@@ -145,6 +145,23 @@ class MirrorApiTest {
         assertEquals("lobby-a", requested[0].retire.server)
     }
 
+    @Test
+    fun `both sides build the same request for the same start and stop`() {
+        val mirror = NetworkMirror().also { it.apply(aRichState()) }
+        val onServer = MirrorApi(mirror, serverSelf(), connector(), CloudEvents())
+        val onProxy = MirrorApi(mirror, proxySelf(), connector(), CloudEvents())
+        onServer.startServer("private-servers", "c0ffee")
+        onProxy.startServer("private-servers", "c0ffee")
+        onServer.stopServer("private-servers-c0ffee")
+        onProxy.stopServer("private-servers-c0ffee")
+
+        assertEquals(4, requested.size)
+        assertEquals(requested[0].startServer, requested[1].startServer)
+        assertEquals("c0ffee", requested[0].startServer.key)
+        assertEquals(requested[2].stopServer, requested[3].stopServer)
+        assertEquals("private-servers-c0ffee", requested[2].stopServer.server)
+    }
+
     // Announcing is the one verb only one side can succeed at, and it is still
     // built identically on both: the refusal is the operator's answer rather
     // than a branch in here. A client that decided for itself which side may

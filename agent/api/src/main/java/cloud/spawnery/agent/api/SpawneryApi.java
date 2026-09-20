@@ -148,6 +148,60 @@ public interface SpawneryApi {
     CompletionStage<Integer> stopBoosts(String group);
 
     /**
+     * Asks for the private server that carries this key.
+     *
+     * <p>The key names a world and not a server: the operator composes the
+     * server's name from the group and the key, and the same key later finds
+     * the same world. Only a group of type {@code OnDemand} has members to
+     * ask for; anything else fails.
+     *
+     * <p><b>The stage completing means the server was asked for, not that it
+     * can take players.</b> It starts out as any server does; watch
+     * {@link ServerInfo#phase()} or the events for {@link ServerPhase#READY}
+     * before sending anybody there.
+     *
+     * <p>Asking for one that is already running succeeds with
+     * {@link StartedServer#alreadyRunning()} set, so a player pressing a
+     * button twice needs no lock on your side. That flag says the server
+     * exists and nothing about its being ready.
+     *
+     * <p>The stage fails, and its message begins with the operator's reason:
+     * <ul>
+     *   <li>{@code REFUSED} for a key that cannot be part of a name, for a name
+     *       longer than 63 characters once the group and the key are composed,
+     *       for a group that is not on-demand, for a name that another group's
+     *       server already has, and for a group that is genuinely at its
+     *       {@code spec.maxInstances}.</li>
+     *   <li>{@code NOT_FOUND} for a group this network does not have.</li>
+     *   <li>{@code UNAVAILABLE} for a member of that key that is still
+     *       stopping, and for a group that is at its {@code maxInstances}
+     *       only because one of its members is stopping. Neither is a refusal:
+     *       the same request succeeds once that member is gone, so ask
+     *       again.</li>
+     * </ul>
+     */
+    CompletionStage<StartedServer> startServer(String group, String key);
+
+    /**
+     * Stops one private server and leaves its world where it is.
+     *
+     * <p>Not {@link #retire}: retiring closes a server's door and lets it
+     * empty in its own time, while this says its owner is done with it — the
+     * players on it are moved through the proxies and the pod goes. The world
+     * is on a claim nothing deletes, so the next {@link #startServer} of the
+     * same key finds it.
+     *
+     * <p>The stage completes with no value. Stopping a server that is already
+     * on its way out succeeds too, so a second press of the same button is not
+     * an error.
+     *
+     * <p>It fails with {@code REFUSED} for a server that is not a member of an
+     * on-demand group, which is what keeps a wrong name from taking down a
+     * lobby, and with {@code NOT_FOUND} for a name this network does not have.
+     */
+    CompletionStage<Void> stopServer(String server);
+
+    /**
      * Opens or closes this server's own door.
      *
      * <p><b>Closing is not {@link #retire}, and the difference is the whole

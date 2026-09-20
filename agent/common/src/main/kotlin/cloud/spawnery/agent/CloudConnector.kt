@@ -2,6 +2,7 @@ package cloud.spawnery.agent
 
 import cloud.spawnery.agent.api.BoostResult
 import cloud.spawnery.agent.api.ConnectResult
+import cloud.spawnery.agent.api.StartedServer
 import cloud.spawnery.agent.api.Target
 import cloud.spawnery.agent.pb.AcceptJoinsRequest
 import cloud.spawnery.agent.pb.AnnounceRequest
@@ -10,7 +11,9 @@ import cloud.spawnery.agent.pb.CloudResponse
 import cloud.spawnery.agent.pb.ConnectRequest
 import cloud.spawnery.agent.pb.BoostRequest
 import cloud.spawnery.agent.pb.RetireRequest
+import cloud.spawnery.agent.pb.StartServerRequest
 import cloud.spawnery.agent.pb.StopBoostRequest
+import cloud.spawnery.agent.pb.StopServerRequest
 import cloud.spawnery.agent.pb.RequestError
 import java.time.Duration
 import java.time.Instant
@@ -95,6 +98,32 @@ class CloudConnector(
                             .setReplicas(replicas)
                             .setDurationSeconds(forHowLong?.seconds ?: 0L),
                     )
+                    .build(),
+            )
+        }
+
+    /** Asks for the private server that carries this key. */
+    fun startServer(group: String, key: String): CompletionStage<StartedServer> =
+        requests.start<StartedServer> { id ->
+            sendRequest(
+                CloudRequest.newBuilder()
+                    .setId(id)
+                    .setStartServer(
+                        StartServerRequest.newBuilder()
+                            .setGroup(group)
+                            .setKey(key),
+                    )
+                    .build(),
+            )
+        }
+
+    /** Stops one private server; its world stays. The answer echoes the name and carries no value. */
+    fun stopServer(server: String): CompletionStage<Void> =
+        requests.start<Void> { id ->
+            sendRequest(
+                CloudRequest.newBuilder()
+                    .setId(id)
+                    .setStopServer(StopServerRequest.newBuilder().setServer(server))
                     .build(),
             )
         }
@@ -230,6 +259,14 @@ class CloudConnector(
                     Instant.ofEpochSecond(response.boost.expiresAtUnix),
                 ),
             )
+            response.hasStartServer() -> requests.complete(
+                response.id,
+                StartedServer(
+                    response.startServer.server,
+                    response.startServer.alreadyRunning,
+                ),
+            )
+            response.hasStopServer() -> requests.complete(response.id, null)
             response.hasStopBoost() -> requests.complete(response.id, response.stopBoost.removed)
             response.hasAnnounce() -> requests.complete(response.id, null)
             response.hasAcceptJoins() -> requests.complete(response.id, null)

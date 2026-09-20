@@ -9,6 +9,7 @@ import cloud.spawnery.agent.api.EventBus
 import cloud.spawnery.agent.api.Self
 import cloud.spawnery.agent.api.Target
 import cloud.spawnery.agent.api.ServerInfo
+import cloud.spawnery.agent.api.StartedServer
 import cloud.spawnery.agent.api.SpawneryApi
 import java.util.Optional
 import java.time.Duration
@@ -83,6 +84,12 @@ class MirrorApi(
 
     override fun boost(group: String, replicas: Int, forHowLong: Duration?): CompletionStage<BoostResult> =
         connector.boost(group, replicas, forHowLong)
+
+    override fun startServer(group: String, key: String): CompletionStage<StartedServer> =
+        connector.startServer(group, key)
+
+    override fun stopServer(server: String): CompletionStage<Void> =
+        connector.stopServer(server)
 
     override fun announce(state: String, attributes: Map<String, String>): CompletionStage<Void> =
         connector.announce(state, attributes)

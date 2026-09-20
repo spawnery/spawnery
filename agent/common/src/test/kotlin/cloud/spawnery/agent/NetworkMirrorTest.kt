@@ -1,5 +1,6 @@
 package cloud.spawnery.agent
 
+import cloud.spawnery.agent.api.Group
 import cloud.spawnery.agent.api.ServerPhase
 import cloud.spawnery.agent.pb.GroupState
 import cloud.spawnery.agent.pb.NetworkState
@@ -171,6 +172,30 @@ class NetworkMirrorTest {
         mirror.apply(state(servers = listOf("lobby-a"), phase = "SomethingLaterInvented"))
 
         assertEquals(ServerPhase.UNKNOWN, mirror.servers().single().phase())
+    }
+
+    @Test
+    fun `an on-demand group is named as one`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addGroups(
+                GroupState.newBuilder().setName("private-servers").setKind(GroupState.Kind.ON_DEMAND),
+            ).build(),
+        )
+
+        assertEquals(Group.Kind.ON_DEMAND, mirror.groups().single().kind())
+    }
+
+    @Test
+    fun `a group kind this jar predates becomes UNKNOWN rather than throwing`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addGroups(
+                GroupState.newBuilder().setName("later").setKindValue(999),
+            ).build(),
+        )
+
+        assertEquals(Group.Kind.UNKNOWN, mirror.groups().single().kind())
     }
 
     @Test

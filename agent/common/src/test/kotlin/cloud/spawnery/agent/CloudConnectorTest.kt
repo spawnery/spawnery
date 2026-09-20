@@ -1,6 +1,10 @@
 package cloud.spawnery.agent
 
 import cloud.spawnery.agent.pb.CloudRequest
+import cloud.spawnery.agent.pb.CloudResponse
+import cloud.spawnery.agent.pb.StartServerResult
+import cloud.spawnery.agent.pb.StopServerResult
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
@@ -166,5 +170,75 @@ class CloudConnectorTest {
         reconnected.onStreamChanged()
 
         assertEquals(1, sent.size)
+    }
+
+    @Test
+    fun `a start is sent with the group and the key`() {
+        val connector = connector()
+
+        connector.startServer("private-servers", "c0ffee")
+
+        assertEquals("private-servers", requested.single().startServer.group)
+        assertEquals("c0ffee", requested.single().startServer.key)
+    }
+
+    @Test
+    fun `a start answer completes with the composed name`() {
+        val connector = connector()
+        val future = connector.startServer("private-servers", "c0ffee")
+
+        connector.answer(
+            CloudResponse.newBuilder()
+                .setId(requested.single().id)
+                .setStartServer(
+                    StartServerResult.newBuilder()
+                        .setServer("private-servers-c0ffee")
+                        .setAlreadyRunning(true),
+                )
+                .build(),
+        )
+
+        val started = future.toCompletableFuture().get(1, TimeUnit.SECONDS)
+        assertEquals("private-servers-c0ffee", started.name())
+        assertTrue(started.alreadyRunning())
+    }
+
+    @Test
+    fun `a start that made the server says it was not already running`() {
+        val connector = connector()
+        val future = connector.startServer("private-servers", "c0ffee")
+
+        connector.answer(
+            CloudResponse.newBuilder()
+                .setId(requested.single().id)
+                .setStartServer(StartServerResult.newBuilder().setServer("private-servers-c0ffee"))
+                .build(),
+        )
+
+        assertEquals(false, future.toCompletableFuture().get(1, TimeUnit.SECONDS).alreadyRunning())
+    }
+
+    @Test
+    fun `a stop is sent with the server's name`() {
+        val connector = connector()
+
+        connector.stopServer("private-servers-c0ffee")
+
+        assertEquals("private-servers-c0ffee", requested.single().stopServer.server)
+    }
+
+    @Test
+    fun `a stop answer completes with no value`() {
+        val connector = connector()
+        val future = connector.stopServer("private-servers-c0ffee")
+
+        connector.answer(
+            CloudResponse.newBuilder()
+                .setId(requested.single().id)
+                .setStopServer(StopServerResult.newBuilder().setServer("private-servers-c0ffee"))
+                .build(),
+        )
+
+        assertEquals(null, future.toCompletableFuture().get(1, TimeUnit.SECONDS))
     }
 }
