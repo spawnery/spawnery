@@ -491,6 +491,11 @@ func (w KubeWriter) occupant(
 // The key check is the bound and not a courtesy: this is the only verb on
 // this channel that deletes a server outright, and a name that belongs to a
 // lobby has to fail rather than work.
+//
+// A non-empty spec.key is what marks an on-demand member throughout this
+// operator -- see ServerSpec.Key and the controller's fallbackGroup -- so the
+// object says which kind it is and its group's type does not have to be
+// fetched to find out.
 func (w KubeWriter) StopServer(ctx context.Context, namespace, name string) error {
 	var srv spawneryv1alpha1.Server
 	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &srv); err != nil {
