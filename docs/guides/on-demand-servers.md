@@ -137,8 +137,8 @@ because RBAC selects by name and these names are minted at runtime.
   that ended in `Failed` is kept, under the cap of one per group that an
   ephemeral group's failures are kept under, so that a world that broke can be
   looked at; a start on that key replaces it rather than being refused by it —
-  unless it is still draining, when the start answers `UNAVAILABLE` and asking
-  again a moment later works.
+  unless it is still held by its drain, when the start answers `UNAVAILABLE` and
+  asking again a moment later works.
   The cap is per group and not per key, so a second player's broken world
   removes the first one's `Server` — the object only, never the claim.
 - **Its node drains.** A member on a node that is leaving goes like any other
