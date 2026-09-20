@@ -111,8 +111,9 @@ func TestAPrivateServersWorldOutlivesItsServer(t *testing.T) {
 			"routes the player to", first.GetServer(), server)
 	}
 	if first.GetAlreadyRunning() {
-		t.Errorf("the first start of %s answered already_running: nothing had asked for this key "+
-			"before, so a plugin would skip the wait for a server that is in fact cold", server)
+		t.Fatalf("the first start of %s answered already_running: nothing had asked for this key "+
+			"before, so a plugin would skip the wait for a server that is in fact cold -- and "+
+			"everything below would be measuring a member this test did not start", server)
 	}
 
 	waitReady(t, server, "the first start")
@@ -129,7 +130,6 @@ func TestAPrivateServersWorldOutlivesItsServer(t *testing.T) {
 	// Unique per run, so a cluster kept with E2E_KEEP=1 and re-run cannot pass
 	// on the marker its previous run left behind.
 	marker := fmt.Sprintf("spawnery-e2e %d", time.Now().UnixNano())
-	firstPod := podOf(t, server)
 	writeMarker(t, server, marker)
 
 	stopServer(t, proxy, server)
@@ -137,6 +137,12 @@ func TestAPrivateServersWorldOutlivesItsServer(t *testing.T) {
 	// The Server object going is what a plugin sees; the pod going is what
 	// makes the read at the end mean anything, because a marker read out of
 	// the pod that wrote it proves nothing about storage.
+	//
+	// The second of these two waits is where that property lives, and it is
+	// the only place it can: once this pod has been observed NotFound, any pod
+	// carrying this name afterwards is necessarily a later one. Nothing below
+	// compares pod identities, because after this wait there is no same-pod
+	// outcome left for such a comparison to rule out.
 	eventually(t, 5*time.Minute, "the stopped server to be gone", func() (bool, string) {
 		var srv spawneryv1alpha1.Server
 		err := k8s.Get(ctx, client.ObjectKey{Namespace: onDemandNamespace, Name: server}, &srv)
@@ -183,17 +189,11 @@ func TestAPrivateServersWorldOutlivesItsServer(t *testing.T) {
 			onDemandKey, second.GetServer(), server)
 	}
 	if second.GetAlreadyRunning() {
-		t.Errorf("the second start answered already_running, yet the first server and its pod "+
+		t.Fatalf("the second start answered already_running, yet the first server and its pod " +
 			"were both observed gone above")
 	}
 
 	waitReady(t, server, "the second start")
-
-	secondPod := podOf(t, server)
-	if secondPod.UID == firstPod.UID {
-		t.Fatalf("the second start got the same pod %s (uid %s): the marker read below would "+
-			"then say nothing about the claim", secondPod.Name, secondPod.UID)
-	}
 
 	got := readMarker(t, server)
 	if got != marker {
@@ -247,15 +247,6 @@ func podTrouble(t *testing.T, name string) string {
 		}
 	}
 	return fmt.Sprintf("pod %s: %s", pod.Status.Phase, strings.Join(states, "; "))
-}
-
-func podOf(t *testing.T, server string) *corev1.Pod {
-	t.Helper()
-	var pod corev1.Pod
-	if err := k8s.Get(ctx, client.ObjectKey{Namespace: onDemandNamespace, Name: server}, &pod); err != nil {
-		t.Fatalf("get pod %s: %v", server, err)
-	}
-	return &pod
 }
 
 // aProxyPodOf waits for a pod of the proxy group and returns it. The pod is
