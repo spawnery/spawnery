@@ -2583,10 +2583,10 @@ func TestTheFallbackGroupOfAnOnDemandMemberIsOnDemand(t *testing.T) {
 }
 
 // Every group type, and the marker that identifies a Server of it without
-// its group. A marker fallbackGroup does not read fails here instead of
-// falling back to Ephemeral, which is what the third type did until it was
-// given an arm of its own. The table is written by hand: a type added to the
-// enum needs its row added here.
+// its group. fallbackGroup must read each marker back as its own type, so a
+// type whose marker it ignores fails here rather than reading as Ephemeral.
+// The table is written by hand: a type added to the enum needs its row added
+// here.
 func TestTheFallbackGroupCoversEveryType(t *testing.T) {
 	marker := map[spawneryv1alpha1.ServerGroupType]func(*spawneryv1alpha1.Server){
 		spawneryv1alpha1.ServerGroupEphemeral:  func(*spawneryv1alpha1.Server) {},
