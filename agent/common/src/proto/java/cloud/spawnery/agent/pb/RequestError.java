@@ -89,10 +89,14 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The operator understood and declined, and asking again unchanged will be
-     * declined again: the request met a bound, or it is itself wrong -- a
-     * replica count below one, a name that is not a DNS label, a server that is
-     * not of the kind the verb acts on. There is no reason of its own for bad
-     * input; a boost for fewer than one replica was already refused this way.
+     * declined again while the same state holds: the request met a bound, or
+     * it is itself wrong -- a replica count below one, a name that is not a
+     * DNS label, a server that is not of the kind the verb acts on. A bound
+     * that can clear is refused this way too, and the clause above is why the
+     * promise is no stronger: a group at its instance ceiling and one with no
+     * boost headroom both answer the same request differently once capacity
+     * frees. There is no reason of its own for bad input; a boost for fewer
+     * than one replica was already refused this way.
      * </pre>
      *
      * <code>REFUSED = 2;</code>
@@ -144,10 +148,14 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The operator understood and declined, and asking again unchanged will be
-     * declined again: the request met a bound, or it is itself wrong -- a
-     * replica count below one, a name that is not a DNS label, a server that is
-     * not of the kind the verb acts on. There is no reason of its own for bad
-     * input; a boost for fewer than one replica was already refused this way.
+     * declined again while the same state holds: the request met a bound, or
+     * it is itself wrong -- a replica count below one, a name that is not a
+     * DNS label, a server that is not of the kind the verb acts on. A bound
+     * that can clear is refused this way too, and the clause above is why the
+     * promise is no stronger: a group at its instance ceiling and one with no
+     * boost headroom both answer the same request differently once capacity
+     * frees. There is no reason of its own for bad input; a boost for fewer
+     * than one replica was already refused this way.
      * </pre>
      *
      * <code>REFUSED = 2;</code>
