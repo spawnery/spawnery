@@ -201,9 +201,8 @@ The `ServerGroup` reconciler learns the type and then declines most of its own
 work for it:
 
 - **No sizing.** `size()` is not consulted; the group creates no server and
-  condemns none. The existing surplus path must not see these members, which
-  is the one place where a missed branch would delete a player's running
-  server.
+  condemns none. The existing surplus path must not see these members: §3.7
+  says what a fallthrough there costs today and what it may cost later.
 - **No rolling update.** A spec edit does not make a running member stale.
   The pod hash is still stamped at creation and still tells a reader which
   spec a member started with, but nothing acts on a difference: a member
@@ -212,13 +211,18 @@ work for it:
   their own world to apply a version bump is the opposite of what a private
   server is for, and it is why `spec.update` is rejected for this type rather
   than ignored.
-- **It does clean up.** A member whose pod has ended is deleted, and with it
-  the object: the world is on the claim, so there is nothing about a stopped
-  member worth keeping, and a leftover object holds the one name its owner
-  needs to start again. A member that reached `Failed` is deleted on the same
-  rule rather than retained — but a start on a key whose last run failed must
-  not be refused by the corpse of that run, and this is the ordering that
-  guarantees it.
+- **It does clean up.** A member whose round has ended and whose pod has
+  stopped (`Finished`) is deleted, and with it the object: the world is on the
+  claim, so there is nothing about a stopped member worth keeping, and a
+  leftover object holds the one name its owner needs to start again. A member
+  that reached `Failed` is kept under the retention cap every group has, so a
+  world that broke can be looked at — and a start on a key whose last run
+  failed replaces that corpse rather than being refused by it.
+- **A node that leaves takes its members with it.** `size()` condemns every
+  server on a departing node, whatever its type or phase, and this type is not
+  exempt: the drain moves the players through the proxies first, the pod goes,
+  and nothing recreates the member. The world is on its claim, so the key is
+  free and its owner starts it again the way they started it the first time.
 - **It still reconciles the group's own furniture**: the ConfigMap, the
   conditions, the storage-resize condition, the PDB.
 
@@ -274,8 +278,14 @@ deliberate answer, and the plan carries them one by one. The shape of it:
   it is an accident; it gets its own branch.
 - **Wrong until each is looked at.** The five sizing and update branches in
   `servergroup_controller.go` (`:427`, `:528`, `:588`, `:751`, `:898`) are
-  where a missed inversion deletes a player's running world to satisfy a
-  replica count that does not exist. These carry the risk of the change.
+  where a missed branch files a member under a rule written for something
+  else. A fallthrough in `size()` deletes nothing today, and that was measured
+  rather than assumed: `DecidePersistentSize` skips a view whose ordinal is
+  nil, and a member has none. But that skip is a rule about adopted persistent
+  servers, not a promise made to this type, so the protection lasts only until
+  somebody changes the rule for reasons of its own — after which a member is a
+  surplus for a replica count it does not have. These carry the risk of the
+  change.
 - **Wrong and fixed by `spec.key`.** The synthetic group in
   `server_controller.go:859`, per §3.2.
 
