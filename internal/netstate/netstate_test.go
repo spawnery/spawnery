@@ -449,6 +449,53 @@ func TestOnDemandMembersReachProxiesOnly(t *testing.T) {
 	}
 }
 
+func TestABackendIsToldAPlayerIsOnlineAndNotThatTheyAreOnAPrivateServer(t *testing.T) {
+	src, reg := source(t,
+		onDemandGroup("ns", "private-servers"),
+		onDemandMember("ns", "private-servers", "c0ffee"),
+		ephemeralGroup("ns", "lobby"),
+		readyServer("ns", "lobby-abc", "lobby", 0, 100),
+	)
+	reg.Connect("proxy-a", agent.RoleProxy)
+	if err := reg.ReportRoster("proxy-a", "ns", []agent.RosterEntry{
+		{UUID: "u-alice", Name: "alice", Server: "private-servers-c0ffee"},
+		{UUID: "u-bob", Name: "bob", Server: "lobby-abc"},
+	}); err != nil {
+		t.Fatalf("ReportRoster: %v", err)
+	}
+
+	forServers, err := src.Build(context.Background(), "ns", netstate.ForServers)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	where := map[string]string{}
+	for _, p := range forServers.GetPlayers() {
+		where[p.GetUuid()] = p.GetServer()
+	}
+	if len(where) != 2 {
+		t.Fatalf("players = %v, want both: a player on a private server is still on the network",
+			forServers.GetPlayers())
+	}
+	if where["u-alice"] != "" {
+		t.Errorf("alice is on %q in a backend's picture, which its own servers() does not list -- "+
+			"and stopServer takes that name", where["u-alice"])
+	}
+	if where["u-bob"] != "lobby-abc" {
+		t.Errorf("bob is on %q, want lobby-abc", where["u-bob"])
+	}
+
+	forProxies, err := src.Build(context.Background(), "ns", netstate.ForProxies)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for _, p := range forProxies.GetPlayers() {
+		if p.GetUuid() == "u-alice" && p.GetServer() != "private-servers-c0ffee" {
+			t.Errorf("alice is on %q in the proxies' picture, which is the one that routes",
+				p.GetServer())
+		}
+	}
+}
+
 func TestOnlyAMemberOfAnOnDemandGroupIsAPrivateServer(t *testing.T) {
 	if !netstate.IsPrivateServer(onDemandMember("ns", "private-servers", "c0ffee")) {
 		t.Error("a member carrying a key was not a private server")

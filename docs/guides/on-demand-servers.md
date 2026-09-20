@@ -166,6 +166,13 @@ backends'.** A lobby's `servers()` never lists three hundred private servers,
 and never receives a fresh picture for each start and stop. A proxy's does, and
 that is where a plugin that sends players to them lives.
 
+**The players stay, their whereabouts do not.** A backend's `players()` lists
+everyone on the network, including whoever is on a private server — taking them
+out would drop a player from a count while they are still online. What a backend
+does not learn is *where*: `CloudPlayer.server()` is empty for them, as it is
+for a player between two backends, so the roster never names a server the same
+picture refuses to list.
+
 The same line bounds `connect`:
 
 - A backend that names a private server in `Target.server(...)` is refused, with

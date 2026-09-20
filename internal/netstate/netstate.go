@@ -56,7 +56,8 @@ type Audience int
 const (
 	// ForProxies is the whole namespace.
 	ForProxies Audience = iota
-	// ForServers leaves out on-demand groups and their members.
+	// ForServers leaves out on-demand groups and their members, and blanks the
+	// server a roster entry names when it is one of those members.
 	ForServers
 )
 
@@ -194,8 +195,15 @@ func (s Source) Build(ctx context.Context, namespace string, audience Audience) 
 	if err := s.Reader.List(ctx, &servers, client.InNamespace(namespace)); err != nil {
 		return nil, fmt.Errorf("list servers in %s: %w", namespace, err)
 	}
+	// Collected here rather than derived below, because this is the loop that
+	// drops them: the roster is built from a different source and would
+	// otherwise name servers this picture does not contain.
+	private := map[string]bool{}
 	for i := range servers.Items {
 		srv := &servers.Items[i]
+		if IsPrivateServer(srv) {
+			private[srv.Name] = true
+		}
 		if audience == ForServers && IsPrivateServer(srv) {
 			continue
 		}
@@ -229,8 +237,20 @@ func (s Source) Build(ctx context.Context, namespace string, audience Audience) 
 	// from a plugin's side.
 	roster, _ := s.Agents.Roster(namespace)
 	for _, p := range roster {
+		server := p.Server
+		// The player stays, the address goes. A backend learns that they are
+		// online and not where, which is what a lobby's count and its
+		// "somebody is on" both want; filtering the entry out instead would
+		// take a player off players() while they are still on the network.
+		//
+		// The name is what the audience split is for: it is a server this
+		// picture does not list, and stopServer and retire each act on a name
+		// a backend supplies.
+		if audience == ForServers && private[server] {
+			server = ""
+		}
 		state.Players = append(state.Players, &agentpb.RosterEntry{
-			Uuid: p.UUID, Name: p.Name, Server: p.Server,
+			Uuid: p.UUID, Name: p.Name, Server: server,
 		})
 	}
 

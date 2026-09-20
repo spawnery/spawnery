@@ -270,6 +270,16 @@ group itself, reach the proxies' picture and not the backends'. Proxies need
 them because that is where routing lives and where the consumer's plugin runs;
 a backend needs neither.
 
+The roster is not split the same way, because a player is not a server. Every
+player stays in every picture — a backend dropping one from `players()` while
+they are still online would break a count nobody expected to break — and it is
+the *address* that is withheld: a roster entry whose server is a private one
+reaches a backend with that field empty, which the entry already documents as
+"on no backend right now". A backend therefore learns that the player is
+online and not where they are, and never a name its own `servers()` does not
+carry. That name matters beyond tidiness: `stopServer` and `retire` each act
+on a server name a backend supplies.
+
 **This is the only contract in this design that gets narrower**, and it is
 deliberately done now rather than later: once a plugin on a game server can
 see private servers in `servers()`, taking them back out is a breaking change
