@@ -111,11 +111,15 @@ writer rather than discovered by a pod that never schedules:
 A second start on a key does not fail on the name, and it is not left to the
 create to say what happened. The writer looks at what is in the way and answers
 from the object: the caller's own live member is `already_running` with the
-server's name, a member still stopping is `UNAVAILABLE`, a terminal run of the
-same key is replaced, and a server of another group that composes the same name
-is `REFUSED`. A create that still races another caller falls back on
-`AlreadyExists` and is answered from the object the same way, which is why no
-caller needs a lock to ask twice.
+server's name, a member still stopping is `UNAVAILABLE`, and a server of another
+group that composes the same name is `REFUSED`. A terminal run of the same key
+is replaced, unless its drain finalizer still holds the object: while it does,
+the start is `UNAVAILABLE` and the caller asks again a moment later, which is
+the case right after a stop, when a player is most likely to press start
+again. A create that still races another caller falls back on `AlreadyExists`,
+and the writer reads the object in the way to answer: the caller's own live
+member is `already_running`, and a member that is stopping or terminal is
+`UNAVAILABLE`. That is why no caller needs a lock to ask twice.
 
 `spec.ordinal` stays unset on these servers. Its presence means "persistent"
 elsewhere in this operator, and a member of an `OnDemand` group is not that:
@@ -240,9 +244,11 @@ work for it:
   stopped (`Finished`) is deleted, and with it the object: the world is on the
   claim, so there is nothing about a stopped member worth keeping, and a
   leftover object holds the one name its owner needs to start again. A member
-  that reached `Failed` is kept under the retention cap every group has, so a
+  that reached `Failed` is kept under the cap an ephemeral group's failures are kept under, so a
   world that broke can be looked at — and a start on a key whose last run
-  failed replaces that corpse rather than being refused by it.
+  failed replaces that corpse rather than being refused by it, unless the
+  corpse's drain finalizer still holds the object, in which case the start is
+  `UNAVAILABLE` until it is gone.
 - **A node that leaves takes its members with it.** `size()` condemns every
   server on a departing node, whatever its type or phase, and this type is not
   exempt: the drain moves the players through the proxies first, the pod goes,

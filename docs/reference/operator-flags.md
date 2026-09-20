@@ -169,10 +169,10 @@ warns only for a small set of taints other autoscalers are known to use
 simply absent from the cluster cannot be told from a typo by anything here.
 
 **What condemning a server actually does depends on whether its group is
-ephemeral, persistent or on-demand, and this is the flag's real edge.** An ephemeral
-group treats a condemned server exactly like a stale one: a replacement is
-created before the condemned server is removed, so the group never drops
-below its target count. A persistent group cannot do that. Its ordinal is
+ephemeral, persistent or on-demand, and this is the flag's real edge.** An
+ephemeral group treats a condemned server exactly like a stale one: a
+replacement is created before the condemned server is removed, so the group
+never drops below its target count. A persistent group cannot do that. Its ordinal is
 tied to a `ReadWriteOnce` claim, and a second pod mounting that claim while
 the first is still draining does not fail cleanly, it hangs on the volume --
 so the replacement for a persistent ordinal waits for the condemned server's
