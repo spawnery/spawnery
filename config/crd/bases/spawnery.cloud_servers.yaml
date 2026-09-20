@@ -78,6 +78,18 @@ spec:
                 required:
                 - name
                 type: object
+              key:
+                description: |-
+                  Key is the caller's name for the world this member carries, and it is
+                  set for a member of an OnDemand group and for no other server.
+
+                  It is here for the reason Ordinal is: a Server has to be able to say
+                  what kind of member it is without its group, and the Server controller
+                  reconstructs a synthetic group from this object alone when the real one
+                  is gone. An inference from Ordinal alone was exhaustive while there were
+                  two types; with three, a member with neither marker would read as
+                  ephemeral, which is the one answer that is wrong about its world.
+                type: string
               number:
                 description: |-
                   Number is which of its group's servers this is, counted the way a

@@ -30,6 +30,18 @@ type ServerSpec struct {
 	// +optional
 	Ordinal *int32 `json:"ordinal,omitempty"`
 
+	// Key is the caller's name for the world this member carries, and it is
+	// set for a member of an OnDemand group and for no other server.
+	//
+	// It is here for the reason Ordinal is: a Server has to be able to say
+	// what kind of member it is without its group, and the Server controller
+	// reconstructs a synthetic group from this object alone when the real one
+	// is gone. An inference from Ordinal alone was exhaustive while there were
+	// two types; with three, a member with neither marker would read as
+	// ephemeral, which is the one answer that is wrong about its world.
+	// +optional
+	Key string `json:"key,omitempty"`
+
 	// Number is which of its group's servers this is, counted the way a
 	// person counts: the second hub is 2. The group assigns it once, at
 	// creation, and it is given out again only after this server is gone.

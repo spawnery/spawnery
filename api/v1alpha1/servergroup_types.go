@@ -25,7 +25,7 @@ import (
 )
 
 // ServerGroupType selects the operating mode of a group.
-// +kubebuilder:validation:Enum=Ephemeral;Persistent
+// +kubebuilder:validation:Enum=Ephemeral;Persistent;OnDemand
 type ServerGroupType string
 
 const (
@@ -33,6 +33,10 @@ const (
 	ServerGroupEphemeral ServerGroupType = "Ephemeral"
 	// ServerGroupPersistent keeps its world on a PVC: survival and creative.
 	ServerGroupPersistent ServerGroupType = "Persistent"
+	// ServerGroupOnDemand is a template whose members are asked for by name
+	// rather than counted: one world per key, started when somebody asks and
+	// gone when they are done. The group itself never creates one.
+	ServerGroupOnDemand ServerGroupType = "OnDemand"
 )
 
 // AnnotationRetry on a ServerGroup resets its failure streak whenever its
@@ -112,6 +116,12 @@ type StorageSpec struct {
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.update)",message="spec.update is not allowed for type Persistent"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || has(self.storage)",message="spec.storage is required for type Persistent"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || has(self.replicas)",message="spec.replicas is required for type Persistent"
+// +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || !has(self.scaling)",message="spec.scaling is not allowed for type OnDemand"
+// +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || !has(self.replicas)",message="spec.replicas is not allowed for type OnDemand"
+// +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || !has(self.update)",message="spec.update is not allowed for type OnDemand"
+// +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || has(self.storage)",message="spec.storage is required for type OnDemand"
+// +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || has(self.maxInstances)",message="spec.maxInstances is required for type OnDemand"
+// +kubebuilder:validation:XValidation:rule="self.type == 'OnDemand' || !has(self.maxInstances)",message="spec.maxInstances is only allowed for type OnDemand"
 // +kubebuilder:validation:XValidation:rule="!has(self.scaling) || self.scaling.minReplicas <= self.scaling.maxReplicas",message="scaling.minReplicas must not exceed scaling.maxReplicas"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || (has(self.storage.storageClassName) == has(oldSelf.storage.storageClassName) && (!has(self.storage.storageClassName) || self.storage.storageClassName == oldSelf.storage.storageClassName))",message="storage.storageClassName is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || self.storage.accessModes == oldSelf.storage.accessModes",message="storage.accessModes is immutable"
@@ -149,6 +159,20 @@ type ServerGroupSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
+
+	// MaxInstances is how many members this group may have at once.
+	//
+	// A fleet ceiling and not a per-player quota: who may have how many
+	// private servers is a question about a player, a purchase and a ban,
+	// and the system that knows those three is the one that answers it.
+	//
+	// Zero is legal and means the group is closed -- new starts are refused
+	// and every world stays where it is, which is the state an incident wants
+	// and a deletion would not give. Required rather than defaulted: a
+	// ceiling nobody chose is a ceiling nobody thought about.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MaxInstances *int32 `json:"maxInstances,omitempty"`
 
 	// Resources overrides Network.spec.defaults.resources.
 	// +optional
@@ -448,6 +472,11 @@ func (g *ServerGroup) IsEphemeral() bool {
 	return g.Spec.Type == ServerGroupEphemeral
 }
 
+// IsOnDemand reports whether this group's members are asked for by name.
+func (g *ServerGroup) IsOnDemand() bool {
+	return g.Spec.Type == ServerGroupOnDemand
+}
+
 // DesiredReplicas is the number of servers the group must have at minimum. For
 // an ephemeral group it is the floor only: the size it actually runs at is
 // DecideSize's, which reads this as one input among several.
@@ -457,6 +486,13 @@ func (g *ServerGroup) DesiredReplicas() int32 {
 			return 0
 		}
 		return g.Spec.Scaling.MinReplicas
+	}
+	// Nothing is desired: an on-demand group's members exist because somebody
+	// asked for them. The fallthrough below would reach the same 0 through
+	// spec.replicas being nil, and an answer that correct by accident is one
+	// a later edit can break without a test noticing.
+	if g.IsOnDemand() {
+		return 0
 	}
 	if g.Spec.Replicas == nil {
 		return 0

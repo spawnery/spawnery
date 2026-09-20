@@ -17,3 +17,18 @@ func TestFinishedRetentionIsSecondsNotTheFailedOne(t *testing.T) {
 		t.Errorf("FailedRetention() = %v, want %v", got, want)
 	}
 }
+
+func TestDesiredReplicasIsZeroForOnDemand(t *testing.T) {
+	g := &ServerGroup{
+		Spec: ServerGroupSpec{Type: ServerGroupOnDemand},
+	}
+	if got := g.DesiredReplicas(); got != 0 {
+		t.Fatalf("DesiredReplicas() = %d, want 0", got)
+	}
+	if !g.IsOnDemand() {
+		t.Fatal("IsOnDemand() = false for a group of type OnDemand")
+	}
+	if g.IsEphemeral() {
+		t.Fatal("IsEphemeral() = true for a group of type OnDemand")
+	}
+}
