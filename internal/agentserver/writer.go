@@ -393,7 +393,14 @@ func (w KubeWriter) StartServer(
 		if m.Spec.GroupRef.Name != group || m.Spec.Key == "" {
 			continue
 		}
-		if m.Name == name {
+		// Name and key together, which is the question occupant asks of the
+		// object a create finds in the way. Asking less here would let an
+		// object whose key does not compose its own name be the caller's
+		// member on this path and somebody else's on that one; nothing this
+		// operator writes is in that state, and one question with two
+		// answers is what this branch exists to remove. Such an object falls
+		// through to the create, where occupant refuses it by name.
+		if m.Name == name && m.Spec.Key == key {
 			if !m.DeletionTimestamp.IsZero() {
 				return StartedServer{}, ErrInstanceStopping
 			}
