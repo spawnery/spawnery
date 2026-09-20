@@ -108,9 +108,14 @@ writer rather than discovered by a pod that never schedules:
   since the failure lands on a player's start rather than on the admin's
   `kubectl apply`.
 
-A second start on a key whose server is running collides on the name. That is the
-answer, not an accident to paper over: the operator returns `already_running`
-with the server's name, and no caller needs a lock to ask twice.
+A second start on a key does not fail on the name, and it is not left to the
+create to say what happened. The writer looks at what is in the way and answers
+from the object: the caller's own live member is `already_running` with the
+server's name, a member still stopping is `UNAVAILABLE`, a terminal run of the
+same key is replaced, and a server of another group that composes the same name
+is `REFUSED`. A create that still races another caller falls back on
+`AlreadyExists` and is answered from the object the same way, which is why no
+caller needs a lock to ask twice.
 
 `spec.ordinal` stays unset on these servers. Its presence means "persistent"
 elsewhere in this operator, and a member of an `OnDemand` group is not that:
