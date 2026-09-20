@@ -17,11 +17,14 @@ limitations under the License.
 package controller
 
 import (
+	"strings"
 	"testing"
 
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -91,16 +94,7 @@ func TestOnDemandMemberIsNotRolledBySpecChange(t *testing.T) {
 	f.setPhase(t, member, phase.Ready)
 	f.reconcileNamedGroup(t, r, group.Name)
 
-	// Re-read first: the pass above wrote the group's status, so the copy
-	// createOnDemandGroup returned is a generation behind and an update from
-	// it is refused.
-	if err := f.c.Get(f.ctx, client.ObjectKeyFromObject(group), group); err != nil {
-		t.Fatalf("re-read the group: %v", err)
-	}
-	group.Spec.Image = "ghcr.io/spawnery/paper:1.21.4-0.2.0"
-	if err := f.c.Update(f.ctx, group); err != nil {
-		t.Fatalf("bump the image: %v", err)
-	}
+	f.bumpOnDemandImage(t, group)
 	f.reconcileNamedGroup(t, r, group.Name)
 
 	var got spawneryv1alpha1.Server
@@ -151,6 +145,42 @@ func TestOnDemandFailedMembersArePrunedPastTheCap(t *testing.T) {
 	}
 }
 
+// Progressing is about members coming up, not about the render they carry.
+// Nothing replaces an on-demand member, so a group whose worlds predate an
+// image bump has arrived where it decided to be, and a condition that said
+// otherwise would say it for as long as somebody kept playing.
+func TestOnDemandProgressingIgnoresAnEarlierSpec(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	group := f.createOnDemandGroup(t, "private-servers", 50)
+	member := f.createOnDemandMember(t, group, "c0ffee")
+	f.setPhase(t, member, phase.Ready)
+	// The pass that stamps the member with the group's current render, which is
+	// what the bump below makes it older than.
+	f.reconcileNamedGroup(t, r, group.Name)
+	f.bumpOnDemandImage(t, group)
+	f.reconcileNamedGroup(t, r, group.Name)
+
+	if cond := f.progressing(t, group.Name); cond.Status == metav1.ConditionTrue {
+		t.Fatalf("Progressing = True (%s) for a group that replaces nothing: %s",
+			cond.Reason, cond.Message)
+	}
+
+	// And a member that is coming up is progress, whatever render it carries.
+	second := f.createOnDemandMember(t, group, "decaf")
+	f.setPhase(t, second, phase.Pending)
+	f.reconcileNamedGroup(t, r, group.Name)
+
+	cond := f.progressing(t, group.Name)
+	if cond.Status != metav1.ConditionTrue || cond.Reason != spawneryv1alpha1.ReasonServersStarting {
+		t.Fatalf("Progressing = %s/%s, want True/%s: %s",
+			cond.Status, cond.Reason, spawneryv1alpha1.ReasonServersStarting, cond.Message)
+	}
+	if strings.Contains(cond.Message, "earlier spec") {
+		t.Fatalf("Progressing reports a replacement that cannot happen: %s", cond.Message)
+	}
+}
+
 func (f *fixture) createOnDemandGroup(t *testing.T, name string, maxInstances int32) *spawneryv1alpha1.ServerGroup {
 	t.Helper()
 	g := &spawneryv1alpha1.ServerGroup{
@@ -191,4 +221,33 @@ func (f *fixture) setPhase(t *testing.T, srv *spawneryv1alpha1.Server, p phase.P
 	if err := f.c.Status().Update(f.ctx, srv); err != nil {
 		t.Fatalf("set phase %s: %v", p, err)
 	}
+}
+
+// bumpOnDemandImage moves the group's image, re-reading it first: a reconcile
+// pass has written the group's status since it was created, so an update from
+// the caller's copy is refused.
+func (f *fixture) bumpOnDemandImage(t *testing.T, g *spawneryv1alpha1.ServerGroup) {
+	t.Helper()
+	if err := f.c.Get(f.ctx, client.ObjectKeyFromObject(g), g); err != nil {
+		t.Fatalf("re-read the group: %v", err)
+	}
+	g.Spec.Image = "ghcr.io/spawnery/paper:1.21.4-0.2.0"
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatalf("bump the image: %v", err)
+	}
+}
+
+// progressing is the group's Progressing condition, which has to be published
+// for an assertion to be about anything.
+func (f *fixture) progressing(t *testing.T, name string) *metav1.Condition {
+	t.Helper()
+	g := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: name, Namespace: f.ns}, g); err != nil {
+		t.Fatalf("get group %s: %v", name, err)
+	}
+	cond := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
+	if cond == nil {
+		t.Fatalf("group %s publishes no %s condition", name, spawneryv1alpha1.ConditionProgressing)
+	}
+	return cond
 }

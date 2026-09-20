@@ -1252,12 +1252,25 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, 
 	// Named and not counted, because the remedy is per server -- delete it and
 	// the slot comes back at once -- and a count would leave an operator
 	// listing every server to find which.
+	//
+	// It stays empty for an on-demand group without an exception of its own:
+	// spec.retire is the update budget's signal, and no budget reaches a member
+	// nothing ever retires.
 	var stuck []string
 	for _, v := range views {
 		if v.Retire && v.Phase == phase.Failed {
 			stuck = append(stuck, v.Name)
 		}
-		if staleSpec(v, podHash) {
+		// An on-demand member of an earlier spec is not a replacement in
+		// flight: nothing rolls, so an image bump reaches a world the next time
+		// its owner starts it, and until then carrying the older render is the
+		// group's ordinary and permanent state. Counting it as older would hold
+		// this condition True for as long as somebody keeps playing, which
+		// teaches whoever watches Progressing to stop reading it. So the phase
+		// is the whole question for this type: a member is coming up or it is
+		// not, and the count below sees it either way rather than skipping it
+		// here for carrying a hash nothing will replace.
+		if !group.IsOnDemand() && staleSpec(v, podHash) {
 			older++
 			continue
 		}
