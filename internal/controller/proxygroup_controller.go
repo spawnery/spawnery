@@ -942,7 +942,9 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// point: a group replacing a pod because its node is leaving and a group
 	// replacing every pod because a release changed the render are different
 	// events, and only the second is a fact about the whole installation.
-	own, surgeAllowed, waitingFor, err := proxyChangeover(ctx, r, network, group, wantHash)
+	key := group.Namespace + "/" + group.Name
+	pendingCreates, _, _ := r.Expectations.pending(key)
+	own, surgeAllowed, waitingFor, err := proxyChangeover(ctx, r, network, group, wantHash, int32(len(pendingCreates)))
 	if err != nil {
 		return err
 	}
@@ -973,8 +975,6 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// DecideSize's alive := in.PendingCreates (scaling.go); this states the
 	// same correction as a post-processing step on DecideRollout's answer
 	// instead, so rollout.go's sizing keeps knowing nothing about reservations.
-	key := group.Namespace + "/" + group.Name
-	pendingCreates, _, _ := r.Expectations.pending(key)
 	create := decision.Create - int32(len(pendingCreates))
 	if create < 0 {
 		create = 0

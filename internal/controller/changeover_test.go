@@ -20,7 +20,11 @@ import (
 	"reflect"
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/podspec"
 )
 
 func TestAdmitChangeovers(t *testing.T) {
@@ -118,6 +122,42 @@ func TestAdmitChangeovers(t *testing.T) {
 			got := AdmitChangeovers(tc.groups, tc.budget)
 			if !reflect.DeepEqual(got, tc.want) {
 				t.Errorf("AdmitChangeovers(%+v, %d) = %v, want %v", tc.groups, tc.budget, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOwnProxyChangeover(t *testing.T) {
+	pod := func(hash string, mutate ...func(*corev1.Pod)) corev1.Pod {
+		p := corev1.Pod{ObjectMeta: metav1.ObjectMeta{Labels: map[string]string{podspec.LabelPodHash: hash}}}
+		for _, m := range mutate {
+			m(&p)
+		}
+		return p
+	}
+	terminating := func(p *corev1.Pod) { now := metav1.Now(); p.DeletionTimestamp = &now }
+	failed := func(p *corev1.Pod) { p.Status.Phase = corev1.PodFailed }
+	cases := []struct {
+		name    string
+		pods    []corev1.Pod
+		pending int32
+		want    spawneryv1alpha1.ChangeoverState
+	}{
+		{"all current", []corev1.Pod{pod("new"), pod("new")}, 0, spawneryv1alpha1.ChangeoverNone},
+		{"stale only", []corev1.Pod{pod("old"), pod("old")}, 0, spawneryv1alpha1.ChangeoverWaiting},
+		{"stale and current", []corev1.Pod{pod("old"), pod("new")}, 0, spawneryv1alpha1.ChangeoverBegun},
+		{"stale only with a create the cache has not shown", []corev1.Pod{pod("old"), pod("old")}, 1,
+			spawneryv1alpha1.ChangeoverBegun},
+		{"terminating stale beside current", []corev1.Pod{pod("old", terminating), pod("new")}, 0,
+			spawneryv1alpha1.ChangeoverBegun},
+		{"terminating current is not begun", []corev1.Pod{pod("old"), pod("new", terminating)}, 0,
+			spawneryv1alpha1.ChangeoverWaiting},
+		{"failed stale is gone", []corev1.Pod{pod("old", failed), pod("new")}, 0, spawneryv1alpha1.ChangeoverNone},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ownProxyChangeover(tc.pods, "new", tc.pending); got != tc.want {
+				t.Errorf("ownProxyChangeover = %q, want %q", got, tc.want)
 			}
 		})
 	}

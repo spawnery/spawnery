@@ -166,7 +166,7 @@ func ownServerChangeover(views []ServerView, podHash string, pendingCreates int3
 // ownProxyChangeover is a proxy group's changeover state from every pod of the
 // group that still exists: a stale one that is draining or terminating is
 // still the group's extra pod.
-func ownProxyChangeover(pods []corev1.Pod, wantHash string) spawneryv1alpha1.ChangeoverState {
+func ownProxyChangeover(pods []corev1.Pod, wantHash string, pendingCreates int32) spawneryv1alpha1.ChangeoverState {
 	var stale, current bool
 	for i := range pods {
 		p := &pods[i]
@@ -182,7 +182,7 @@ func ownProxyChangeover(pods []corev1.Pod, wantHash string) spawneryv1alpha1.Cha
 	switch {
 	case !stale:
 		return spawneryv1alpha1.ChangeoverNone
-	case current:
+	case current || pendingCreates > 0:
 		return spawneryv1alpha1.ChangeoverBegun
 	default:
 		return spawneryv1alpha1.ChangeoverWaiting
@@ -193,14 +193,14 @@ func ownProxyChangeover(pods []corev1.Pod, wantHash string) spawneryv1alpha1.Cha
 // surge, and, when it may not, the groups holding the places.
 func proxyChangeover(
 	ctx context.Context, c client.Reader, network *spawneryv1alpha1.Network,
-	group *spawneryv1alpha1.ProxyGroup, wantHash string,
+	group *spawneryv1alpha1.ProxyGroup, wantHash string, pendingCreates int32,
 ) (spawneryv1alpha1.ChangeoverState, bool, []string, error) {
 	pods := &corev1.PodList{}
 	if err := c.List(ctx, pods, client.InNamespace(group.Namespace),
 		client.MatchingLabels(podspec.ProxyLabels(network.Name, group.Name))); err != nil {
 		return "", false, nil, err
 	}
-	own := ownProxyChangeover(pods.Items, wantHash)
+	own := ownProxyChangeover(pods.Items, wantHash, pendingCreates)
 	budget := network.ChangeoverBudget()
 	if budget == 0 || own != spawneryv1alpha1.ChangeoverWaiting {
 		return own, true, nil, nil
