@@ -114,11 +114,11 @@ no extra pod.
 
 **The race.** Two reconcilers can read the cache a moment apart and both admit
 themselves to the last place, and a sibling's `status.changeover` is one
-status write behind its reconcile. The budget is then exceeded by one for the few
-seconds until both see the other's new server, after which the later one is a
-holder like any other. This is accepted rather than locked against: the
-failure it prevents is a sustained surge of every group, not a transient one
-of two.
+status write behind its reconcile. Once both have begun, both are holders and
+neither is paused, so the budget stays exceeded by one until whichever of the
+two finishes its changeover first — minutes, not seconds, once a drain is
+part of it. This is accepted rather than locked against: the failure it
+prevents is a sustained surge of every group, not a race between two.
 
 **Wake-up.** A waiting group needs no watch on its siblings: every group is
 reconciled at least every five seconds, which is also how often a changeover
@@ -152,6 +152,20 @@ can make progress.
   that all four end at the new generation.
 - **Hash goldens stay unchanged:** the field lives on the Network and feeds no
   pod.
+
+**Known gap.** The envtest above, driven to completion by a manager and
+asserting the race bound end to end, was not built. What exists instead is
+narrower: the per-rule envtests in `internal/controller/changeover_envtest_test.go`,
+each driving one or two groups through hand-picked reconcile passes to check
+one rule of the budget (a holder keeps its place until its last stale server
+or pod is gone, a failing group is skipped, a refused group gives up a
+`Waiting` place, a proxy group waits behind a server group and is admitted
+once it finishes), plus the `AdmitChangeovers`, `DecideSize` and
+`DecideRollout` tables this section already lists. None of them run a
+manager loop or a network's worth of groups to completion together. A
+manager-driven end-to-end test — three server groups and a proxy group,
+changed over by a real network's default image and reconciled by a running
+manager to completion — is a follow-up, not covered here.
 
 ## 6. Not in this
 
