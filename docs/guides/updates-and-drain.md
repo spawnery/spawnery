@@ -99,7 +99,11 @@ halfway. A group that must change over but has not begun waits its turn;
 server groups and proxy groups are admitted together, by name. While it
 waits, nothing about it changes except the roll: its stale servers keep
 running and keep taking players, and only the cold start (for a proxy group,
-the surge pod) is withheld until it is admitted. A group whose changeover is
+the surge pod) is withheld until it is admitted. Player demand is not
+withheld: a waiting group that still needs a new server to answer it builds
+one at the current generation like any other, and that server is a begun
+changeover holding a place of its own — a second way, besides the race below,
+that the network can end up over the cap by one group. A group whose changeover is
 failing (`BackingOff` or `Degraded`) holds no place, so one replacement that
 cannot start does not stall every other group. A group whose cold start the
 `maxReplicas` ceiling refuses does not wait for a place either — its own
@@ -130,9 +134,11 @@ and `spawnery_network_changeovers_waiting`, both labelled `namespace` and
 doing its job from one that is actually stuck.
 
 Two reconcilers can admit themselves to the last place within moments of each
-other, so the budget can be exceeded by one group for a few seconds. That is
+other. Once that happens both are holders, and neither is paused, so the
+budget stays exceeded by one group until whichever of the two finishes its
+changeover first — minutes, not seconds, once a drain is part of it. That is
 accepted rather than locked against: what it prevents is a sustained surge
-across the whole network, not a brief one across two groups.
+across the whole network, not a race between two groups.
 
 ## What actually makes a group roll
 
