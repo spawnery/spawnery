@@ -101,7 +101,8 @@ one; the result is keyed by `Kind/Name`.
 **ServerGroup:** a group that is changing and not admitted gets no cold start.
 `DecideSize` already has the path for a refused cold start
 (`ColdStartBlocked`), used today for a ceiling that leaves no room; a new input
-`ChangeoverAdmitted bool` refuses it the same way, and the fall-through that
+`ChangeoverRefused bool` (named for the refusal, so its zero value is today's
+behaviour) refuses it the same way, and the fall-through that
 keeps a refused cold start from stalling the demand rule applies unchanged.
 
 **ProxyGroup:** `DecideRollout` gets the same input and computes its target
@@ -143,7 +144,7 @@ can make progress.
   a server group and a proxy group of the same name are two entries.
 - **`DecideSize` / `DecideRollout`:** a changing, not-admitted group creates
   nothing and reports the waiting reason; admitted, both behave exactly as
-  today (the existing tables run with `ChangeoverAdmitted: true`).
+  today (the existing tables, which leave `ChangeoverRefused` false).
 - **envtest:** a network with `maxConcurrentChangeovers: 1`, three server
   groups and one proxy group; change the network's default image. Assert that
   two groups never hold a current-generation server that is not Ready for
