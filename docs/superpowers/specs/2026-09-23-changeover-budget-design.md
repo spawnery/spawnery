@@ -78,8 +78,8 @@ type ChangeoverView struct {
     Failing  bool   // BackingOff or Degraded is True
 }
 
-// AdmitChangeovers returns the names of the groups that may change over now.
-// budget < 1 means no cap.
+// AdmitChangeovers returns the groups that may change over now, keyed
+// "Kind/Name". budget < 1 means no cap.
 func AdmitChangeovers(groups []ChangeoverView, budget int32) map[string]bool
 ```
 
@@ -123,8 +123,8 @@ can make progress.
 - The Network reports `spawnery_network_changeovers_in_flight` (holders) and
   `spawnery_network_changeovers_waiting` as gauges.
 - The field and the reason are documented in the CRD reference and in the
-  guide on updates and drain (`docs/guides/updates-and-drain.md`), with the two-node example of §1 told
-  generically.
+  guide on updates and drain (`docs/guides/updates-and-drain.md`), with the
+  two-node example of §1 told generically.
 
 ## 5. Testing
 
@@ -137,9 +137,10 @@ can make progress.
   nothing and reports the waiting reason; admitted, both behave exactly as
   today (the existing tables run with `ChangeoverAdmitted: true`).
 - **envtest:** a network with `maxConcurrentChangeovers: 1`, three server
-  groups and one proxy group; change the network's default image. Assert on
-  every observed state that at most one group has a current-generation server
-  that is not Ready, and that all four end at the new generation.
+  groups and one proxy group; change the network's default image. Assert that
+  two groups never hold a current-generation server that is not Ready for
+  longer than the race of §3 allows (two reconcile passes, ten seconds), and
+  that all four end at the new generation.
 - **Hash goldens stay unchanged:** the field lives on the Network and feeds no
   pod.
 
