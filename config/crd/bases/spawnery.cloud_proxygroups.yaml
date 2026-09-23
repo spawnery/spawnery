@@ -1836,6 +1836,15 @@ spec:
               address:
                 description: Address is where players connect.
                 type: string
+              changeover:
+                description: |-
+                  Changeover is this group's changeover as the network's budget sees it;
+                  written by its own reconcile and read by its siblings'.
+                enum:
+                - ""
+                - Waiting
+                - Begun
+                type: string
               conditions:
                 description: Conditions follow the standard Kubernetes condition contract.
                 items:

@@ -427,6 +427,12 @@ type ServerGroupStatus struct {
 	// +optional
 	FailureStreakKey string `json:"failureStreakKey,omitempty"`
 
+	// Changeover is this group's changeover as the network's budget sees it;
+	// written by its own reconcile and read by its siblings'.
+	// +optional
+	// +kubebuilder:validation:Enum="";Waiting;Begun
+	Changeover ChangeoverState `json:"changeover,omitempty"`
+
 	// Conditions follow the standard Kubernetes condition contract.
 	// +optional
 	// +listType=map

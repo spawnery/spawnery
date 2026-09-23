@@ -55,6 +55,8 @@ NetworkSpec describes one Minecraft network. Exactly one Network may exist per n
 <tr><td><code>scheduling.hostPortRange</code></td><td>object</td><td align="center"></td><td></td><td>HostPortRange bounds expose.hostPort.port on this network&#x27;s proxy groups. Without it no HostPort group is accepted.</td></tr>
 <tr><td><code>scheduling.hostPortRange.max</code></td><td>integer (int32) (1-65535)</td><td align="center">&#10003;</td><td></td><td></td></tr>
 <tr><td><code>scheduling.hostPortRange.min</code></td><td>integer (int32) (1-65535)</td><td align="center">&#10003;</td><td></td><td></td></tr>
+<tr><td><code>update</code></td><td>object</td><td align="center"></td><td></td><td>Update is how the network&#x27;s groups change over to a new spec.</td></tr>
+<tr><td><code>update.maxConcurrentChangeovers</code></td><td>integer (int32) (&gt;= 1)</td><td align="center"></td><td></td><td>MaxConcurrentChangeovers is how many server and proxy groups may change over at the same time. A group changing over runs one server more than its size until its last stale server is gone; a change that reaches every group at once needs that room for every group at once. Unset means no cap.</td></tr>
 </tbody></table></div>
 
 ### status
@@ -166,6 +168,7 @@ Read by observers; the operator writes it and reads nothing back from it.
 <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Default</th><th>Description</th></tr></thead>
 <tbody>
 <tr><td><code>boostedReplicas</code></td><td>integer (int32)</td><td align="center"></td><td></td><td>BoostedReplicas is how much of this group&#x27;s current floor comes from ScaleBoost objects rather than from spec.scaling.minReplicas.<details><summary>more</summary>It exists because the likeliest failure of a boost is not a wrong number but an unexplained one: a group running four servers with a declared floor of one and nothing anywhere saying why. A person meeting that will edit the spec, which is the single thing that would not help -- the boost is a separate object and the spec is not where it lives.<br><br>Zero and present rather than absent, so that comparing two groups does not mean telling &quot;no boost&quot; apart from &quot;this operator is too old to say&quot;.</details></td></tr>
+<tr><td><code>changeover</code></td><td>string (one of: , Waiting, Begun)</td><td align="center"></td><td></td><td>Changeover is this group&#x27;s changeover as the network&#x27;s budget sees it; written by its own reconcile and read by its siblings&#x27;.</td></tr>
 <tr><td><code>conditions</code></td><td>array</td><td align="center"></td><td></td><td>Conditions follow the standard Kubernetes condition contract.</td></tr>
 <tr><td><code>conditions[].lastTransitionTime</code></td><td>string (date-time)</td><td align="center">&#10003;</td><td></td><td>lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.</td></tr>
 <tr><td><code>conditions[].message</code></td><td>string (length 0-32768)</td><td align="center">&#10003;</td><td></td><td>message is a human readable message indicating details about the transition. This may be an empty string.</td></tr>
@@ -269,6 +272,7 @@ Read by observers; the operator writes it and reads nothing back from it.
 <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Default</th><th>Description</th></tr></thead>
 <tbody>
 <tr><td><code>address</code></td><td>string</td><td align="center"></td><td></td><td>Address is where players connect.</td></tr>
+<tr><td><code>changeover</code></td><td>string (one of: , Waiting, Begun)</td><td align="center"></td><td></td><td>Changeover is this group&#x27;s changeover as the network&#x27;s budget sees it; written by its own reconcile and read by its siblings&#x27;.</td></tr>
 <tr><td><code>conditions</code></td><td>array</td><td align="center"></td><td></td><td>Conditions follow the standard Kubernetes condition contract.</td></tr>
 <tr><td><code>conditions[].lastTransitionTime</code></td><td>string (date-time)</td><td align="center">&#10003;</td><td></td><td>lastTransitionTime is the last time the condition transitioned from one status to another. This should be when the underlying condition changed.  If that is not known, then using the time when the API field changed is acceptable.</td></tr>
 <tr><td><code>conditions[].message</code></td><td>string (length 0-32768)</td><td align="center">&#10003;</td><td></td><td>message is a human readable message indicating details about the transition. This may be an empty string.</td></tr>
