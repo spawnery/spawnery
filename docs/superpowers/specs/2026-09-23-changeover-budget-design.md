@@ -64,9 +64,16 @@ is withheld until it is admitted.
 
 ## 3. Where it is decided
 
-**Each group decides for itself, from the shared cache.** Before sizing, the
-ServerGroup and ProxyGroup reconcilers list the network's groups and their
-servers or pods from the informer cache and call one pure function:
+**Each group decides for itself, from the shared cache.** A group knows its
+own changeover state only as a by-product of its own reconcile: whether a
+server is stale depends on the group's desired pod hash, which takes the
+network, the group and its config overlay to compute. So every group
+publishes that state in its status, `status.changeover`: empty when it is not
+changing over, `Waiting` when it must and has not begun, `Begun` when it has a
+server or pod of the current generation beside stale ones. Before sizing, a
+reconciler reads its siblings' `status.changeover` and conditions from the
+informer cache, adds its own state computed this pass, and calls one pure
+function:
 
 ```go
 // ChangeoverView is one group as the budget sees it.
@@ -105,7 +112,8 @@ pod takes its place rather than adding to it, so a waiting proxy group costs
 no extra pod.
 
 **The race.** Two reconcilers can read the cache a moment apart and both admit
-themselves to the last place. The budget is then exceeded by one for the few
+themselves to the last place, and a sibling's `status.changeover` is one
+status write behind its reconcile. The budget is then exceeded by one for the few
 seconds until both see the other's new server, after which the later one is a
 holder like any other. This is accepted rather than locked against: the
 failure it prevents is a sustained surge of every group, not a transient one
