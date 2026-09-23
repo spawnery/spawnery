@@ -45,6 +45,7 @@ import (
 
 	_ "github.com/spawnery/spawnery/internal/agentserver"
 	_ "github.com/spawnery/spawnery/internal/certs"
+	_ "github.com/spawnery/spawnery/internal/controller"
 	_ "github.com/spawnery/spawnery/internal/grpcauth"
 	_ "github.com/spawnery/spawnery/internal/proxyreg"
 	_ "github.com/spawnery/spawnery/internal/rbacaudit"
@@ -240,8 +241,17 @@ func quotedField(s string) (value, rest string, err error) {
 }
 
 // gatherTypes reads the real metric type -- gauge, counter, ... -- for every
-// metric Gather() has at least one sample for. It is deliberately not the
-// source of the metric list: see describeAll for what Gather() misses.
+// spawnery_ metric Gather() has at least one sample for. It is deliberately
+// not the source of the metric list: see describeAll for what Gather()
+// misses.
+//
+// Filtered to metricNamePrefix because Gather() also returns whatever the Go
+// runtime and process collectors have registered on this same registry --
+// controller-runtime's controller package pulls those in as a side effect,
+// and among them is a histogram (go_sched_pauses_stopping_other_seconds).
+// Left unfiltered, that reaches verifyObservedTypesFitInferType, which is a
+// check on the naming convention this repository's own spawnery_ metrics
+// follow and has nothing to say about a foreign collector's choices.
 func gatherTypes() (map[string]string, error) {
 	mfs, err := metrics.Registry.Gather()
 	if err != nil {
@@ -249,7 +259,9 @@ func gatherTypes() (map[string]string, error) {
 	}
 	types := make(map[string]string, len(mfs))
 	for _, mf := range mfs {
-		types[mf.GetName()] = strings.ToLower(mf.GetType().String())
+		if name := mf.GetName(); strings.HasPrefix(name, metricNamePrefix) {
+			types[name] = strings.ToLower(mf.GetType().String())
+		}
 	}
 	return types, nil
 }
