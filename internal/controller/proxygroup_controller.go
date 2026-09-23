@@ -531,6 +531,13 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 // controller-runtime ignores it when the error is non-nil and backs off
 // instead, which is the behaviour wanted for a failed protection pass.
 func (r *ProxyGroupReconciler) refuse(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) (ctrl.Result, error) {
+	// A Waiting group has no surge pod, so giving up its place costs nothing;
+	// see AdmitChangeovers, which would otherwise keep handing the place to
+	// this name forever. A Begun group's surge pod exists and is never
+	// paused halfway, so its state stands.
+	if group.Status.Changeover == spawneryv1alpha1.ChangeoverWaiting {
+		group.Status.Changeover = spawneryv1alpha1.ChangeoverNone
+	}
 	protectErr := r.protectPlayersOnly(ctx, group)
 	if err := r.writeStatus(ctx, group); err != nil {
 		return ctrl.Result{}, err

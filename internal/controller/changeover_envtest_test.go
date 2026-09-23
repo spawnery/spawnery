@@ -22,6 +22,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -376,11 +377,75 @@ func TestChangeoverBudgetHeldUntilTheLastStaleProxyIsGone(t *testing.T) {
 	}
 }
 
+// A Waiting proxy group that is then refused must give up its place: refuse()
+// used to leave status.changeover untouched, so the refused group kept
+// winning AdmitChangeovers's name-ordered admission forever, and a real
+// waiting sibling named after it never got in.
+func TestARefusedWaitingProxyGroupGivesUpItsPlace(t *testing.T) {
+	f := newFixture(t)
+	gr := groupReconciler(f)
+	pr := proxyGroupReconciler(f)
+	f.setChangeoverBudget(t, 1)
+	f.reconcileNamedGroup(t, gr, "lobby")
+	f.readyAllServersOf(t, "lobby")
+	f.readyProxyGroup(t, pr, "gateway")
+	f.readyProxyGroup(t, pr, "zulu", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Expose.NodePort.Port = 30002
+	})
+
+	// lobby is reconciled first and alone, so it takes the network's one
+	// place and holds it.
+	f.setImage(t, "lobby", nextImage)
+	f.reconcileNamedGroup(t, gr, "lobby")
+
+	f.setProxyImage(t, "gateway", nextProxyImage)
+	f.reconcileProxyGroup(pr, "gateway")
+	f.setProxyImage(t, "zulu", nextProxyImage)
+	f.reconcileProxyGroup(pr, "zulu")
+	if got := f.proxyGroup("gateway").Status.Changeover; got != spawneryv1alpha1.ChangeoverWaiting {
+		t.Fatalf("gateway status.changeover = %q, want Waiting", got)
+	}
+	if got := f.proxyGroup("zulu").Status.Changeover; got != spawneryv1alpha1.ChangeoverWaiting {
+		t.Fatalf("zulu status.changeover = %q, want Waiting", got)
+	}
+
+	// gateway is refused on an unrelated ground -- its own scheduling, which
+	// the network does not allow -- while it is still Waiting.
+	gateway := f.proxyGroup("gateway")
+	gateway.Spec.Scheduling = &spawneryv1alpha1.Scheduling{
+		Tolerations: []corev1.Toleration{{Key: "spawnery.cloud/test-refusal", Operator: corev1.TolerationOpExists}},
+	}
+	if err := f.c.Update(f.ctx, gateway); err != nil {
+		t.Fatalf("update gateway: %v", err)
+	}
+	f.reconcileProxyGroup(pr, "gateway")
+	if c := meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions, spawneryv1alpha1.ConditionAccepted); c == nil ||
+		c.Reason != spawneryv1alpha1.ReasonSchedulingNotAllowed {
+		t.Fatalf("gateway Accepted condition = %+v, want SchedulingNotAllowed", c)
+	}
+	if got := f.proxyGroup("gateway").Status.Changeover; got != spawneryv1alpha1.ChangeoverNone {
+		t.Fatalf("gateway status.changeover = %q after its refusal, want empty: a Waiting group has no extra pod to hold a place with", got)
+	}
+
+	// The holder finishes; the place is free. zulu, waiting since before
+	// gateway was refused and named after it, must be admitted -- not
+	// blocked forever by a refused group AdmitChangeovers still counts as
+	// Waiting.
+	f.finishChangeover(t, gr, "lobby")
+	f.reconcileProxyGroup(pr, "zulu")
+	if n := len(f.proxyPods("zulu")); n != 3 {
+		t.Fatalf("zulu has %d pods, want 3: the place is free, the surge pod comes", n)
+	}
+	if got := f.proxyGroup("zulu").Status.Changeover; got != spawneryv1alpha1.ChangeoverBegun {
+		t.Fatalf("zulu status.changeover = %q, want Begun", got)
+	}
+}
+
 // readyProxyGroup creates a proxy group, reconciles it once and readies its
 // pods, returning their names.
-func (f *fixture) readyProxyGroup(t *testing.T, r *ProxyGroupReconciler, name string) []string {
+func (f *fixture) readyProxyGroup(t *testing.T, r *ProxyGroupReconciler, name string, mutate ...func(*spawneryv1alpha1.ProxyGroup)) []string {
 	t.Helper()
-	f.createProxyGroup(name)
+	f.createProxyGroup(name, mutate...)
 	f.reconcileProxyGroup(r, name)
 	pods := f.proxyPods(name)
 	names := make([]string, 0, len(pods))
