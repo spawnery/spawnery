@@ -20,10 +20,13 @@ import (
 	"strings"
 	"testing"
 
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/phase"
 )
 
 const nextImage = "ghcr.io/spawnery/paper:1.21.4-0.2.0"
@@ -123,6 +126,71 @@ func TestChangeoverBudgetIgnoresAGroupAtItsCeiling(t *testing.T) {
 	}
 	if n := len(f.serverNamesOfGroup(t, "lobby")); n != 2 {
 		t.Fatalf("lobby has %d servers, want 2: arena holds no place", n)
+	}
+}
+
+// Without a budget a failing group is not refused either: the pass on which
+// its backoff has just expired still reads BackingOff True from the last one.
+func TestChangeoverBudgetUnsetDoesNotRefuseAFailingGroup(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.reconcileNamedGroup(t, r, "lobby")
+	f.readyAllServersOf(t, "lobby")
+	f.setImage(t, "lobby", nextImage)
+
+	g := f.serverGroup(t, "lobby")
+	meta.SetStatusCondition(&g.Status.Conditions, metav1.Condition{
+		Type: spawneryv1alpha1.ConditionBackingOff, Status: metav1.ConditionTrue,
+		Reason: "Test", Message: "left over from the last pass",
+	})
+	if err := f.c.Status().Update(f.ctx, g); err != nil {
+		t.Fatalf("update lobby status: %v", err)
+	}
+
+	f.reconcileNamedGroup(t, r, "lobby")
+
+	if n := len(f.serverNamesOfGroup(t, "lobby")); n != 2 {
+		t.Fatalf("lobby has %d servers, want 2: no budget refuses nothing", n)
+	}
+}
+
+// A stale server that is leaving but not gone is still the group's extra
+// server, so the group keeps its place until it is gone.
+func TestChangeoverBudgetHeldUntilTheLastStaleServerIsGone(t *testing.T) {
+	for _, p := range []phase.Phase{phase.Retiring, phase.Draining, phase.Terminating} {
+		t.Run(string(p), func(t *testing.T) {
+			f := newFixture(t)
+			r := groupReconciler(f)
+			f.setChangeoverBudget(t, 1)
+			f.createEphemeralGroupLike(t, "arena")
+			for _, name := range []string{"arena", "lobby"} {
+				f.reconcileNamedGroup(t, r, name)
+				f.readyAllServersOf(t, name)
+			}
+			stale := f.serverNamesOfGroup(t, "arena")
+			f.setImage(t, "arena", nextImage)
+			f.setImage(t, "lobby", nextImage)
+			f.reconcileNamedGroup(t, r, "arena")
+
+			g := f.serverGroup(t, "arena")
+			for _, name := range f.serverNamesOfGroup(t, "arena") {
+				if srv := f.server(name); srv.Spec.GroupGeneration == g.Generation {
+					bringUpNamed(t, f, name)
+				}
+			}
+			for _, name := range stale {
+				f.setPhase(t, f.server(name), p)
+			}
+			f.reconcileNamedGroup(t, r, "arena")
+			f.reconcileNamedGroup(t, r, "lobby")
+
+			if got := f.serverGroup(t, "arena").Status.Changeover; got != spawneryv1alpha1.ChangeoverBegun {
+				t.Fatalf("arena status.changeover = %q with its stale server %s, want Begun", got, p)
+			}
+			if n := len(f.serverNamesOfGroup(t, "lobby")); n != 1 {
+				t.Fatalf("lobby has %d servers, want 1: arena still holds the place", n)
+			}
+		})
 	}
 }
 

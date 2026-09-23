@@ -940,7 +940,7 @@ func (r *ServerGroupReconciler) size(
 				PendingDeletes: pendingDeletes,
 				PendingRetires: pendingRetires,
 
-				ChangeoverRefused: own == spawneryv1alpha1.ChangeoverWaiting &&
+				ChangeoverRefused: budget > 0 && own == spawneryv1alpha1.ChangeoverWaiting &&
 					!admitted[changeoverKey("ServerGroup", group.Name)],
 			})
 			switch {

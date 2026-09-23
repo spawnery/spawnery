@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/phase"
 )
 
 // ChangeoverView is what AdmitChangeovers needs of one group to decide
@@ -136,15 +137,16 @@ func changeoverHolders(groups []ChangeoverView, admitted map[string]bool, selfKi
 
 // ownServerChangeover is a server group's changeover state from its own
 // servers. Only an ephemeral group surges, so only its views are passed here.
+// A stale server that is leaving still counts: until it is gone it is the
+// group's extra server.
 func ownServerChangeover(views []ServerView, podHash string, pendingCreates int32) spawneryv1alpha1.ChangeoverState {
 	var stale, current bool
 	for _, v := range views {
-		if !v.countsTowardSize() {
-			continue
-		}
 		if staleSpec(v, podHash) {
-			stale = true
-		} else {
+			if !phase.Terminal(v.Phase) {
+				stale = true
+			}
+		} else if v.countsTowardSize() {
 			current = true
 		}
 	}
