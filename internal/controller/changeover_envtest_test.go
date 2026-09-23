@@ -17,13 +17,16 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"strings"
 	"testing"
+	"time"
 
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/phase"
@@ -265,4 +268,159 @@ func (f *fixture) finishChangeover(t *testing.T, r *ServerGroupReconciler, group
 	}
 	f.reconcileNamedGroup(t, r, group)
 	f.reconcileNamedGroup(t, r, group)
+}
+
+const nextProxyImage = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
+
+func TestChangeoverBudgetHoldsAProxyGroupBehindAServerGroup(t *testing.T) {
+	f := newFixture(t)
+	gr := groupReconciler(f)
+	pr := proxyGroupReconciler(f)
+	f.setChangeoverBudget(t, 1)
+	f.reconcileNamedGroup(t, gr, "lobby")
+	f.readyAllServersOf(t, "lobby")
+	f.readyProxyGroup(t, pr, "gateway")
+
+	f.setImage(t, "lobby", nextImage)
+	f.reconcileNamedGroup(t, gr, "lobby")
+	f.setProxyImage(t, "gateway", nextProxyImage)
+	f.reconcileProxyGroup(pr, "gateway")
+
+	if n := len(f.proxyPods("gateway")); n != 2 {
+		t.Fatalf("gateway has %d pods, want 2: lobby holds the place", n)
+	}
+	g := f.proxyGroup("gateway")
+	if g.Status.Changeover != spawneryv1alpha1.ChangeoverWaiting {
+		t.Fatalf("gateway status.changeover = %q, want Waiting", g.Status.Changeover)
+	}
+	if c := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionChangingOver); c == nil ||
+		c.Status != metav1.ConditionTrue ||
+		c.Message != "waiting for a changeover place; changing over: lobby" {
+		t.Fatalf("gateway ChangingOver = %+v, want True naming lobby", c)
+	}
+
+	f.finishChangeover(t, gr, "lobby")
+	f.reconcileProxyGroup(pr, "gateway")
+
+	if n := len(f.proxyPods("gateway")); n != 3 {
+		t.Fatalf("gateway has %d pods, want 3: the place is free, the surge pod comes", n)
+	}
+	if got := f.proxyGroup("gateway").Status.Changeover; got != spawneryv1alpha1.ChangeoverBegun {
+		t.Fatalf("gateway status.changeover = %q, want Begun", got)
+	}
+}
+
+func TestChangeoverBudgetUnsetDoesNotRefuseADegradedProxyGroup(t *testing.T) {
+	f := newFixture(t)
+	pr := proxyGroupReconciler(f)
+	f.readyProxyGroup(t, pr, "gateway")
+	f.setProxyImage(t, "gateway", nextProxyImage)
+
+	g := f.proxyGroup("gateway")
+	meta.SetStatusCondition(&g.Status.Conditions, metav1.Condition{
+		Type: spawneryv1alpha1.ConditionDegraded, Status: metav1.ConditionTrue,
+		Reason: "Test", Message: "left over from the last pass",
+	})
+	if err := f.c.Status().Update(f.ctx, g); err != nil {
+		t.Fatalf("update gateway status: %v", err)
+	}
+
+	f.reconcileProxyGroup(pr, "gateway")
+
+	if n := len(f.proxyPods("gateway")); n != 3 {
+		t.Fatalf("gateway has %d pods, want 3: no budget refuses nothing", n)
+	}
+}
+
+// A stale proxy that is draining or terminating still exists, so the group
+// keeps its place until it is gone.
+func TestChangeoverBudgetHeldUntilTheLastStaleProxyIsGone(t *testing.T) {
+	for _, leaving := range []string{"draining", "terminating"} {
+		t.Run(leaving, func(t *testing.T) {
+			f := newFixture(t)
+			gr := groupReconciler(f)
+			pr := proxyGroupReconciler(f)
+			f.setChangeoverBudget(t, 1)
+			f.reconcileNamedGroup(t, gr, "lobby")
+			f.readyAllServersOf(t, "lobby")
+			stale := f.readyProxyGroup(t, pr, "gateway")
+
+			f.setProxyImage(t, "gateway", nextProxyImage)
+			f.reconcileProxyGroup(pr, "gateway")
+			pods := f.proxyPods("gateway")
+			if len(pods) != 3 {
+				t.Fatalf("gateway has %d pods, want 3", len(pods))
+			}
+			for i := range pods {
+				f.markProxyPodReady(t, &pods[i])
+			}
+
+			f.deletePod(t, stale[0], false)
+			switch leaving {
+			case "draining":
+				f.setDrainingSince(stale[1], f.clock.Now().UTC().Format(time.RFC3339))
+			case "terminating":
+				f.deletePod(t, stale[1], true)
+			}
+			f.reconcileProxyGroup(pr, "gateway")
+			f.setImage(t, "lobby", nextImage)
+			f.reconcileNamedGroup(t, gr, "lobby")
+
+			if got := f.proxyGroup("gateway").Status.Changeover; got != spawneryv1alpha1.ChangeoverBegun {
+				t.Fatalf("gateway status.changeover = %q with its last stale pod %s, want Begun", got, leaving)
+			}
+			if n := len(f.serverNamesOfGroup(t, "lobby")); n != 1 {
+				t.Fatalf("lobby has %d servers, want 1: gateway still holds the place", n)
+			}
+		})
+	}
+}
+
+// readyProxyGroup creates a proxy group, reconciles it once and readies its
+// pods, returning their names.
+func (f *fixture) readyProxyGroup(t *testing.T, r *ProxyGroupReconciler, name string) []string {
+	t.Helper()
+	f.createProxyGroup(name)
+	f.reconcileProxyGroup(r, name)
+	pods := f.proxyPods(name)
+	names := make([]string, 0, len(pods))
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+		names = append(names, pods[i].Name)
+	}
+	return names
+}
+
+func (f *fixture) setProxyImage(t *testing.T, name, image string) {
+	t.Helper()
+	g := f.proxyGroup(name)
+	g.Spec.Image = image
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatalf("update ProxyGroup %s: %v", name, err)
+	}
+}
+
+// deletePod deletes a pod at once, or, held by a finalizer, leaves it
+// terminating.
+func (f *fixture) deletePod(t *testing.T, name string, hold bool) {
+	t.Helper()
+	pod, ok := f.pod(name)
+	if !ok {
+		t.Fatalf("pod %s not found", name)
+	}
+	if hold {
+		pod.Finalizers = append(pod.Finalizers, "spawnery.cloud/test-hold")
+		if err := f.c.Update(f.ctx, pod); err != nil {
+			t.Fatalf("hold pod %s: %v", name, err)
+		}
+		t.Cleanup(func() {
+			if p, _ := f.pod(name); p != nil {
+				p.Finalizers = nil
+				_ = f.c.Update(context.Background(), p)
+			}
+		})
+	}
+	if err := f.c.Delete(f.ctx, pod, client.GracePeriodSeconds(0)); err != nil {
+		t.Fatalf("delete pod %s: %v", name, err)
+	}
 }

@@ -18,14 +18,17 @@ package controller
 
 import (
 	"context"
+	"slices"
 	"sort"
 
+	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/phase"
+	"github.com/spawnery/spawnery/internal/podspec"
 )
 
 // ChangeoverView is what AdmitChangeovers needs of one group to decide
@@ -158,4 +161,61 @@ func ownServerChangeover(views []ServerView, podHash string, pendingCreates int3
 	default:
 		return spawneryv1alpha1.ChangeoverWaiting
 	}
+}
+
+// ownProxyChangeover is a proxy group's changeover state from every pod of the
+// group that still exists: a stale one that is draining or terminating is
+// still the group's extra pod.
+func ownProxyChangeover(pods []corev1.Pod, wantHash string) spawneryv1alpha1.ChangeoverState {
+	var stale, current bool
+	for i := range pods {
+		p := &pods[i]
+		if p.Status.Phase == corev1.PodFailed || p.Status.Phase == corev1.PodSucceeded {
+			continue
+		}
+		if p.Labels[podspec.LabelPodHash] != wantHash {
+			stale = true
+		} else if p.DeletionTimestamp.IsZero() {
+			current = true
+		}
+	}
+	switch {
+	case !stale:
+		return spawneryv1alpha1.ChangeoverNone
+	case current:
+		return spawneryv1alpha1.ChangeoverBegun
+	default:
+		return spawneryv1alpha1.ChangeoverWaiting
+	}
+}
+
+// proxyChangeover is a proxy group's own changeover state, whether it may
+// surge, and, when it may not, the groups holding the places.
+func proxyChangeover(
+	ctx context.Context, c client.Reader, network *spawneryv1alpha1.Network,
+	group *spawneryv1alpha1.ProxyGroup, wantHash string,
+) (spawneryv1alpha1.ChangeoverState, bool, []string, error) {
+	pods := &corev1.PodList{}
+	if err := c.List(ctx, pods, client.InNamespace(group.Namespace),
+		client.MatchingLabels(podspec.ProxyLabels(network.Name, group.Name))); err != nil {
+		return "", false, nil, err
+	}
+	own := ownProxyChangeover(pods.Items, wantHash)
+	budget := network.ChangeoverBudget()
+	if budget == 0 || own != spawneryv1alpha1.ChangeoverWaiting {
+		return own, true, nil, nil
+	}
+	siblings, err := changeoverSiblings(ctx, c, group.Namespace, network.Name, "ProxyGroup", group.Name)
+	if err != nil {
+		return "", false, nil, err
+	}
+	groups := append(slices.Clip(siblings), ChangeoverView{
+		Kind: "ProxyGroup", Name: group.Name, State: own,
+		Failing: changeoverFailing(group.Status.Conditions),
+	})
+	admitted := AdmitChangeovers(groups, budget)
+	if admitted[changeoverKey("ProxyGroup", group.Name)] {
+		return own, true, nil, nil
+	}
+	return own, false, changeoverHolders(groups, admitted, "ProxyGroup", group.Name), nil
 }

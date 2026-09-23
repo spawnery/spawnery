@@ -942,9 +942,14 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// point: a group replacing a pod because its node is leaving and a group
 	// replacing every pod because a release changed the render are different
 	// events, and only the second is a fact about the whole installation.
-	reportChangingOver(group, pods, wantHash)
+	own, surgeAllowed, waitingFor, err := proxyChangeover(ctx, r, network, group, wantHash)
+	if err != nil {
+		return err
+	}
+	group.Status.Changeover = own
+	reportChangingOver(group, pods, wantHash, waitingFor)
 
-	decision := DecideRollout(views, group.Spec.Replicas, true)
+	decision := DecideRollout(views, group.Spec.Replicas, surgeAllowed)
 
 	// DecideRollout sizes target - total from views, which pods() has already
 	// read through the manager's cached client: a reconcile triggered by its
@@ -1004,6 +1009,9 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		// is nothing to expire on the TTL in that case, because nothing was
 		// recorded.
 		r.Expectations.expectCreated(key, pod.Name, 0)
+	}
+	if own == spawneryv1alpha1.ChangeoverWaiting && decision.Create > 0 {
+		group.Status.Changeover = spawneryv1alpha1.ChangeoverBegun
 	}
 
 	// Which pods are going, decided once and used by both loops below.
@@ -1474,7 +1482,7 @@ func (r *ProxyGroupReconciler) reportNodeDraining(
 // creates lacks one -- podspec stamps it on every proxy pod -- so the only way
 // to be here is a pod somebody else made under this group's name, and a pod
 // whose shape cannot be compared is not a pod whose shape agrees.
-func reportChangingOver(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, wantHash string) {
+func reportChangingOver(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, wantHash string, waitingFor []string) {
 	stale := 0
 	for i := range pods {
 		if pods[i].Labels[podspec.LabelPodHash] != wantHash {
@@ -1495,6 +1503,9 @@ func reportChangingOver(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, w
 				"being replaced one at a time; if every group in the cluster says this at "+
 				"once, an operator upgrade changed the pod render rather than anyone "+
 				"editing a spec", stale, len(pods))
+		if len(waitingFor) > 0 {
+			cond.Message = "waiting for a changeover place; changing over: " + strings.Join(waitingFor, ", ")
+		}
 	}
 	meta.SetStatusCondition(&group.Status.Conditions, cond)
 }
