@@ -519,9 +519,23 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		boost = boostpkg.Live(boostList.Items, group.Name, r.Clock())
 	}
 
-	decision, err := r.size(ctx, group, views, servers, backoff, mayResize, podHash, boost)
+	var siblings []ChangeoverView
+	budget := network.ChangeoverBudget()
+	if group.IsEphemeral() && mayResize {
+		siblings, err = changeoverSiblings(ctx, r, group.Namespace, network.Name, "ServerGroup", group.Name)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+	}
+	decision, err := r.size(ctx, group, views, servers, backoff, mayResize, podHash, boost, siblings, budget)
 	if err != nil {
 		return ctrl.Result{}, err
+	}
+	var waitingFor []string
+	if decision.ChangeoverWaiting {
+		// A refused group took no place, so the siblings alone are admitted
+		// exactly as they were with it.
+		waitingFor = changeoverHolders(siblings, AdmitChangeovers(siblings, budget), "ServerGroup", group.Name)
 	}
 	sized := mayResize
 
@@ -776,7 +790,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// After derivePhase and independent of it: the two answer different
 	// questions and neither is allowed to move the other. See
 	// ConditionProgressing and reportProgressing.
-	reportProgressing(group, views, podHash)
+	reportProgressing(group, views, podHash, waitingFor)
 	// This group's own answer about the forwarding secret. Unlike the proxy
 	// side, this controller works in Servers and holds no pods, so it costs a
 	// list of its own -- label-scoped to this group, over the manager's warm
@@ -883,6 +897,8 @@ func (r *ServerGroupReconciler) size(
 	mayResize bool,
 	podHash string,
 	boost int32,
+	siblings []ChangeoverView,
+	budget int32,
 ) (SizeDecision, error) {
 	logger := log.FromContext(ctx)
 	key := group.Namespace + "/" + group.Name
@@ -895,6 +911,7 @@ func (r *ServerGroupReconciler) size(
 	pendingCreates, pendingDeletes, pendingRetires := r.Expectations.pending(key)
 
 	var decision SizeDecision
+	group.Status.Changeover = spawneryv1alpha1.ChangeoverNone
 	switch {
 	case !mayResize:
 		// No size is decided, and the condemnation attached below is the whole
@@ -902,6 +919,11 @@ func (r *ServerGroupReconciler) size(
 		// by a field no rule filled in.
 	case group.IsEphemeral():
 		if group.Spec.Scaling != nil {
+			own := ownServerChangeover(views, podHash, int32(len(pendingCreates)))
+			admitted := AdmitChangeovers(append(siblings, ChangeoverView{
+				Kind: "ServerGroup", Name: group.Name, State: own,
+				Failing: changeoverFailing(group.Status.Conditions),
+			}), budget)
 			decision = DecideSize(ScalingInputs{
 				Views:         views,
 				MinReplicas:   group.Spec.Scaling.MinReplicas,
@@ -917,7 +939,19 @@ func (r *ServerGroupReconciler) size(
 				PendingCreates: int32(len(pendingCreates)),
 				PendingDeletes: pendingDeletes,
 				PendingRetires: pendingRetires,
+
+				ChangeoverRefused: own == spawneryv1alpha1.ChangeoverWaiting &&
+					!admitted[changeoverKey("ServerGroup", group.Name)],
 			})
+			switch {
+			// The ceiling, not the budget, holds this group; a place would
+			// only keep a sibling waiting.
+			case decision.ColdStartBlocked:
+			case own == spawneryv1alpha1.ChangeoverWaiting && decision.Create > 0 && backoff.MayCreate:
+				group.Status.Changeover = spawneryv1alpha1.ChangeoverBegun
+			default:
+				group.Status.Changeover = own
+			}
 		}
 	case group.IsOnDemand():
 		// No size is decided and none can be: the members of this group exist
@@ -1233,7 +1267,7 @@ func (r *ServerGroupReconciler) groupPods(
 // replacement that was not happening. An empty podHash compares nothing, so a
 // pass without a usable Network reports no replacement rather than a phantom
 // one.
-func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, podHash string) {
+func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, podHash string, waitingFor []string) {
 	var starting, older int32
 	// A retiree that will never retire. spec.retire is the update budget's one
 	// signal (selectRetirement), and it survives the server failing -- so a
@@ -1282,6 +1316,10 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, 
 
 	condition := metav1.Condition{Type: spawneryv1alpha1.ConditionProgressing}
 	switch {
+	case len(waitingFor) > 0:
+		condition.Status = metav1.ConditionTrue
+		condition.Reason = spawneryv1alpha1.ReasonWaitingForChangeoverBudget
+		condition.Message = "waiting for a changeover place; changing over: " + strings.Join(waitingFor, ", ")
 	// Before the two counts below, because it is the answer to the question
 	// they raise. A group in this state reports older > 0 for as long as the
 	// retention window lasts and says "still being replaced", which is true

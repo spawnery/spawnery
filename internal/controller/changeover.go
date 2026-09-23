@@ -17,7 +17,12 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"sort"
+
+	"k8s.io/apimachinery/pkg/api/meta"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
@@ -69,4 +74,86 @@ func AdmitChangeovers(groups []ChangeoverView, budget int32) map[string]bool {
 		holders++
 	}
 	return admitted
+}
+
+func changeoverFailing(conditions []metav1.Condition) bool {
+	return meta.IsStatusConditionTrue(conditions, spawneryv1alpha1.ConditionBackingOff) ||
+		meta.IsStatusConditionTrue(conditions, spawneryv1alpha1.ConditionDegraded)
+}
+
+// changeoverSiblings is every server and proxy group of the network in the
+// namespace except the caller, as AdmitChangeovers sees them.
+func changeoverSiblings(
+	ctx context.Context, c client.Reader, namespace, network, selfKind, selfName string,
+) ([]ChangeoverView, error) {
+	var views []ChangeoverView
+	servers := &spawneryv1alpha1.ServerGroupList{}
+	if err := c.List(ctx, servers, client.InNamespace(namespace)); err != nil {
+		return nil, err
+	}
+	for i := range servers.Items {
+		g := &servers.Items[i]
+		if g.Spec.NetworkRef.Name != network || (selfKind == "ServerGroup" && g.Name == selfName) {
+			continue
+		}
+		views = append(views, ChangeoverView{
+			Kind: "ServerGroup", Name: g.Name,
+			State: g.Status.Changeover, Failing: changeoverFailing(g.Status.Conditions),
+		})
+	}
+	proxies := &spawneryv1alpha1.ProxyGroupList{}
+	if err := c.List(ctx, proxies, client.InNamespace(namespace)); err != nil {
+		return nil, err
+	}
+	for i := range proxies.Items {
+		g := &proxies.Items[i]
+		if g.Spec.NetworkRef.Name != network || (selfKind == "ProxyGroup" && g.Name == selfName) {
+			continue
+		}
+		views = append(views, ChangeoverView{
+			Kind: "ProxyGroup", Name: g.Name,
+			State: g.Status.Changeover, Failing: changeoverFailing(g.Status.Conditions),
+		})
+	}
+	return views, nil
+}
+
+// changeoverHolders names the groups other than the caller that AdmitChangeovers
+// admitted, sorted and without repeats: the ones a waiting group waits for.
+func changeoverHolders(groups []ChangeoverView, admitted map[string]bool, selfKind, selfName string) []string {
+	seen := map[string]bool{}
+	var names []string
+	for _, g := range groups {
+		if (g.Kind == selfKind && g.Name == selfName) || !admitted[changeoverKey(g.Kind, g.Name)] || seen[g.Name] {
+			continue
+		}
+		seen[g.Name] = true
+		names = append(names, g.Name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ownServerChangeover is a server group's changeover state from its own
+// servers. Only an ephemeral group surges, so only its views are passed here.
+func ownServerChangeover(views []ServerView, podHash string, pendingCreates int32) spawneryv1alpha1.ChangeoverState {
+	var stale, current bool
+	for _, v := range views {
+		if !v.countsTowardSize() {
+			continue
+		}
+		if staleSpec(v, podHash) {
+			stale = true
+		} else {
+			current = true
+		}
+	}
+	switch {
+	case !stale:
+		return spawneryv1alpha1.ChangeoverNone
+	case current || pendingCreates > 0:
+		return spawneryv1alpha1.ChangeoverBegun
+	default:
+		return spawneryv1alpha1.ChangeoverWaiting
+	}
 }
