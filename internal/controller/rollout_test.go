@@ -52,7 +52,7 @@ func TestDecideRolloutCountsDrainingIndependentlyOfStale(t *testing.T) {
 		{Name: "new", Stale: false, Ready: true},
 		{Name: "other", Stale: false, Ready: true},
 	}
-	got := DecideRollout(pods, 2)
+	got := DecideRollout(pods, 2, true)
 	if got.Create != 0 {
 		t.Fatalf("Create = %d, want 0", got.Create)
 	}
@@ -283,7 +283,56 @@ func TestDecideRollout(t *testing.T) {
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := DecideRollout(tc.pods, tc.replicas)
+			got := DecideRollout(tc.pods, tc.replicas, true)
+			if got.Create != tc.want.Create {
+				t.Errorf("Create = %d, want %d", got.Create, tc.want.Create)
+			}
+			if len(got.Drain) != len(tc.want.Drain) {
+				t.Fatalf("Drain = %v, want %v", got.Drain, tc.want.Drain)
+			}
+			for i := range got.Drain {
+				if got.Drain[i] != tc.want.Drain[i] {
+					t.Errorf("Drain[%d] = %q, want %q", i, got.Drain[i], tc.want.Drain[i])
+				}
+			}
+		})
+	}
+}
+
+// TestDecideRolloutWithoutSurge is the budget's counterpart to TestDecideRollout:
+// with surgeAllowed false the group never grows to replicas+1, whatever is
+// stale. It waits at its size, and the only pod it may still touch is one
+// that already serves nobody.
+func TestDecideRolloutWithoutSurge(t *testing.T) {
+	tests := []struct {
+		name     string
+		pods     []ProxyView
+		replicas int32
+		want     RolloutDecision
+	}{
+		{
+			name: "two stale Ready pods at replicas 2: no create, no drain",
+			pods: []ProxyView{
+				{Name: "a", Stale: true, Ready: true, CreatedAt: at(0)},
+				{Name: "b", Stale: true, Ready: true, CreatedAt: at(1)},
+			},
+			replicas: 2,
+			want:     RolloutDecision{},
+		},
+		{
+			name: "one stale not-Ready pod among two is replaced in place, no extra pod",
+			pods: []ProxyView{
+				{Name: "stale", Stale: true, Ready: false, CreatedAt: at(0)},
+				{Name: "current", Ready: true, CreatedAt: at(1)},
+			},
+			replicas: 2,
+			want:     RolloutDecision{Drain: []string{"stale"}},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			got := DecideRollout(tc.pods, tc.replicas, false)
 			if got.Create != tc.want.Create {
 				t.Errorf("Create = %d, want %d", got.Create, tc.want.Create)
 			}

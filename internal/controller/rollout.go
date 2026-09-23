@@ -66,7 +66,11 @@ type RolloutDecision struct {
 // draining pod goes. Surge outliving the mark rebuilds it in place instead.
 // TestDecideRollout's "the surge pod dying mid-drain is replaced, because
 // surge outlives the mark" is that case exactly.
-func DecideRollout(pods []ProxyView, replicas int32) RolloutDecision {
+//
+// Without surgeAllowed the network's changeover budget is spent: the group
+// waits at its size, and only a stale pod that serves nobody is replaced, in
+// place.
+func DecideRollout(pods []ProxyView, replicas int32, surgeAllowed bool) RolloutDecision {
 	var stale, draining int32
 	for _, p := range pods {
 		if p.Stale {
@@ -78,7 +82,7 @@ func DecideRollout(pods []ProxyView, replicas int32) RolloutDecision {
 	}
 
 	var surge int32
-	if stale > 0 {
+	if stale > 0 && surgeAllowed {
 		surge = 1
 	}
 	target := replicas + surge

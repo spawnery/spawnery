@@ -944,7 +944,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// events, and only the second is a fact about the whole installation.
 	reportChangingOver(group, pods, wantHash)
 
-	decision := DecideRollout(views, group.Spec.Replicas)
+	decision := DecideRollout(views, group.Spec.Replicas, true)
 
 	// DecideRollout sizes target - total from views, which pods() has already
 	// read through the manager's cached client: a reconcile triggered by its

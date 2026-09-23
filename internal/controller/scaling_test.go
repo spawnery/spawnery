@@ -541,6 +541,69 @@ func TestDecideSizeReportsAColdStartTheCeilingRefuses(t *testing.T) {
 	}
 }
 
+// TestDecideSizeWithholdsTheColdStartWhileNotAdmitted pins the budget's one
+// job in decideSize: a refused changeover withholds the cold start itself,
+// not the demand this pass would otherwise answer, and it must not read as a
+// ceiling refusal — ColdStartBlocked and Limited stay false, since the
+// ceiling never got asked.
+func TestDecideSizeWithholdsTheColdStartWhileNotAdmitted(t *testing.T) {
+	in := ScalingInputs{
+		Views:       []ServerView{staleReady("a", 0, 100, "old")},
+		PodHash:     "current",
+		MinReplicas: 1, MaxReplicas: 3, SpareSlots: 40, MaxPlayers: 100,
+		ChangeoverRefused: true,
+	}
+	got := DecideSize(in)
+	if got.Create != 0 {
+		t.Errorf("Create = %d, want 0 — the changeover budget withholds the cold start", got.Create)
+	}
+	if !got.ChangeoverWaiting {
+		t.Error("ChangeoverWaiting = false, want true")
+	}
+	if len(got.Retire) != 0 {
+		t.Errorf("Retire = %v, want none — nothing may retire without a replacement", got.Retire)
+	}
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none", got.Delete)
+	}
+	if got.ColdStartBlocked {
+		t.Error("ColdStartBlocked = true, want false — the ceiling never refused anything here")
+	}
+	if got.Limited {
+		t.Error("Limited = true, want false — the budget's refusal is not the ceiling's")
+	}
+
+	in.ChangeoverRefused = false
+	got = DecideSize(in)
+	if got.Create != 1 {
+		t.Errorf("Create = %d, want 1 — today's cold start once the budget admits it", got.Create)
+	}
+	if got.ChangeoverWaiting {
+		t.Error("ChangeoverWaiting = true, want false — the changeover was admitted")
+	}
+}
+
+// TestDecideSizeStillAnswersDemandWhileWaiting is the guard on the rule
+// above: waiting withholds only the cold start, and a real shortfall the
+// spare-slot rule would answer regardless still gets its server.
+func TestDecideSizeStillAnswersDemandWhileWaiting(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views: []ServerView{
+			staleReady("a", 60, 100, "old"),
+			staleReady("b", 100, 100, "old"),
+		},
+		PodHash:     "current",
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 60, MaxPlayers: 100,
+		ChangeoverRefused: true,
+	})
+	if got.Create != 1 {
+		t.Errorf("Create = %d, want 1 — the spare-slot shortfall is answered even while waiting", got.Create)
+	}
+	if !got.ChangeoverWaiting {
+		t.Error("ChangeoverWaiting = false, want true")
+	}
+}
+
 func TestDecideSizeDoesNotShrinkWhileACreateIsOutstanding(t *testing.T) {
 	got := DecideSize(ScalingInputs{
 		Views: []ServerView{

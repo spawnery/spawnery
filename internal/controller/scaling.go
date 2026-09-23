@@ -81,6 +81,9 @@ type ScalingInputs struct {
 	// many get built. The capacity arithmetic below stays blind to it -- see
 	// the type comment above for the hazard that filtering it would create.
 	PodHash string
+	// ChangeoverRefused withholds the cold start: the network's changeover
+	// budget is spent by other groups. Demand is still answered.
+	ChangeoverRefused bool
 	// MaxUnavailable is spec.update.maxUnavailable: how many servers this
 	// update may have unavailable at once.
 	MaxUnavailable int32
@@ -142,6 +145,9 @@ type SizeDecision struct {
 	// this field is the explicit signal the caller that builds the
 	// operator-facing ScalingLimited message needs to tell them apart.
 	ColdStartBlocked bool
+	// ChangeoverWaiting is a cold start withheld by the network's changeover
+	// budget.
+	ChangeoverWaiting bool
 	// Condemn names the servers whose node is departing. They are deleted
 	// unconditionally: not bounded by Surplus, not held back by MinReplicas,
 	// and all of them in one pass. It is a separate field from Delete so the
@@ -597,6 +603,10 @@ func decideSize(in ScalingInputs) SizeDecision {
 	// decided nothing, while an ordinary shortfall it refuses has.
 	demanded := create
 	cold := coldStart(in)
+	waiting := cold && in.ChangeoverRefused
+	if waiting {
+		cold = false
+	}
 	if cold && create < 1 {
 		create = 1
 	}
@@ -624,7 +634,7 @@ func decideSize(in ScalingInputs) SizeDecision {
 
 	if create > 0 {
 		if granted > 0 {
-			return SizeDecision{Create: granted, Wanted: wanted, Limited: limited, ColdStartBlocked: coldBlocked}
+			return SizeDecision{Create: granted, Wanted: wanted, Limited: limited, ColdStartBlocked: coldBlocked, ChangeoverWaiting: waiting}
 		}
 		// No room to grow. Being short of capacity is not a reprieve from the
 		// ceiling: a lowered maxReplicas is an instruction, and a group that
@@ -635,15 +645,16 @@ func decideSize(in ScalingInputs) SizeDecision {
 		// has just said it needs.
 		if surplus := alive - in.MaxReplicas; surplus > 0 {
 			return SizeDecision{
-				Wanted:           wanted,
-				Limited:          limited,
-				ColdStartBlocked: coldBlocked,
-				Surplus:          surplus,
-				Delete:           SelectDeletionCandidates(deletable(in), int(surplus)),
+				Wanted:            wanted,
+				Limited:           limited,
+				ColdStartBlocked:  coldBlocked,
+				Surplus:           surplus,
+				Delete:            SelectDeletionCandidates(deletable(in), int(surplus)),
+				ChangeoverWaiting: waiting,
 			}
 		}
 		if !coldOnly {
-			return SizeDecision{Wanted: wanted, Limited: limited, ColdStartBlocked: coldBlocked}
+			return SizeDecision{Wanted: wanted, Limited: limited, ColdStartBlocked: coldBlocked, ChangeoverWaiting: waiting}
 		}
 		// The refused cold start, and nothing else asking for a server: no
 		// create was granted and there is no surplus to shed, so this pass has
@@ -679,8 +690,9 @@ func decideSize(in ScalingInputs) SizeDecision {
 
 	if surplus := alive - in.MaxReplicas; surplus > 0 {
 		return SizeDecision{
-			Surplus: surplus,
-			Delete:  SelectDeletionCandidates(deletable(in), int(surplus)),
+			Surplus:           surplus,
+			Delete:            SelectDeletionCandidates(deletable(in), int(surplus)),
+			ChangeoverWaiting: waiting,
 		}
 	}
 
@@ -689,7 +701,7 @@ func decideSize(in ScalingInputs) SizeDecision {
 	// that retires has already decided how this group loses a server and a
 	// second removal would be a second decision on the same reading.
 	if name := selectRetirement(in); name != "" {
-		return SizeDecision{Retire: []string{name}}
+		return SizeDecision{Retire: []string{name}, ChangeoverWaiting: waiting}
 	}
 
 	// Demand. Never in the same pass as a create — reaching here means the
@@ -753,14 +765,15 @@ func decideSize(in ScalingInputs) SizeDecision {
 		// One per pass: every removal costs a drain cycle, and the five-second
 		// resync converges quickly enough.
 		if names := SelectDeletionCandidates(eligible, 1); len(names) > 0 {
-			return SizeDecision{Delete: names}
+			return SizeDecision{Delete: names, ChangeoverWaiting: waiting}
 		}
 	}
 
 	// Nothing was decided. Every path that reaches here with create == 0 has
-	// wanted == 0 and neither flag set, so this is the empty decision it always
-	// was. The one path that does not is the refused cold start that fell
-	// through and found nothing to shed — and that is the stall the operator has
-	// to be told about, so the flags travel out with it.
-	return SizeDecision{Wanted: wanted, Limited: limited, ColdStartBlocked: coldBlocked}
+	// wanted == 0 and neither ceiling flag set, so this is the empty decision it
+	// always was — except for a refused cold start, which either fell through and
+	// found nothing to shed (ColdStartBlocked) or was withheld by the changeover
+	// budget instead of the ceiling (ChangeoverWaiting). Either way the stall has
+	// to be told to the operator, so the flags travel out with it.
+	return SizeDecision{Wanted: wanted, Limited: limited, ColdStartBlocked: coldBlocked, ChangeoverWaiting: waiting}
 }
