@@ -23,6 +23,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -89,6 +90,13 @@ type NetworkReconciler struct {
 func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	network := &spawneryv1alpha1.Network{}
 	if err := r.Get(ctx, req.NamespacedName, network); err != nil {
+		if apierrors.IsNotFound(err) {
+			// No finalizer holds a Network back for cleanup, so this is the
+			// only pass a deletion ever reaches: by the time DeletionTimestamp
+			// could be observed non-zero, the object is usually already gone.
+			ChangeoversInFlight.DeleteLabelValues(req.Namespace, req.Name)
+			ChangeoversWaiting.DeleteLabelValues(req.Namespace, req.Name)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !network.DeletionTimestamp.IsZero() {
@@ -514,24 +522,39 @@ func (r *NetworkReconciler) countGroups(ctx context.Context, network *spawneryv1
 		return err
 	}
 
-	var serverGroupCount, players int32
+	var serverGroupCount, players, inFlight, waiting int32
 	for _, g := range serverGroups.Items {
 		if g.Spec.NetworkRef.Name != network.Name {
 			continue
 		}
 		serverGroupCount++
 		players += g.Status.OnlinePlayers
+		switch {
+		case g.Status.Changeover == spawneryv1alpha1.ChangeoverBegun && !changeoverFailing(g.Status.Conditions):
+			inFlight++
+		case g.Status.Changeover == spawneryv1alpha1.ChangeoverWaiting:
+			waiting++
+		}
 	}
 	var proxyGroupCount int32
 	for _, g := range proxyGroups.Items {
-		if g.Spec.NetworkRef.Name == network.Name {
-			proxyGroupCount++
+		if g.Spec.NetworkRef.Name != network.Name {
+			continue
+		}
+		proxyGroupCount++
+		switch {
+		case g.Status.Changeover == spawneryv1alpha1.ChangeoverBegun && !changeoverFailing(g.Status.Conditions):
+			inFlight++
+		case g.Status.Changeover == spawneryv1alpha1.ChangeoverWaiting:
+			waiting++
 		}
 	}
 
 	network.Status.ServerGroups = serverGroupCount
 	network.Status.ProxyGroups = proxyGroupCount
 	network.Status.OnlinePlayers = players
+	ChangeoversInFlight.WithLabelValues(network.Namespace, network.Name).Set(float64(inFlight))
+	ChangeoversWaiting.WithLabelValues(network.Namespace, network.Name).Set(float64(waiting))
 	return nil
 }
 

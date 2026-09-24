@@ -70,6 +70,76 @@ finish rolling is usually a group with players who never leave and a
 one server rather than by the fleet. Raising it rolls faster and costs more
 capacity while it does.
 
+## Changing over a whole network
+
+`maxUnavailable` bounds one group's own roll. It says nothing about what
+happens when a change reaches every group at once — the network's defaults,
+a config revision stamped onto all of them — and every group starts its own
+extra server in the same pass. A network on two nodes sized to its groups has
+room for one or two of those, not for all of them at once; the rest sit
+Pending, run into their startup timeout, fail and back off, while the stale
+servers they were meant to replace hold exactly the memory the replacements
+need.
+
+`spec.update.maxConcurrentChangeovers`, on the `Network`, bounds that instead:
+
+```yaml
+kind: Network
+spec:
+  update:
+    maxConcurrentChangeovers: 1
+```
+
+Optional, minimum `1`. Unset means no cap — today's behaviour, unchanged.
+
+A group is changing over from the moment it has a stale server (a stale pod,
+for a proxy group) until the last one is gone, including one that is draining
+or terminating, and it holds its place for that whole window — never paused
+halfway. A group that must change over but has not begun waits its turn;
+server groups and proxy groups are admitted together, by name. While it
+waits, nothing about it changes except the roll: its stale servers keep
+running and keep taking players, and only the cold start (for a proxy group,
+the surge pod) is withheld until it is admitted. Player demand is not
+withheld: a waiting group that still needs a new server to answer it builds
+one at the current generation like any other, and that server is a begun
+changeover holding a place of its own — a second way, besides the race below,
+that the network can end up over the cap by one group. A group whose changeover is
+failing (`BackingOff` or `Degraded`) holds no place, so one replacement that
+cannot start does not stall every other group. A group whose cold start the
+`maxReplicas` ceiling refuses does not wait for a place either — its own
+`ScalingLimited` condition says why, not the budget.
+
+A waiting group shows up across the whole network at a glance:
+
+```bash
+kubectl get servergroups -n minecraft \
+  -o custom-columns='NAME:.metadata.name,CHANGEOVER:.status.changeover'
+```
+
+and names who is holding the places it is waiting for, in its own
+`Progressing` condition:
+
+```bash
+kubectl get servergroup <name> -n minecraft \
+  -o jsonpath='{range .status.conditions[?(@.type=="Progressing")]}{.reason}: {.message}{"\n"}{end}'
+# WaitingForChangeoverBudget: waiting for a changeover place; changing over: hub, lobby
+```
+
+A waiting proxy group says the same thing in its `ChangingOver` condition
+instead.
+
+The `Network` also reports two gauges, `spawnery_network_changeovers_in_flight`
+and `spawnery_network_changeovers_waiting`, both labelled `namespace` and
+`network` — useful for telling a rollout that is slow because the budget is
+doing its job from one that is actually stuck.
+
+Two reconcilers can admit themselves to the last place within moments of each
+other. Once that happens both are holders, and neither is paused, so the
+budget stays exceeded by one group until whichever of the two finishes its
+changeover first — minutes, not seconds, once a drain is part of it. That is
+accepted rather than locked against: what it prevents is a sustained surge
+across the whole network, not a race between two groups.
+
 ## What actually makes a group roll
 
 The operator compares each server against a hash of the whole desired pod plus

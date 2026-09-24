@@ -200,9 +200,12 @@ const (
 	// rather than choose between two worlds, so this needs a person.
 	ReasonOrdinalDuplicated = "OrdinalCarriedByTwoServers"
 	ReasonOrdinalsAvailable = "OrdinalsAvailable"
-	ReasonServersStarting   = "ServersStarting"
-	ReasonReplacingServers  = "ReplacingServers"
-	ReasonAtDesiredState    = "AtDesiredState"
+	// ReasonWaitingForChangeoverBudget: the network's changeover budget is
+	// spent by other groups.
+	ReasonWaitingForChangeoverBudget = "WaitingForChangeoverBudget"
+	ReasonServersStarting            = "ServersStarting"
+	ReasonReplacingServers           = "ReplacingServers"
+	ReasonAtDesiredState             = "AtDesiredState"
 	// ReasonRetireeStuck says a server carrying spec.retire has failed, and is
 	// therefore holding an update slot until its retention window ends. The
 	// changeover is stopped, not finished.
@@ -302,6 +305,21 @@ const (
 	// operator-side account arrives after --startup-deadline as a counted
 	// startup failure, which is what a bad image looks like too.
 	EventForwardingSecretNotFound = "ForwardingSecretNotFound"
+)
+
+// ChangeoverState is a group's changeover as the network's changeover budget
+// sees it.
+type ChangeoverState string
+
+const (
+	// ChangeoverNone means the group is not changing over.
+	ChangeoverNone ChangeoverState = ""
+	// ChangeoverWaiting means the group must change over but has not begun:
+	// it holds no place in the network's budget.
+	ChangeoverWaiting ChangeoverState = "Waiting"
+	// ChangeoverBegun means the group has a server or pod of the current
+	// generation beside stale ones: it holds a place until the changeover ends.
+	ChangeoverBegun ChangeoverState = "Begun"
 )
 
 // ObjectRef names another object in the same namespace.

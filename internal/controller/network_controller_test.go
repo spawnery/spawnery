@@ -26,6 +26,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -330,6 +331,31 @@ func TestNetworkCountsItsGroups(t *testing.T) {
 	}
 	if got.Status.OnlinePlayers != 9 {
 		t.Errorf("onlinePlayers = %d, want 9", got.Status.OnlinePlayers)
+	}
+}
+
+func TestNetworkCountsChangeoversInFlightAndWaiting(t *testing.T) {
+	f := newFixture(t)
+	r := networkReconciler(f)
+
+	begun := f.group
+	begun.Status.Changeover = spawneryv1alpha1.ChangeoverBegun
+	if err := f.c.Status().Update(f.ctx, begun); err != nil {
+		t.Fatalf("set lobby's changeover to Begun: %v", err)
+	}
+	waiting := f.createEphemeralGroupLike(t, "arena")
+	waiting.Status.Changeover = spawneryv1alpha1.ChangeoverWaiting
+	if err := f.c.Status().Update(f.ctx, waiting); err != nil {
+		t.Fatalf("set arena's changeover to Waiting: %v", err)
+	}
+
+	f.reconcileNetwork(t, r, "production")
+
+	if got := testutil.ToFloat64(ChangeoversInFlight.WithLabelValues(f.ns, "production")); got != 1 {
+		t.Errorf("ChangeoversInFlight = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(ChangeoversWaiting.WithLabelValues(f.ns, "production")); got != 1 {
+		t.Errorf("ChangeoversWaiting = %v, want 1", got)
 	}
 }
 

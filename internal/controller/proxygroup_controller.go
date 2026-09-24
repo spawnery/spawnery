@@ -531,6 +531,13 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 // controller-runtime ignores it when the error is non-nil and backs off
 // instead, which is the behaviour wanted for a failed protection pass.
 func (r *ProxyGroupReconciler) refuse(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) (ctrl.Result, error) {
+	// A Waiting group has no surge pod, so giving up its place costs nothing;
+	// see AdmitChangeovers, which would otherwise keep handing the place to
+	// this name forever. A Begun group's surge pod exists and is never
+	// paused halfway, so its state stands.
+	if group.Status.Changeover == spawneryv1alpha1.ChangeoverWaiting {
+		group.Status.Changeover = spawneryv1alpha1.ChangeoverNone
+	}
 	protectErr := r.protectPlayersOnly(ctx, group)
 	if err := r.writeStatus(ctx, group); err != nil {
 		return ctrl.Result{}, err
@@ -942,9 +949,16 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// point: a group replacing a pod because its node is leaving and a group
 	// replacing every pod because a release changed the render are different
 	// events, and only the second is a fact about the whole installation.
-	reportChangingOver(group, pods, wantHash)
+	key := group.Namespace + "/" + group.Name
+	pendingCreates, _, _ := r.Expectations.pending(key)
+	own, surgeAllowed, waitingFor, err := proxyChangeover(ctx, r, network, group, wantHash, int32(len(pendingCreates)))
+	if err != nil {
+		return err
+	}
+	group.Status.Changeover = own
+	reportChangingOver(group, pods, wantHash, waitingFor)
 
-	decision := DecideRollout(views, group.Spec.Replicas)
+	decision := DecideRollout(views, group.Spec.Replicas, surgeAllowed)
 
 	// DecideRollout sizes target - total from views, which pods() has already
 	// read through the manager's cached client: a reconcile triggered by its
@@ -968,8 +982,6 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	// DecideSize's alive := in.PendingCreates (scaling.go); this states the
 	// same correction as a post-processing step on DecideRollout's answer
 	// instead, so rollout.go's sizing keeps knowing nothing about reservations.
-	key := group.Namespace + "/" + group.Name
-	pendingCreates, _, _ := r.Expectations.pending(key)
 	create := decision.Create - int32(len(pendingCreates))
 	if create < 0 {
 		create = 0
@@ -1004,6 +1016,9 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		// is nothing to expire on the TTL in that case, because nothing was
 		// recorded.
 		r.Expectations.expectCreated(key, pod.Name, 0)
+	}
+	if own == spawneryv1alpha1.ChangeoverWaiting && decision.Create > 0 {
+		group.Status.Changeover = spawneryv1alpha1.ChangeoverBegun
 	}
 
 	// Which pods are going, decided once and used by both loops below.
@@ -1474,7 +1489,7 @@ func (r *ProxyGroupReconciler) reportNodeDraining(
 // creates lacks one -- podspec stamps it on every proxy pod -- so the only way
 // to be here is a pod somebody else made under this group's name, and a pod
 // whose shape cannot be compared is not a pod whose shape agrees.
-func reportChangingOver(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, wantHash string) {
+func reportChangingOver(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, wantHash string, waitingFor []string) {
 	stale := 0
 	for i := range pods {
 		if pods[i].Labels[podspec.LabelPodHash] != wantHash {
@@ -1495,6 +1510,9 @@ func reportChangingOver(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, w
 				"being replaced one at a time; if every group in the cluster says this at "+
 				"once, an operator upgrade changed the pod render rather than anyone "+
 				"editing a spec", stale, len(pods))
+		if len(waitingFor) > 0 {
+			cond.Message = "waiting for a changeover place; changing over: " + strings.Join(waitingFor, ", ")
+		}
 	}
 	meta.SetStatusCondition(&group.Status.Conditions, cond)
 }

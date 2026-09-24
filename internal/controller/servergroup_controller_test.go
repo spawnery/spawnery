@@ -4523,7 +4523,7 @@ func TestProgressingSaysWhetherTheGroupHasArrived(t *testing.T) {
 			group := &spawneryv1alpha1.ServerGroup{
 				ObjectMeta: metav1.ObjectMeta{Name: "lobby"},
 			}
-			reportProgressing(group, tc.views, gen)
+			reportProgressing(group, tc.views, gen, nil)
 			got := meta.FindStatusCondition(group.Status.Conditions,
 				spawneryv1alpha1.ConditionProgressing)
 			if got == nil {
@@ -4843,7 +4843,7 @@ func TestAFailedRetireeIsNamedOnProgressing(t *testing.T) {
 		{Name: "lobby-old", PodHash: "old", Phase: phase.Failed, Retire: true},
 	}
 
-	reportProgressing(group, views, "current")
+	reportProgressing(group, views, "current", nil)
 
 	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
 	if cond == nil || cond.Status != metav1.ConditionTrue {
@@ -4877,7 +4877,7 @@ func TestAnOrdinaryRetireeIsNotReportedAsStuck(t *testing.T) {
 			reportProgressing(group, []ServerView{
 				{Name: "lobby-new", PodHash: "current", Phase: phase.Ready},
 				{Name: "lobby-old", PodHash: "old", Phase: p, Retire: true},
-			}, "current")
+			}, "current", nil)
 			cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
 			if cond != nil && cond.Reason == spawneryv1alpha1.ReasonRetireeStuck {
 				t.Errorf("a %s retiree was reported as stuck: %q", p, cond.Message)

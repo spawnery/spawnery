@@ -55,6 +55,30 @@ type NetworkSpec struct {
 	// held to; this field is where the Network's owner widens it.
 	// +optional
 	Scheduling *SchedulingPolicy `json:"scheduling,omitempty"`
+
+	// Update is how the network's groups change over to a new spec.
+	// +optional
+	Update *NetworkUpdateSpec `json:"update,omitempty"`
+}
+
+// NetworkUpdateSpec bounds changeovers across the network's groups.
+type NetworkUpdateSpec struct {
+	// MaxConcurrentChangeovers is how many server and proxy groups may change
+	// over at the same time. A group changing over runs one server more than
+	// its size until its last stale server is gone; a change that reaches
+	// every group at once needs that room for every group at once. Unset
+	// means no cap.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	MaxConcurrentChangeovers *int32 `json:"maxConcurrentChangeovers,omitempty"`
+}
+
+// ChangeoverBudget is spec.update.maxConcurrentChangeovers, 0 when unset.
+func (n *Network) ChangeoverBudget() int32 {
+	if n.Spec.Update == nil || n.Spec.Update.MaxConcurrentChangeovers == nil {
+		return 0
+	}
+	return *n.Spec.Update.MaxConcurrentChangeovers
 }
 
 // SchedulingPolicy names what a group's spec.scheduling may contain. Each

@@ -22,6 +22,7 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/testenv"
@@ -59,6 +60,38 @@ func TestNetworkRoundTrip(t *testing.T) {
 	}
 	if got.Spec.Defaults.MinecraftVersion != "1.21.4" {
 		t.Errorf("minecraftVersion = %q, want 1.21.4", got.Spec.Defaults.MinecraftVersion)
+	}
+}
+
+func TestNetworkRejectsAZeroChangeoverBudget(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	net := &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "zero-budget", Namespace: ns},
+		Spec: spawneryv1alpha1.NetworkSpec{
+			ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "fwd"},
+			Update:              &spawneryv1alpha1.NetworkUpdateSpec{MaxConcurrentChangeovers: ptr.To[int32](0)},
+		},
+	}
+	if err := c.Create(ctx, net); err == nil {
+		t.Fatal("create with spec.update.maxConcurrentChangeovers = 0 succeeded, want rejection")
+	}
+}
+
+func TestNetworkAcceptsAChangeoverBudgetOfOne(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	net := &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "budget-one", Namespace: ns},
+		Spec: spawneryv1alpha1.NetworkSpec{
+			ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "fwd"},
+			Update:              &spawneryv1alpha1.NetworkUpdateSpec{MaxConcurrentChangeovers: ptr.To[int32](1)},
+		},
+	}
+	if err := c.Create(ctx, net); err != nil {
+		t.Fatalf("create with spec.update.maxConcurrentChangeovers = 1: %v", err)
 	}
 }
 

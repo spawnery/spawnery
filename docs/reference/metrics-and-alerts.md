@@ -23,6 +23,8 @@ Generated from two sources that only agree with each other because this page che
 <tr><td><code>spawnery_ca_expiry_timestamp_seconds</code></td><td>gauge</td><td><em>none</em></td><td>NotAfter of the CA currently signing the serving certificate, in Unix seconds.</td></tr>
 <tr><td><code>spawnery_ca_rotation_blocked_namespaces</code></td><td>gauge</td><td><em>none</em></td><td>Namespaces holding a Network whose CA ConfigMap does not yet carry the incoming CA.</td></tr>
 <tr><td><code>spawnery_ca_rotation_phase</code></td><td>gauge</td><td><code>phase</code></td><td>1 for the CA rotation phase currently in effect, 0 for the others.</td></tr>
+<tr><td><code>spawnery_network_changeovers_in_flight</code></td><td>gauge</td><td><code>namespace</code>, <code>network</code></td><td>Groups of the network currently holding a changeover budget place.</td></tr>
+<tr><td><code>spawnery_network_changeovers_waiting</code></td><td>gauge</td><td><code>namespace</code>, <code>network</code></td><td>Groups of the network waiting for a changeover budget place.</td></tr>
 <tr><td><code>spawnery_permissions_missing</code></td><td>gauge</td><td><code>scope</code></td><td>Permissions the operator needs and the API server says it lacks, by scope.</td></tr>
 <tr><td><code>spawnery_proxy_sessions_cut_total</code></td><td>counter</td><td><em>none</em></td><td>Proxy sessions ended because the session fell too far behind.</td></tr>
 <tr><td><code>spawnery_server_sessions_cut_total</code></td><td>counter</td><td><em>none</em></td><td>Backend sessions ended because the session fell too far behind.</td></tr>

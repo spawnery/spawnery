@@ -48,7 +48,7 @@ kind create cluster --name spawnery-tutorial --config kind-config.yaml
 
 ```bash
 helm install spawnery oci://ghcr.io/spawnery/charts/spawnery \
-  --version 0.5.0 \
+  --version 0.6.0 \
   --namespace spawnery-system --create-namespace
 ```
 
@@ -61,7 +61,7 @@ REVISION: 1
 DESCRIPTION: Install complete
 TEST SUITE: None
 NOTES:
-spawnery 0.5.0 installed as release spawnery in namespace spawnery-system.
+spawnery 0.6.0 installed as release spawnery in namespace spawnery-system.
 
   kubectl -n spawnery-system rollout status deployment/spawnery-operator
 

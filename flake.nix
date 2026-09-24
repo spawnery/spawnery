@@ -471,7 +471,13 @@
           # controller sweeps a member whose run has ended, and the network
           # picture is now built per audience. A group without the new type
           # is unchanged and no server rolls.
-          operatorVersion = "0.5.0";
+          #
+          # 0.6.0 moves it with the chart. A Network may cap how many of its
+          # groups change over at once (spec.update.maxConcurrentChangeovers):
+          # a group that must wait gets no cold start or surge pod until a
+          # place is free, and every group publishes status.changeover. Unset,
+          # nothing changes and no server rolls. The images do not move.
+          operatorVersion = "0.6.0";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";

@@ -1226,6 +1226,21 @@ spec:
                     - min
                     type: object
                 type: object
+              update:
+                description: Update is how the network's groups change over to a new
+                  spec.
+                properties:
+                  maxConcurrentChangeovers:
+                    description: |-
+                      MaxConcurrentChangeovers is how many server and proxy groups may change
+                      over at the same time. A group changing over runs one server more than
+                      its size until its last stale server is gone; a change that reaches
+                      every group at once needs that room for every group at once. Unset
+                      means no cap.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                type: object
             required:
             - forwardingSecretRef
             type: object
@@ -3176,6 +3191,15 @@ spec:
             properties:
               address:
                 description: Address is where players connect.
+                type: string
+              changeover:
+                description: |-
+                  Changeover is this group's changeover as the network's budget sees it;
+                  written by its own reconcile and read by its siblings'.
+                enum:
+                - ""
+                - Waiting
+                - Begun
                 type: string
               conditions:
                 description: Conditions follow the standard Kubernetes condition contract.
@@ -5269,6 +5293,15 @@ spec:
                   say".
                 format: int32
                 type: integer
+              changeover:
+                description: |-
+                  Changeover is this group's changeover as the network's budget sees it;
+                  written by its own reconcile and read by its siblings'.
+                enum:
+                - ""
+                - Waiting
+                - Begun
+                type: string
               conditions:
                 description: Conditions follow the standard Kubernetes condition contract.
                 items:
