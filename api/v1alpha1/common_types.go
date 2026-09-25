@@ -203,6 +203,10 @@ const (
 	// ReasonWaitingForChangeoverBudget: the network's changeover budget is
 	// spent by other groups.
 	ReasonWaitingForChangeoverBudget = "WaitingForChangeoverBudget"
+	// ReasonWaitingForMinAvailable: the next stale server would leave fewer
+	// than spec.update.minAvailable joinable servers, and the extra server
+	// that would keep the floor is not being built.
+	ReasonWaitingForMinAvailable = "WaitingForMinAvailable"
 	ReasonServersStarting            = "ServersStarting"
 	ReasonReplacingServers           = "ReplacingServers"
 	ReasonAtDesiredState             = "AtDesiredState"
@@ -320,6 +324,10 @@ const (
 	// ChangeoverBegun means the group has a server or pod of the current
 	// generation beside stale ones: it holds a place until the changeover ends.
 	ChangeoverBegun ChangeoverState = "Begun"
+	// ChangeoverDeferred means a WhenEmpty server group has a Ready server of
+	// the current generation and its remaining stale servers wait for their
+	// players: it holds no place in the network's budget.
+	ChangeoverDeferred ChangeoverState = "Deferred"
 )
 
 // ObjectRef names another object in the same namespace.

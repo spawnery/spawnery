@@ -34,3 +34,28 @@ func TestDesiredReplicasIsZeroForOnDemand(t *testing.T) {
 		t.Fatal("IsEphemeral() = true for a group of type OnDemand")
 	}
 }
+
+func TestUpdateStrategyAndFloorAccessors(t *testing.T) {
+	cases := []struct {
+		name      string
+		update    *UpdateSpec
+		whenEmpty bool
+		floor     int32
+	}{
+		{"no update policy", nil, false, 0},
+		{"rolling update without a floor", &UpdateSpec{Strategy: UpdateRollingUpdate}, false, 0},
+		{"when empty", &UpdateSpec{Strategy: UpdateWhenEmpty}, true, 0},
+		{"a floor", &UpdateSpec{MinAvailable: ptr.To[int32](3)}, false, 3},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &ServerGroup{Spec: ServerGroupSpec{Update: tc.update}}
+			if got := g.UpdateWhenEmpty(); got != tc.whenEmpty {
+				t.Errorf("UpdateWhenEmpty() = %v, want %v", got, tc.whenEmpty)
+			}
+			if got := g.UpdateMinAvailable(); got != tc.floor {
+				t.Errorf("UpdateMinAvailable() = %d, want %d", got, tc.floor)
+			}
+		})
+	}
+}
