@@ -143,7 +143,9 @@ func changeoverHolders(groups []ChangeoverView, admitted map[string]bool, selfKi
 // A stale server that is leaving still counts: until it is gone it is the
 // group's extra server. A WhenEmpty group with a Ready current server is
 // Deferred instead: what remains waits for its players, not for the budget.
-func ownServerChangeover(views []ServerView, podHash string, pendingCreates int32, whenEmpty bool) spawneryv1alpha1.ChangeoverState {
+// It stays Deferred while any current server still counts, Ready or not, so a
+// readiness loss does not take a budget place nobody admitted it to.
+func ownServerChangeover(views []ServerView, podHash string, pendingCreates int32, whenEmpty bool, was spawneryv1alpha1.ChangeoverState) spawneryv1alpha1.ChangeoverState {
 	var stale, current, readyCurrent bool
 	for _, v := range views {
 		if staleSpec(v, podHash) {
@@ -160,7 +162,7 @@ func ownServerChangeover(views []ServerView, podHash string, pendingCreates int3
 	switch {
 	case !stale:
 		return spawneryv1alpha1.ChangeoverNone
-	case whenEmpty && readyCurrent:
+	case whenEmpty && (readyCurrent || (was == spawneryv1alpha1.ChangeoverDeferred && current)):
 		return spawneryv1alpha1.ChangeoverDeferred
 	case current || pendingCreates > 0:
 		return spawneryv1alpha1.ChangeoverBegun

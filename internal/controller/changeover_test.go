@@ -182,16 +182,19 @@ func TestOwnServerChangeover(t *testing.T) {
 		views     []ServerView
 		pending   int32
 		whenEmpty bool
+		was       spawneryv1alpha1.ChangeoverState
 		want      spawneryv1alpha1.ChangeoverState
 	}{
-		{"nothing stale", []ServerView{current}, 0, true, spawneryv1alpha1.ChangeoverNone},
-		{"stale only, nothing asked for", []ServerView{old}, 0, true, spawneryv1alpha1.ChangeoverWaiting},
-		{"WhenEmpty with its first server starting", []ServerView{old, startingCurrent}, 0, true, spawneryv1alpha1.ChangeoverBegun},
-		{"WhenEmpty with a Ready current server", []ServerView{old, current}, 0, true, spawneryv1alpha1.ChangeoverDeferred},
-		{"RollingUpdate with a Ready current server", []ServerView{old, current}, 0, false, spawneryv1alpha1.ChangeoverBegun},
+		{"nothing stale", []ServerView{current}, 0, true, "", spawneryv1alpha1.ChangeoverNone},
+		{"stale only, nothing asked for", []ServerView{old}, 0, true, "", spawneryv1alpha1.ChangeoverWaiting},
+		{"WhenEmpty with its first server starting", []ServerView{old, startingCurrent}, 0, true, spawneryv1alpha1.ChangeoverBegun, spawneryv1alpha1.ChangeoverBegun},
+		{"WhenEmpty with a Ready current server", []ServerView{old, current}, 0, true, spawneryv1alpha1.ChangeoverBegun, spawneryv1alpha1.ChangeoverDeferred},
+		{"RollingUpdate with a Ready current server", []ServerView{old, current}, 0, false, spawneryv1alpha1.ChangeoverBegun, spawneryv1alpha1.ChangeoverBegun},
+		{"deferred stays deferred while its current server is not Ready", []ServerView{old, startingCurrent}, 0, true, spawneryv1alpha1.ChangeoverDeferred, spawneryv1alpha1.ChangeoverDeferred},
+		{"deferred with no current server left waits again", []ServerView{old}, 0, true, spawneryv1alpha1.ChangeoverDeferred, spawneryv1alpha1.ChangeoverWaiting},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ownServerChangeover(tc.views, "current", tc.pending, tc.whenEmpty); got != tc.want {
+			if got := ownServerChangeover(tc.views, "current", tc.pending, tc.whenEmpty, tc.was); got != tc.want {
 				t.Errorf("ownServerChangeover = %q, want %q", got, tc.want)
 			}
 		})
