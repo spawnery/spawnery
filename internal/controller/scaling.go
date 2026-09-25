@@ -420,6 +420,9 @@ func coldStart(in ScalingInputs) bool {
 // One per pass. Every retirement is a replacement's worth of work, and the
 // five-second resync converges quickly enough.
 //
+// Under WhenEmpty only stale servers known to be empty are candidates; an
+// occupied one is left Ready until it empties.
+//
 // With a floor, the first candidate in that order whose retirement keeps
 // MinAvailable joinable servers goes; the bool reports a decline that only the
 // floor caused, which is what licenses decideSize's extra server.
@@ -485,6 +488,9 @@ func selectRetirement(in ScalingInputs) (string, bool) {
 		// server already leaving by one route may not also be spent from the
 		// update budget.
 		if v.Phase == phase.Ready && !in.PendingDeletes[v.Name] && !v.Condemned {
+			if in.WhenEmpty && (v.Players != 0 || v.Stale) {
+				continue
+			}
 			stale = append(stale, v)
 		}
 	}

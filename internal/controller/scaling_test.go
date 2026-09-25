@@ -1907,3 +1907,53 @@ func TestDecideSizeDoesNotCountAReservedRetirementAsJoinable(t *testing.T) {
 			"old1 is already going, so old2 and new are the only joinable two", got.Retire, got.Create)
 	}
 }
+
+func whenEmptyInputs(views ...ServerView) ScalingInputs {
+	in := floorInputs(0, views...)
+	in.WhenEmpty = true
+	return in
+}
+
+func TestWhenEmptyLeavesAnOccupiedServer(t *testing.T) {
+	got := DecideSize(whenEmptyInputs(staleReady("old", 10, 100, "old"), ready("new", 0, 100)))
+	if len(got.Retire) != 0 || got.FloorHeld || got.Create != 0 {
+		t.Errorf("Retire = %v FloorHeld = %v Create = %d, want nothing: the round on old goes on",
+			got.Retire, got.FloorHeld, got.Create)
+	}
+}
+
+func TestWhenEmptyRetiresAnEmptyServer(t *testing.T) {
+	got := DecideSize(whenEmptyInputs(staleReady("old", 0, 100, "old"), ready("new", 0, 100)))
+	if len(got.Retire) != 1 || got.Retire[0] != "old" {
+		t.Errorf("Retire = %v, want [old]", got.Retire)
+	}
+}
+
+func TestWhenEmptyLeavesAServerWithAnUntrustedCount(t *testing.T) {
+	quiet := staleReady("old", 0, 100, "old")
+	quiet.Stale = true
+	got := DecideSize(whenEmptyInputs(quiet, ready("new", 0, 100)))
+	if len(got.Retire) != 0 {
+		t.Errorf("Retire = %v, want none: a count nobody can trust reads as occupied", got.Retire)
+	}
+}
+
+func TestWhenEmptyRetiresTheEmptyServerBesideAnOccupiedOne(t *testing.T) {
+	got := DecideSize(whenEmptyInputs(
+		staleReady("a", 5, 100, "old"),
+		staleReady("b", 0, 100, "old"),
+		ready("new", 0, 100),
+	))
+	if len(got.Retire) != 1 || got.Retire[0] != "b" {
+		t.Errorf("Retire = %v, want [b]", got.Retire)
+	}
+}
+
+func TestWhenEmptyKeepsTheFloor(t *testing.T) {
+	in := whenEmptyInputs(staleReady("old", 0, 100, "old"), ready("new", 0, 100))
+	in.MinAvailable = 2
+	got := DecideSize(in)
+	if len(got.Retire) != 0 || got.Create != 1 {
+		t.Errorf("Retire = %v Create = %d, want an extra server before the empty old one goes", got.Retire, got.Create)
+	}
+}
