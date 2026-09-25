@@ -207,9 +207,9 @@ const (
 	// than spec.update.minAvailable joinable servers, and the extra server
 	// that would keep the floor is not being built.
 	ReasonWaitingForMinAvailable = "WaitingForMinAvailable"
-	ReasonServersStarting            = "ServersStarting"
-	ReasonReplacingServers           = "ReplacingServers"
-	ReasonAtDesiredState             = "AtDesiredState"
+	ReasonServersStarting        = "ServersStarting"
+	ReasonReplacingServers       = "ReplacingServers"
+	ReasonAtDesiredState         = "AtDesiredState"
 	// ReasonRetireeStuck says a server carrying spec.retire has failed, and is
 	// therefore holding an update slot until its retention window ends. The
 	// changeover is stopped, not finished.
