@@ -70,6 +70,55 @@ finish rolling is usually a group with players who never leave and a
 one server rather than by the fleet. Raising it rolls faster and costs more
 capacity while it does.
 
+## Keeping servers joinable during a roll
+
+A roll takes servers out of the proxies' tables one at a time and builds
+replacements only as far as the group's free slots need them. A group whose
+players choose a server, rather than being placed on any, can end up with a
+single open server for a while. `minAvailable` says how many must stay open:
+
+```yaml
+spec:
+  update:
+    minAvailable: 2
+```
+
+While stale servers remain, the next one is retired only if at least that
+many servers stay joinable afterwards: Ready, registered, door open, and not
+on their way out, old or new alike. If retiring it would leave fewer, the
+group first builds one extra server, waits for it to be Ready, and then
+retires. The extra servers are removed by the ordinary scale-down once the
+roll is over. It must be below `maxReplicas`, because keeping the floor needs
+room for one more.
+
+A roll held at the floor that cannot build its extra server says so on
+`Progressing` (`WaitingForMinAvailable`), and on `ScalingLimited` if the
+ceiling is the reason.
+
+## Rolling only what is empty
+
+Some servers are not worth rolling while they are in use: a round-based game
+whose server gathers a lobby, closes its door for the round and ends with it.
+`Retiring` would stop the lobby filling, and `maxStaleSeconds` would move the
+players of a running round. `WhenEmpty` leaves them alone:
+
+```yaml
+spec:
+  update:
+    strategy: WhenEmpty
+```
+
+Only stale servers that are known to be empty are retired, and those go at
+once. An occupied stale server stays `Ready` and joinable for as long as it
+has players; once it is empty it is replaced like any other. A server whose
+player count cannot be trusted counts as occupied. `maxStaleSeconds` cannot be
+combined with it, and a node drain still moves these servers, because the
+node is leaving either way.
+
+Such a group takes a network changeover place only for its first new server.
+Once that is Ready, `status.changeover` reads `Deferred`: the rest waits for
+players, not for the budget, and other groups are not held behind it.
+
 ## Changing over a whole network
 
 `maxUnavailable` bounds one group's own roll. It says nothing about what

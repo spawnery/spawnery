@@ -477,7 +477,14 @@
           # a group that must wait gets no cold start or surge pod until a
           # place is free, and every group publishes status.changeover. Unset,
           # nothing changes and no server rolls. The images do not move.
-          operatorVersion = "0.6.0";
+          #
+          # 0.7.0 moves it with the chart. An ephemeral group may keep a floor
+          # of joinable servers through a changeover (spec.update.minAvailable),
+          # building one extra server at a time, and may replace only stale
+          # servers that are empty (spec.update.strategy WhenEmpty), holding
+          # no changeover place while it waits on players. Unset, nothing
+          # changes and no server rolls. The images do not move.
+          operatorVersion = "0.7.0";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";

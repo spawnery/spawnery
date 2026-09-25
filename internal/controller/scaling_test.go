@@ -1774,3 +1774,208 @@ func TestProvisionalCapacityStillCreditsAServerARestartedOperatorHasNotHeardFrom
 		t.Errorf("provisionalCapacity = %d, want the full 80 for a server the operator has not heard from since it started", got)
 	}
 }
+
+// floorInputs is a changeover with room: two stale servers carrying players,
+// one Ready replacement, budget for two retirements.
+func floorInputs(minAvailable int32, views ...ServerView) ScalingInputs {
+	return ScalingInputs{
+		Views:   views,
+		PodHash: "current", MaxUnavailable: 2, MinAvailable: minAvailable,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+		Stabilization: 5 * time.Minute,
+	}
+}
+
+func TestDecideSizeKeepsTheFloorOfJoinableServers(t *testing.T) {
+	got := DecideSize(floorInputs(3,
+		staleReady("old1", 10, 100, "old"),
+		staleReady("old2", 10, 100, "old"),
+		ready("new", 0, 100),
+	))
+	if len(got.Retire) != 0 {
+		t.Fatalf("Retire = %v, want none: three joinable, floor three", got.Retire)
+	}
+	if got.Create != 1 || !got.FloorHeld || got.Joinable != 3 {
+		t.Errorf("Create = %d FloorHeld = %v Joinable = %d, want one extra server for the floor of 3 joinable",
+			got.Create, got.FloorHeld, got.Joinable)
+	}
+}
+
+func TestDecideSizeRetiresAboveTheFloor(t *testing.T) {
+	got := DecideSize(floorInputs(2,
+		staleReady("old1", 10, 100, "old"),
+		staleReady("old2", 10, 100, "old"),
+		ready("new", 0, 100),
+	))
+	if len(got.Retire) != 1 || got.Retire[0] != "old1" || got.FloorHeld {
+		t.Errorf("Retire = %v FloorHeld = %v, want [old1]: two stay joinable", got.Retire, got.FloorHeld)
+	}
+}
+
+func TestDecideSizeRetiresAClosedDoorWithoutTouchingTheFloor(t *testing.T) {
+	closed := staleReady("zzz", 10, 100, "old")
+	closed.JoinsClosed = true
+	got := DecideSize(floorInputs(2,
+		staleReady("old2", 10, 100, "old"),
+		closed,
+		ready("new", 0, 100),
+	))
+	if len(got.Retire) != 1 || got.Retire[0] != "zzz" {
+		t.Errorf("Retire = %v, want [zzz]: it is not joinable, so retiring it keeps the two that are", got.Retire)
+	}
+}
+
+func TestDecideSizeBuildsOnlyOneExtraServerAtATime(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		extra   []ServerView
+		pending int32
+	}{
+		{"the extra server is starting", []ServerView{starting("surge")}, 0},
+		{"the extra server is pending", nil, 1},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			in := floorInputs(3, append([]ServerView{
+				staleReady("old1", 10, 100, "old"),
+				staleReady("old2", 10, 100, "old"),
+				ready("new", 0, 100),
+			}, tc.extra...)...)
+			in.PendingCreates = tc.pending
+			got := DecideSize(in)
+			if got.Create != 0 || len(got.Retire) != 0 || !got.FloorHeld {
+				t.Errorf("Create = %d Retire = %v FloorHeld = %v, want nothing new while the extra server comes up",
+					got.Create, got.Retire, got.FloorHeld)
+			}
+		})
+	}
+}
+
+func TestDecideSizeReportsTheFloorBlockedAtTheCeiling(t *testing.T) {
+	busy := ready("busy", 20, 100)
+	busy.JoinsClosed = true
+	in := floorInputs(3,
+		staleReady("old1", 10, 100, "old"),
+		staleReady("old2", 10, 100, "old"),
+		ready("new", 0, 100),
+		busy,
+	)
+	in.MaxReplicas = 4
+	got := DecideSize(in)
+	if got.Create != 0 || len(got.Retire) != 0 {
+		t.Fatalf("Create = %d Retire = %v, want nothing: at the ceiling with the floor reached", got.Create, got.Retire)
+	}
+	if !got.FloorHeld || !got.FloorBlocked || !got.Limited {
+		t.Errorf("FloorHeld = %v FloorBlocked = %v Limited = %v, want all true", got.FloorHeld, got.FloorBlocked, got.Limited)
+	}
+}
+
+func TestDecideSizeHoldsTheFloorAgainstScaleDownDuringAChangeover(t *testing.T) {
+	retiring := staleReady("old1", 40, 100, "old")
+	retiring.Phase = phase.Retiring
+	retiring.Retire = true
+	idle := staleReady("old2", 0, 100, "old")
+	idle.EmptyFor = time.Hour
+	in := floorInputs(2, retiring, idle, ready("new", 60, 100))
+	in.MaxUnavailable = 1
+	got := DecideSize(in)
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none: old2 and new are the two joinable servers the floor keeps", got.Delete)
+	}
+}
+
+func TestDecideSizeIgnoresTheFloorOutsideAChangeover(t *testing.T) {
+	a := ready("a", 0, 100)
+	a.EmptyFor = time.Hour
+	b := ready("b", 0, 100)
+	b.EmptyFor = time.Hour
+	got := DecideSize(floorInputs(5, a, b))
+	if len(got.Delete) != 1 {
+		t.Errorf("Delete = %v, want one: nothing is stale, so the floor does not apply", got.Delete)
+	}
+}
+
+func TestDecideSizeDoesNotCountAReservedRetirementAsJoinable(t *testing.T) {
+	in := floorInputs(2,
+		staleReady("old1", 10, 100, "old"),
+		staleReady("old2", 10, 100, "old"),
+		ready("new", 0, 100),
+	)
+	in.PendingRetires = map[string]bool{"old1": true}
+	got := DecideSize(in)
+	if len(got.Retire) != 0 || got.Create != 1 {
+		t.Errorf("Retire = %v Create = %d, want no retirement and one extra server: "+
+			"old1 is already going, so old2 and new are the only joinable two", got.Retire, got.Create)
+	}
+}
+
+func whenEmptyInputs(views ...ServerView) ScalingInputs {
+	in := floorInputs(0, views...)
+	in.WhenEmpty = true
+	return in
+}
+
+func TestWhenEmptyLeavesAnOccupiedServer(t *testing.T) {
+	got := DecideSize(whenEmptyInputs(staleReady("old", 10, 100, "old"), ready("new", 0, 100)))
+	if len(got.Retire) != 0 || got.FloorHeld || got.Create != 0 {
+		t.Errorf("Retire = %v FloorHeld = %v Create = %d, want nothing: the round on old goes on",
+			got.Retire, got.FloorHeld, got.Create)
+	}
+}
+
+func TestWhenEmptyRetiresAnEmptyServer(t *testing.T) {
+	got := DecideSize(whenEmptyInputs(staleReady("old", 0, 100, "old"), ready("new", 0, 100)))
+	if len(got.Retire) != 1 || got.Retire[0] != "old" {
+		t.Errorf("Retire = %v, want [old]", got.Retire)
+	}
+}
+
+func TestWhenEmptyLeavesAServerWithAnUntrustedCount(t *testing.T) {
+	quiet := staleReady("old", 0, 100, "old")
+	quiet.Stale = true
+	got := DecideSize(whenEmptyInputs(quiet, ready("new", 0, 100)))
+	if len(got.Retire) != 0 {
+		t.Errorf("Retire = %v, want none: a count nobody can trust reads as occupied", got.Retire)
+	}
+}
+
+func TestWhenEmptyRetiresTheEmptyServerBesideAnOccupiedOne(t *testing.T) {
+	got := DecideSize(whenEmptyInputs(
+		staleReady("a", 5, 100, "old"),
+		staleReady("b", 0, 100, "old"),
+		ready("new", 0, 100),
+	))
+	if len(got.Retire) != 1 || got.Retire[0] != "b" {
+		t.Errorf("Retire = %v, want [b]", got.Retire)
+	}
+}
+
+func TestWhenEmptyKeepsTheFloor(t *testing.T) {
+	in := whenEmptyInputs(staleReady("old", 0, 100, "old"), ready("new", 0, 100))
+	in.MinAvailable = 2
+	got := DecideSize(in)
+	if len(got.Retire) != 0 || got.Create != 1 {
+		t.Errorf("Retire = %v Create = %d, want an extra server before the empty old one goes", got.Retire, got.Create)
+	}
+}
+
+func TestWhenEmptyStillShrinksTheNewGenerationBesideABusyStaleServer(t *testing.T) {
+	views := []ServerView{staleReady("hub", 30, 100, "old")}
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		v := ready(name, 0, 100)
+		v.EmptyFor = time.Hour
+		views = append(views, v)
+	}
+	got := DecideSize(whenEmptyInputs(views...))
+	if len(got.Delete) != 1 {
+		t.Errorf("Delete = %v, want one idle current server: the busy stale hub may never empty", got.Delete)
+	}
+}
+
+func TestWhenEmptyKeepsTheLastCurrentServer(t *testing.T) {
+	idle := ready("new", 0, 100)
+	idle.EmptyFor = time.Hour
+	got := DecideSize(whenEmptyInputs(staleReady("hub", 30, 100, "old"), idle))
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none: without it the next pass would cold start it again", got.Delete)
+	}
+}

@@ -67,8 +67,27 @@ type ScalingSpec struct {
 	ScaleDownStabilizationSeconds int32 `json:"scaleDownStabilizationSeconds,omitempty"`
 }
 
+// UpdateStrategy is how a changeover replaces stale servers.
+// +kubebuilder:validation:Enum=RollingUpdate;WhenEmpty
+type UpdateStrategy string
+
+const (
+	// UpdateRollingUpdate retires stale servers whether or not they have
+	// players; the players stay until they leave.
+	UpdateRollingUpdate UpdateStrategy = "RollingUpdate"
+	// UpdateWhenEmpty retires only stale servers known to be empty. An
+	// occupied stale server stays Ready and joinable until it empties.
+	UpdateWhenEmpty UpdateStrategy = "WhenEmpty"
+)
+
 // UpdateSpec controls the rolling update of ephemeral groups.
+// +kubebuilder:validation:XValidation:rule="!has(self.strategy) || self.strategy != 'WhenEmpty' || !has(self.maxStaleSeconds) || self.maxStaleSeconds == 0",message="spec.update.maxStaleSeconds must be 0 with strategy WhenEmpty: it drains the occupied servers WhenEmpty leaves alone"
 type UpdateSpec struct {
+	// Strategy is how stale servers are replaced.
+	// +kubebuilder:default=RollingUpdate
+	// +optional
+	Strategy UpdateStrategy `json:"strategy,omitempty"`
+
 	// MaxUnavailable is how many servers may be draining or terminating at the
 	// same time because of a generation change.
 	// +kubebuilder:default=1
@@ -82,6 +101,15 @@ type UpdateSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	MaxStaleSeconds int32 `json:"maxStaleSeconds,omitempty"`
+
+	// MinAvailable is how many servers must stay joinable while the group
+	// changes over: Ready, registered, door open, and not on their way out,
+	// of either generation. The group builds one extra server at a time to
+	// keep it. Unset keeps no floor beyond one Ready server of the current
+	// generation.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	MinAvailable *int32 `json:"minAvailable,omitempty"`
 }
 
 // DrainSpec bounds how long players may be moved off a server.
@@ -123,6 +151,7 @@ type StorageSpec struct {
 // +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || has(self.maxInstances)",message="spec.maxInstances is required for type OnDemand"
 // +kubebuilder:validation:XValidation:rule="self.type == 'OnDemand' || !has(self.maxInstances)",message="spec.maxInstances is only allowed for type OnDemand"
 // +kubebuilder:validation:XValidation:rule="!has(self.scaling) || self.scaling.minReplicas <= self.scaling.maxReplicas",message="scaling.minReplicas must not exceed scaling.maxReplicas"
+// +kubebuilder:validation:XValidation:rule="!has(self.update) || !has(self.update.minAvailable) || !has(self.scaling) || self.update.minAvailable < self.scaling.maxReplicas",message="spec.update.minAvailable must be less than spec.scaling.maxReplicas: keeping the floor needs room for one extra server"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || (has(self.storage.storageClassName) == has(oldSelf.storage.storageClassName) && (!has(self.storage.storageClassName) || self.storage.storageClassName == oldSelf.storage.storageClassName))",message="storage.storageClassName is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || self.storage.accessModes == oldSelf.storage.accessModes",message="storage.accessModes is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || quantity(self.storage.size).compareTo(quantity(oldSelf.storage.size)) >= 0",message="storage.size must not shrink"
@@ -430,7 +459,7 @@ type ServerGroupStatus struct {
 	// Changeover is this group's changeover as the network's budget sees it;
 	// written by its own reconcile and read by its siblings'.
 	// +optional
-	// +kubebuilder:validation:Enum="";Waiting;Begun
+	// +kubebuilder:validation:Enum="";Waiting;Begun;Deferred
 	Changeover ChangeoverState `json:"changeover,omitempty"`
 
 	// Conditions follow the standard Kubernetes condition contract.
@@ -559,6 +588,19 @@ func (g *ServerGroup) UpdateMaxStale() time.Duration {
 		return 0
 	}
 	return time.Duration(g.Spec.Update.MaxStaleSeconds) * time.Second
+}
+
+// UpdateWhenEmpty reports whether spec.update.strategy is WhenEmpty.
+func (g *ServerGroup) UpdateWhenEmpty() bool {
+	return g.Spec.Update != nil && g.Spec.Update.Strategy == UpdateWhenEmpty
+}
+
+// UpdateMinAvailable is spec.update.minAvailable, 0 when unset.
+func (g *ServerGroup) UpdateMinAvailable() int32 {
+	if g.Spec.Update == nil || g.Spec.Update.MinAvailable == nil {
+		return 0
+	}
+	return *g.Spec.Update.MinAvailable
 }
 
 func init() {

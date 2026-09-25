@@ -261,6 +261,29 @@ func TestServerGroupCELRejections(t *testing.T) {
 				g.Spec.Scaling = &spawneryv1alpha1.ScalingSpec{MinReplicas: 5, MaxReplicas: 2}
 			},
 		},
+		{
+			name: "minAvailable equal to maxReplicas",
+			base: ephemeralGroup,
+			mutate: func(g *spawneryv1alpha1.ServerGroup) {
+				g.Spec.Update = &spawneryv1alpha1.UpdateSpec{MinAvailable: ptr.To[int32](10)}
+			},
+		},
+		{
+			name: "minAvailable zero",
+			base: ephemeralGroup,
+			mutate: func(g *spawneryv1alpha1.ServerGroup) {
+				g.Spec.Update = &spawneryv1alpha1.UpdateSpec{MinAvailable: ptr.To[int32](0)}
+			},
+		},
+		{
+			name: "WhenEmpty with maxStaleSeconds",
+			base: ephemeralGroup,
+			mutate: func(g *spawneryv1alpha1.ServerGroup) {
+				g.Spec.Update = &spawneryv1alpha1.UpdateSpec{
+					Strategy: spawneryv1alpha1.UpdateWhenEmpty, MaxStaleSeconds: 60,
+				}
+			},
+		},
 	}
 
 	for _, tc := range cases {
@@ -270,6 +293,32 @@ func TestServerGroupCELRejections(t *testing.T) {
 			tc.mutate(g)
 			if err := c.Create(ctx, g); err == nil {
 				t.Fatalf("create succeeded, want CEL rejection")
+			}
+		})
+	}
+}
+
+func TestServerGroupAcceptsAFloorAndWhenEmpty(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	for _, tc := range []struct {
+		name   string
+		update *spawneryv1alpha1.UpdateSpec
+	}{
+		{"a floor one below the ceiling", &spawneryv1alpha1.UpdateSpec{MinAvailable: ptr.To[int32](9)}},
+		{"WhenEmpty", &spawneryv1alpha1.UpdateSpec{Strategy: spawneryv1alpha1.UpdateWhenEmpty}},
+		{"WhenEmpty with a floor", &spawneryv1alpha1.UpdateSpec{
+			Strategy: spawneryv1alpha1.UpdateWhenEmpty, MinAvailable: ptr.To[int32](2),
+		}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := testenv.Namespace(t, ctx, c)
+			g := ephemeralGroup(ns, "group")
+			g.Spec.Update = tc.update
+			if err := c.Create(ctx, g); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			if g.Spec.Update.Strategy == "" {
+				t.Errorf("strategy was not defaulted")
 			}
 		})
 	}

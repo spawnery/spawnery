@@ -4523,7 +4523,7 @@ func TestProgressingSaysWhetherTheGroupHasArrived(t *testing.T) {
 			group := &spawneryv1alpha1.ServerGroup{
 				ObjectMeta: metav1.ObjectMeta{Name: "lobby"},
 			}
-			reportProgressing(group, tc.views, gen, nil)
+			reportProgressing(group, tc.views, gen, nil, FloorReport{})
 			got := meta.FindStatusCondition(group.Status.Conditions,
 				spawneryv1alpha1.ConditionProgressing)
 			if got == nil {
@@ -4843,7 +4843,7 @@ func TestAFailedRetireeIsNamedOnProgressing(t *testing.T) {
 		{Name: "lobby-old", PodHash: "old", Phase: phase.Failed, Retire: true},
 	}
 
-	reportProgressing(group, views, "current", nil)
+	reportProgressing(group, views, "current", nil, FloorReport{})
 
 	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
 	if cond == nil || cond.Status != metav1.ConditionTrue {
@@ -4877,7 +4877,7 @@ func TestAnOrdinaryRetireeIsNotReportedAsStuck(t *testing.T) {
 			reportProgressing(group, []ServerView{
 				{Name: "lobby-new", PodHash: "current", Phase: phase.Ready},
 				{Name: "lobby-old", PodHash: "old", Phase: p, Retire: true},
-			}, "current", nil)
+			}, "current", nil, FloorReport{})
 			cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
 			if cond != nil && cond.Reason == spawneryv1alpha1.ReasonRetireeStuck {
 				t.Errorf("a %s retiree was reported as stuck: %q", p, cond.Message)
@@ -5249,5 +5249,29 @@ func TestTheRefusalIsAnnouncedOnceAndNotEveryResync(t *testing.T) {
 	}
 	if got := scalingEvents(rec, spawneryv1alpha1.ReasonPluginVolumeUnusable); got != 1 {
 		t.Errorf("recorded %d refusal events across three reconciles, want one on the transition", got)
+	}
+}
+
+func TestProgressingNamesTheFloor(t *testing.T) {
+	group := &spawneryv1alpha1.ServerGroup{ObjectMeta: metav1.ObjectMeta{Name: "lobby", Generation: 2}}
+	views := []ServerView{
+		{Name: "lobby-new", PodHash: "current", Phase: phase.Ready},
+		{Name: "lobby-old", PodHash: "old", Phase: phase.Ready},
+	}
+	reportProgressing(group, views, "current", nil, FloorReport{Joinable: 2, Min: 2})
+	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
+	if cond == nil || cond.Reason != spawneryv1alpha1.ReasonWaitingForMinAvailable {
+		t.Fatalf("Progressing = %+v, want reason %s", cond, spawneryv1alpha1.ReasonWaitingForMinAvailable)
+	}
+	if !strings.Contains(cond.Message, "minAvailable 2") {
+		t.Errorf("message %q does not name the floor", cond.Message)
+	}
+
+	group.Status.Conditions = nil
+	views = append(views, ServerView{Name: "lobby-surge", PodHash: "current", Phase: phase.Starting})
+	reportProgressing(group, views, "current", nil, FloorReport{Joinable: 2, Min: 2})
+	cond = meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
+	if cond == nil || cond.Reason != spawneryv1alpha1.ReasonServersStarting {
+		t.Errorf("Progressing = %+v, want %s while the extra server starts", cond, spawneryv1alpha1.ReasonServersStarting)
 	}
 }

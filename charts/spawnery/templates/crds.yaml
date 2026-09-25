@@ -5226,7 +5226,29 @@ spec:
                     format: int32
                     minimum: 1
                     type: integer
+                  minAvailable:
+                    description: |-
+                      MinAvailable is how many servers must stay joinable while the group
+                      changes over: Ready, registered, door open, and not on their way out,
+                      of either generation. The group builds one extra server at a time to
+                      keep it. Unset keeps no floor beyond one Ready server of the current
+                      generation.
+                    format: int32
+                    minimum: 1
+                    type: integer
+                  strategy:
+                    default: RollingUpdate
+                    description: Strategy is how stale servers are replaced.
+                    enum:
+                    - RollingUpdate
+                    - WhenEmpty
+                    type: string
                 type: object
+                x-kubernetes-validations:
+                - message: 'spec.update.maxStaleSeconds must be 0 with strategy WhenEmpty:
+                    it drains the occupied servers WhenEmpty leaves alone'
+                  rule: '!has(self.strategy) || self.strategy != ''WhenEmpty'' ||
+                    !has(self.maxStaleSeconds) || self.maxStaleSeconds == 0'
             required:
             - image
             - maxPlayers
@@ -5264,6 +5286,10 @@ spec:
               rule: self.type == 'OnDemand' || !has(self.maxInstances)
             - message: scaling.minReplicas must not exceed scaling.maxReplicas
               rule: '!has(self.scaling) || self.scaling.minReplicas <= self.scaling.maxReplicas'
+            - message: 'spec.update.minAvailable must be less than spec.scaling.maxReplicas:
+                keeping the floor needs room for one extra server'
+              rule: '!has(self.update) || !has(self.update.minAvailable) || !has(self.scaling)
+                || self.update.minAvailable < self.scaling.maxReplicas'
             - message: storage.storageClassName is immutable
               rule: '!has(self.storage) || !has(oldSelf.storage) || (has(self.storage.storageClassName)
                 == has(oldSelf.storage.storageClassName) && (!has(self.storage.storageClassName)
@@ -5301,6 +5327,7 @@ spec:
                 - ""
                 - Waiting
                 - Begun
+                - Deferred
                 type: string
               conditions:
                 description: Conditions follow the standard Kubernetes condition contract.
