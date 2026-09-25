@@ -919,7 +919,7 @@ func (r *ServerGroupReconciler) size(
 		// by a field no rule filled in.
 	case group.IsEphemeral():
 		if group.Spec.Scaling != nil {
-			own := ownServerChangeover(views, podHash, int32(len(pendingCreates)))
+			own := ownServerChangeover(views, podHash, int32(len(pendingCreates)), group.UpdateWhenEmpty())
 			admitted := AdmitChangeovers(append(siblings, ChangeoverView{
 				Kind: "ServerGroup", Name: group.Name, State: own,
 				Failing: changeoverFailing(group.Status.Conditions),

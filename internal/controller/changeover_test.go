@@ -24,6 +24,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
@@ -34,6 +35,15 @@ func TestAdmitChangeovers(t *testing.T) {
 		budget int32
 		want   map[string]bool
 	}{
+		{
+			"a deferred group neither holds nor waits",
+			[]ChangeoverView{
+				{Kind: "ServerGroup", Name: "arena", State: spawneryv1alpha1.ChangeoverDeferred},
+				{Kind: "ServerGroup", Name: "lobby", State: spawneryv1alpha1.ChangeoverWaiting},
+			},
+			1,
+			map[string]bool{"ServerGroup/lobby": true},
+		},
 		{
 			"no cap admits everyone changing over",
 			[]ChangeoverView{
@@ -158,6 +168,31 @@ func TestOwnProxyChangeover(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := ownProxyChangeover(tc.pods, "new", tc.pending); got != tc.want {
 				t.Errorf("ownProxyChangeover = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOwnServerChangeover(t *testing.T) {
+	old := ServerView{Name: "old", PodHash: "old", Phase: phase.Ready}
+	current := ServerView{Name: "new", PodHash: "current", Phase: phase.Ready}
+	startingCurrent := ServerView{Name: "new", PodHash: "current", Phase: phase.Starting}
+	for _, tc := range []struct {
+		name      string
+		views     []ServerView
+		pending   int32
+		whenEmpty bool
+		want      spawneryv1alpha1.ChangeoverState
+	}{
+		{"nothing stale", []ServerView{current}, 0, true, spawneryv1alpha1.ChangeoverNone},
+		{"stale only, nothing asked for", []ServerView{old}, 0, true, spawneryv1alpha1.ChangeoverWaiting},
+		{"WhenEmpty with its first server starting", []ServerView{old, startingCurrent}, 0, true, spawneryv1alpha1.ChangeoverBegun},
+		{"WhenEmpty with a Ready current server", []ServerView{old, current}, 0, true, spawneryv1alpha1.ChangeoverDeferred},
+		{"RollingUpdate with a Ready current server", []ServerView{old, current}, 0, false, spawneryv1alpha1.ChangeoverBegun},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ownServerChangeover(tc.views, "current", tc.pending, tc.whenEmpty); got != tc.want {
+				t.Errorf("ownServerChangeover = %q, want %q", got, tc.want)
 			}
 		})
 	}

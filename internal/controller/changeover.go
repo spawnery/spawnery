@@ -49,7 +49,7 @@ func AdmitChangeovers(groups []ChangeoverView, budget int32) map[string]bool {
 	var waiting []ChangeoverView
 	var holders int32
 	for _, g := range groups {
-		if g.State == spawneryv1alpha1.ChangeoverNone || g.Failing {
+		if g.State == spawneryv1alpha1.ChangeoverNone || g.State == spawneryv1alpha1.ChangeoverDeferred || g.Failing {
 			continue
 		}
 		if budget < 1 || g.State == spawneryv1alpha1.ChangeoverBegun {
@@ -141,9 +141,10 @@ func changeoverHolders(groups []ChangeoverView, admitted map[string]bool, selfKi
 // ownServerChangeover is a server group's changeover state from its own
 // servers. Only an ephemeral group surges, so only its views are passed here.
 // A stale server that is leaving still counts: until it is gone it is the
-// group's extra server.
-func ownServerChangeover(views []ServerView, podHash string, pendingCreates int32) spawneryv1alpha1.ChangeoverState {
-	var stale, current bool
+// group's extra server. A WhenEmpty group with a Ready current server is
+// Deferred instead: what remains waits for its players, not for the budget.
+func ownServerChangeover(views []ServerView, podHash string, pendingCreates int32, whenEmpty bool) spawneryv1alpha1.ChangeoverState {
+	var stale, current, readyCurrent bool
 	for _, v := range views {
 		if staleSpec(v, podHash) {
 			if !phase.Terminal(v.Phase) {
@@ -151,11 +152,16 @@ func ownServerChangeover(views []ServerView, podHash string, pendingCreates int3
 			}
 		} else if v.countsTowardSize() {
 			current = true
+			if v.Phase == phase.Ready {
+				readyCurrent = true
+			}
 		}
 	}
 	switch {
 	case !stale:
 		return spawneryv1alpha1.ChangeoverNone
+	case whenEmpty && readyCurrent:
+		return spawneryv1alpha1.ChangeoverDeferred
 	case current || pendingCreates > 0:
 		return spawneryv1alpha1.ChangeoverBegun
 	default:
