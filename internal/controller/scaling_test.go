@@ -1957,3 +1957,25 @@ func TestWhenEmptyKeepsTheFloor(t *testing.T) {
 		t.Errorf("Retire = %v Create = %d, want an extra server before the empty old one goes", got.Retire, got.Create)
 	}
 }
+
+func TestWhenEmptyStillShrinksTheNewGenerationBesideABusyStaleServer(t *testing.T) {
+	views := []ServerView{staleReady("hub", 30, 100, "old")}
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		v := ready(name, 0, 100)
+		v.EmptyFor = time.Hour
+		views = append(views, v)
+	}
+	got := DecideSize(whenEmptyInputs(views...))
+	if len(got.Delete) != 1 {
+		t.Errorf("Delete = %v, want one idle current server: the busy stale hub may never empty", got.Delete)
+	}
+}
+
+func TestWhenEmptyKeepsTheLastCurrentServer(t *testing.T) {
+	idle := ready("new", 0, 100)
+	idle.EmptyFor = time.Hour
+	got := DecideSize(whenEmptyInputs(staleReady("hub", 30, 100, "old"), idle))
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none: without it the next pass would cold start it again", got.Delete)
+	}
+}

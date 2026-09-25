@@ -822,26 +822,46 @@ func decideSize(in ScalingInputs) SizeDecision {
 		changeover := staleRemains(in)
 		open := joinableCount(in)
 
-		eligible := make([]ServerView, 0, len(pool))
+		// Under WhenEmpty an occupied stale server may never empty, so the
+		// current generation cannot wait for it to shrink. It becomes a
+		// candidate once no stale one is, short of its last Ready server, whose
+		// removal would bring back the cold-start loop described above.
+		var readyCurrent int32
 		for _, v := range pool {
-			// The changeover rule: stale capacity goes first. See above.
-			if changeover && !staleSpec(v, in.PodHash) {
-				continue
+			if !staleSpec(v, in.PodHash) && v.Phase == phase.Ready {
+				readyCurrent++
 			}
-			if changeover && in.MinAvailable > 0 && joinable(in, v) && open-1 < in.MinAvailable {
-				continue
+		}
+		collect := func(current bool) []ServerView {
+			eligible := make([]ServerView, 0, len(pool))
+			for _, v := range pool {
+				// The changeover rule: stale capacity goes first. See above.
+				if changeover && staleSpec(v, in.PodHash) == current {
+					continue
+				}
+				if current && v.Phase == phase.Ready && readyCurrent < 2 {
+					continue
+				}
+				if changeover && in.MinAvailable > 0 && joinable(in, v) && open-1 < in.MinAvailable {
+					continue
+				}
+				// EmptyFor decides nothing on its own: a server that was never
+				// empty carries zero here too, and Stabilization may be zero.
+				if v.Players != 0 || v.Stale || v.EmptyFor < in.Stabilization {
+					continue
+				}
+				// Each candidate on its own, so an infeasible head of the list does
+				// not hide a feasible tail.
+				if free-readyContribution(v) < in.SpareSlots {
+					continue
+				}
+				eligible = append(eligible, v)
 			}
-			// EmptyFor decides nothing on its own: a server that was never
-			// empty carries zero here too, and Stabilization may be zero.
-			if v.Players != 0 || v.Stale || v.EmptyFor < in.Stabilization {
-				continue
-			}
-			// Each candidate on its own, so an infeasible head of the list does
-			// not hide a feasible tail.
-			if free-readyContribution(v) < in.SpareSlots {
-				continue
-			}
-			eligible = append(eligible, v)
+			return eligible
+		}
+		eligible := collect(false)
+		if len(eligible) == 0 && changeover && in.WhenEmpty {
+			eligible = collect(true)
 		}
 		// One per pass: every removal costs a drain cycle, and the five-second
 		// resync converges quickly enough.
