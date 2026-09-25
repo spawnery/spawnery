@@ -90,6 +90,12 @@ type ScalingInputs struct {
 	// PendingRetires are the servers this reconciler has asked to retire and
 	// the cache has not shown yet.
 	PendingRetires map[string]bool
+	// MinAvailable is spec.update.minAvailable: how many servers stay
+	// joinable while stale ones remain. 0 is no floor.
+	MinAvailable int32
+	// WhenEmpty is spec.update.strategy WhenEmpty: only stale servers known
+	// to be empty are retired.
+	WhenEmpty bool
 }
 
 // floor is how many servers this group is held at: what its spec declares plus
@@ -148,6 +154,14 @@ type SizeDecision struct {
 	// ChangeoverWaiting is a cold start withheld by the network's changeover
 	// budget.
 	ChangeoverWaiting bool
+	// FloorHeld is true when a changeover retirement was declined only
+	// because it would leave fewer than MinAvailable joinable servers.
+	FloorHeld bool
+	// Joinable is the count FloorHeld was judged on.
+	Joinable int32
+	// FloorBlocked is true when FloorHeld and the extra server the floor
+	// needs cannot be built because the group is at maxReplicas.
+	FloorBlocked bool
 	// Condemn names the servers whose node is departing. They are deleted
 	// unconditionally: not bounded by Surplus, not held back by MinReplicas,
 	// and all of them in one pass. It is a separate field from Delete so the
@@ -405,7 +419,11 @@ func coldStart(in ScalingInputs) bool {
 //
 // One per pass. Every retirement is a replacement's worth of work, and the
 // five-second resync converges quickly enough.
-func selectRetirement(in ScalingInputs) string {
+//
+// With a floor, the first candidate in that order whose retirement keeps
+// MinAvailable joinable servers goes; the bool reports a decline that only the
+// floor caused, which is what licenses decideSize's extra server.
+func selectRetirement(in ScalingInputs) (string, bool) {
 	var (
 		readyCurrent bool
 		unavailable  int32
@@ -500,7 +518,7 @@ func selectRetirement(in ScalingInputs) string {
 	// watch and a cache that can be wrong for a distinction that only permits
 	// emptying a non-fallback group faster.
 	if !readyCurrent || unavailable >= budget || len(stale) == 0 {
-		return ""
+		return "", false
 	}
 	sort.SliceStable(stale, func(i, j int) bool {
 		// Empty means empty and known to be: unknown counts as occupied
@@ -518,7 +536,48 @@ func selectRetirement(in ScalingInputs) string {
 		}
 		return stale[i].Name < stale[j].Name
 	})
-	return stale[0].Name
+	if in.MinAvailable < 1 {
+		return stale[0].Name, false
+	}
+	open := joinableCount(in)
+	for _, v := range stale {
+		if !joinable(in, v) || open-1 >= in.MinAvailable {
+			return v.Name, false
+		}
+	}
+	return "", true
+}
+
+// joinable reports whether a player can be sent to this server now: Ready,
+// in the proxies' tables, door open, and not already on its way out by any
+// route. Either generation.
+func joinable(in ScalingInputs, v ServerView) bool {
+	return v.Phase == phase.Ready && v.Registered && !v.JoinsClosed &&
+		!v.Retire && !in.PendingRetires[v.Name] && !in.PendingDeletes[v.Name] && !v.Condemned
+}
+
+func joinableCount(in ScalingInputs) int32 {
+	var n int32
+	for _, v := range in.Views {
+		if joinable(in, v) {
+			n++
+		}
+	}
+	return n
+}
+
+// currentStarting reports whether a server of the current generation is on
+// its way up, which is the extra server the floor already asked for.
+func currentStarting(in ScalingInputs) bool {
+	for _, v := range in.Views {
+		if in.PendingDeletes[v.Name] || staleSpec(v, in.PodHash) {
+			continue
+		}
+		if v.Phase == phase.Pending || v.Phase == phase.Starting {
+			return true
+		}
+	}
+	return false
 }
 
 // staleRemains reports whether the changeover still has stale capacity to shed.
@@ -700,8 +759,20 @@ func decideSize(in ScalingInputs) SizeDecision {
 	// instruction and outranks a changeover; demand does not, because a pass
 	// that retires has already decided how this group loses a server and a
 	// second removal would be a second decision on the same reading.
-	if name := selectRetirement(in); name != "" {
+	name, floorHeld := selectRetirement(in)
+	if name != "" {
 		return SizeDecision{Retire: []string{name}, ChangeoverWaiting: waiting}
+	}
+	var floorOpen int32
+	var floorBlocked bool
+	if floorHeld {
+		floorOpen = joinableCount(in)
+		if in.PendingCreates == 0 && !currentStarting(in) {
+			if alive < in.MaxReplicas {
+				return SizeDecision{Create: 1, FloorHeld: true, Joinable: floorOpen, ChangeoverWaiting: waiting}
+			}
+			floorBlocked = true
+		}
 	}
 
 	// Demand. Never in the same pass as a create — reaching here means the
@@ -743,11 +814,15 @@ func decideSize(in ScalingInputs) SizeDecision {
 		// removal back; it cannot create anything. The numbers above stay
 		// generation-blind exactly as 4a left them.
 		changeover := staleRemains(in)
+		open := joinableCount(in)
 
 		eligible := make([]ServerView, 0, len(pool))
 		for _, v := range pool {
 			// The changeover rule: stale capacity goes first. See above.
 			if changeover && !staleSpec(v, in.PodHash) {
+				continue
+			}
+			if changeover && in.MinAvailable > 0 && joinable(in, v) && open-1 < in.MinAvailable {
 				continue
 			}
 			// EmptyFor decides nothing on its own: a server that was never
@@ -765,7 +840,8 @@ func decideSize(in ScalingInputs) SizeDecision {
 		// One per pass: every removal costs a drain cycle, and the five-second
 		// resync converges quickly enough.
 		if names := SelectDeletionCandidates(eligible, 1); len(names) > 0 {
-			return SizeDecision{Delete: names, ChangeoverWaiting: waiting}
+			return SizeDecision{Delete: names, ChangeoverWaiting: waiting,
+				FloorHeld: floorHeld, Joinable: floorOpen, FloorBlocked: floorBlocked}
 		}
 	}
 
@@ -775,5 +851,6 @@ func decideSize(in ScalingInputs) SizeDecision {
 	// found nothing to shed (ColdStartBlocked) or was withheld by the changeover
 	// budget instead of the ceiling (ChangeoverWaiting). Either way the stall has
 	// to be told to the operator, so the flags travel out with it.
-	return SizeDecision{Wanted: wanted, Limited: limited, ColdStartBlocked: coldBlocked, ChangeoverWaiting: waiting}
+	return SizeDecision{Wanted: wanted, Limited: limited || floorBlocked, ColdStartBlocked: coldBlocked,
+		ChangeoverWaiting: waiting, FloorHeld: floorHeld, Joinable: floorOpen, FloorBlocked: floorBlocked}
 }
