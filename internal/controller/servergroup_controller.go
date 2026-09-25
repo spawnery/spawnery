@@ -558,6 +558,10 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 				limited.Message = fmt.Sprintf(
 					"changeover cannot begin: the group is already at maxReplicas %d; raise it by at least 1 to start the new generation",
 					group.Spec.Scaling.MaxReplicas)
+			} else if decision.FloorBlocked {
+				limited.Message = fmt.Sprintf(
+					"the changeover keeps minAvailable %d joinable and needs one extra server; the group is at maxReplicas %d",
+					group.UpdateMinAvailable(), group.Spec.Scaling.MaxReplicas)
 			} else {
 				limited.Message = fmt.Sprintf(
 					"%d more server(s) needed to cover spareSlots %d; maxReplicas %d allows %d now",
@@ -790,7 +794,13 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	// After derivePhase and independent of it: the two answer different
 	// questions and neither is allowed to move the other. See
 	// ConditionProgressing and reportProgressing.
-	reportProgressing(group, views, podHash, waitingFor)
+	// Only while the extra server is not being built: the pass that creates it
+	// reads views from before the create, which would show no server starting.
+	var floor FloorReport
+	if decision.FloorHeld && (decision.FloorBlocked || (decision.Create > 0 && !backoff.MayCreate)) {
+		floor = FloorReport{Joinable: decision.Joinable, Min: group.UpdateMinAvailable()}
+	}
+	reportProgressing(group, views, podHash, waitingFor, floor)
 	// This group's own answer about the forwarding secret. Unlike the proxy
 	// side, this controller works in Servers and holds no pods, so it costs a
 	// list of its own -- label-scoped to this group, over the manager's warm
@@ -935,6 +945,8 @@ func (r *ServerGroupReconciler) size(
 
 				PodHash:        podHash,
 				MaxUnavailable: group.UpdateMaxUnavailable(),
+				MinAvailable:   group.UpdateMinAvailable(),
+				WhenEmpty:      group.UpdateWhenEmpty(),
 
 				PendingCreates: int32(len(pendingCreates)),
 				PendingDeletes: pendingDeletes,
@@ -1267,7 +1279,13 @@ func (r *ServerGroupReconciler) groupPods(
 // replacement that was not happening. An empty podHash compares nothing, so a
 // pass without a usable Network reports no replacement rather than a phantom
 // one.
-func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, podHash string, waitingFor []string) {
+// FloorReport is a changeover held at spec.update.minAvailable; the zero value
+// is none.
+type FloorReport struct {
+	Joinable, Min int32
+}
+
+func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, podHash string, waitingFor []string, floor FloorReport) {
 	var starting, older int32
 	// A retiree that will never retire. spec.retire is the update budget's one
 	// signal (selectRetirement), and it survives the server failing -- so a
@@ -1332,6 +1350,12 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, 
 				"update slot for its whole failedRetentionSeconds (%ds), so no further server retires until "+
 				"then. Deleting it returns the slot immediately.",
 			strings.Join(stuck, ", "), group.Spec.FailedRetentionSeconds)
+	case floor.Min > 0 && starting == 0:
+		condition.Status = metav1.ConditionTrue
+		condition.Reason = spawneryv1alpha1.ReasonWaitingForMinAvailable
+		condition.Message = fmt.Sprintf(
+			"%d server(s) joinable, minAvailable %d: the next stale server waits for an extra server "+
+				"that is not being built (see ScalingLimited and BackingOff)", floor.Joinable, floor.Min)
 	case starting > 0:
 		condition.Status = metav1.ConditionTrue
 		condition.Reason = spawneryv1alpha1.ReasonServersStarting
