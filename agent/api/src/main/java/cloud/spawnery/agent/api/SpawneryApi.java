@@ -63,6 +63,12 @@ public interface SpawneryApi {
     /** One server by name, empty if this network has none. */
     Optional<ServerInfo> server(String name);
 
+    /** Every proxy in this network, in no particular order. */
+    List<ProxyInfo> proxies();
+
+    /** One proxy by name, empty if this network has none. */
+    Optional<ProxyInfo> proxy(String name);
+
     /** Every player on this network, whichever backend they are on. */
     List<CloudPlayer> players();
 
@@ -111,6 +117,15 @@ public interface SpawneryApi {
      * far more safely than one that was never told.
      */
     CompletionStage<Void> retire(String server);
+
+    /**
+     * Takes a server's retirement back. It takes joins again, and nothing
+     * automatic removes it any more; it stays until it ends by itself.
+     *
+     * <p>Fails for a server that is already stopping or is not retiring, with
+     * the operator's reason.
+     */
+    CompletionStage<Void> unretire(String server);
 
     /**
      * Asks for extra capacity on a group, for a while.

@@ -60,6 +60,8 @@ import java.util.Objects;
  *     group, which reports its ordinal here so that its number agrees with
  *     the name it already carries. Show the name you already have for those
  *     rather than a zero.
+ * @param held whether an admin took this server's retirement back: nothing
+ *     automatic removes it any more; it stays until it ends by itself.
  */
 public record ServerInfo(
         String name,
@@ -71,7 +73,8 @@ public record ServerInfo(
         String state,
         Map<String, String> attributes,
         String incarnation,
-        int number) {
+        int number,
+        boolean held) {
     public ServerInfo {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(group, "group");
@@ -87,6 +90,21 @@ public record ServerInfo(
         // has not placed yet is one a plugin should be able to describe
         // without a null check.
         incarnation = incarnation == null ? "" : incarnation;
+    }
+
+    /** The record as it was before {@code held}, which it reads as false. */
+    public ServerInfo(
+            String name,
+            String group,
+            ServerPhase phase,
+            int players,
+            int slots,
+            boolean registered,
+            String state,
+            Map<String, String> attributes,
+            String incarnation,
+            int number) {
+        this(name, group, phase, players, slots, registered, state, attributes, incarnation, number, false);
     }
 
     /**

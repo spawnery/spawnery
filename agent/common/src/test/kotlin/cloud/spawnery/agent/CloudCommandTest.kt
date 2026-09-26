@@ -7,7 +7,9 @@ import cloud.spawnery.agent.pb.BoostResult
 import cloud.spawnery.agent.pb.CloudResponse
 import cloud.spawnery.agent.pb.GroupState
 import cloud.spawnery.agent.pb.RequestError
+import cloud.spawnery.agent.pb.ProxyState
 import cloud.spawnery.agent.pb.RetireResult
+import cloud.spawnery.agent.pb.UnretireResult
 import cloud.spawnery.agent.pb.StopBoostResult
 import cloud.spawnery.agent.pb.NetworkState
 import cloud.spawnery.agent.pb.ServerState
@@ -30,6 +32,28 @@ private fun aNetwork(): NetworkState =
             ServerState.newBuilder().setName("lobby-a").setGroup("lobby")
                 .setPhase("Ready").setPlayers(12).setSlots(100).setRegistered(true),
         )
+        .build()
+
+private fun aNetworkWithProxies(): NetworkState =
+    NetworkState.newBuilder()
+        .addGroups(
+            GroupState.newBuilder().setName("lobby").setKind(GroupState.Kind.EPHEMERAL)
+                .setReplicas(2).setReadyReplicas(2).setOnlinePlayers(3).setFreeSlots(97),
+        )
+        .addGroups(
+            GroupState.newBuilder().setName("gateway").setKind(GroupState.Kind.PROXY)
+                .setReplicas(2).setReadyReplicas(2).setOnlinePlayers(3),
+        )
+        .addServers(
+            ServerState.newBuilder().setName("lobby-r").setGroup("lobby")
+                .setPhase("Retiring").setPlayers(3).setSlots(100),
+        )
+        .addServers(
+            ServerState.newBuilder().setName("lobby-h").setGroup("lobby")
+                .setPhase("Ready").setPlayers(0).setSlots(100).setRegistered(true).setHeld(true),
+        )
+        .addProxies(ProxyState.newBuilder().setName("gateway-a").setGroup("gateway").setReady(true).setPlayers(3))
+        .addProxies(ProxyState.newBuilder().setName("gateway-b").setGroup("gateway").setReady(true).setDraining(true))
         .build()
 
 class CloudCommandTest {
@@ -550,6 +574,48 @@ class CloudCommandTest {
         assertFailsWith<CommandSyntaxException> { run("cloud list") }
         assertTrue(sent.isEmpty(), "a source without the read permission was told something: $sent")
     }
+
+    @Test
+    fun `unretire asks the operator and says what it means`() {
+        run("cloud unretire lobby-r", api(aNetworkWithProxies()))
+        assertEquals("lobby-r", requested.single().unretire.server)
+        assertTrue(sent.isEmpty(), "the command answered before the operator did: $sent")
+        answer { setUnretire(UnretireResult.newBuilder().setServer("lobby-r")) }
+        val line = sent.single()
+        assertTrue(line.contains("lobby-r") && line.contains("takes joins again"), line)
+    }
+
+    @Test
+    fun `unretire says why the operator refused`() {
+        run("cloud unretire lobby-r", api(aNetworkWithProxies()))
+        answer {
+            setError(
+                RequestError.newBuilder().setReason(RequestError.Reason.REFUSED)
+                    .setMessage("that server is already stopping"),
+            )
+        }
+        assertTrue(sent.single().contains("already stopping"), sent.single())
+    }
+
+    @Test
+    fun `list shows a proxy group's proxies`() {
+        run("cloud list", api(aNetworkWithProxies()))
+        assertTrue(sent.any { it.contains("gateway-a") }, "$sent")
+        assertTrue(sent.any { it.contains("gateway-b") && it.contains("draining") }, "$sent")
+    }
+
+    @Test
+    fun `info answers for a proxy`() {
+        run("cloud info gateway-b", api(aNetworkWithProxies()))
+        assertTrue(sent.single().contains("gateway-b") && sent.single().contains("draining"), sent.single())
+    }
+
+    @Test
+    fun `info says a held server is held`() {
+        run("cloud info lobby-h", api(aNetworkWithProxies()))
+        assertTrue(sent.single().contains("held"), sent.single())
+    }
+
 }
 
 class CloudCompletionTest {
@@ -626,4 +692,5 @@ class CloudCompletionTest {
     fun `a name nothing matches offers nothing rather than everything`() {
         assertEquals(emptyList(), completions("cloud info zzz"))
     }
+
 }

@@ -14,6 +14,7 @@ import cloud.spawnery.agent.pb.RetireRequest
 import cloud.spawnery.agent.pb.StartServerRequest
 import cloud.spawnery.agent.pb.StopBoostRequest
 import cloud.spawnery.agent.pb.StopServerRequest
+import cloud.spawnery.agent.pb.UnretireRequest
 import cloud.spawnery.agent.pb.RequestError
 import java.time.Duration
 import java.time.Instant
@@ -73,6 +74,17 @@ class CloudConnector(
                 CloudRequest.newBuilder()
                     .setId(id)
                     .setRetire(RetireRequest.newBuilder().setServer(server))
+                    .build(),
+            )
+        }
+
+    /** Takes a server's retirement back; fails with the operator's reason. */
+    fun unretire(server: String): CompletionStage<Void> =
+        requests.start<Void> { id ->
+            sendRequest(
+                CloudRequest.newBuilder()
+                    .setId(id)
+                    .setUnretire(UnretireRequest.newBuilder().setServer(server))
                     .build(),
             )
         }
@@ -252,6 +264,7 @@ class CloudConnector(
                 ),
             )
             response.hasRetire() -> requests.complete(response.id, null)
+            response.hasUnretire() -> requests.complete(response.id, null)
             response.hasBoost() -> requests.complete(
                 response.id,
                 BoostResult(

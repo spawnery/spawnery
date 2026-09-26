@@ -146,6 +146,17 @@ class MirrorApiTest {
     }
 
     @Test
+    fun `both sides build the same request for the same unretire`() {
+        val mirror = NetworkMirror().also { it.apply(aRichState()) }
+        MirrorApi(mirror, serverSelf(), connector(), CloudEvents()).unretire("lobby-a")
+        MirrorApi(mirror, proxySelf(), connector(), CloudEvents()).unretire("lobby-a")
+
+        assertEquals(2, requested.size)
+        assertEquals(requested[0].unretire, requested[1].unretire)
+        assertEquals("lobby-a", requested[0].unretire.server)
+    }
+
+    @Test
     fun `both sides build the same request for the same start and stop`() {
         val mirror = NetworkMirror().also { it.apply(aRichState()) }
         val onServer = MirrorApi(mirror, serverSelf(), connector(), CloudEvents())

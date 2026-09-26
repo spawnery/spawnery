@@ -8,6 +8,7 @@ import cloud.spawnery.agent.api.ReadinessHold
 import cloud.spawnery.agent.api.EventBus
 import cloud.spawnery.agent.api.Self
 import cloud.spawnery.agent.api.Target
+import cloud.spawnery.agent.api.ProxyInfo
 import cloud.spawnery.agent.api.ServerInfo
 import cloud.spawnery.agent.api.StartedServer
 import cloud.spawnery.agent.api.SpawneryApi
@@ -69,6 +70,11 @@ class MirrorApi(
     override fun server(name: String): Optional<ServerInfo> =
         Optional.ofNullable(mirror.servers().firstOrNull { it.name() == name })
 
+    override fun proxies(): List<ProxyInfo> = mirror.proxies()
+
+    override fun proxy(name: String): Optional<ProxyInfo> =
+        Optional.ofNullable(mirror.proxies().firstOrNull { it.name() == name })
+
     override fun players(): List<CloudPlayer> = mirror.players()
 
     override fun player(id: UUID): Optional<CloudPlayer> =
@@ -81,6 +87,9 @@ class MirrorApi(
 
     override fun retire(server: String): CompletionStage<Void> =
         connector.retire(server)
+
+    override fun unretire(server: String): CompletionStage<Void> =
+        connector.unretire(server)
 
     override fun boost(group: String, replicas: Int, forHowLong: Duration?): CompletionStage<BoostResult> =
         connector.boost(group, replicas, forHowLong)
