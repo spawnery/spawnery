@@ -23,6 +23,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/podspec"
 )
 
 func aServer() *spawneryv1alpha1.Server {
@@ -94,5 +95,22 @@ func TestAGroupEventNamesTheGroupAsBothSubjectAndGroup(t *testing.T) {
 	}
 	if ev.GetSubject() != "lobby" || ev.GetGroup() != "lobby" {
 		t.Errorf("subject/group = %q/%q, want lobby/lobby", ev.GetSubject(), ev.GetGroup())
+	}
+}
+
+func TestAProxyPodIsAnEventAboutThatProxy(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "gateway-abc", Namespace: "minecraft",
+		Labels: map[string]string{podspec.LabelRole: podspec.RoleProxy, podspec.LabelGroup: "gateway"}}}
+	ns, ev, ok := Derive(pod, corev1.EventTypeNormal, "ProxyStarted", "proxy gateway-abc is taking connections")
+	if !ok || ns != "minecraft" || ev.GetSubject() != "gateway-abc" || ev.GetGroup() != "gateway" {
+		t.Errorf("Derive = %q %+v %v, want the proxy as subject and its group", ns, ev, ok)
+	}
+}
+
+func TestAGamePodIsNotAnEvent(t *testing.T) {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: "lobby-a", Namespace: "minecraft",
+		Labels: map[string]string{podspec.LabelRole: podspec.RoleServer, podspec.LabelGroup: "lobby"}}}
+	if _, _, ok := Derive(pod, corev1.EventTypeWarning, "Unhealthy", "probe failed"); ok {
+		t.Error("a game pod's event reached the feed")
 	}
 }

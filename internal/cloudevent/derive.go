@@ -29,6 +29,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agentpb"
+	"github.com/spawnery/spawnery/internal/podspec"
 )
 
 // Derive turns one recorded event into at most one CloudEvent.
@@ -56,6 +57,11 @@ func Derive(
 		namespace, subject, group = o.Namespace, o.Name, o.Name
 	case *spawneryv1alpha1.ProxyGroup:
 		namespace, subject, group = o.Namespace, o.Name, o.Name
+	case *corev1.Pod:
+		if o.Labels[podspec.LabelRole] != podspec.RoleProxy {
+			return "", nil, false
+		}
+		namespace, subject, group = o.Namespace, o.Name, o.Labels[podspec.LabelGroup]
 	default:
 		// Networks, Secrets, and anything added later.
 		return "", nil, false

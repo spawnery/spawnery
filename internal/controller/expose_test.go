@@ -1423,7 +1423,10 @@ func TestAGroupSaysWhenItsPodsNoLongerMatchWhatTheOperatorRenders(t *testing.T) 
 	// matching. Editing the label is how a unit-level test reaches that state
 	// without rebuilding the operator — the controller compares the label
 	// against what it renders now, and does not care which side moved.
-	stale := &pods[0]
+	stale, ok := f.pod(pods[0].Name)
+	if !ok {
+		t.Fatalf("pod %s is gone", pods[0].Name)
+	}
 	stale.Labels[podspec.LabelPodHash] = "0000000000000000"
 	if err := f.c.Update(f.ctx, stale); err != nil {
 		t.Fatalf("age the pod's hash: %v", err)

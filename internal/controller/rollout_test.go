@@ -347,3 +347,15 @@ func TestDecideRolloutWithoutSurge(t *testing.T) {
 		})
 	}
 }
+
+func TestARetireRequestIsDrainedFirstAmongStalePods(t *testing.T) {
+	got := DecideRollout([]ProxyView{
+		{Name: "a", Ready: true, Stale: true, Players: 0, CreatedAt: at(0)},
+		{Name: "b", Ready: true, Stale: true, RetireRequested: true, Players: 5, CreatedAt: at(1)},
+		{Name: "c", Ready: true, Players: 0, CreatedAt: at(2)},
+		{Name: "d", Ready: true, Players: 0, CreatedAt: at(3)},
+	}, 3, true)
+	if len(got.Drain) != 1 || got.Drain[0] != "b" {
+		t.Errorf("Drain = %v, want [b]: an admin asked for that one", got.Drain)
+	}
+}
