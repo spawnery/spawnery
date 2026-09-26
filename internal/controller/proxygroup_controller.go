@@ -1363,8 +1363,18 @@ func (r *ProxyGroupReconciler) drainDeparting(
 		// pass rather than never.
 		since, dated := drainingSince(pod)
 		waited := r.Clock().Sub(since)
-		unknown := !snap.Connected || snap.PlayersStale
-		expired := dated && (((nodeGoing[i] || unknown) && waited >= group.DrainTimeout()) ||
+		// Measured from when the count became unknown, not from the drain's
+		// start: after an operator restart every count is unknown until its
+		// agent reconnects, and a long soft drain must survive that.
+		var unknownFor time.Duration
+		switch {
+		case !snap.Connected:
+			unknownFor = snap.StreamDownFor
+		case snap.PlayersStale:
+			unknownFor = r.Clock().Sub(snap.PlayersReportedAt)
+		}
+		expired := dated && ((nodeGoing[i] && waited >= group.DrainTimeout()) ||
+			(unknownFor > 0 && unknownFor >= group.DrainTimeout() && waited >= group.DrainTimeout()) ||
 			(group.MaxStale() > 0 && waited >= group.MaxStale()))
 
 		// Held until the delete lands, for the reason the Network

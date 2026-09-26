@@ -25,6 +25,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
@@ -156,5 +157,22 @@ func TestAProxyThatPassesTheReadyGateIsAnnouncedOnce(t *testing.T) {
 	}
 	if f.proxyPods("gateway")[0].Annotations[podspec.AnnotationProxyReadySince] == "" {
 		t.Error("the proxy carries no ready-since")
+	}
+}
+
+func TestAnOperatorRestartDoesNotEndALongProxyDrain(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	surplus := drainOneProxy(t, f, r)
+
+	f.clock.Advance(time.Hour)
+	f.reportProxyPlayers(t, surplus, 3)
+	f.reconcileProxyGroup(r, "gateway")
+
+	// A restarted operator has heard from no agent yet.
+	r.Agents = agent.New(f.clock.Now, 5*time.Second, f.clock.Now())
+	f.reconcileProxyGroup(r, "gateway")
+	if got := len(f.proxyPods("gateway")); got != 2 {
+		t.Fatalf("proxy pods = %d, want 2: the drain outlived drain.timeoutSeconds before the restart, and nobody knows yet whether its players left", got)
 	}
 }
