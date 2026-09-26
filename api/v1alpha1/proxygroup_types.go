@@ -195,6 +195,16 @@ type ProxyConfigSpec struct {
 	OnlineMode *bool `json:"onlineMode,omitempty"`
 }
 
+// ProxyUpdateSpec controls how a proxy group lets draining proxies go.
+type ProxyUpdateSpec struct {
+	// MaxStaleSeconds disconnects the players left on a draining proxy after
+	// this many seconds. 0, the default, means a drain waits for its players:
+	// the proxy takes no new connections and stops once empty.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	MaxStaleSeconds int32 `json:"maxStaleSeconds,omitempty"`
+}
+
 // ProxyGroupSpec describes the Velocity layer of a network.
 // +kubebuilder:validation:XValidation:rule="self.networkRef == oldSelf.networkRef",message="spec.networkRef is immutable"
 type ProxyGroupSpec struct {
@@ -239,6 +249,10 @@ type ProxyGroupSpec struct {
 	// +kubebuilder:default={timeoutSeconds:300}
 	// +optional
 	Drain *DrainSpec `json:"drain,omitempty"`
+
+	// Update bounds how long a draining proxy may wait for its players.
+	// +optional
+	Update *ProxyUpdateSpec `json:"update,omitempty"`
 
 	// Config are the rendered Velocity settings.
 	// +optional
@@ -449,4 +463,12 @@ func (g *ProxyGroup) DrainTimeout() time.Duration {
 		return defaultProxyDrainTimeout
 	}
 	return time.Duration(g.Spec.Drain.TimeoutSeconds) * time.Second
+}
+
+// MaxStale is spec.update.maxStaleSeconds, 0 when unset.
+func (g *ProxyGroup) MaxStale() time.Duration {
+	if g.Spec.Update == nil {
+		return 0
+	}
+	return time.Duration(g.Spec.Update.MaxStaleSeconds) * time.Second
 }

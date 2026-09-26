@@ -78,6 +78,14 @@ spec:
                 required:
                 - name
                 type: object
+              hold:
+                description: |-
+                  Hold keeps this server against every automatic removal: a rolling
+                  update does not retire it, and neither the demand rule nor a lowered
+                  maxReplicas deletes it. It stays until it ends by itself. Set by the
+                  agent endpoint's unretire request; a node drain still moves it, and a
+                  retire request still retires it.
+                type: boolean
               key:
                 description: |-
                   Key is the caller's name for the world this member carries, and it is

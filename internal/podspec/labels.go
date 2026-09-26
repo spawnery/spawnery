@@ -101,6 +101,15 @@ const AnnotationSafeToEvict = "cluster-autoscaler.kubernetes.io/safe-to-evict"
 // make CreateOrUpdate write on every reconcile.
 const AnnotationExposeAnnotations = "spawnery.cloud/expose-annotations"
 
+// AnnotationProxyDrainingSince dates when a proxy started draining, as RFC 3339.
+const AnnotationProxyDrainingSince = "spawnery.cloud/draining-since"
+
+// AnnotationRetireRequested marks a proxy an admin asked to retire, as RFC 3339.
+const AnnotationRetireRequested = "spawnery.cloud/retire-requested"
+
+// AnnotationProxyReadySince dates a proxy's first pass of the ready gate, as RFC 3339.
+const AnnotationProxyReadySince = "spawnery.cloud/ready-since"
+
 // ServerLabels are the labels of a Paper pod.
 func ServerLabels(network, group, server string) map[string]string {
 	return map[string]string{

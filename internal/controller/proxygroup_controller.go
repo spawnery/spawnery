@@ -59,7 +59,7 @@ import (
 // is per group. Everything else about a drain is re-derived every pass — which
 // pods are surplus, and therefore what readiness each should have — so this is
 // the only thing that has to be written down.
-const ProxyDrainingSinceAnnotation = "spawnery.cloud/draining-since"
+const ProxyDrainingSinceAnnotation = podspec.AnnotationProxyDrainingSince
 
 // readinessDivergenceGrace is how long a pod's actual readiness may disagree
 // with the asserted one before the group says so. It must clear both known
