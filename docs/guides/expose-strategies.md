@@ -20,7 +20,7 @@ spec:
   networkRef:
     name: production
   replicas: 2
-  image: ghcr.io/spawnery/velocity:3.5.1-0.5.0
+  image: ghcr.io/spawnery/velocity:3.5.1-0.8.0
   expose:
     type: LoadBalancer
     loadBalancer: {}

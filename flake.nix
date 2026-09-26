@@ -326,7 +326,12 @@
           # minor step: two methods are added to the published API, which is
           # otherwise the one 0.4.0 published, and it is republished under
           # this number for the reason the 0.2.21 paragraph gives.
-          imageVersion = "0.5.0";
+          #
+          # 0.8.0 moves it because the agents changed: SpawneryApi gains
+          # unretire, proxies() and proxy(name), ServerInfo gains held(), and
+          # /cloud gains unretire and shows proxies. The proto gains the
+          # messages for both; an older operator answers unretire as unknown.
+          imageVersion = "0.8.0";
 
           # The operator's own version, deliberately not imageVersion.
           # imageVersion above is the *agent* version -- it reaches the
@@ -484,7 +489,14 @@
           # servers that are empty (spec.update.strategy WhenEmpty), holding
           # no changeover place while it waits on players. Unset, nothing
           # changes and no server rolls. The images do not move.
-          operatorVersion = "0.7.0";
+          #
+          # 0.8.0 moves it with the chart and the images. A server whose round
+          # ended shuts down as Finished; unretire takes a retirement back and
+          # holds the server; proxies are in the network picture and the feed,
+          # can be retired by name, and drain without disconnecting unless
+          # their node leaves, their count goes unreadable, or the new
+          # ProxyGroup spec.update.maxStaleSeconds passes.
+          operatorVersion = "0.8.0";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
