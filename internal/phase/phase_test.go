@@ -1155,3 +1155,26 @@ func TestAWithdrawnRetirementGoesBackToReady(t *testing.T) {
 		})
 	}
 }
+
+// TestAFinishedServerStillRunningMovesItsPlayersBeforeItGoes covers a server
+// that reached Finished through a lost ready signal after endRound while its
+// pod still runs: its retention is measured from the round's end, so it can
+// expire with players still on it.
+func TestAFinishedServerStillRunningMovesItsPlayersBeforeItGoes(t *testing.T) {
+	running := Inputs{
+		PodExists: true, PodRunning: true, RoundEnded: true, WasRegistered: true,
+		PlayersOnline: 2, FinishedRetentionElapsed: true,
+	}
+	if got := Decide(Finished, running); got.Next != Finished || !got.StartDrain || got.DeletePod {
+		t.Errorf("Decide(Finished, running with players) = %+v, want a drain before the pod goes", got)
+	}
+	running.DrainDeadlineReached = true
+	if got := Decide(Finished, running); got.Next != Terminating || !got.DeletePod {
+		t.Errorf("Decide(Finished, drain deadline reached) = %+v, want Terminating", got)
+	}
+	empty := running
+	empty.DrainDeadlineReached, empty.PlayersOnline = false, 0
+	if got := Decide(Finished, empty); got.Next != Terminating || !got.DeletePod {
+		t.Errorf("Decide(Finished, empty) = %+v, want Terminating", got)
+	}
+}

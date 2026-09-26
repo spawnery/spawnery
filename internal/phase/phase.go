@@ -393,10 +393,18 @@ func Decide(current Phase, in Inputs) Decision {
 
 	case Finished:
 		if in.DeletionRequested || in.FinishedRetentionElapsed {
-			// No drain: the pod is terminal, so its sessions went with it.
-			// That is the same reasoning the terminal branch below gives, and
-			// it is why this case is shorter than Failed's -- a Finished
-			// server is only ever reached through a terminal pod.
+			// A server that lost its ready signal after endRound is Finished
+			// with its pod still running, and the retention runs from the
+			// round's end, so players may still be on it: move them first, as
+			// Failed does.
+			if in.Occupied() && in.WasRegistered && !in.PodLost && !in.PodTerminal &&
+				!in.DrainDeadlineReached {
+				return Decision{
+					Next: Finished, StartDrain: true,
+					Reason:  ReasonDrainingBeforeCleanup,
+					Message: "moving players off a finished server before removing it",
+				}
+			}
 			reason := ReasonFinishedRetentionElapsed
 			message := "finished retention elapsed"
 			if in.DeletionRequested {
