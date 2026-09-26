@@ -28,7 +28,7 @@ Everything else is a separate grant, deliberately.
 | Node | Opens |
 |---|---|
 | `spawnery.cloud.read` | `/cloud list`, `/cloud info <name>` |
-| `spawnery.cloud.retire` | `/cloud retire <name>` |
+| `spawnery.cloud.retire` | `/cloud retire <name>`, `/cloud unretire <name>` |
 | `spawnery.cloud.scale` | `/cloud start <group> <count> [for <duration>]`, `/cloud stop <group>` |
 | `spawnery.cloud.events` | `/cloud events on`, `/cloud events off` |
 
@@ -37,6 +37,9 @@ above reading, because the two are not the same kind of thing: reading is what
 you give a moderator so they can see where people are, and retiring changes the
 fleet. A permission system that made one imply the other would hand every
 moderator the second the day somebody granted the first.
+
+`retire` and `unretire` share one node for the same reason: somebody trusted
+to retire a server is trusted to take that back.
 
 `start` and `stop` share one node in the other direction, and for the matching
 reason: somebody trusted to add servers is trusted to take back what they
@@ -92,6 +95,20 @@ for reasons outside the server it was typed on. Retiring puts a server into the
 soft drain described in [Rolling a
 group](updates-and-drain.md#retiring-is-not-draining-and-the-difference-is-the-whole-point):
 it stops taking joins, and the players already on it are left alone.
+
+**`/cloud retire <name>`** takes a proxy's name too. A retired proxy is
+replaced first, then takes no new connections and stops once it is empty;
+nobody on it is disconnected.
+
+**`/cloud unretire <name>`** takes a retirement back while the server is
+still retiring and not yet being stopped: it takes joins again, and it is
+held — nothing automatic removes it any more, not a rolling update and not a
+scale-down; it stays until it ends by itself. A server that is already
+draining, terminating or finished is refused. `/cloud info` says "held" for
+such a server.
+
+`/cloud list` shows each proxy under its proxy group, and `/cloud info
+<name>` answers for a proxy: ready or not, draining or not, and its players.
 
 **`/cloud start <group> <count> for <duration>`** creates a `ScaleBoost`, which
 is the same object [Scaling and boosts](scaling-and-boosts.md) describes. A

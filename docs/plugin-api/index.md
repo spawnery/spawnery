@@ -106,8 +106,11 @@ permission, because a command has somebody running it.
 
 ## What is a value and what is a moment
 
-`ServerInfo`, `Group` and `CloudPlayer` are records describing what the
-operator last said. They do not update. Ask again for a newer one.
+`ServerInfo`, `ProxyInfo`, `Group` and `CloudPlayer` are records describing
+what the operator last said. They do not update. Ask again for a newer one.
+`proxies()` and `proxy(name)` read the network's proxies the way `servers()`
+and `server(name)` read its servers, and `ServerInfo.held()` says whether an
+admin took a server's retirement back.
 
 Reads never block, never time out, and throw nothing: the operator keeps a
 mirror current inside the agent, so `servers()` is a lookup in a local map.
