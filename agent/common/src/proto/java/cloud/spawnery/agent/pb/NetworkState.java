@@ -51,6 +51,7 @@ private static final long serialVersionUID = 0L;
     servers_ = java.util.Collections.emptyList();
     players_ = java.util.Collections.emptyList();
     feedFormat_ = "";
+    proxies_ = java.util.Collections.emptyList();
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -347,6 +348,67 @@ private static final long serialVersionUID = 0L;
     }
   }
 
+  public static final int PROXIES_FIELD_NUMBER = 5;
+  @SuppressWarnings("serial")
+  private java.util.List<cloud.spawnery.agent.pb.ProxyState> proxies_;
+  /**
+   * <pre>
+   * Every proxy of the namespace, sorted by name.
+   * </pre>
+   *
+   * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+   */
+  @java.lang.Override
+  public java.util.List<cloud.spawnery.agent.pb.ProxyState> getProxiesList() {
+    return proxies_;
+  }
+  /**
+   * <pre>
+   * Every proxy of the namespace, sorted by name.
+   * </pre>
+   *
+   * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+   */
+  @java.lang.Override
+  public java.util.List<? extends cloud.spawnery.agent.pb.ProxyStateOrBuilder> 
+      getProxiesOrBuilderList() {
+    return proxies_;
+  }
+  /**
+   * <pre>
+   * Every proxy of the namespace, sorted by name.
+   * </pre>
+   *
+   * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+   */
+  @java.lang.Override
+  public int getProxiesCount() {
+    return proxies_.size();
+  }
+  /**
+   * <pre>
+   * Every proxy of the namespace, sorted by name.
+   * </pre>
+   *
+   * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.ProxyState getProxies(int index) {
+    return proxies_.get(index);
+  }
+  /**
+   * <pre>
+   * Every proxy of the namespace, sorted by name.
+   * </pre>
+   *
+   * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.ProxyStateOrBuilder getProxiesOrBuilder(
+      int index) {
+    return proxies_.get(index);
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -372,6 +434,9 @@ private static final long serialVersionUID = 0L;
     }
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(feedFormat_)) {
       com.google.protobuf.GeneratedMessage.writeString(output, 4, feedFormat_);
+    }
+    for (int i = 0; i < proxies_.size(); i++) {
+      output.writeMessage(5, proxies_.get(i));
     }
     getUnknownFields().writeTo(output);
   }
@@ -407,6 +472,15 @@ private static final long serialVersionUID = 0L;
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(feedFormat_)) {
       size += com.google.protobuf.GeneratedMessage.computeStringSize(4, feedFormat_);
     }
+
+        {
+          final int count = proxies_.size();
+          for (int i = 0; i < count; i++) {
+            size += com.google.protobuf.CodedOutputStream
+              .computeMessageSizeNoTag(proxies_.get(i));
+          }
+          size += 1 * count;
+        }
     return size;
   }
   @java.lang.Override
@@ -439,6 +513,8 @@ private static final long serialVersionUID = 0L;
         .equals(other.getPlayersList())) return false;
     if (!getFeedFormat()
         .equals(other.getFeedFormat())) return false;
+    if (!getProxiesList()
+        .equals(other.getProxiesList())) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -464,6 +540,10 @@ private static final long serialVersionUID = 0L;
     }
     hash = (37 * hash) + FEED_FORMAT_FIELD_NUMBER;
     hash = (53 * hash) + getFeedFormat().hashCode();
+    if (getProxiesCount() > 0) {
+      hash = (37 * hash) + PROXIES_FIELD_NUMBER;
+      hash = (53 * hash) + getProxiesList().hashCode();
+    }
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -636,6 +716,13 @@ private static final long serialVersionUID = 0L;
       }
       bitField0_ = (bitField0_ & ~0x00000004);
       feedFormat_ = "";
+      if (proxiesBuilder_ == null) {
+        proxies_ = java.util.Collections.emptyList();
+      } else {
+        proxies_ = null;
+        proxiesBuilder_.clear();
+      }
+      bitField0_ = (bitField0_ & ~0x00000010);
       return this;
     }
 
@@ -695,6 +782,15 @@ private static final long serialVersionUID = 0L;
         result.players_ = players_;
       } else {
         result.players_ = playersBuilder_.build();
+      }
+      if (proxiesBuilder_ == null) {
+        if (((bitField0_ & 0x00000010) != 0)) {
+          proxies_ = java.util.Collections.unmodifiableList(proxies_);
+          bitField0_ = (bitField0_ & ~0x00000010);
+        }
+        result.proxies_ = proxies_;
+      } else {
+        result.proxies_ = proxiesBuilder_.build();
       }
     }
 
@@ -800,6 +896,32 @@ private static final long serialVersionUID = 0L;
         bitField0_ |= 0x00000008;
         onChanged();
       }
+      if (proxiesBuilder_ == null) {
+        if (!other.proxies_.isEmpty()) {
+          if (proxies_.isEmpty()) {
+            proxies_ = other.proxies_;
+            bitField0_ = (bitField0_ & ~0x00000010);
+          } else {
+            ensureProxiesIsMutable();
+            proxies_.addAll(other.proxies_);
+          }
+          onChanged();
+        }
+      } else {
+        if (!other.proxies_.isEmpty()) {
+          if (proxiesBuilder_.isEmpty()) {
+            proxiesBuilder_.dispose();
+            proxiesBuilder_ = null;
+            proxies_ = other.proxies_;
+            bitField0_ = (bitField0_ & ~0x00000010);
+            proxiesBuilder_ = 
+              com.google.protobuf.GeneratedMessage.alwaysUseFieldBuilders ?
+                 internalGetProxiesFieldBuilder() : null;
+          } else {
+            proxiesBuilder_.addAllMessages(other.proxies_);
+          }
+        }
+      }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
       return this;
@@ -870,6 +992,19 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000008;
               break;
             } // case 34
+            case 42: {
+              cloud.spawnery.agent.pb.ProxyState m =
+                  input.readMessage(
+                      cloud.spawnery.agent.pb.ProxyState.parser(),
+                      extensionRegistry);
+              if (proxiesBuilder_ == null) {
+                ensureProxiesIsMutable();
+                proxies_.add(m);
+              } else {
+                proxiesBuilder_.addMessage(m);
+              }
+              break;
+            } // case 42
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2061,6 +2196,318 @@ private static final long serialVersionUID = 0L;
       bitField0_ |= 0x00000008;
       onChanged();
       return this;
+    }
+
+    private java.util.List<cloud.spawnery.agent.pb.ProxyState> proxies_ =
+      java.util.Collections.emptyList();
+    private void ensureProxiesIsMutable() {
+      if (!((bitField0_ & 0x00000010) != 0)) {
+        proxies_ = new java.util.ArrayList<cloud.spawnery.agent.pb.ProxyState>(proxies_);
+        bitField0_ |= 0x00000010;
+       }
+    }
+
+    private com.google.protobuf.RepeatedFieldBuilder<
+        cloud.spawnery.agent.pb.ProxyState, cloud.spawnery.agent.pb.ProxyState.Builder, cloud.spawnery.agent.pb.ProxyStateOrBuilder> proxiesBuilder_;
+
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public java.util.List<cloud.spawnery.agent.pb.ProxyState> getProxiesList() {
+      if (proxiesBuilder_ == null) {
+        return java.util.Collections.unmodifiableList(proxies_);
+      } else {
+        return proxiesBuilder_.getMessageList();
+      }
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public int getProxiesCount() {
+      if (proxiesBuilder_ == null) {
+        return proxies_.size();
+      } else {
+        return proxiesBuilder_.getCount();
+      }
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public cloud.spawnery.agent.pb.ProxyState getProxies(int index) {
+      if (proxiesBuilder_ == null) {
+        return proxies_.get(index);
+      } else {
+        return proxiesBuilder_.getMessage(index);
+      }
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public Builder setProxies(
+        int index, cloud.spawnery.agent.pb.ProxyState value) {
+      if (proxiesBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        ensureProxiesIsMutable();
+        proxies_.set(index, value);
+        onChanged();
+      } else {
+        proxiesBuilder_.setMessage(index, value);
+      }
+      return this;
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public Builder setProxies(
+        int index, cloud.spawnery.agent.pb.ProxyState.Builder builderForValue) {
+      if (proxiesBuilder_ == null) {
+        ensureProxiesIsMutable();
+        proxies_.set(index, builderForValue.build());
+        onChanged();
+      } else {
+        proxiesBuilder_.setMessage(index, builderForValue.build());
+      }
+      return this;
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public Builder addProxies(cloud.spawnery.agent.pb.ProxyState value) {
+      if (proxiesBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        ensureProxiesIsMutable();
+        proxies_.add(value);
+        onChanged();
+      } else {
+        proxiesBuilder_.addMessage(value);
+      }
+      return this;
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public Builder addProxies(
+        int index, cloud.spawnery.agent.pb.ProxyState value) {
+      if (proxiesBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        ensureProxiesIsMutable();
+        proxies_.add(index, value);
+        onChanged();
+      } else {
+        proxiesBuilder_.addMessage(index, value);
+      }
+      return this;
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public Builder addProxies(
+        cloud.spawnery.agent.pb.ProxyState.Builder builderForValue) {
+      if (proxiesBuilder_ == null) {
+        ensureProxiesIsMutable();
+        proxies_.add(builderForValue.build());
+        onChanged();
+      } else {
+        proxiesBuilder_.addMessage(builderForValue.build());
+      }
+      return this;
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public Builder addProxies(
+        int index, cloud.spawnery.agent.pb.ProxyState.Builder builderForValue) {
+      if (proxiesBuilder_ == null) {
+        ensureProxiesIsMutable();
+        proxies_.add(index, builderForValue.build());
+        onChanged();
+      } else {
+        proxiesBuilder_.addMessage(index, builderForValue.build());
+      }
+      return this;
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public Builder addAllProxies(
+        java.lang.Iterable<? extends cloud.spawnery.agent.pb.ProxyState> values) {
+      if (proxiesBuilder_ == null) {
+        ensureProxiesIsMutable();
+        com.google.protobuf.AbstractMessageLite.Builder.addAll(
+            values, proxies_);
+        onChanged();
+      } else {
+        proxiesBuilder_.addAllMessages(values);
+      }
+      return this;
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public Builder clearProxies() {
+      if (proxiesBuilder_ == null) {
+        proxies_ = java.util.Collections.emptyList();
+        bitField0_ = (bitField0_ & ~0x00000010);
+        onChanged();
+      } else {
+        proxiesBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public Builder removeProxies(int index) {
+      if (proxiesBuilder_ == null) {
+        ensureProxiesIsMutable();
+        proxies_.remove(index);
+        onChanged();
+      } else {
+        proxiesBuilder_.remove(index);
+      }
+      return this;
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public cloud.spawnery.agent.pb.ProxyState.Builder getProxiesBuilder(
+        int index) {
+      return internalGetProxiesFieldBuilder().getBuilder(index);
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public cloud.spawnery.agent.pb.ProxyStateOrBuilder getProxiesOrBuilder(
+        int index) {
+      if (proxiesBuilder_ == null) {
+        return proxies_.get(index);  } else {
+        return proxiesBuilder_.getMessageOrBuilder(index);
+      }
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public java.util.List<? extends cloud.spawnery.agent.pb.ProxyStateOrBuilder> 
+         getProxiesOrBuilderList() {
+      if (proxiesBuilder_ != null) {
+        return proxiesBuilder_.getMessageOrBuilderList();
+      } else {
+        return java.util.Collections.unmodifiableList(proxies_);
+      }
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public cloud.spawnery.agent.pb.ProxyState.Builder addProxiesBuilder() {
+      return internalGetProxiesFieldBuilder().addBuilder(
+          cloud.spawnery.agent.pb.ProxyState.getDefaultInstance());
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public cloud.spawnery.agent.pb.ProxyState.Builder addProxiesBuilder(
+        int index) {
+      return internalGetProxiesFieldBuilder().addBuilder(
+          index, cloud.spawnery.agent.pb.ProxyState.getDefaultInstance());
+    }
+    /**
+     * <pre>
+     * Every proxy of the namespace, sorted by name.
+     * </pre>
+     *
+     * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+     */
+    public java.util.List<cloud.spawnery.agent.pb.ProxyState.Builder> 
+         getProxiesBuilderList() {
+      return internalGetProxiesFieldBuilder().getBuilderList();
+    }
+    private com.google.protobuf.RepeatedFieldBuilder<
+        cloud.spawnery.agent.pb.ProxyState, cloud.spawnery.agent.pb.ProxyState.Builder, cloud.spawnery.agent.pb.ProxyStateOrBuilder> 
+        internalGetProxiesFieldBuilder() {
+      if (proxiesBuilder_ == null) {
+        proxiesBuilder_ = new com.google.protobuf.RepeatedFieldBuilder<
+            cloud.spawnery.agent.pb.ProxyState, cloud.spawnery.agent.pb.ProxyState.Builder, cloud.spawnery.agent.pb.ProxyStateOrBuilder>(
+                proxies_,
+                ((bitField0_ & 0x00000010) != 0),
+                getParentForChildren(),
+                isClean());
+        proxies_ = null;
+      }
+      return proxiesBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.NetworkState)

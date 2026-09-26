@@ -78,6 +78,7 @@ private static final long serialVersionUID = 0L;
     ACCEPT_JOINS(7),
     START_SERVER(8),
     STOP_SERVER(9),
+    UNRETIRE(10),
     REQUEST_NOT_SET(0);
     private final int value;
     private RequestCase(int value) {
@@ -103,6 +104,7 @@ private static final long serialVersionUID = 0L;
         case 7: return ACCEPT_JOINS;
         case 8: return START_SERVER;
         case 9: return STOP_SERVER;
+        case 10: return UNRETIRE;
         case 0: return REQUEST_NOT_SET;
         default: return null;
       }
@@ -377,6 +379,37 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.StopServerRequest.getDefaultInstance();
   }
 
+  public static final int UNRETIRE_FIELD_NUMBER = 10;
+  /**
+   * <code>.spawnery.agent.v1alpha1.UnretireRequest unretire = 10;</code>
+   * @return Whether the unretire field is set.
+   */
+  @java.lang.Override
+  public boolean hasUnretire() {
+    return requestCase_ == 10;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.UnretireRequest unretire = 10;</code>
+   * @return The unretire.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.UnretireRequest getUnretire() {
+    if (requestCase_ == 10) {
+       return (cloud.spawnery.agent.pb.UnretireRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.UnretireRequest.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.UnretireRequest unretire = 10;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.UnretireRequestOrBuilder getUnretireOrBuilder() {
+    if (requestCase_ == 10) {
+       return (cloud.spawnery.agent.pb.UnretireRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.UnretireRequest.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -418,6 +451,9 @@ private static final long serialVersionUID = 0L;
     if (requestCase_ == 9) {
       output.writeMessage(9, (cloud.spawnery.agent.pb.StopServerRequest) request_);
     }
+    if (requestCase_ == 10) {
+      output.writeMessage(10, (cloud.spawnery.agent.pb.UnretireRequest) request_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -457,6 +493,10 @@ private static final long serialVersionUID = 0L;
     if (requestCase_ == 9) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(9, (cloud.spawnery.agent.pb.StopServerRequest) request_);
+    }
+    if (requestCase_ == 10) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(10, (cloud.spawnery.agent.pb.UnretireRequest) request_);
     }
     return size;
   }
@@ -518,6 +558,10 @@ private static final long serialVersionUID = 0L;
         if (!getStopServer()
             .equals(other.getStopServer())) return false;
         break;
+      case 10:
+        if (!getUnretire()
+            .equals(other.getUnretire())) return false;
+        break;
       case 0:
       default:
     }
@@ -567,6 +611,10 @@ private static final long serialVersionUID = 0L;
       case 9:
         hash = (37 * hash) + STOP_SERVER_FIELD_NUMBER;
         hash = (53 * hash) + getStopServer().hashCode();
+        break;
+      case 10:
+        hash = (37 * hash) + UNRETIRE_FIELD_NUMBER;
+        hash = (53 * hash) + getUnretire().hashCode();
         break;
       case 0:
       default:
@@ -743,6 +791,9 @@ private static final long serialVersionUID = 0L;
       if (stopServerBuilder_ != null) {
         stopServerBuilder_.clear();
       }
+      if (unretireBuilder_ != null) {
+        unretireBuilder_.clear();
+      }
       requestCase_ = 0;
       request_ = null;
       return this;
@@ -819,6 +870,10 @@ private static final long serialVersionUID = 0L;
           stopServerBuilder_ != null) {
         result.request_ = stopServerBuilder_.build();
       }
+      if (requestCase_ == 10 &&
+          unretireBuilder_ != null) {
+        result.request_ = unretireBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -867,6 +922,10 @@ private static final long serialVersionUID = 0L;
         }
         case STOP_SERVER: {
           mergeStopServer(other.getStopServer());
+          break;
+        }
+        case UNRETIRE: {
+          mergeUnretire(other.getUnretire());
           break;
         }
         case REQUEST_NOT_SET: {
@@ -960,6 +1019,13 @@ private static final long serialVersionUID = 0L;
               requestCase_ = 9;
               break;
             } // case 74
+            case 82: {
+              input.readMessage(
+                  internalGetUnretireFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              requestCase_ = 10;
+              break;
+            } // case 82
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2158,6 +2224,148 @@ private static final long serialVersionUID = 0L;
       requestCase_ = 9;
       onChanged();
       return stopServerBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.UnretireRequest, cloud.spawnery.agent.pb.UnretireRequest.Builder, cloud.spawnery.agent.pb.UnretireRequestOrBuilder> unretireBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.UnretireRequest unretire = 10;</code>
+     * @return Whether the unretire field is set.
+     */
+    @java.lang.Override
+    public boolean hasUnretire() {
+      return requestCase_ == 10;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.UnretireRequest unretire = 10;</code>
+     * @return The unretire.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.UnretireRequest getUnretire() {
+      if (unretireBuilder_ == null) {
+        if (requestCase_ == 10) {
+          return (cloud.spawnery.agent.pb.UnretireRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.UnretireRequest.getDefaultInstance();
+      } else {
+        if (requestCase_ == 10) {
+          return unretireBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.UnretireRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.UnretireRequest unretire = 10;</code>
+     */
+    public Builder setUnretire(cloud.spawnery.agent.pb.UnretireRequest value) {
+      if (unretireBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        request_ = value;
+        onChanged();
+      } else {
+        unretireBuilder_.setMessage(value);
+      }
+      requestCase_ = 10;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.UnretireRequest unretire = 10;</code>
+     */
+    public Builder setUnretire(
+        cloud.spawnery.agent.pb.UnretireRequest.Builder builderForValue) {
+      if (unretireBuilder_ == null) {
+        request_ = builderForValue.build();
+        onChanged();
+      } else {
+        unretireBuilder_.setMessage(builderForValue.build());
+      }
+      requestCase_ = 10;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.UnretireRequest unretire = 10;</code>
+     */
+    public Builder mergeUnretire(cloud.spawnery.agent.pb.UnretireRequest value) {
+      if (unretireBuilder_ == null) {
+        if (requestCase_ == 10 &&
+            request_ != cloud.spawnery.agent.pb.UnretireRequest.getDefaultInstance()) {
+          request_ = cloud.spawnery.agent.pb.UnretireRequest.newBuilder((cloud.spawnery.agent.pb.UnretireRequest) request_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          request_ = value;
+        }
+        onChanged();
+      } else {
+        if (requestCase_ == 10) {
+          unretireBuilder_.mergeFrom(value);
+        } else {
+          unretireBuilder_.setMessage(value);
+        }
+      }
+      requestCase_ = 10;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.UnretireRequest unretire = 10;</code>
+     */
+    public Builder clearUnretire() {
+      if (unretireBuilder_ == null) {
+        if (requestCase_ == 10) {
+          requestCase_ = 0;
+          request_ = null;
+          onChanged();
+        }
+      } else {
+        if (requestCase_ == 10) {
+          requestCase_ = 0;
+          request_ = null;
+        }
+        unretireBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.UnretireRequest unretire = 10;</code>
+     */
+    public cloud.spawnery.agent.pb.UnretireRequest.Builder getUnretireBuilder() {
+      return internalGetUnretireFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.UnretireRequest unretire = 10;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.UnretireRequestOrBuilder getUnretireOrBuilder() {
+      if ((requestCase_ == 10) && (unretireBuilder_ != null)) {
+        return unretireBuilder_.getMessageOrBuilder();
+      } else {
+        if (requestCase_ == 10) {
+          return (cloud.spawnery.agent.pb.UnretireRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.UnretireRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.UnretireRequest unretire = 10;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.UnretireRequest, cloud.spawnery.agent.pb.UnretireRequest.Builder, cloud.spawnery.agent.pb.UnretireRequestOrBuilder> 
+        internalGetUnretireFieldBuilder() {
+      if (unretireBuilder_ == null) {
+        if (!(requestCase_ == 10)) {
+          request_ = cloud.spawnery.agent.pb.UnretireRequest.getDefaultInstance();
+        }
+        unretireBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.UnretireRequest, cloud.spawnery.agent.pb.UnretireRequest.Builder, cloud.spawnery.agent.pb.UnretireRequestOrBuilder>(
+                (cloud.spawnery.agent.pb.UnretireRequest) request_,
+                getParentForChildren(),
+                isClean());
+        request_ = null;
+      }
+      requestCase_ = 10;
+      onChanged();
+      return unretireBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.CloudRequest)

@@ -65,6 +65,25 @@ func retireOverTheWire(
 	t *testing.T, f *serverFixture, pod *corev1.Pod, server string,
 ) *agentpb.CloudResponse {
 	t.Helper()
+	return askAsServerOverTheWire(t, f, pod, &agentpb.CloudRequest{
+		Request: &agentpb.CloudRequest_Retire{Retire: &agentpb.RetireRequest{Server: server}},
+	})
+}
+
+func unretireOverTheWire(
+	t *testing.T, f *serverFixture, pod *corev1.Pod, server string,
+) *agentpb.CloudResponse {
+	t.Helper()
+	return askAsServerOverTheWire(t, f, pod, &agentpb.CloudRequest{
+		Request: &agentpb.CloudRequest_Unretire{Unretire: &agentpb.UnretireRequest{Server: server}},
+	})
+}
+
+func askAsServerOverTheWire(
+	t *testing.T, f *serverFixture, pod *corev1.Pod, req *agentpb.CloudRequest,
+) *agentpb.CloudResponse {
+	t.Helper()
+	req.Id = 11
 	stream, done := dialAgent(t, f.ctx, f.addr, f.ca,
 		f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	defer done()
@@ -72,12 +91,7 @@ func retireOverTheWire(
 		t.Fatalf("the opening message never arrived: %v", err)
 	}
 	if err := stream.Send(&agentpb.ServerMessage{
-		Message: &agentpb.ServerMessage_CloudRequest{
-			CloudRequest: &agentpb.CloudRequest{
-				Id:      11,
-				Request: &agentpb.CloudRequest_Retire{Retire: &agentpb.RetireRequest{Server: server}},
-			},
-		},
+		Message: &agentpb.ServerMessage_CloudRequest{CloudRequest: req},
 	}); err != nil {
 		t.Fatalf("send the request: %v", err)
 	}
@@ -257,5 +271,20 @@ func TestTheRateBoundCoversEveryVerbAndNotJustConnect(t *testing.T) {
 	if got := last.GetError().GetReason(); got != agentpb.RequestError_RATE_LIMITED {
 		t.Fatalf("reason = %v on ask %d, want RATE_LIMITED past a burst of %d",
 			got, asks, agentserver.RequestBurst)
+	}
+}
+
+func TestUnretireOverTheWireHoldsTheServer(t *testing.T) {
+	f := newServerFixture(t)
+	pod := f.pod("lobby-aaaa")
+	makeServer(t, f, "lobby-aaaa")
+	retireOverTheWire(t, f, pod, "lobby-aaaa")
+
+	resp := unretireOverTheWire(t, f, pod, "lobby-aaaa")
+	if resp.GetUnretire().GetServer() != "lobby-aaaa" {
+		t.Fatalf("answer = %+v, want an UnretireResult naming lobby-aaaa", resp.GetResult())
+	}
+	if retiring(t, f, f.ns, "lobby-aaaa") {
+		t.Error("spec.retire is still true")
 	}
 }

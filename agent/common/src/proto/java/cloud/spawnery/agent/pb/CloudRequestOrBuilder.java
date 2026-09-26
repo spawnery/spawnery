@@ -136,5 +136,20 @@ public interface CloudRequestOrBuilder extends
    */
   cloud.spawnery.agent.pb.StopServerRequestOrBuilder getStopServerOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.UnretireRequest unretire = 10;</code>
+   * @return Whether the unretire field is set.
+   */
+  boolean hasUnretire();
+  /**
+   * <code>.spawnery.agent.v1alpha1.UnretireRequest unretire = 10;</code>
+   * @return The unretire.
+   */
+  cloud.spawnery.agent.pb.UnretireRequest getUnretire();
+  /**
+   * <code>.spawnery.agent.v1alpha1.UnretireRequest unretire = 10;</code>
+   */
+  cloud.spawnery.agent.pb.UnretireRequestOrBuilder getUnretireOrBuilder();
+
   cloud.spawnery.agent.pb.CloudRequest.RequestCase getRequestCase();
 }

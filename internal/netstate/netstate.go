@@ -226,6 +226,7 @@ func (s Source) Build(ctx context.Context, namespace string, audience Audience) 
 			// From the spec and not the status: the group decided this when it
 			// created the server, and nothing observes it afterwards.
 			Number: srv.Spec.Number,
+			Held:   srv.Spec.Hold,
 		})
 	}
 

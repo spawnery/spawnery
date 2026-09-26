@@ -41,6 +41,13 @@ import (
 // backs it.
 var ErrNoSuchServer = errors.New("no such server")
 
+// ErrServerStopping is an unretire for a server that is already draining,
+// terminating or finished.
+var ErrServerStopping = errors.New("server is already stopping")
+
+// ErrNotRetiring is an unretire for a server that is not retiring.
+var ErrNotRetiring = errors.New("server is not retiring")
+
 // ErrNoSuchGroup is the same for a group.
 var ErrNoSuchGroup = errors.New("no such group")
 
@@ -163,6 +170,8 @@ type ClusterWriter interface {
 	// ErrNotAnInstance for a server that is not a member of such a group --
 	// the refusal that keeps a mistyped name from deleting a lobby.
 	StopServer(ctx context.Context, namespace, name string) error
+	// Unretire takes a retirement back and holds the server.
+	Unretire(ctx context.Context, namespace, name string) error
 }
 
 // StartedServer is the member a start request produced.
@@ -246,6 +255,30 @@ func (w KubeWriter) Retire(ctx context.Context, namespace, name string) (bool, e
 		return false, err
 	}
 	return true, nil
+}
+
+// Unretire takes a server's retirement back and holds it: spec.retire false,
+// spec.hold true. Refused for a server that is already stopping, and for one
+// that is not retiring, which includes one an earlier unretire already held.
+func (w KubeWriter) Unretire(ctx context.Context, namespace, name string) error {
+	var srv spawneryv1alpha1.Server
+	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &srv); err != nil {
+		if apierrors.IsNotFound(err) {
+			return ErrNoSuchServer
+		}
+		return err
+	}
+	switch phase.Phase(srv.Status.Phase) {
+	case phase.Draining, phase.Terminating, phase.Finished, phase.Failed:
+		return ErrServerStopping
+	}
+	if !srv.Spec.Retire && phase.Phase(srv.Status.Phase) != phase.Retiring {
+		return ErrNotRetiring
+	}
+	patch := client.MergeFrom(srv.DeepCopy())
+	srv.Spec.Retire = false
+	srv.Spec.Hold = true
+	return w.Client.Patch(ctx, &srv, patch)
 }
 
 // Headroom reads the group and its boosts.

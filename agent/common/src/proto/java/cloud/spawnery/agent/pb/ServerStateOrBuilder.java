@@ -211,4 +211,14 @@ java.lang.String defaultValue);
    * @return The number.
    */
   int getNumber();
+
+  /**
+   * <pre>
+   * Whether an admin took this server's retirement back: spec.hold.
+   * </pre>
+   *
+   * <code>bool held = 11;</code>
+   * @return The held.
+   */
+  boolean getHeld();
 }

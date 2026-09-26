@@ -207,4 +207,48 @@ public interface NetworkStateOrBuilder extends
    */
   com.google.protobuf.ByteString
       getFeedFormatBytes();
+
+  /**
+   * <pre>
+   * Every proxy of the namespace, sorted by name.
+   * </pre>
+   *
+   * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+   */
+  java.util.List<cloud.spawnery.agent.pb.ProxyState> 
+      getProxiesList();
+  /**
+   * <pre>
+   * Every proxy of the namespace, sorted by name.
+   * </pre>
+   *
+   * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+   */
+  cloud.spawnery.agent.pb.ProxyState getProxies(int index);
+  /**
+   * <pre>
+   * Every proxy of the namespace, sorted by name.
+   * </pre>
+   *
+   * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+   */
+  int getProxiesCount();
+  /**
+   * <pre>
+   * Every proxy of the namespace, sorted by name.
+   * </pre>
+   *
+   * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+   */
+  java.util.List<? extends cloud.spawnery.agent.pb.ProxyStateOrBuilder> 
+      getProxiesOrBuilderList();
+  /**
+   * <pre>
+   * Every proxy of the namespace, sorted by name.
+   * </pre>
+   *
+   * <code>repeated .spawnery.agent.v1alpha1.ProxyState proxies = 5;</code>
+   */
+  cloud.spawnery.agent.pb.ProxyStateOrBuilder getProxiesOrBuilder(
+      int index);
 }
