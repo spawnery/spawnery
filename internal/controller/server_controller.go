@@ -1007,6 +1007,7 @@ func (r *ServerReconciler) applyDecision(
 		if current != phase.Ready || srv.Status.ReadySince == nil {
 			srv.Status.ReadySince = &now
 		}
+		srv.Status.RetiringSince = nil
 	case phase.Starting:
 		// Re-arm the startup deadline. It bounds the current attempt to become
 		// playable, not the age of the pod: entering Starting from Pending arms

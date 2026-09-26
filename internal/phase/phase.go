@@ -136,17 +136,18 @@ const MaxReadinessLosses int32 = 3
 
 // Reasons carried in the decision and mirrored into the CR condition.
 const (
-	ReasonPodPending        = "PodPending"
-	ReasonPodRunning        = "PodRunning"
-	ReasonReadyGatePassed   = "ReadyGatePassed"
-	ReasonReadinessLost     = "ReadinessLost"
-	ReasonDeletionRequested = "DeletionRequested"
-	ReasonDrained           = "Drained"
-	ReasonDrainTimeout      = "DrainTimeout"
-	ReasonPodLost           = "PodLost"
-	ReasonPodNeverCreated   = "PodNeverCreated"
-	ReasonPodTerminal       = "PodTerminal"
-	ReasonRetiring          = "Retiring"
+	ReasonPodPending          = "PodPending"
+	ReasonPodRunning          = "PodRunning"
+	ReasonReadyGatePassed     = "ReadyGatePassed"
+	ReasonReadinessLost       = "ReadinessLost"
+	ReasonDeletionRequested   = "DeletionRequested"
+	ReasonDrained             = "Drained"
+	ReasonDrainTimeout        = "DrainTimeout"
+	ReasonPodLost             = "PodLost"
+	ReasonPodNeverCreated     = "PodNeverCreated"
+	ReasonPodTerminal         = "PodTerminal"
+	ReasonRetiring            = "Retiring"
+	ReasonRetirementWithdrawn = "RetirementWithdrawn"
 	// ReasonJoinsOpen marks a server returning to the proxies' routing table
 	// because its round has not ended.
 	ReasonJoinsOpen       = "JoinsOpen"
@@ -469,6 +470,18 @@ func Decide(current Phase, in Inputs) Decision {
 			return Decision{
 				Next: Draining, StartDrain: true,
 				Reason: ReasonDeletionRequested, Message: "deletion requested, moving players off",
+			}
+		}
+		if !in.RetirementRequested {
+			if in.PodRunning && in.PodReady && in.AgentReady && in.AgentStreamDownFor < StreamDownGrace {
+				return Decision{
+					Next: Ready, Register: true,
+					Reason: ReasonRetirementWithdrawn, Message: "retirement was withdrawn",
+				}
+			}
+			return Decision{
+				Next:   Retiring,
+				Reason: ReasonRetiring, Message: "retirement was withdrawn, waiting for both ready signals",
 			}
 		}
 		if in.MaxStaleReached {
