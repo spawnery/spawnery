@@ -95,6 +95,8 @@ type ServerView struct {
 	// survives the escalation to Draining that maxStaleSeconds can force —
 	// which is what tells that drain apart from one a scale-down started.
 	Retire bool
+	// Hold is spec.hold: nothing automatic removes this server.
+	Hold bool
 	// Condemned is true when this server's pod sits on a node that is on its
 	// way out of service. Set by collectViews from pod.spec.nodeName and the
 	// operator's departing-node test; the view carries the conclusion so the

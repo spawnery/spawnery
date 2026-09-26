@@ -148,6 +148,9 @@ func changeoverHolders(groups []ChangeoverView, admitted map[string]bool, selfKi
 func ownServerChangeover(views []ServerView, podHash string, pendingCreates int32, whenEmpty bool, was spawneryv1alpha1.ChangeoverState) spawneryv1alpha1.ChangeoverState {
 	var stale, current, readyCurrent bool
 	for _, v := range views {
+		if v.Hold {
+			continue
+		}
 		if staleSpec(v, podHash) {
 			if !phase.Terminal(v.Phase) {
 				stale = true

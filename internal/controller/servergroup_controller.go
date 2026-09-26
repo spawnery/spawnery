@@ -1322,7 +1322,7 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, 
 		// is the whole question for this type: a member is coming up or it is
 		// not, and the count below sees it either way rather than skipping it
 		// here for carrying a hash nothing will replace.
-		if !group.IsOnDemand() && staleSpec(v, podHash) {
+		if !group.IsOnDemand() && staleSpec(v, podHash) && !v.Hold {
 			older++
 			continue
 		}
@@ -1438,6 +1438,7 @@ func (r *ServerGroupReconciler) collectViews(
 			Generation:   srv.Spec.GroupGeneration,
 			PodHash:      srv.Spec.PodHash,
 			Retire:       srv.Spec.Retire,
+			Hold:         srv.Spec.Hold,
 			CreatedAt:    srv.CreationTimestamp.Time,
 			// podFound is required, and it is what makes pod safe to
 			// dereference here. It is false on all three of podFor's routes: no
