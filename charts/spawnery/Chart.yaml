@@ -8,7 +8,7 @@ type: application
 # version bump alone. Since v0.2.14 this number is also the address people
 # install by -- `--version` against oci://ghcr.io/spawnery/charts/spawnery --
 # so it is no longer only what Flux names a packaged artifact after.
-version: 0.7.0
+version: 0.8.0
 # appVersion beschreibt den Operator, den dieses Chart ausliefert, und nicht die
 # Release-Nummer. v0.2.13 aendert nur die Agenten und einen Kommentar an einer
 # CRD, v0.2.14 gar kein Image -- sein ganzer Inhalt ist der Veroeffentlichungs-
@@ -124,7 +124,11 @@ version: 0.7.0
 # 0.7.0 moves it with the operator: ServerGroup gains
 # spec.update.minAvailable and spec.update.strategy, and status.changeover
 # may read Deferred. Every existing object validates unchanged.
-appVersion: "0.7.0"
+#
+# 0.8.0 moves it with the images: Server gains spec.hold and ProxyGroup
+# spec.update.maxStaleSeconds, both optional. Every existing object
+# validates unchanged.
+appVersion: "0.8.0"
 
 # The floor is the CRDs', not the operator's. api/v1alpha1 carries
 # +kubebuilder:validation:XValidation rules -- five of them on ExposeSpec

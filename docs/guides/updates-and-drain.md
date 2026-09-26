@@ -189,6 +189,45 @@ changeover first — minutes, not seconds, once a drain is part of it. That is
 accepted rather than locked against: what it prevents is a sustained surge
 across the whole network, not a race between two groups.
 
+## Proxies wait for their players too
+
+A proxy that a roll replaces, that a lowered `replicas` removes, or that an
+admin retires takes no new connections and is stopped once it is empty.
+Nobody on it is disconnected, however long that takes. To bound it:
+
+```yaml
+kind: ProxyGroup
+spec:
+  update:
+    # Disconnect whoever is left on a draining proxy after this long.
+    # 0, the default, means a drain waits until the proxy is empty.
+    maxStaleSeconds: 1800
+```
+
+Two cases keep `spec.drain.timeoutSeconds` as a deadline. A proxy on a node
+that is leaving is removed at it, because the node goes either way. And a
+proxy whose player count nobody can read — its agent is gone or its report
+is stale — is removed once it has been unreadable that long, so a dead proxy
+does not drain forever; an operator restart, after which every count is
+unreadable until the agents reconnect, does not end a drain.
+
+Proxies drain one at a time, so a roll of a group of N proxies waits N times
+for the last player on a proxy to leave, and the proxies still waiting their
+turn keep taking new players meanwhile. With
+`Network.spec.update.maxConcurrentChangeovers` set, the proxy group holds its
+changeover place for that whole time, and every server group in the network
+waits behind it. `spec.update.maxStaleSeconds` is what bounds both.
+
+## Taking a retirement back
+
+`/cloud unretire <name>` (or `unretire(server)` from a plugin) takes a
+server's retirement back while it is still `Retiring`: it goes back to
+`Ready`, takes joins again, and carries `spec.hold`. A held server is never
+removed automatically: a rolling update leaves it on its old generation, and
+neither scale-down nor a lowered `maxReplicas` deletes it. It stays until it
+ends by itself, and it does not keep the group's changeover open. A node drain
+still moves it, and a `retire` still retires it.
+
 ## What actually makes a group roll
 
 The operator compares each server against a hash of the whole desired pod plus

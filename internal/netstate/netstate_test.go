@@ -21,8 +21,10 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -30,12 +32,16 @@ import (
 	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/netstate"
+	"github.com/spawnery/spawnery/internal/podspec"
 )
 
 func source(t *testing.T, objects ...client.Object) (netstate.Source, *agent.Registry) {
 	t.Helper()
 	scheme := runtime.NewScheme()
 	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	if err := corev1.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme: %v", err)
 	}
 	start := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
@@ -516,5 +522,49 @@ func TestAudienceOfSendsOnlyProxiesTheWholePicture(t *testing.T) {
 	// too little, and widening later is not a breaking change.
 	if netstate.AudienceOf(agent.Role("something-new")) != netstate.ForServers {
 		t.Error("an unknown role was given the whole picture")
+	}
+}
+
+func proxyPodIn(ns, name string, ready, draining bool) *corev1.Pod {
+	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: name, Namespace: ns, UID: types.UID(name + "-uid"),
+		Labels: podspec.ProxyLabels("production", "gateway"),
+	}}
+	if draining {
+		pod.Annotations = map[string]string{podspec.AnnotationProxyDrainingSince: "2026-09-26T12:00:00Z"}
+	}
+	status := corev1.ConditionFalse
+	if ready {
+		status = corev1.ConditionTrue
+	}
+	pod.Status.Conditions = []corev1.PodCondition{{Type: corev1.PodReady, Status: status}}
+	return pod
+}
+
+func TestBuildListsEveryProxy(t *testing.T) {
+	src, reg := source(t,
+		proxyGroupNamed("ns", "gateway"),
+		proxyPodIn("ns", "gateway-a", true, false),
+		proxyPodIn("ns", "gateway-b", true, true),
+		proxyPodIn("other", "gateway-x", true, false),
+	)
+	reg.Connect("gateway-a-uid", agent.RoleProxy)
+	if err := reg.ReportPlayers("gateway-a-uid", 3, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+
+	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(got.GetProxies()) != 2 {
+		t.Fatalf("proxies = %v, want the two in this namespace", got.GetProxies())
+	}
+	a, b := got.GetProxies()[0], got.GetProxies()[1]
+	if a.GetName() != "gateway-a" || !a.GetReady() || a.GetDraining() || a.GetPlayers() != 3 || a.GetGroup() != "gateway" {
+		t.Errorf("gateway-a = %+v", a)
+	}
+	if b.GetName() != "gateway-b" || !b.GetDraining() {
+		t.Errorf("gateway-b = %+v, want it draining", b)
 	}
 }

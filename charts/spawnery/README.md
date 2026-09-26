@@ -6,7 +6,7 @@ replaces, no longer exists in this repository.
 
 ```bash
 helm install spawnery oci://ghcr.io/spawnery/charts/spawnery \
-  --version 0.7.0 --namespace spawnery-system --create-namespace
+  --version 0.8.0 --namespace spawnery-system --create-namespace
 ```
 
 Installing the chart, choosing a game namespace, the values and the `/cloud`

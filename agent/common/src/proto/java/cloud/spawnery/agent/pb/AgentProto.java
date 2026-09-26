@@ -77,6 +77,16 @@ public final class AgentProto extends com.google.protobuf.GeneratedFile {
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internal_static_spawnery_agent_v1alpha1_RetireResult_fieldAccessorTable;
   static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_spawnery_agent_v1alpha1_UnretireRequest_descriptor;
+  static final 
+    com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_spawnery_agent_v1alpha1_UnretireRequest_fieldAccessorTable;
+  static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_spawnery_agent_v1alpha1_UnretireResult_descriptor;
+  static final 
+    com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_spawnery_agent_v1alpha1_UnretireResult_fieldAccessorTable;
+  static final com.google.protobuf.Descriptors.Descriptor
     internal_static_spawnery_agent_v1alpha1_BoostRequest_descriptor;
   static final 
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
@@ -227,6 +237,11 @@ public final class AgentProto extends com.google.protobuf.GeneratedFile {
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
       internal_static_spawnery_agent_v1alpha1_ServerState_AttributesEntry_fieldAccessorTable;
   static final com.google.protobuf.Descriptors.Descriptor
+    internal_static_spawnery_agent_v1alpha1_ProxyState_descriptor;
+  static final 
+    com.google.protobuf.GeneratedMessage.FieldAccessorTable
+      internal_static_spawnery_agent_v1alpha1_ProxyState_fieldAccessorTable;
+  static final com.google.protobuf.Descriptors.Descriptor
     internal_static_spawnery_agent_v1alpha1_ProxyMessage_descriptor;
   static final 
     com.google.protobuf.GeneratedMessage.FieldAccessorTable
@@ -287,7 +302,7 @@ public final class AgentProto extends com.google.protobuf.GeneratedFile {
       "ne_seconds\030\002 \001(\005\"D\n\005Hello\022\017\n\007version\030\001 \001" +
       "(\t\022\r\n\005ready\030\002 \001(\010\022\033\n\023read_timeout_millis" +
       "\030\003 \001(\005\"-\n\013PlayerCount\022\017\n\007players\030\001 \001(\005\022\r" +
-      "\n\005slots\030\002 \001(\005\"\237\004\n\014CloudRequest\022\n\n\002id\030\001 \001" +
+      "\n\005slots\030\002 \001(\005\"\335\004\n\014CloudRequest\022\n\n\002id\030\001 \001" +
       "(\004\022:\n\007connect\030\002 \001(\0132\'.spawnery.agent.v1a" +
       "lpha1.ConnectRequestH\000\0228\n\006retire\030\003 \001(\0132&" +
       ".spawnery.agent.v1alpha1.RetireRequestH\000" +
@@ -300,150 +315,158 @@ public final class AgentProto extends com.google.protobuf.GeneratedFile {
       "insRequestH\000\022C\n\014start_server\030\010 \001(\0132+.spa" +
       "wnery.agent.v1alpha1.StartServerRequestH" +
       "\000\022A\n\013stop_server\030\t \001(\0132*.spawnery.agent." +
-      "v1alpha1.StopServerRequestH\000B\t\n\007request\"" +
-      "\317\004\n\rCloudResponse\022\n\n\002id\030\001 \001(\004\0229\n\007connect" +
-      "\030\002 \001(\0132&.spawnery.agent.v1alpha1.Connect" +
-      "ResultH\000\0226\n\005error\030\003 \001(\0132%.spawnery.agent" +
-      ".v1alpha1.RequestErrorH\000\0227\n\006retire\030\004 \001(\013" +
-      "2%.spawnery.agent.v1alpha1.RetireResultH" +
-      "\000\0225\n\005boost\030\005 \001(\0132$.spawnery.agent.v1alph" +
-      "a1.BoostResultH\000\022>\n\nstop_boost\030\006 \001(\0132(.s" +
-      "pawnery.agent.v1alpha1.StopBoostResultH\000" +
-      "\022;\n\010announce\030\007 \001(\0132\'.spawnery.agent.v1al" +
-      "pha1.AnnounceResultH\000\022B\n\014accept_joins\030\010 " +
-      "\001(\0132*.spawnery.agent.v1alpha1.AcceptJoin" +
-      "sResultH\000\022B\n\014start_server\030\t \001(\0132*.spawne" +
-      "ry.agent.v1alpha1.StartServerResultH\000\022@\n" +
-      "\013stop_server\030\n \001(\0132).spawnery.agent.v1al" +
-      "pha1.StopServerResultH\000B\010\n\006result\"R\n\016Con" +
-      "nectRequest\022\023\n\013player_uuid\030\001 \001(\t\022\020\n\006serv" +
-      "er\030\002 \001(\tH\000\022\017\n\005group\030\003 \001(\tH\000B\010\n\006target\"G\n" +
-      "\rConnectResult\022\017\n\007ordered\030\001 \001(\010\022\025\n\ralrea" +
-      "dy_there\030\002 \001(\010\022\016\n\006target\030\003 \001(\t\"\037\n\rRetire" +
-      "Request\022\016\n\006server\030\001 \001(\t\"\036\n\014RetireResult\022" +
-      "\016\n\006server\030\001 \001(\t\"I\n\014BoostRequest\022\r\n\005group" +
-      "\030\001 \001(\t\022\020\n\010replicas\030\002 \001(\005\022\030\n\020duration_sec" +
-      "onds\030\003 \001(\003\"8\n\013BoostResult\022\020\n\010replicas\030\001 " +
-      "\001(\005\022\027\n\017expires_at_unix\030\002 \001(\003\"!\n\020StopBoos" +
-      "tRequest\022\r\n\005group\030\001 \001(\t\"\"\n\017StopBoostResu" +
-      "lt\022\017\n\007removed\030\001 \001(\005\"9\n\022AcceptJoinsReques" +
-      "t\022\016\n\006accept\030\001 \001(\010\022\023\n\013round_ended\030\002 \001(\010\"\023" +
-      "\n\021AcceptJoinsResult\"\241\001\n\017AnnounceRequest\022" +
-      "\r\n\005state\030\001 \001(\t\022L\n\nattributes\030\002 \003(\01328.spa" +
-      "wnery.agent.v1alpha1.AnnounceRequest.Att" +
-      "ributesEntry\0321\n\017AttributesEntry\022\013\n\003key\030\001" +
-      " \001(\t\022\r\n\005value\030\002 \001(\t:\0028\001\"\020\n\016AnnounceResul" +
-      "t\"0\n\022StartServerRequest\022\r\n\005group\030\001 \001(\t\022\013" +
-      "\n\003key\030\002 \001(\t\"<\n\021StartServerResult\022\016\n\006serv" +
-      "er\030\001 \001(\t\022\027\n\017already_running\030\002 \001(\010\"#\n\021Sto" +
-      "pServerRequest\022\016\n\006server\030\001 \001(\t\"\"\n\020StopSe" +
-      "rverResult\022\016\n\006server\030\001 \001(\t\"\\\n\nCloudEvent" +
-      "\022\014\n\004kind\030\001 \001(\t\022\017\n\007subject\030\002 \001(\t\022\r\n\005group" +
-      "\030\003 \001(\t\022\017\n\007message\030\004 \001(\t\022\017\n\007warning\030\005 \001(\010" +
-      "\"\037\n\rEventInterest\022\016\n\006wanted\030\001 \001(\010\"\276\001\n\014Re" +
-      "questError\022<\n\006reason\030\001 \001(\0162,.spawnery.ag" +
-      "ent.v1alpha1.RequestError.Reason\022\017\n\007mess" +
-      "age\030\002 \001(\t\"_\n\006Reason\022\026\n\022REASON_UNSPECIFIE" +
-      "D\020\000\022\r\n\tNOT_FOUND\020\001\022\013\n\007REFUSED\020\002\022\020\n\014RATE_" +
-      "LIMITED\020\003\022\017\n\013UNAVAILABLE\020\004\"\007\n\005Ready\"\274\002\n\r" +
-      "ServerMessage\022/\n\005hello\030\001 \001(\0132\036.spawnery." +
-      "agent.v1alpha1.HelloH\000\022/\n\005ready\030\002 \001(\0132\036." +
-      "spawnery.agent.v1alpha1.ReadyH\000\022<\n\014playe" +
-      "r_count\030\003 \001(\0132$.spawnery.agent.v1alpha1." +
-      "PlayerCountH\000\022>\n\rcloud_request\030\004 \001(\0132%.s" +
-      "pawnery.agent.v1alpha1.CloudRequestH\000\022@\n" +
-      "\016event_interest\030\005 \001(\0132&.spawnery.agent.v" +
-      "1alpha1.EventInterestH\000B\t\n\007message\"\345\002\n\020O" +
-      "peratorToServer\022B\n\017report_interval\030\001 \001(\013" +
-      "2\'.spawnery.agent.v1alpha1.ReportInterva" +
-      "lH\000\022D\n\020session_deadline\030\002 \001(\0132(.spawnery" +
-      ".agent.v1alpha1.SessionDeadlineH\000\022>\n\rnet" +
-      "work_state\030\003 \001(\0132%.spawnery.agent.v1alph" +
-      "a1.NetworkStateH\000\022@\n\016cloud_response\030\004 \001(" +
-      "\0132&.spawnery.agent.v1alpha1.CloudRespons" +
-      "eH\000\022:\n\013cloud_event\030\005 \001(\0132#.spawnery.agen" +
-      "t.v1alpha1.CloudEventH\000B\t\n\007message\"\013\n\tHe" +
-      "artbeat\"4\n\022PlayerJoinedServer\022\016\n\006player\030" +
-      "\001 \001(\t\022\016\n\006server\030\002 \001(\t\"\207\001\n\016BackendPlayers" +
-      "\022E\n\007players\030\001 \003(\01324.spawnery.agent.v1alp" +
-      "ha1.BackendPlayers.PlayersEntry\032.\n\014Playe" +
-      "rsEntry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 \001(\005:\0028\001\"" +
-      "E\n\014PlayerRoster\0225\n\007players\030\001 \003(\0132$.spawn" +
-      "ery.agent.v1alpha1.RosterEntry\"9\n\013Roster" +
-      "Entry\022\014\n\004uuid\030\001 \001(\t\022\014\n\004name\030\002 \001(\t\022\016\n\006ser" +
-      "ver\030\003 \001(\t\"\306\001\n\014NetworkState\0223\n\006groups\030\001 \003" +
-      "(\0132#.spawnery.agent.v1alpha1.GroupState\022" +
-      "5\n\007servers\030\002 \003(\0132$.spawnery.agent.v1alph" +
-      "a1.ServerState\0225\n\007players\030\003 \003(\0132$.spawne" +
-      "ry.agent.v1alpha1.RosterEntry\022\023\n\013feed_fo" +
-      "rmat\030\004 \001(\t\"\221\003\n\nGroupState\022\014\n\004name\030\001 \001(\t\022" +
-      "6\n\004kind\030\002 \001(\0162(.spawnery.agent.v1alpha1." +
-      "GroupState.Kind\022\020\n\010replicas\030\003 \001(\005\022\026\n\016rea" +
-      "dy_replicas\030\004 \001(\005\022\026\n\016online_players\030\005 \001(" +
-      "\005\022\022\n\nfree_slots\030\006 \001(\005\022G\n\nattributes\030\007 \003(" +
-      "\01323.spawnery.agent.v1alpha1.GroupState.A" +
-      "ttributesEntry\022\024\n\014display_name\030\010 \001(\t\0321\n\017" +
-      "AttributesEntry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 " +
-      "\001(\t:\0028\001\"U\n\004Kind\022\024\n\020KIND_UNSPECIFIED\020\000\022\r\n" +
-      "\tEPHEMERAL\020\001\022\016\n\nPERSISTENT\020\002\022\t\n\005PROXY\020\003\022" +
-      "\r\n\tON_DEMAND\020\004\"\236\002\n\013ServerState\022\014\n\004name\030\001" +
-      " \001(\t\022\r\n\005group\030\002 \001(\t\022\r\n\005phase\030\003 \001(\t\022\017\n\007pl" +
-      "ayers\030\004 \001(\005\022\r\n\005slots\030\005 \001(\005\022\022\n\nregistered" +
-      "\030\006 \001(\010\022\r\n\005state\030\007 \001(\t\022H\n\nattributes\030\010 \003(" +
-      "\01324.spawnery.agent.v1alpha1.ServerState." +
-      "AttributesEntry\022\023\n\013incarnation\030\t \001(\t\022\016\n\006" +
-      "number\030\n \001(\005\0321\n\017AttributesEntry\022\013\n\003key\030\001" +
-      " \001(\t\022\r\n\005value\030\002 \001(\t:\0028\001\"\224\004\n\014ProxyMessage" +
-      "\022/\n\005hello\030\001 \001(\0132\036.spawnery.agent.v1alpha" +
-      "1.HelloH\000\022<\n\014player_count\030\002 \001(\0132$.spawne" +
-      "ry.agent.v1alpha1.PlayerCountH\000\022K\n\024playe" +
-      "r_joined_server\030\003 \001(\0132+.spawnery.agent.v" +
-      "1alpha1.PlayerJoinedServerH\000\0227\n\theartbea" +
-      "t\030\004 \001(\0132\".spawnery.agent.v1alpha1.Heartb" +
-      "eatH\000\022B\n\017backend_players\030\005 \001(\0132\'.spawner" +
-      "y.agent.v1alpha1.BackendPlayersH\000\022>\n\rpla" +
-      "yer_roster\030\006 \001(\0132%.spawnery.agent.v1alph" +
-      "a1.PlayerRosterH\000\022>\n\rcloud_request\030\007 \001(\013" +
-      "2%.spawnery.agent.v1alpha1.CloudRequestH" +
-      "\000\022@\n\016event_interest\030\010 \001(\0132&.spawnery.age" +
-      "nt.v1alpha1.EventInterestH\000B\t\n\007message\"@" +
-      "\n\020RegisteredServer\022\014\n\004name\030\001 \001(\t\022\017\n\007addr" +
-      "ess\030\002 \001(\t\022\r\n\005group\030\003 \001(\t\"F\n\010FullSync\022:\n\007" +
-      "servers\030\001 \003(\0132).spawnery.agent.v1alpha1." +
-      "RegisteredServer\"K\n\016RegisterServer\0229\n\006se" +
-      "rver\030\001 \001(\0132).spawnery.agent.v1alpha1.Reg" +
-      "isteredServer\" \n\020UnregisterServer\022\014\n\004nam" +
-      "e\030\001 \001(\t\"8\n\nMovePlayer\022\023\n\013player_uuid\030\001 \001" +
-      "(\t\022\025\n\rtarget_server\030\002 \001(\t\"6\n\014DrainPlayer" +
-      "s\022\023\n\013from_server\030\001 \001(\t\022\021\n\tto_groups\030\002 \003(" +
-      "\t\"\031\n\010SetReady\022\r\n\005ready\030\001 \001(\010\"\334\005\n\017Operato" +
-      "rToProxy\0226\n\tfull_sync\030\001 \001(\0132!.spawnery.a" +
-      "gent.v1alpha1.FullSyncH\000\022B\n\017register_ser" +
-      "ver\030\002 \001(\0132\'.spawnery.agent.v1alpha1.Regi" +
-      "sterServerH\000\022F\n\021unregister_server\030\003 \001(\0132" +
-      ").spawnery.agent.v1alpha1.UnregisterServ" +
-      "erH\000\022>\n\rdrain_players\030\004 \001(\0132%.spawnery.a" +
-      "gent.v1alpha1.DrainPlayersH\000\022B\n\017report_i" +
-      "nterval\030\005 \001(\0132\'.spawnery.agent.v1alpha1." +
-      "ReportIntervalH\000\022D\n\020session_deadline\030\006 \001" +
-      "(\0132(.spawnery.agent.v1alpha1.SessionDead" +
-      "lineH\000\0226\n\tset_ready\030\007 \001(\0132!.spawnery.age" +
-      "nt.v1alpha1.SetReadyH\000\022>\n\rnetwork_state\030" +
-      "\010 \001(\0132%.spawnery.agent.v1alpha1.NetworkS" +
-      "tateH\000\022@\n\016cloud_response\030\t \001(\0132&.spawner" +
-      "y.agent.v1alpha1.CloudResponseH\000\022:\n\013move" +
-      "_player\030\n \001(\0132#.spawnery.agent.v1alpha1." +
-      "MovePlayerH\000\022:\n\013cloud_event\030\013 \001(\0132#.spaw" +
-      "nery.agent.v1alpha1.CloudEventH\000B\t\n\007mess" +
-      "age2\333\001\n\014AgentService\022c\n\014ProxySession\022%.s" +
-      "pawnery.agent.v1alpha1.ProxyMessage\032(.sp" +
-      "awnery.agent.v1alpha1.OperatorToProxy(\0010" +
-      "\001\022f\n\rServerSession\022&.spawnery.agent.v1al" +
-      "pha1.ServerMessage\032).spawnery.agent.v1al" +
-      "pha1.OperatorToServer(\0010\001BV\n\027cloud.spawn" +
-      "ery.agent.pbB\nAgentProtoP\001Z-github.com/s" +
-      "pawnery/spawnery/internal/agentpbb\006proto" +
-      "3"
+      "v1alpha1.StopServerRequestH\000\022<\n\010unretire" +
+      "\030\n \001(\0132(.spawnery.agent.v1alpha1.Unretir" +
+      "eRequestH\000B\t\n\007request\"\214\005\n\rCloudResponse\022" +
+      "\n\n\002id\030\001 \001(\004\0229\n\007connect\030\002 \001(\0132&.spawnery." +
+      "agent.v1alpha1.ConnectResultH\000\0226\n\005error\030" +
+      "\003 \001(\0132%.spawnery.agent.v1alpha1.RequestE" +
+      "rrorH\000\0227\n\006retire\030\004 \001(\0132%.spawnery.agent." +
+      "v1alpha1.RetireResultH\000\0225\n\005boost\030\005 \001(\0132$" +
+      ".spawnery.agent.v1alpha1.BoostResultH\000\022>" +
+      "\n\nstop_boost\030\006 \001(\0132(.spawnery.agent.v1al" +
+      "pha1.StopBoostResultH\000\022;\n\010announce\030\007 \001(\013" +
+      "2\'.spawnery.agent.v1alpha1.AnnounceResul" +
+      "tH\000\022B\n\014accept_joins\030\010 \001(\0132*.spawnery.age" +
+      "nt.v1alpha1.AcceptJoinsResultH\000\022B\n\014start" +
+      "_server\030\t \001(\0132*.spawnery.agent.v1alpha1." +
+      "StartServerResultH\000\022@\n\013stop_server\030\n \001(\013" +
+      "2).spawnery.agent.v1alpha1.StopServerRes" +
+      "ultH\000\022;\n\010unretire\030\013 \001(\0132\'.spawnery.agent" +
+      ".v1alpha1.UnretireResultH\000B\010\n\006result\"R\n\016" +
+      "ConnectRequest\022\023\n\013player_uuid\030\001 \001(\t\022\020\n\006s" +
+      "erver\030\002 \001(\tH\000\022\017\n\005group\030\003 \001(\tH\000B\010\n\006target" +
+      "\"G\n\rConnectResult\022\017\n\007ordered\030\001 \001(\010\022\025\n\ral" +
+      "ready_there\030\002 \001(\010\022\016\n\006target\030\003 \001(\t\"\037\n\rRet" +
+      "ireRequest\022\016\n\006server\030\001 \001(\t\"\036\n\014RetireResu" +
+      "lt\022\016\n\006server\030\001 \001(\t\"!\n\017UnretireRequest\022\016\n" +
+      "\006server\030\001 \001(\t\" \n\016UnretireResult\022\016\n\006serve" +
+      "r\030\001 \001(\t\"I\n\014BoostRequest\022\r\n\005group\030\001 \001(\t\022\020" +
+      "\n\010replicas\030\002 \001(\005\022\030\n\020duration_seconds\030\003 \001" +
+      "(\003\"8\n\013BoostResult\022\020\n\010replicas\030\001 \001(\005\022\027\n\017e" +
+      "xpires_at_unix\030\002 \001(\003\"!\n\020StopBoostRequest" +
+      "\022\r\n\005group\030\001 \001(\t\"\"\n\017StopBoostResult\022\017\n\007re" +
+      "moved\030\001 \001(\005\"9\n\022AcceptJoinsRequest\022\016\n\006acc" +
+      "ept\030\001 \001(\010\022\023\n\013round_ended\030\002 \001(\010\"\023\n\021Accept" +
+      "JoinsResult\"\241\001\n\017AnnounceRequest\022\r\n\005state" +
+      "\030\001 \001(\t\022L\n\nattributes\030\002 \003(\01328.spawnery.ag" +
+      "ent.v1alpha1.AnnounceRequest.AttributesE" +
+      "ntry\0321\n\017AttributesEntry\022\013\n\003key\030\001 \001(\t\022\r\n\005" +
+      "value\030\002 \001(\t:\0028\001\"\020\n\016AnnounceResult\"0\n\022Sta" +
+      "rtServerRequest\022\r\n\005group\030\001 \001(\t\022\013\n\003key\030\002 " +
+      "\001(\t\"<\n\021StartServerResult\022\016\n\006server\030\001 \001(\t" +
+      "\022\027\n\017already_running\030\002 \001(\010\"#\n\021StopServerR" +
+      "equest\022\016\n\006server\030\001 \001(\t\"\"\n\020StopServerResu" +
+      "lt\022\016\n\006server\030\001 \001(\t\"\\\n\nCloudEvent\022\014\n\004kind" +
+      "\030\001 \001(\t\022\017\n\007subject\030\002 \001(\t\022\r\n\005group\030\003 \001(\t\022\017" +
+      "\n\007message\030\004 \001(\t\022\017\n\007warning\030\005 \001(\010\"\037\n\rEven" +
+      "tInterest\022\016\n\006wanted\030\001 \001(\010\"\276\001\n\014RequestErr" +
+      "or\022<\n\006reason\030\001 \001(\0162,.spawnery.agent.v1al" +
+      "pha1.RequestError.Reason\022\017\n\007message\030\002 \001(" +
+      "\t\"_\n\006Reason\022\026\n\022REASON_UNSPECIFIED\020\000\022\r\n\tN" +
+      "OT_FOUND\020\001\022\013\n\007REFUSED\020\002\022\020\n\014RATE_LIMITED\020" +
+      "\003\022\017\n\013UNAVAILABLE\020\004\"\007\n\005Ready\"\274\002\n\rServerMe" +
+      "ssage\022/\n\005hello\030\001 \001(\0132\036.spawnery.agent.v1" +
+      "alpha1.HelloH\000\022/\n\005ready\030\002 \001(\0132\036.spawnery" +
+      ".agent.v1alpha1.ReadyH\000\022<\n\014player_count\030" +
+      "\003 \001(\0132$.spawnery.agent.v1alpha1.PlayerCo" +
+      "untH\000\022>\n\rcloud_request\030\004 \001(\0132%.spawnery." +
+      "agent.v1alpha1.CloudRequestH\000\022@\n\016event_i" +
+      "nterest\030\005 \001(\0132&.spawnery.agent.v1alpha1." +
+      "EventInterestH\000B\t\n\007message\"\345\002\n\020OperatorT" +
+      "oServer\022B\n\017report_interval\030\001 \001(\0132\'.spawn" +
+      "ery.agent.v1alpha1.ReportIntervalH\000\022D\n\020s" +
+      "ession_deadline\030\002 \001(\0132(.spawnery.agent.v" +
+      "1alpha1.SessionDeadlineH\000\022>\n\rnetwork_sta" +
+      "te\030\003 \001(\0132%.spawnery.agent.v1alpha1.Netwo" +
+      "rkStateH\000\022@\n\016cloud_response\030\004 \001(\0132&.spaw" +
+      "nery.agent.v1alpha1.CloudResponseH\000\022:\n\013c" +
+      "loud_event\030\005 \001(\0132#.spawnery.agent.v1alph" +
+      "a1.CloudEventH\000B\t\n\007message\"\013\n\tHeartbeat\"" +
+      "4\n\022PlayerJoinedServer\022\016\n\006player\030\001 \001(\t\022\016\n" +
+      "\006server\030\002 \001(\t\"\207\001\n\016BackendPlayers\022E\n\007play" +
+      "ers\030\001 \003(\01324.spawnery.agent.v1alpha1.Back" +
+      "endPlayers.PlayersEntry\032.\n\014PlayersEntry\022" +
+      "\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 \001(\005:\0028\001\"E\n\014Playe" +
+      "rRoster\0225\n\007players\030\001 \003(\0132$.spawnery.agen" +
+      "t.v1alpha1.RosterEntry\"9\n\013RosterEntry\022\014\n" +
+      "\004uuid\030\001 \001(\t\022\014\n\004name\030\002 \001(\t\022\016\n\006server\030\003 \001(" +
+      "\t\"\374\001\n\014NetworkState\0223\n\006groups\030\001 \003(\0132#.spa" +
+      "wnery.agent.v1alpha1.GroupState\0225\n\007serve" +
+      "rs\030\002 \003(\0132$.spawnery.agent.v1alpha1.Serve" +
+      "rState\0225\n\007players\030\003 \003(\0132$.spawnery.agent" +
+      ".v1alpha1.RosterEntry\022\023\n\013feed_format\030\004 \001" +
+      "(\t\0224\n\007proxies\030\005 \003(\0132#.spawnery.agent.v1a" +
+      "lpha1.ProxyState\"\221\003\n\nGroupState\022\014\n\004name\030" +
+      "\001 \001(\t\0226\n\004kind\030\002 \001(\0162(.spawnery.agent.v1a" +
+      "lpha1.GroupState.Kind\022\020\n\010replicas\030\003 \001(\005\022" +
+      "\026\n\016ready_replicas\030\004 \001(\005\022\026\n\016online_player" +
+      "s\030\005 \001(\005\022\022\n\nfree_slots\030\006 \001(\005\022G\n\nattribute" +
+      "s\030\007 \003(\01323.spawnery.agent.v1alpha1.GroupS" +
+      "tate.AttributesEntry\022\024\n\014display_name\030\010 \001" +
+      "(\t\0321\n\017AttributesEntry\022\013\n\003key\030\001 \001(\t\022\r\n\005va" +
+      "lue\030\002 \001(\t:\0028\001\"U\n\004Kind\022\024\n\020KIND_UNSPECIFIE" +
+      "D\020\000\022\r\n\tEPHEMERAL\020\001\022\016\n\nPERSISTENT\020\002\022\t\n\005PR" +
+      "OXY\020\003\022\r\n\tON_DEMAND\020\004\"\254\002\n\013ServerState\022\014\n\004" +
+      "name\030\001 \001(\t\022\r\n\005group\030\002 \001(\t\022\r\n\005phase\030\003 \001(\t" +
+      "\022\017\n\007players\030\004 \001(\005\022\r\n\005slots\030\005 \001(\005\022\022\n\nregi" +
+      "stered\030\006 \001(\010\022\r\n\005state\030\007 \001(\t\022H\n\nattribute" +
+      "s\030\010 \003(\01324.spawnery.agent.v1alpha1.Server" +
+      "State.AttributesEntry\022\023\n\013incarnation\030\t \001" +
+      "(\t\022\016\n\006number\030\n \001(\005\022\014\n\004held\030\013 \001(\010\0321\n\017Attr" +
+      "ibutesEntry\022\013\n\003key\030\001 \001(\t\022\r\n\005value\030\002 \001(\t:" +
+      "\0028\001\"[\n\nProxyState\022\014\n\004name\030\001 \001(\t\022\r\n\005group" +
+      "\030\002 \001(\t\022\r\n\005ready\030\003 \001(\010\022\020\n\010draining\030\004 \001(\010\022" +
+      "\017\n\007players\030\005 \001(\005\"\224\004\n\014ProxyMessage\022/\n\005hel" +
+      "lo\030\001 \001(\0132\036.spawnery.agent.v1alpha1.Hello" +
+      "H\000\022<\n\014player_count\030\002 \001(\0132$.spawnery.agen" +
+      "t.v1alpha1.PlayerCountH\000\022K\n\024player_joine" +
+      "d_server\030\003 \001(\0132+.spawnery.agent.v1alpha1" +
+      ".PlayerJoinedServerH\000\0227\n\theartbeat\030\004 \001(\013" +
+      "2\".spawnery.agent.v1alpha1.HeartbeatH\000\022B" +
+      "\n\017backend_players\030\005 \001(\0132\'.spawnery.agent" +
+      ".v1alpha1.BackendPlayersH\000\022>\n\rplayer_ros" +
+      "ter\030\006 \001(\0132%.spawnery.agent.v1alpha1.Play" +
+      "erRosterH\000\022>\n\rcloud_request\030\007 \001(\0132%.spaw" +
+      "nery.agent.v1alpha1.CloudRequestH\000\022@\n\016ev" +
+      "ent_interest\030\010 \001(\0132&.spawnery.agent.v1al" +
+      "pha1.EventInterestH\000B\t\n\007message\"@\n\020Regis" +
+      "teredServer\022\014\n\004name\030\001 \001(\t\022\017\n\007address\030\002 \001" +
+      "(\t\022\r\n\005group\030\003 \001(\t\"F\n\010FullSync\022:\n\007servers" +
+      "\030\001 \003(\0132).spawnery.agent.v1alpha1.Registe" +
+      "redServer\"K\n\016RegisterServer\0229\n\006server\030\001 " +
+      "\001(\0132).spawnery.agent.v1alpha1.Registered" +
+      "Server\" \n\020UnregisterServer\022\014\n\004name\030\001 \001(\t" +
+      "\"8\n\nMovePlayer\022\023\n\013player_uuid\030\001 \001(\t\022\025\n\rt" +
+      "arget_server\030\002 \001(\t\"6\n\014DrainPlayers\022\023\n\013fr" +
+      "om_server\030\001 \001(\t\022\021\n\tto_groups\030\002 \003(\t\"\031\n\010Se" +
+      "tReady\022\r\n\005ready\030\001 \001(\010\"\334\005\n\017OperatorToProx" +
+      "y\0226\n\tfull_sync\030\001 \001(\0132!.spawnery.agent.v1" +
+      "alpha1.FullSyncH\000\022B\n\017register_server\030\002 \001" +
+      "(\0132\'.spawnery.agent.v1alpha1.RegisterSer" +
+      "verH\000\022F\n\021unregister_server\030\003 \001(\0132).spawn" +
+      "ery.agent.v1alpha1.UnregisterServerH\000\022>\n" +
+      "\rdrain_players\030\004 \001(\0132%.spawnery.agent.v1" +
+      "alpha1.DrainPlayersH\000\022B\n\017report_interval" +
+      "\030\005 \001(\0132\'.spawnery.agent.v1alpha1.ReportI" +
+      "ntervalH\000\022D\n\020session_deadline\030\006 \001(\0132(.sp" +
+      "awnery.agent.v1alpha1.SessionDeadlineH\000\022" +
+      "6\n\tset_ready\030\007 \001(\0132!.spawnery.agent.v1al" +
+      "pha1.SetReadyH\000\022>\n\rnetwork_state\030\010 \001(\0132%" +
+      ".spawnery.agent.v1alpha1.NetworkStateH\000\022" +
+      "@\n\016cloud_response\030\t \001(\0132&.spawnery.agent" +
+      ".v1alpha1.CloudResponseH\000\022:\n\013move_player" +
+      "\030\n \001(\0132#.spawnery.agent.v1alpha1.MovePla" +
+      "yerH\000\022:\n\013cloud_event\030\013 \001(\0132#.spawnery.ag" +
+      "ent.v1alpha1.CloudEventH\000B\t\n\007message2\333\001\n" +
+      "\014AgentService\022c\n\014ProxySession\022%.spawnery" +
+      ".agent.v1alpha1.ProxyMessage\032(.spawnery." +
+      "agent.v1alpha1.OperatorToProxy(\0010\001\022f\n\rSe" +
+      "rverSession\022&.spawnery.agent.v1alpha1.Se" +
+      "rverMessage\032).spawnery.agent.v1alpha1.Op" +
+      "eratorToServer(\0010\001BV\n\027cloud.spawnery.age" +
+      "nt.pbB\nAgentProtoP\001Z-github.com/spawnery" +
+      "/spawnery/internal/agentpbb\006proto3"
     };
     descriptor = com.google.protobuf.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,
@@ -478,13 +501,13 @@ public final class AgentProto extends com.google.protobuf.GeneratedFile {
     internal_static_spawnery_agent_v1alpha1_CloudRequest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_CloudRequest_descriptor,
-        new java.lang.String[] { "Id", "Connect", "Retire", "Boost", "StopBoost", "Announce", "AcceptJoins", "StartServer", "StopServer", "Request", });
+        new java.lang.String[] { "Id", "Connect", "Retire", "Boost", "StopBoost", "Announce", "AcceptJoins", "StartServer", "StopServer", "Unretire", "Request", });
     internal_static_spawnery_agent_v1alpha1_CloudResponse_descriptor =
       getDescriptor().getMessageType(5);
     internal_static_spawnery_agent_v1alpha1_CloudResponse_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_CloudResponse_descriptor,
-        new java.lang.String[] { "Id", "Connect", "Error", "Retire", "Boost", "StopBoost", "Announce", "AcceptJoins", "StartServer", "StopServer", "Result", });
+        new java.lang.String[] { "Id", "Connect", "Error", "Retire", "Boost", "StopBoost", "Announce", "AcceptJoins", "StartServer", "StopServer", "Unretire", "Result", });
     internal_static_spawnery_agent_v1alpha1_ConnectRequest_descriptor =
       getDescriptor().getMessageType(6);
     internal_static_spawnery_agent_v1alpha1_ConnectRequest_fieldAccessorTable = new
@@ -509,44 +532,56 @@ public final class AgentProto extends com.google.protobuf.GeneratedFile {
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_RetireResult_descriptor,
         new java.lang.String[] { "Server", });
-    internal_static_spawnery_agent_v1alpha1_BoostRequest_descriptor =
+    internal_static_spawnery_agent_v1alpha1_UnretireRequest_descriptor =
       getDescriptor().getMessageType(10);
+    internal_static_spawnery_agent_v1alpha1_UnretireRequest_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+        internal_static_spawnery_agent_v1alpha1_UnretireRequest_descriptor,
+        new java.lang.String[] { "Server", });
+    internal_static_spawnery_agent_v1alpha1_UnretireResult_descriptor =
+      getDescriptor().getMessageType(11);
+    internal_static_spawnery_agent_v1alpha1_UnretireResult_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+        internal_static_spawnery_agent_v1alpha1_UnretireResult_descriptor,
+        new java.lang.String[] { "Server", });
+    internal_static_spawnery_agent_v1alpha1_BoostRequest_descriptor =
+      getDescriptor().getMessageType(12);
     internal_static_spawnery_agent_v1alpha1_BoostRequest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_BoostRequest_descriptor,
         new java.lang.String[] { "Group", "Replicas", "DurationSeconds", });
     internal_static_spawnery_agent_v1alpha1_BoostResult_descriptor =
-      getDescriptor().getMessageType(11);
+      getDescriptor().getMessageType(13);
     internal_static_spawnery_agent_v1alpha1_BoostResult_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_BoostResult_descriptor,
         new java.lang.String[] { "Replicas", "ExpiresAtUnix", });
     internal_static_spawnery_agent_v1alpha1_StopBoostRequest_descriptor =
-      getDescriptor().getMessageType(12);
+      getDescriptor().getMessageType(14);
     internal_static_spawnery_agent_v1alpha1_StopBoostRequest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_StopBoostRequest_descriptor,
         new java.lang.String[] { "Group", });
     internal_static_spawnery_agent_v1alpha1_StopBoostResult_descriptor =
-      getDescriptor().getMessageType(13);
+      getDescriptor().getMessageType(15);
     internal_static_spawnery_agent_v1alpha1_StopBoostResult_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_StopBoostResult_descriptor,
         new java.lang.String[] { "Removed", });
     internal_static_spawnery_agent_v1alpha1_AcceptJoinsRequest_descriptor =
-      getDescriptor().getMessageType(14);
+      getDescriptor().getMessageType(16);
     internal_static_spawnery_agent_v1alpha1_AcceptJoinsRequest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_AcceptJoinsRequest_descriptor,
         new java.lang.String[] { "Accept", "RoundEnded", });
     internal_static_spawnery_agent_v1alpha1_AcceptJoinsResult_descriptor =
-      getDescriptor().getMessageType(15);
+      getDescriptor().getMessageType(17);
     internal_static_spawnery_agent_v1alpha1_AcceptJoinsResult_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_AcceptJoinsResult_descriptor,
         new java.lang.String[] { });
     internal_static_spawnery_agent_v1alpha1_AnnounceRequest_descriptor =
-      getDescriptor().getMessageType(16);
+      getDescriptor().getMessageType(18);
     internal_static_spawnery_agent_v1alpha1_AnnounceRequest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_AnnounceRequest_descriptor,
@@ -558,85 +593,85 @@ public final class AgentProto extends com.google.protobuf.GeneratedFile {
         internal_static_spawnery_agent_v1alpha1_AnnounceRequest_AttributesEntry_descriptor,
         new java.lang.String[] { "Key", "Value", });
     internal_static_spawnery_agent_v1alpha1_AnnounceResult_descriptor =
-      getDescriptor().getMessageType(17);
+      getDescriptor().getMessageType(19);
     internal_static_spawnery_agent_v1alpha1_AnnounceResult_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_AnnounceResult_descriptor,
         new java.lang.String[] { });
     internal_static_spawnery_agent_v1alpha1_StartServerRequest_descriptor =
-      getDescriptor().getMessageType(18);
+      getDescriptor().getMessageType(20);
     internal_static_spawnery_agent_v1alpha1_StartServerRequest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_StartServerRequest_descriptor,
         new java.lang.String[] { "Group", "Key", });
     internal_static_spawnery_agent_v1alpha1_StartServerResult_descriptor =
-      getDescriptor().getMessageType(19);
+      getDescriptor().getMessageType(21);
     internal_static_spawnery_agent_v1alpha1_StartServerResult_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_StartServerResult_descriptor,
         new java.lang.String[] { "Server", "AlreadyRunning", });
     internal_static_spawnery_agent_v1alpha1_StopServerRequest_descriptor =
-      getDescriptor().getMessageType(20);
+      getDescriptor().getMessageType(22);
     internal_static_spawnery_agent_v1alpha1_StopServerRequest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_StopServerRequest_descriptor,
         new java.lang.String[] { "Server", });
     internal_static_spawnery_agent_v1alpha1_StopServerResult_descriptor =
-      getDescriptor().getMessageType(21);
+      getDescriptor().getMessageType(23);
     internal_static_spawnery_agent_v1alpha1_StopServerResult_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_StopServerResult_descriptor,
         new java.lang.String[] { "Server", });
     internal_static_spawnery_agent_v1alpha1_CloudEvent_descriptor =
-      getDescriptor().getMessageType(22);
+      getDescriptor().getMessageType(24);
     internal_static_spawnery_agent_v1alpha1_CloudEvent_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_CloudEvent_descriptor,
         new java.lang.String[] { "Kind", "Subject", "Group", "Message", "Warning", });
     internal_static_spawnery_agent_v1alpha1_EventInterest_descriptor =
-      getDescriptor().getMessageType(23);
+      getDescriptor().getMessageType(25);
     internal_static_spawnery_agent_v1alpha1_EventInterest_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_EventInterest_descriptor,
         new java.lang.String[] { "Wanted", });
     internal_static_spawnery_agent_v1alpha1_RequestError_descriptor =
-      getDescriptor().getMessageType(24);
+      getDescriptor().getMessageType(26);
     internal_static_spawnery_agent_v1alpha1_RequestError_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_RequestError_descriptor,
         new java.lang.String[] { "Reason", "Message", });
     internal_static_spawnery_agent_v1alpha1_Ready_descriptor =
-      getDescriptor().getMessageType(25);
+      getDescriptor().getMessageType(27);
     internal_static_spawnery_agent_v1alpha1_Ready_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_Ready_descriptor,
         new java.lang.String[] { });
     internal_static_spawnery_agent_v1alpha1_ServerMessage_descriptor =
-      getDescriptor().getMessageType(26);
+      getDescriptor().getMessageType(28);
     internal_static_spawnery_agent_v1alpha1_ServerMessage_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_ServerMessage_descriptor,
         new java.lang.String[] { "Hello", "Ready", "PlayerCount", "CloudRequest", "EventInterest", "Message", });
     internal_static_spawnery_agent_v1alpha1_OperatorToServer_descriptor =
-      getDescriptor().getMessageType(27);
+      getDescriptor().getMessageType(29);
     internal_static_spawnery_agent_v1alpha1_OperatorToServer_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_OperatorToServer_descriptor,
         new java.lang.String[] { "ReportInterval", "SessionDeadline", "NetworkState", "CloudResponse", "CloudEvent", "Message", });
     internal_static_spawnery_agent_v1alpha1_Heartbeat_descriptor =
-      getDescriptor().getMessageType(28);
+      getDescriptor().getMessageType(30);
     internal_static_spawnery_agent_v1alpha1_Heartbeat_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_Heartbeat_descriptor,
         new java.lang.String[] { });
     internal_static_spawnery_agent_v1alpha1_PlayerJoinedServer_descriptor =
-      getDescriptor().getMessageType(29);
+      getDescriptor().getMessageType(31);
     internal_static_spawnery_agent_v1alpha1_PlayerJoinedServer_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_PlayerJoinedServer_descriptor,
         new java.lang.String[] { "Player", "Server", });
     internal_static_spawnery_agent_v1alpha1_BackendPlayers_descriptor =
-      getDescriptor().getMessageType(30);
+      getDescriptor().getMessageType(32);
     internal_static_spawnery_agent_v1alpha1_BackendPlayers_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_BackendPlayers_descriptor,
@@ -648,25 +683,25 @@ public final class AgentProto extends com.google.protobuf.GeneratedFile {
         internal_static_spawnery_agent_v1alpha1_BackendPlayers_PlayersEntry_descriptor,
         new java.lang.String[] { "Key", "Value", });
     internal_static_spawnery_agent_v1alpha1_PlayerRoster_descriptor =
-      getDescriptor().getMessageType(31);
+      getDescriptor().getMessageType(33);
     internal_static_spawnery_agent_v1alpha1_PlayerRoster_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_PlayerRoster_descriptor,
         new java.lang.String[] { "Players", });
     internal_static_spawnery_agent_v1alpha1_RosterEntry_descriptor =
-      getDescriptor().getMessageType(32);
+      getDescriptor().getMessageType(34);
     internal_static_spawnery_agent_v1alpha1_RosterEntry_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_RosterEntry_descriptor,
         new java.lang.String[] { "Uuid", "Name", "Server", });
     internal_static_spawnery_agent_v1alpha1_NetworkState_descriptor =
-      getDescriptor().getMessageType(33);
+      getDescriptor().getMessageType(35);
     internal_static_spawnery_agent_v1alpha1_NetworkState_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_NetworkState_descriptor,
-        new java.lang.String[] { "Groups", "Servers", "Players", "FeedFormat", });
+        new java.lang.String[] { "Groups", "Servers", "Players", "FeedFormat", "Proxies", });
     internal_static_spawnery_agent_v1alpha1_GroupState_descriptor =
-      getDescriptor().getMessageType(34);
+      getDescriptor().getMessageType(36);
     internal_static_spawnery_agent_v1alpha1_GroupState_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_GroupState_descriptor,
@@ -678,67 +713,73 @@ public final class AgentProto extends com.google.protobuf.GeneratedFile {
         internal_static_spawnery_agent_v1alpha1_GroupState_AttributesEntry_descriptor,
         new java.lang.String[] { "Key", "Value", });
     internal_static_spawnery_agent_v1alpha1_ServerState_descriptor =
-      getDescriptor().getMessageType(35);
+      getDescriptor().getMessageType(37);
     internal_static_spawnery_agent_v1alpha1_ServerState_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_ServerState_descriptor,
-        new java.lang.String[] { "Name", "Group", "Phase", "Players", "Slots", "Registered", "State", "Attributes", "Incarnation", "Number", });
+        new java.lang.String[] { "Name", "Group", "Phase", "Players", "Slots", "Registered", "State", "Attributes", "Incarnation", "Number", "Held", });
     internal_static_spawnery_agent_v1alpha1_ServerState_AttributesEntry_descriptor =
       internal_static_spawnery_agent_v1alpha1_ServerState_descriptor.getNestedType(0);
     internal_static_spawnery_agent_v1alpha1_ServerState_AttributesEntry_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_ServerState_AttributesEntry_descriptor,
         new java.lang.String[] { "Key", "Value", });
+    internal_static_spawnery_agent_v1alpha1_ProxyState_descriptor =
+      getDescriptor().getMessageType(38);
+    internal_static_spawnery_agent_v1alpha1_ProxyState_fieldAccessorTable = new
+      com.google.protobuf.GeneratedMessage.FieldAccessorTable(
+        internal_static_spawnery_agent_v1alpha1_ProxyState_descriptor,
+        new java.lang.String[] { "Name", "Group", "Ready", "Draining", "Players", });
     internal_static_spawnery_agent_v1alpha1_ProxyMessage_descriptor =
-      getDescriptor().getMessageType(36);
+      getDescriptor().getMessageType(39);
     internal_static_spawnery_agent_v1alpha1_ProxyMessage_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_ProxyMessage_descriptor,
         new java.lang.String[] { "Hello", "PlayerCount", "PlayerJoinedServer", "Heartbeat", "BackendPlayers", "PlayerRoster", "CloudRequest", "EventInterest", "Message", });
     internal_static_spawnery_agent_v1alpha1_RegisteredServer_descriptor =
-      getDescriptor().getMessageType(37);
+      getDescriptor().getMessageType(40);
     internal_static_spawnery_agent_v1alpha1_RegisteredServer_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_RegisteredServer_descriptor,
         new java.lang.String[] { "Name", "Address", "Group", });
     internal_static_spawnery_agent_v1alpha1_FullSync_descriptor =
-      getDescriptor().getMessageType(38);
+      getDescriptor().getMessageType(41);
     internal_static_spawnery_agent_v1alpha1_FullSync_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_FullSync_descriptor,
         new java.lang.String[] { "Servers", });
     internal_static_spawnery_agent_v1alpha1_RegisterServer_descriptor =
-      getDescriptor().getMessageType(39);
+      getDescriptor().getMessageType(42);
     internal_static_spawnery_agent_v1alpha1_RegisterServer_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_RegisterServer_descriptor,
         new java.lang.String[] { "Server", });
     internal_static_spawnery_agent_v1alpha1_UnregisterServer_descriptor =
-      getDescriptor().getMessageType(40);
+      getDescriptor().getMessageType(43);
     internal_static_spawnery_agent_v1alpha1_UnregisterServer_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_UnregisterServer_descriptor,
         new java.lang.String[] { "Name", });
     internal_static_spawnery_agent_v1alpha1_MovePlayer_descriptor =
-      getDescriptor().getMessageType(41);
+      getDescriptor().getMessageType(44);
     internal_static_spawnery_agent_v1alpha1_MovePlayer_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_MovePlayer_descriptor,
         new java.lang.String[] { "PlayerUuid", "TargetServer", });
     internal_static_spawnery_agent_v1alpha1_DrainPlayers_descriptor =
-      getDescriptor().getMessageType(42);
+      getDescriptor().getMessageType(45);
     internal_static_spawnery_agent_v1alpha1_DrainPlayers_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_DrainPlayers_descriptor,
         new java.lang.String[] { "FromServer", "ToGroups", });
     internal_static_spawnery_agent_v1alpha1_SetReady_descriptor =
-      getDescriptor().getMessageType(43);
+      getDescriptor().getMessageType(46);
     internal_static_spawnery_agent_v1alpha1_SetReady_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_SetReady_descriptor,
         new java.lang.String[] { "Ready", });
     internal_static_spawnery_agent_v1alpha1_OperatorToProxy_descriptor =
-      getDescriptor().getMessageType(44);
+      getDescriptor().getMessageType(47);
     internal_static_spawnery_agent_v1alpha1_OperatorToProxy_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_OperatorToProxy_descriptor,

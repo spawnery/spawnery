@@ -49,10 +49,10 @@ const (
 	// up after the group's retention.
 	Failed Phase = "Failed"
 	// Finished means the server's round is over: it said so, and then its pod
-	// stopped. It is terminal like Failed and its group replaces it at once,
-	// but it is not a fault -- it is not counted against the backoff, it
-	// raises no Degraded, and it is kept for its own short retention rather
-	// than the hour a failure gets for diagnosis.
+	// stopped or stopped answering. It is terminal like Failed and its group
+	// replaces it at once, but it is not a fault -- it is not counted against
+	// the backoff, it raises no Degraded, and it is kept for its own short
+	// retention rather than the hour a failure gets for diagnosis.
 	Finished Phase = "Finished"
 )
 
@@ -136,17 +136,18 @@ const MaxReadinessLosses int32 = 3
 
 // Reasons carried in the decision and mirrored into the CR condition.
 const (
-	ReasonPodPending        = "PodPending"
-	ReasonPodRunning        = "PodRunning"
-	ReasonReadyGatePassed   = "ReadyGatePassed"
-	ReasonReadinessLost     = "ReadinessLost"
-	ReasonDeletionRequested = "DeletionRequested"
-	ReasonDrained           = "Drained"
-	ReasonDrainTimeout      = "DrainTimeout"
-	ReasonPodLost           = "PodLost"
-	ReasonPodNeverCreated   = "PodNeverCreated"
-	ReasonPodTerminal       = "PodTerminal"
-	ReasonRetiring          = "Retiring"
+	ReasonPodPending          = "PodPending"
+	ReasonPodRunning          = "PodRunning"
+	ReasonReadyGatePassed     = "ReadyGatePassed"
+	ReasonReadinessLost       = "ReadinessLost"
+	ReasonDeletionRequested   = "DeletionRequested"
+	ReasonDrained             = "Drained"
+	ReasonDrainTimeout        = "DrainTimeout"
+	ReasonPodLost             = "PodLost"
+	ReasonPodNeverCreated     = "PodNeverCreated"
+	ReasonPodTerminal         = "PodTerminal"
+	ReasonRetiring            = "Retiring"
+	ReasonRetirementWithdrawn = "RetirementWithdrawn"
 	// ReasonJoinsOpen marks a server returning to the proxies' routing table
 	// because its round has not ended.
 	ReasonJoinsOpen       = "JoinsOpen"
@@ -392,10 +393,18 @@ func Decide(current Phase, in Inputs) Decision {
 
 	case Finished:
 		if in.DeletionRequested || in.FinishedRetentionElapsed {
-			// No drain: the pod is terminal, so its sessions went with it.
-			// That is the same reasoning the terminal branch below gives, and
-			// it is why this case is shorter than Failed's -- a Finished
-			// server is only ever reached through a terminal pod.
+			// A server that lost its ready signal after endRound is Finished
+			// with its pod still running, and the retention runs from the
+			// round's end, so players may still be on it: move them first, as
+			// Failed does.
+			if in.Occupied() && in.WasRegistered && !in.PodLost && !in.PodTerminal &&
+				!in.DrainDeadlineReached {
+				return Decision{
+					Next: Finished, StartDrain: true,
+					Reason:  ReasonDrainingBeforeCleanup,
+					Message: "moving players off a finished server before removing it",
+				}
+			}
 			reason := ReasonFinishedRetentionElapsed
 			message := "finished retention elapsed"
 			if in.DeletionRequested {
@@ -469,6 +478,18 @@ func Decide(current Phase, in Inputs) Decision {
 			return Decision{
 				Next: Draining, StartDrain: true,
 				Reason: ReasonDeletionRequested, Message: "deletion requested, moving players off",
+			}
+		}
+		if !in.RetirementRequested {
+			if in.PodRunning && in.PodReady && in.AgentReady && in.AgentStreamDownFor < StreamDownGrace {
+				return Decision{
+					Next: Ready, Register: true,
+					Reason: ReasonRetirementWithdrawn, Message: "retirement was withdrawn",
+				}
+			}
+			return Decision{
+				Next:   Retiring,
+				Reason: ReasonRetiring, Message: "retirement was withdrawn, waiting for both ready signals",
 			}
 		}
 		if in.MaxStaleReached {
@@ -615,6 +636,15 @@ func Decide(current Phase, in Inputs) Decision {
 					grace = ReconnectGrace
 				}
 				lost = in.AgentStreamDownFor >= grace
+			}
+		}
+		// After endRound the process stopping is the shutdown the round asked
+		// for. A silent agent is kept out: its players may be on a dead backend
+		// and still need the rescue below.
+		if lost && in.RoundEnded && !in.AgentSilent {
+			return Decision{
+				Next: Finished, Deregister: in.Registered,
+				Reason: ReasonRoundFinished, Message: "the round is over and the server is shutting down",
 			}
 		}
 		if lost {

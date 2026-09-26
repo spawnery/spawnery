@@ -45,3 +45,22 @@ func TestDrainTimeoutHonorsAnExplicitValue(t *testing.T) {
 		t.Errorf("DrainTimeout() = %v, want %v", got, want)
 	}
 }
+
+func TestProxyGroupMaxStale(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		update *ProxyUpdateSpec
+		want   time.Duration
+	}{
+		{"no update block", nil, 0},
+		{"zero means never", &ProxyUpdateSpec{MaxStaleSeconds: 0}, 0},
+		{"a bound", &ProxyUpdateSpec{MaxStaleSeconds: 600}, 10 * time.Minute},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g := &ProxyGroup{Spec: ProxyGroupSpec{Update: tc.update}}
+			if got := g.MaxStale(); got != tc.want {
+				t.Errorf("MaxStale() = %v, want %v", got, tc.want)
+			}
+		})
+	}
+}

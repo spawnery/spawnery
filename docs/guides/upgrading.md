@@ -36,12 +36,14 @@ or `POD_NAMESPACE`, rolls the whole fleet with no image, no rendering change
 and no spec edit involved.
 
 Every group starts within a reconcile of the new operator coming up, one pod
-at a time per group but all groups at once -- nothing serialises across
-groups. Each replaced pod runs the ordinary drain, so players keep playing and
-are disconnected only if still there when `spec.drain.timeoutSeconds` elapses,
-with one `Warning ProxyDrainTimeout` per pod naming what it cost. A busy fleet
-upgraded at peak disconnects, per group, whoever is still on each proxy at
-each deadline.
+at a time per group, and all groups at once unless the Network caps
+concurrent changeovers. Each replaced pod takes no new connections and is
+stopped once its players have left, however long that takes; nobody is
+disconnected unless the group sets `spec.update.maxStaleSeconds`, the pod's
+node is leaving, or its player count cannot be read for
+`spec.drain.timeoutSeconds`. A busy fleet upgraded at peak therefore rolls
+slowly rather than disconnecting anybody. See [Rolling a
+group](updates-and-drain.md#proxies-wait-for-their-players-too).
 
 Rolling on the rendered pod rather than on any `metadata.generation` change is
 deliberate: `replicas` is the routine edit on a proxy group, and a generation

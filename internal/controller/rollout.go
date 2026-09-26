@@ -32,6 +32,8 @@ type ProxyView struct {
 	Players      int32
 	PlayersStale bool
 	CreatedAt    time.Time
+	// RetireRequested is an admin's retire request; such a pod is stale.
+	RetireRequested bool
 }
 
 // RolloutDecision is what one pass should do: how many pods to create, and
@@ -232,6 +234,9 @@ func pick(pods []ProxyView, n int32) []string {
 		a, b := candidates[i], candidates[j]
 		if a.Stale != b.Stale {
 			return a.Stale
+		}
+		if a.RetireRequested != b.RetireRequested {
+			return a.RetireRequested
 		}
 		if a.Ready != b.Ready {
 			return !a.Ready

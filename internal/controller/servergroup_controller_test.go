@@ -5275,3 +5275,15 @@ func TestProgressingNamesTheFloor(t *testing.T) {
 		t.Errorf("Progressing = %+v, want %s while the extra server starts", cond, spawneryv1alpha1.ReasonServersStarting)
 	}
 }
+
+func TestProgressingDoesNotCountAHeldServer(t *testing.T) {
+	group := &spawneryv1alpha1.ServerGroup{ObjectMeta: metav1.ObjectMeta{Name: "lobby", Generation: 2}}
+	reportProgressing(group, []ServerView{
+		{Name: "lobby-new", PodHash: "current", Phase: phase.Ready},
+		{Name: "lobby-old", PodHash: "old", Phase: phase.Ready, Hold: true},
+	}, "current", nil, FloorReport{})
+	cond := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
+	if cond == nil || cond.Reason != spawneryv1alpha1.ReasonAtDesiredState {
+		t.Errorf("Progressing = %+v, want AtDesiredState: a held server is not being replaced", cond)
+	}
+}

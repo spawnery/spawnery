@@ -151,5 +151,20 @@ public interface CloudResponseOrBuilder extends
    */
   cloud.spawnery.agent.pb.StopServerResultOrBuilder getStopServerOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.UnretireResult unretire = 11;</code>
+   * @return Whether the unretire field is set.
+   */
+  boolean hasUnretire();
+  /**
+   * <code>.spawnery.agent.v1alpha1.UnretireResult unretire = 11;</code>
+   * @return The unretire.
+   */
+  cloud.spawnery.agent.pb.UnretireResult getUnretire();
+  /**
+   * <code>.spawnery.agent.v1alpha1.UnretireResult unretire = 11;</code>
+   */
+  cloud.spawnery.agent.pb.UnretireResultOrBuilder getUnretireOrBuilder();
+
   cloud.spawnery.agent.pb.CloudResponse.ResultCase getResultCase();
 }

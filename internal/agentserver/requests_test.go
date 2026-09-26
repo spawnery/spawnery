@@ -25,6 +25,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -69,6 +70,7 @@ func connectFixture(t *testing.T) (
 ) {
 	t.Helper()
 	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
 	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme: %v", err)
 	}
@@ -557,6 +559,7 @@ func TestAProxyIsRefusedADoor(t *testing.T) {
 // would start members for exactly that group without bound.
 func TestStartRefusesAnOnDemandGroupWithNoCeiling(t *testing.T) {
 	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
 	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme: %v", err)
 	}

@@ -1,7 +1,9 @@
 package cloud.spawnery.agent
 
 import cloud.spawnery.agent.api.Group
+import cloud.spawnery.agent.api.ProxyInfo
 import cloud.spawnery.agent.api.ServerInfo
+import cloud.spawnery.agent.api.ServerPhase
 import cloud.spawnery.agent.api.SpawneryApi
 import com.mojang.brigadier.arguments.IntegerArgumentType
 import com.mojang.brigadier.arguments.StringArgumentType
@@ -113,6 +115,11 @@ fun <S> cloudCommand(
                             ctx.source,
                             describeGroup(group),
                         )
+                        if (group.kind() == Group.Kind.PROXY) {
+                            for (proxy in api.proxies().filter { it.group() == group.name() }.sortedBy { it.name() }) {
+                                reply(adapter, format, ctx.source, describeProxy(proxy))
+                            }
+                        }
                     }
                     groups.size
                 },
@@ -125,12 +132,20 @@ fun <S> cloudCommand(
                         // Both, because this branch answers about both, and a
                         // completion that offered only one half would teach
                         // people the other half is not allowed here.
-                        .suggests(suggesting { api.servers().map(ServerInfo::name) + api.groups().map(Group::name) })
+                        .suggests(suggesting {
+                            api.servers().map(ServerInfo::name) + api.proxies().map(ProxyInfo::name) +
+                                api.groups().map(Group::name)
+                        })
                         .executes { ctx ->
                             val name = StringArgumentType.getString(ctx, "name")
                             val server = api.server(name)
                             if (server.isPresent) {
                                 reply(adapter, format, ctx.source, describe(server.get()))
+                                return@executes 1
+                            }
+                            val proxy = api.proxy(name)
+                            if (proxy.isPresent) {
+                                reply(adapter, format, ctx.source, describeProxy(proxy.get()))
                                 return@executes 1
                             }
                             val group = api.group(name)
@@ -148,7 +163,7 @@ fun <S> cloudCommand(
                             // unsure whether the command works at all.
                             reply(adapter, format, 
                                 ctx.source,
-                                Style.bad("no server or group called") + " " + Style.name(name) +
+                                Style.bad("no server, proxy or group called") + " " + Style.name(name) +
                                     Style.quiet(" on this network"),
                             )
                             0
@@ -163,9 +178,9 @@ fun <S> cloudCommand(
                 .requires { adapter.hasPermission(it, PERMISSION_RETIRE) }
                 .then(
                     RequiredArgumentBuilder.argument<S, String>("name", StringArgumentType.word())
-                        // Servers only: a group is not a thing that retires,
-                        // and offering one here would be offering a refusal.
-                        .suggests(suggesting { api.servers().map(ServerInfo::name) })
+                        // Servers and proxies: a group is not a thing that
+                        // retires, and offering one would be offering a refusal.
+                        .suggests(suggesting { api.servers().map(ServerInfo::name) + api.proxies().map(ProxyInfo::name) })
                         .executes { ctx ->
                             val name = StringArgumentType.getString(ctx, "name")
                             val source = ctx.source
@@ -206,6 +221,35 @@ fun <S> cloudCommand(
                 ),
         )
 
+        .then(
+            LiteralArgumentBuilder.literal<S>("unretire")
+                // PERMISSION_RETIRE: whoever may retire a server may take it back.
+                .requires { adapter.hasPermission(it, PERMISSION_RETIRE) }
+                .then(
+                    RequiredArgumentBuilder.argument<S, String>("name", StringArgumentType.word())
+                        .suggests(suggesting { api.servers().filter { it.phase() == ServerPhase.RETIRING }.map(ServerInfo::name) })
+                        .executes { ctx ->
+                            val name = StringArgumentType.getString(ctx, "name")
+                            val source = ctx.source
+                            api.unretire(name).whenComplete { _, failure ->
+                                if (failure == null) {
+                                    reply(adapter, format, 
+                                        source,
+                                        Style.name(name) + Style.good(" takes joins again.") +
+                                            Style.quiet(" Nothing automatic removes it now; it stays until it ends by itself."),
+                                    )
+                                } else {
+                                    reply(adapter, format, 
+                                        source,
+                                        Style.bad("could not unretire") + " " + Style.name(name) +
+                                            Style.quiet(": ") + Style.bad(reason(failure)),
+                                    )
+                                }
+                            }
+                            1
+                        },
+                ),
+        )
         .then(
             LiteralArgumentBuilder.literal<S>("start")
                 .requires { adapter.hasPermission(it, PERMISSION_SCALE) }
@@ -495,6 +539,7 @@ private fun describe(server: ServerInfo): String =
         // than decorating: "can I send somebody there" is the question being
         // asked, and green against red answers it before the words are read.
         (if (server.registered()) Style.good("taking joins") else Style.bad("not taking joins")) +
+        (if (server.held()) Style.quiet(", ") + Style.bad("held") else "") +
         // What the server says it is doing, and only when it says something.
         // Last and introduced by "says", because everything before it is the
         // operator's account and this one is the server's -- an admin reading
@@ -510,6 +555,12 @@ private fun describe(server: ServerInfo): String =
  * them four times as long -- at which point two copies would have been two
  * palettes the day somebody improved one.
  */
+private fun describeProxy(proxy: ProxyInfo): String =
+    Style.name(proxy.name()) + Style.quiet(" in ") + Style.name(proxy.group()) + Style.quiet(": ") +
+        (if (proxy.ready()) Style.good("ready") else Style.bad("not ready")) +
+        (if (proxy.draining()) Style.quiet(", ") + Style.bad("draining") else "") +
+        Style.quiet(", ") + Style.number(proxy.players()) + Style.quiet(" players")
+
 private fun describeGroup(group: Group): String =
     Style.name(group.name()) + Style.quiet(" (") + Style.number(group.kind()) + Style.quiet("): ") +
         Style.number("${group.readyReplicas()}/${group.replicas()}") + Style.quiet(" ready, ") +

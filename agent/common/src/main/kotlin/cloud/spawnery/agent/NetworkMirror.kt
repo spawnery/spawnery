@@ -2,6 +2,7 @@ package cloud.spawnery.agent
 
 import cloud.spawnery.agent.api.CloudPlayer
 import cloud.spawnery.agent.api.Group
+import cloud.spawnery.agent.api.ProxyInfo
 import cloud.spawnery.agent.api.ServerInfo
 import cloud.spawnery.agent.api.ServerPhase
 import cloud.spawnery.agent.pb.GroupState
@@ -38,6 +39,7 @@ class NetworkMirror {
     private data class Snapshot(
         val groups: List<Group>,
         val servers: List<ServerInfo>,
+        val proxies: List<ProxyInfo>,
         val players: List<CloudPlayer>,
         /**
          * The chat feed's shape, from the Network's own spec. Blank until the
@@ -48,7 +50,7 @@ class NetworkMirror {
     )
 
     @Volatile
-    private var snapshot = Snapshot(emptyList(), emptyList(), emptyList(), "")
+    private var snapshot = Snapshot(emptyList(), emptyList(), emptyList(), emptyList(), "")
 
     /** Replaces everything this mirror holds. */
     fun apply(state: NetworkState) {
@@ -84,7 +86,11 @@ class NetworkMirror {
                     it.attributesMap,
                     it.incarnation,
                     it.number,
+                    it.held,
                 )
+            },
+            proxies = state.proxiesList.map {
+                ProxyInfo(it.name, it.group, it.ready, it.draining, it.players)
             },
             // An entry whose UUID will not parse is dropped and the rest of the
             // state applies. One malformed player must not cost this agent its
@@ -104,6 +110,7 @@ class NetworkMirror {
     fun groups(): List<Group> = snapshot.groups
 
     fun servers(): List<ServerInfo> = snapshot.servers
+    fun proxies(): List<ProxyInfo> = snapshot.proxies
 
     fun players(): List<CloudPlayer> = snapshot.players
 

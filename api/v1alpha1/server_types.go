@@ -97,6 +97,14 @@ type ServerSpec struct {
 	// state to correct.
 	// +optional
 	Retire bool `json:"retire,omitempty"`
+
+	// Hold keeps this server against every automatic removal: a rolling
+	// update does not retire it, and neither the demand rule nor a lowered
+	// maxReplicas deletes it. It stays until it ends by itself. Set by the
+	// agent endpoint's unretire request; a node drain still moves it, and a
+	// retire request still retires it.
+	// +optional
+	Hold bool `json:"hold,omitempty"`
 }
 
 // ServerStatus is the observed state of a Server.

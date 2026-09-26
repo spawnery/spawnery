@@ -1820,6 +1820,19 @@ spec:
                       type: object
                     type: array
                 type: object
+              update:
+                description: Update bounds how long a draining proxy may wait for
+                  its players.
+                properties:
+                  maxStaleSeconds:
+                    description: |-
+                      MaxStaleSeconds disconnects the players left on a draining proxy after
+                      this many seconds. 0, the default, means a drain waits for its players:
+                      the proxy takes no new connections and stops once empty.
+                    format: int32
+                    minimum: 0
+                    type: integer
+                type: object
             required:
             - expose
             - image

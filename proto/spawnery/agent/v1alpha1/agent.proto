@@ -115,6 +115,7 @@ message CloudRequest {
     AcceptJoinsRequest accept_joins = 7;
     StartServerRequest start_server = 8;
     StopServerRequest stop_server = 9;
+    UnretireRequest unretire = 10;
   }
 }
 
@@ -136,6 +137,7 @@ message CloudResponse {
     AcceptJoinsResult accept_joins = 8;
     StartServerResult start_server = 9;
     StopServerResult stop_server = 10;
+    UnretireResult unretire = 11;
   }
 }
 
@@ -205,6 +207,18 @@ message RetireRequest {
 message RetireResult {
   // The server that is now retiring, echoed so a caller that asked by a name
   // it built from a string sees what the operator matched.
+  string server = 1;
+}
+
+// UnretireRequest takes a server's retirement back and holds it: nothing
+// automatic removes it afterwards. Refused for a server already stopping or
+// not retiring.
+message UnretireRequest {
+  string server = 1;
+}
+
+// UnretireResult says the server takes joins again and is held.
+message UnretireResult {
   string server = 1;
 }
 
@@ -681,6 +695,8 @@ message NetworkState {
   // Empty is what an operator older than this field sends, and the agent reads
   // it as "use my own default" rather than as "print nothing".
   string feed_format = 4;
+  // Every proxy of the namespace, sorted by name.
+  repeated ProxyState proxies = 5;
 }
 
 // GroupState is one group as the operator's status fields describe it.
@@ -779,6 +795,19 @@ message ServerState {
   // indistinguishable from an unnumbered one. It costs nothing: that server
   // is referred to by the name that names its world.
   int32 number = 10;
+  // Whether an admin took this server's retirement back: spec.hold.
+  bool held = 11;
+}
+
+// ProxyState is one proxy pod as the operator last saw it.
+message ProxyState {
+  string name = 1;
+  // The ProxyGroup the pod belongs to.
+  string group = 2;
+  bool ready = 3;
+  // Taking no new connections.
+  bool draining = 4;
+  int32 players = 5;
 }
 
 message ProxyMessage {

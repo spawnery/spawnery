@@ -45,6 +45,13 @@ that is already retiring **fails**, on purpose: the operator distinguishes "you
 retired it" from "somebody had already asked", and a caller that wants to treat
 the second as success can do that far more safely than one that was never told.
 
+`unretire(server)` takes a retirement back while the server is still
+retiring: it takes joins again and is held, so nothing automatic removes it
+any more. It fails for a server that is already stopping or is not retiring.
+
+`retire` also takes a proxy's name: the proxy is replaced, takes no new
+connections and stops once empty.
+
 `boost(group, replicas, forHowLong)` adds capacity for a while, as a
 `ScaleBoost` object rather than as an edit to the group. Pass `null` for the
 operator's default of an hour.

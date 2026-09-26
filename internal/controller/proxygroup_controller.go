@@ -59,7 +59,7 @@ import (
 // is per group. Everything else about a drain is re-derived every pass — which
 // pods are surplus, and therefore what readiness each should have — so this is
 // the only thing that has to be written down.
-const ProxyDrainingSinceAnnotation = "spawnery.cloud/draining-since"
+const ProxyDrainingSinceAnnotation = podspec.AnnotationProxyDrainingSince
 
 // readinessDivergenceGrace is how long a pod's actual readiness may disagree
 // with the asserted one before the group says so. It must clear both known
@@ -93,8 +93,8 @@ func NewProxyName(group string) string { return NewServerName(group) }
 // contract exists for: reconcileReplicas removes a surplus pod once it is
 // empty, or once its deadline has passed, and not before.
 //
-// It emits Kubernetes events on four occasions, and the bar all four clear
-// is the same one: something happened that no other signal on the object
+// It emits Kubernetes events on the occasions below; the four about the
+// group clear one bar: something happened that no other signal on the object
 // reports.
 //
 //   - A proxy marked for going off a departing node (NodeDraining, Normal,
@@ -126,9 +126,12 @@ func NewProxyName(group string) string { return NewServerName(group) }
 //     clean Degraded=False with nothing on its timeline saying it was ever
 //     anything else.
 //
-// Pod creation and ordinary deletion stay silent: they are recorded on the
-// objects themselves and an event would say nothing the group's status does
-// not.
+// Three more are about a single proxy and are recorded on its pod, which is
+// what lets the in-game feed name the proxy: ProxyStarted on its first pass
+// of the ready gate (announceReady), ProxyRetiring when it is first marked
+// draining for a rollout, a retire request or a scale-down (a departing node
+// has NodeDraining above instead), and ProxyStopped when it is deleted
+// empty.
 type ProxyGroupReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -449,6 +452,9 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 	if err != nil {
 		return obs, ctrl.Result{}, err
 	}
+	if err := r.announceReady(ctx, pods); err != nil {
+		return obs, ctrl.Result{}, err
+	}
 	// From here the pass has seen both, so every return below carries an
 	// observation the caller will record.
 	obs = proxyObservation{observed: true, pods: pods, svc: svc}
@@ -636,7 +642,7 @@ func (r *ProxyGroupReconciler) protectPlayersOnly(ctx context.Context, group *sp
 	if err := r.protectOccupiedProxies(ctx, group, pods); err != nil {
 		return err
 	}
-	return r.drainDeparting(ctx, group, pods, leaving, nodeGoing)
+	return r.drainDeparting(ctx, group, pods, leaving, nodeGoing, "")
 }
 
 // pods lists the group's live proxy pods, oldest first, so scale-down is
@@ -918,6 +924,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		snap := r.Agents.Lookup(string(pods[i].UID))
 		_, dated := drainingSince(&pods[i])
 		nodeGoing[i] = nodeDeparting(ctx, r.Client, pods[i].Spec.NodeName, r.DrainTaintKeys)
+		requested := pods[i].Annotations[podspec.AnnotationRetireRequested] != ""
 		views = append(views, ProxyView{
 			Name: pods[i].Name,
 			// Two ways to be out of date, and the rollout does not distinguish
@@ -925,12 +932,13 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 			// a pod on a node that is going away. Both have to be replaced by a
 			// pod somewhere else, one at a time, without disconnecting anyone —
 			// which is the sentence DecideRollout already implements.
-			Stale:        pods[i].Labels[podspec.LabelPodHash] != wantHash || nodeGoing[i],
-			Ready:        isPodReady(&pods[i]),
-			Draining:     dated,
-			Players:      snap.Players,
-			PlayersStale: snap.PlayersStale,
-			CreatedAt:    pods[i].CreationTimestamp.Time,
+			Stale:           pods[i].Labels[podspec.LabelPodHash] != wantHash || nodeGoing[i] || requested,
+			RetireRequested: requested,
+			Ready:           isPodReady(&pods[i]),
+			Draining:        dated,
+			Players:         snap.Players,
+			PlayersStale:    snap.PlayersStale,
+			CreatedAt:       pods[i].CreationTimestamp.Time,
 		})
 	}
 	// The group's NodeDraining condition is built from this pass's live set,
@@ -1153,7 +1161,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 
 	// The drain half, shared with the path that never gets here. See
 	// drainDeparting.
-	return r.drainDeparting(ctx, group, pods, leaving, nodeGoing)
+	return r.drainDeparting(ctx, group, pods, leaving, nodeGoing, wantHash)
 }
 
 // drainDeparting is everything a proxy pod's removal consists of once
@@ -1206,6 +1214,7 @@ func (r *ProxyGroupReconciler) drainDeparting(
 	pods []corev1.Pod,
 	leaving map[string]bool,
 	nodeGoing []bool,
+	wantHash string,
 ) error {
 	key := group.Namespace + "/" + group.Name
 	// The desired readiness is derived, not remembered: this loop already
@@ -1262,6 +1271,17 @@ func (r *ProxyGroupReconciler) drainDeparting(
 		if going && !wasMarked && nodeGoing[i] {
 			r.Recorder.Eventf(group, nil, corev1.EventTypeNormal, spawneryv1alpha1.ReasonNodeDraining, actionDrainProxy,
 				"draining proxy %s off a node that is going away", pods[i].Name)
+		}
+		if going && !wasMarked && !nodeGoing[i] {
+			why := "scaled down"
+			switch {
+			case pods[i].Annotations[podspec.AnnotationRetireRequested] != "":
+				why = "retire requested"
+			case pods[i].Labels[podspec.LabelPodHash] != wantHash:
+				why = "rolling update"
+			}
+			r.Recorder.Eventf(&pods[i], nil, corev1.EventTypeNormal, "ProxyRetiring", actionDrainProxy,
+				"proxy %s takes no new connections and stops once empty: %s", pods[i].Name, why)
 		}
 		diverging[pods[i].UID] = going && isPodReady(&pods[i])
 		names[pods[i].UID] = pods[i].Name
@@ -1342,7 +1362,20 @@ func (r *ProxyGroupReconciler) drainDeparting(
 		// that lacked one, this pod included, so the deadline starts on this
 		// pass rather than never.
 		since, dated := drainingSince(pod)
-		expired := dated && r.Clock().Sub(since) >= group.DrainTimeout()
+		waited := r.Clock().Sub(since)
+		// Measured from when the count became unknown, not from the drain's
+		// start: after an operator restart every count is unknown until its
+		// agent reconnects, and a long soft drain must survive that.
+		var unknownFor time.Duration
+		switch {
+		case !snap.Connected:
+			unknownFor = snap.StreamDownFor
+		case snap.PlayersStale:
+			unknownFor = r.Clock().Sub(snap.PlayersReportedAt)
+		}
+		expired := dated && ((nodeGoing[i] && waited >= group.DrainTimeout()) ||
+			(unknownFor > 0 && unknownFor >= group.DrainTimeout() && waited >= group.DrainTimeout()) ||
+			(group.MaxStale() > 0 && waited >= group.MaxStale()))
 
 		// Held until the delete lands, for the reason the Network
 		// controller's announce slice carries: the event describes a
@@ -1354,6 +1387,10 @@ func (r *ProxyGroupReconciler) drainDeparting(
 		switch {
 		case !proxyOccupied(snap):
 			// Known empty: nobody is on it, so removing it costs nothing.
+			announce = func() {
+				r.Recorder.Eventf(pod, nil, corev1.EventTypeNormal, "ProxyStopped", actionDrainProxy,
+					"proxy %s stopped: no players left", pod.Name)
+			}
 		case expired:
 			// The one path in this milestone that disconnects anybody. It is
 			// configured rather than accidental, so it says so loudly and
@@ -1595,6 +1632,31 @@ func (r *ProxyGroupReconciler) markDraining(ctx context.Context, pod *corev1.Pod
 		patch := client.MergeFrom(pod.DeepCopy())
 		delete(pod.Annotations, ProxyDrainingSinceAnnotation)
 		return client.IgnoreNotFound(r.Patch(ctx, pod, patch))
+	}
+	return nil
+}
+
+// announceReady dates each proxy's first pass of the ready gate on the pod and
+// records ProxyStarted for it, once: the date is what says it was announced.
+func (r *ProxyGroupReconciler) announceReady(ctx context.Context, pods []corev1.Pod) error {
+	for i := range pods {
+		pod := &pods[i]
+		if !isPodReady(pod) || pod.Annotations[podspec.AnnotationProxyReadySince] != "" {
+			continue
+		}
+		patch := client.MergeFrom(pod.DeepCopy())
+		if pod.Annotations == nil {
+			pod.Annotations = map[string]string{}
+		}
+		pod.Annotations[podspec.AnnotationProxyReadySince] = r.Clock().UTC().Format(time.RFC3339)
+		if err := r.Patch(ctx, pod, patch); err != nil {
+			if apierrors.IsNotFound(err) {
+				continue
+			}
+			return err
+		}
+		r.Recorder.Eventf(pod, nil, corev1.EventTypeNormal, "ProxyStarted", actionSyncStatus,
+			"proxy %s is taking connections", pod.Name)
 	}
 	return nil
 }

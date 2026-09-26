@@ -200,6 +200,8 @@ func (s *Server) answerCloudRequest(
 		return s.answerStartServer(ctx, logger, id, req.GetId(), req.GetStartServer())
 	case req.GetStopServer() != nil:
 		return s.answerStopServer(ctx, logger, id, req.GetId(), req.GetStopServer())
+	case req.GetUnretire() != nil:
+		return s.answerUnretire(ctx, logger, id, req.GetId(), req.GetUnretire())
 	default:
 		return refuse(req.GetId(), agentpb.RequestError_REASON_UNSPECIFIED,
 			"this operator does not know that request")
@@ -242,7 +244,7 @@ func (s *Server) answerRetire(
 		// The snapshot said it was there and the cluster says otherwise --
 		// ordinary, since the snapshot is allowed to be a moment stale.
 		return refuse(reqID, agentpb.RequestError_NOT_FOUND,
-			"no server by that name is on this network")
+			"no server or proxy by that name is on this network")
 	case err != nil:
 		logger.V(1).Info("could not retire a server", "reason", err.Error())
 		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
@@ -688,6 +690,37 @@ func refuse(reqID uint64, reason agentpb.RequestError_Reason, message string) *a
 		Result: &agentpb.CloudResponse_Error{
 			Error: &agentpb.RequestError{Reason: reason, Message: message},
 		},
+	}
+}
+
+// answerUnretire takes one server's retirement back, bound to the token's
+// namespace exactly as answerRetire is.
+func (s *Server) answerUnretire(
+	ctx context.Context,
+	logger logr.Logger,
+	id grpcauth.Identity,
+	reqID uint64,
+	req *agentpb.UnretireRequest,
+) *agentpb.CloudResponse {
+	err := s.opts.Writer.Unretire(ctx, id.Namespace, req.GetServer())
+	switch {
+	case errors.Is(err, ErrNoSuchServer):
+		return refuse(reqID, agentpb.RequestError_NOT_FOUND,
+			"no server by that name is on this network")
+	case errors.Is(err, ErrServerStopping):
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"that server is already stopping")
+	case errors.Is(err, ErrNotRetiring):
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"that server is not retiring")
+	case err != nil:
+		logger.V(1).Info("could not unretire a server", "reason", err.Error())
+		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
+			"the operator could not write that just now")
+	}
+	return &agentpb.CloudResponse{
+		Id:     reqID,
+		Result: &agentpb.CloudResponse_Unretire{Unretire: &agentpb.UnretireResult{Server: req.GetServer()}},
 	}
 }
 

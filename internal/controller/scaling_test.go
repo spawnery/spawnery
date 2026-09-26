@@ -1979,3 +1979,55 @@ func TestWhenEmptyKeepsTheLastCurrentServer(t *testing.T) {
 		t.Errorf("Delete = %v, want none: without it the next pass would cold start it again", got.Delete)
 	}
 }
+
+func held(v ServerView) ServerView { v.Hold = true; return v }
+
+func TestAHeldServerIsNeverRetired(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views:   []ServerView{held(staleReady("old", 10, 100, "old")), ready("new", 0, 100)},
+		PodHash: "current", MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	})
+	if len(got.Retire) != 0 {
+		t.Errorf("Retire = %v, want none: the server is held", got.Retire)
+	}
+}
+
+func TestAHeldServerIsNeverDeletedForDemandOrTheCeiling(t *testing.T) {
+	idle := held(ready("idle", 0, 100))
+	idle.EmptyFor = time.Hour
+	other := ready("other", 0, 100)
+	other.EmptyFor = time.Hour
+	for _, max := range []int32{10, 1} {
+		got := DecideSize(ScalingInputs{
+			Views:       []ServerView{idle, other},
+			MinReplicas: 0, MaxReplicas: max, SpareSlots: 0, MaxPlayers: 100,
+			Stabilization: time.Minute,
+		})
+		for _, name := range got.Delete {
+			if name == "idle" {
+				t.Errorf("maxReplicas %d: Delete = %v, want the held server kept", max, got.Delete)
+			}
+		}
+	}
+}
+
+func TestHoldEndsTheChangeoverForItsServer(t *testing.T) {
+	in := ScalingInputs{
+		Views:   []ServerView{held(staleReady("old", 10, 100, "old"))},
+		PodHash: "current", MaxUnavailable: 1,
+		MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100,
+	}
+	if staleRemains(in) || coldStart(in) {
+		t.Errorf("staleRemains = %v coldStart = %v, want both false for a held server", staleRemains(in), coldStart(in))
+	}
+}
+
+func TestANodeDrainStillCondemnsAHeldServer(t *testing.T) {
+	v := held(ready("held", 5, 100))
+	v.Condemned = true
+	got := DecideSize(ScalingInputs{Views: []ServerView{v}, MinReplicas: 1, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100})
+	if len(got.Condemn) != 1 {
+		t.Errorf("Condemn = %v, want the held server: its node is leaving", got.Condemn)
+	}
+}

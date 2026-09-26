@@ -310,7 +310,7 @@ func deletable(in ScalingInputs) []ServerView {
 		// Condemned is skipped for the same reason as Retire: this server is
 		// already leaving by another route, and naming it here would put it in
 		// Delete and Condemn at once.
-		if in.PendingDeletes[v.Name] || in.PendingRetires[v.Name] || v.Retire || v.Condemned {
+		if in.PendingDeletes[v.Name] || in.PendingRetires[v.Name] || v.Retire || v.Condemned || v.Hold {
 			continue
 		}
 		out = append(out, v)
@@ -388,6 +388,9 @@ func coldStart(in ScalingInputs) bool {
 	}
 	var stale, current int
 	for _, v := range in.Views {
+		if v.Hold {
+			continue
+		}
 		if in.PendingDeletes[v.Name] {
 			continue
 		}
@@ -487,7 +490,7 @@ func selectRetirement(in ScalingInputs) (string, bool) {
 		// the changeover would lose a slot it never got any work out of. A
 		// server already leaving by one route may not also be spent from the
 		// update budget.
-		if v.Phase == phase.Ready && !in.PendingDeletes[v.Name] && !v.Condemned {
+		if v.Phase == phase.Ready && !in.PendingDeletes[v.Name] && !v.Condemned && !v.Hold {
 			if in.WhenEmpty && (v.Players != 0 || v.Stale) {
 				continue
 			}
@@ -596,6 +599,9 @@ func currentStarting(in ScalingInputs) bool {
 // whole failed-retention window, an hour by default.
 func staleRemains(in ScalingInputs) bool {
 	for _, v := range in.Views {
+		if v.Hold {
+			continue
+		}
 		if in.PendingDeletes[v.Name] {
 			continue
 		}

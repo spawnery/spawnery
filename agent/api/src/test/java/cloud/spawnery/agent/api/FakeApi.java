@@ -40,6 +40,8 @@ final class FakeApi implements SpawneryApi {
     @Override public Optional<Group> group(String name) { return Optional.empty(); }
     @Override public List<ServerInfo> servers() { return List.of(); }
     @Override public Optional<ServerInfo> server(String name) { return Optional.empty(); }
+    @Override public List<ProxyInfo> proxies() { return List.of(); }
+    @Override public Optional<ProxyInfo> proxy(String name) { return Optional.empty(); }
     @Override public List<CloudPlayer> players() { return List.of(); }
     @Override public Optional<CloudPlayer> player(UUID id) { return Optional.empty(); }
 
@@ -50,6 +52,11 @@ final class FakeApi implements SpawneryApi {
 
     @Override
     public CompletionStage<Void> retire(String server) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
+    }
+
+    @Override
+    public CompletionStage<Void> unretire(String server) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
     }
 

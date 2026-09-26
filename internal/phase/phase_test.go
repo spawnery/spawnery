@@ -444,13 +444,13 @@ func TestDecide(t *testing.T) {
 			// phase Draining.
 			name:    "retiring never asks for a drain while it waits",
 			current: Retiring,
-			in:      Inputs{PodExists: true, PodRunning: true, PlayersOnline: 3},
+			in:      Inputs{RetirementRequested: true, PodExists: true, PodRunning: true, PlayersOnline: 3},
 			want:    Decision{Next: Retiring, Reason: ReasonRetiring},
 		},
 		{
 			name:    "retiring terminates once the last player leaves",
 			current: Retiring,
-			in:      Inputs{PodExists: true, PodRunning: true},
+			in:      Inputs{RetirementRequested: true, PodExists: true, PodRunning: true},
 			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonDrained},
 		},
 		{
@@ -459,7 +459,7 @@ func TestDecide(t *testing.T) {
 			name:    "an occupied retiring server is never terminated on a drain deadline",
 			current: Retiring,
 			in: Inputs{
-				PodExists: true, PodRunning: true, PlayersOnline: 1,
+				PodExists: true, PodRunning: true, PlayersOnline: 1, RetirementRequested: true,
 				DrainDeadlineReached: true,
 			},
 			want: Decision{Next: Retiring, Reason: ReasonRetiring},
@@ -467,7 +467,7 @@ func TestDecide(t *testing.T) {
 		{
 			name:    "the stale deadline escalates to a real drain",
 			current: Retiring,
-			in: Inputs{
+			in: Inputs{RetirementRequested: true,
 				PodExists: true, PodRunning: true, PlayersOnline: 1,
 				MaxStaleReached: true,
 			},
@@ -479,7 +479,7 @@ func TestDecide(t *testing.T) {
 			name:    "deleting a retiring server moves its players off",
 			current: Retiring,
 			in: Inputs{
-				PodExists: true, PodRunning: true, PlayersOnline: 1,
+				PodExists: true, PodRunning: true, PlayersOnline: 1, RetirementRequested: true,
 				DeletionRequested: true,
 			},
 			want: Decision{Next: Draining, StartDrain: true, Reason: ReasonDeletionRequested},
@@ -487,13 +487,13 @@ func TestDecide(t *testing.T) {
 		{
 			name:    "a lost pod ends a retirement without a drain",
 			current: Retiring,
-			in:      Inputs{PodLost: true, PlayersOnline: 1, PlayersStale: true},
+			in:      Inputs{RetirementRequested: true, PodLost: true, PlayersOnline: 1, PlayersStale: true},
 			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonPodLost},
 		},
 		{
 			name:    "a terminal pod ends a retirement without a drain",
 			current: Retiring,
-			in:      Inputs{PodExists: true, PodTerminal: true, PlayersOnline: 1},
+			in:      Inputs{RetirementRequested: true, PodExists: true, PodTerminal: true, PlayersOnline: 1},
 			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonPodTerminal},
 		},
 		{
@@ -596,13 +596,13 @@ func TestNoPathBackFromDraining(t *testing.T) {
 }
 
 func TestNoPathBackFromRetiring(t *testing.T) {
-	// Retiring is one-way, like Draining. A server that is being replaced
+	// Retiring is one-way while the retirement stands, like Draining. A server that is being replaced
 	// must not re-register itself because its probe happens to be green:
 	// the proxies would start sending joins to a server the group has
 	// already decided to remove.
 	in := Inputs{
 		PodExists: true, PodRunning: true, PodReady: true, AgentReady: true,
-		PlayersOnline: 1,
+		PlayersOnline: 1, RetirementRequested: true,
 	}
 	if got := Decide(Retiring, in); got.Next == Ready || got.Register {
 		t.Errorf("Decide(Retiring, healthy) = %+v, want no way back to Ready", got)
@@ -1056,4 +1056,125 @@ func declaredPhases(t *testing.T) []Phase {
 		t.Fatal("no Phase constants found, so this test would pass whatever Terminal did")
 	}
 	return declared
+}
+
+// TestAServerWhoseRoundEndedShutsDownAsFinished covers the shutdown that follows
+// endRound: the probe going red or the stream breaking is the process stopping,
+// not a fault, so it is neither a readiness loss nor a trip through Starting.
+func TestAServerWhoseRoundEndedShutsDownAsFinished(t *testing.T) {
+	ended := func(mutate func(*Inputs)) Inputs {
+		in := healthyReady()
+		in.RoundEnded = true
+		in.Registered = false
+		mutate(&in)
+		return in
+	}
+	cases := []struct {
+		name string
+		in   Inputs
+		want Decision
+	}{
+		{
+			name: "the probe turns red",
+			in:   ended(func(in *Inputs) { in.PodReady = false }),
+			want: Decision{Next: Finished, Reason: ReasonRoundFinished},
+		},
+		{
+			name: "the stream stays broken past its grace",
+			in: ended(func(in *Inputs) {
+				in.AgentConnected = false
+				in.AgentStreamDownFor = StreamDownGrace
+			}),
+			want: Decision{Next: Finished, Reason: ReasonRoundFinished},
+		},
+		{
+			name: "the proxies still have it",
+			in: ended(func(in *Inputs) {
+				in.Registered = true
+				in.PodReady = false
+			}),
+			want: Decision{Next: Finished, Deregister: true, Reason: ReasonRoundFinished},
+		},
+		{
+			name: "a silent agent still rescues whoever is left",
+			in: ended(func(in *Inputs) {
+				in.AgentConnected = true
+				in.AgentSilent = true
+			}),
+			want: Decision{Next: Starting, Deregister: true, CountReadinessLoss: true, StartDrain: true, Reason: ReasonReadinessLost},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Decide(Ready, tc.in)
+			got.Message = ""
+			if got != tc.want {
+				t.Errorf("Decide(Ready, %+v)\n got  %+v\n want %+v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAWithdrawnRetirementGoesBackToReady(t *testing.T) {
+	healthy := Inputs{
+		PodExists: true, PodRunning: true, PodReady: true, AgentReady: true, AgentConnected: true,
+		PlayersOnline: 2,
+	}
+	for _, tc := range []struct {
+		name string
+		in   Inputs
+		want Decision
+	}{
+		{
+			name: "withdrawn and healthy",
+			in:   healthy,
+			want: Decision{Next: Ready, Register: true, Reason: ReasonRetirementWithdrawn},
+		},
+		{
+			name: "withdrawn but the probe is red",
+			in:   func() Inputs { in := healthy; in.PodReady = false; return in }(),
+			want: Decision{Next: Retiring, Reason: ReasonRetiring},
+		},
+		{
+			name: "running empty wins over a withdrawal",
+			in:   func() Inputs { in := healthy; in.PlayersOnline = 0; return in }(),
+			want: Decision{Next: Terminating, DeletePod: true, Reason: ReasonDrained},
+		},
+		{
+			name: "still requested stays retiring",
+			in:   func() Inputs { in := healthy; in.RetirementRequested = true; return in }(),
+			want: Decision{Next: Retiring, Reason: ReasonRetiring},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Decide(Retiring, tc.in)
+			got.Message = ""
+			if got != tc.want {
+				t.Errorf("Decide(Retiring, %+v)\n got  %+v\n want %+v", tc.in, got, tc.want)
+			}
+		})
+	}
+}
+
+// TestAFinishedServerStillRunningMovesItsPlayersBeforeItGoes covers a server
+// that reached Finished through a lost ready signal after endRound while its
+// pod still runs: its retention is measured from the round's end, so it can
+// expire with players still on it.
+func TestAFinishedServerStillRunningMovesItsPlayersBeforeItGoes(t *testing.T) {
+	running := Inputs{
+		PodExists: true, PodRunning: true, RoundEnded: true, WasRegistered: true,
+		PlayersOnline: 2, FinishedRetentionElapsed: true,
+	}
+	if got := Decide(Finished, running); got.Next != Finished || !got.StartDrain || got.DeletePod {
+		t.Errorf("Decide(Finished, running with players) = %+v, want a drain before the pod goes", got)
+	}
+	running.DrainDeadlineReached = true
+	if got := Decide(Finished, running); got.Next != Terminating || !got.DeletePod {
+		t.Errorf("Decide(Finished, drain deadline reached) = %+v, want Terminating", got)
+	}
+	empty := running
+	empty.DrainDeadlineReached, empty.PlayersOnline = false, 0
+	if got := Decide(Finished, empty); got.Next != Terminating || !got.DeletePod {
+		t.Errorf("Decide(Finished, empty) = %+v, want Terminating", got)
+	}
 }
