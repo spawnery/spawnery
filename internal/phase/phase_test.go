@@ -1057,3 +1057,60 @@ func declaredPhases(t *testing.T) []Phase {
 	}
 	return declared
 }
+
+// TestAServerWhoseRoundEndedShutsDownAsFinished covers the shutdown that follows
+// endRound: the probe going red or the stream breaking is the process stopping,
+// not a fault, so it is neither a readiness loss nor a trip through Starting.
+func TestAServerWhoseRoundEndedShutsDownAsFinished(t *testing.T) {
+	ended := func(mutate func(*Inputs)) Inputs {
+		in := healthyReady()
+		in.RoundEnded = true
+		in.Registered = false
+		mutate(&in)
+		return in
+	}
+	cases := []struct {
+		name string
+		in   Inputs
+		want Decision
+	}{
+		{
+			name: "the probe turns red",
+			in:   ended(func(in *Inputs) { in.PodReady = false }),
+			want: Decision{Next: Finished, Reason: ReasonRoundFinished},
+		},
+		{
+			name: "the stream stays broken past its grace",
+			in: ended(func(in *Inputs) {
+				in.AgentConnected = false
+				in.AgentStreamDownFor = StreamDownGrace
+			}),
+			want: Decision{Next: Finished, Reason: ReasonRoundFinished},
+		},
+		{
+			name: "the proxies still have it",
+			in: ended(func(in *Inputs) {
+				in.Registered = true
+				in.PodReady = false
+			}),
+			want: Decision{Next: Finished, Deregister: true, Reason: ReasonRoundFinished},
+		},
+		{
+			name: "a silent agent still rescues whoever is left",
+			in: ended(func(in *Inputs) {
+				in.AgentConnected = true
+				in.AgentSilent = true
+			}),
+			want: Decision{Next: Starting, Deregister: true, CountReadinessLoss: true, StartDrain: true, Reason: ReasonReadinessLost},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			got := Decide(Ready, tc.in)
+			got.Message = ""
+			if got != tc.want {
+				t.Errorf("Decide(Ready, %+v)\n got  %+v\n want %+v", tc.in, got, tc.want)
+			}
+		})
+	}
+}

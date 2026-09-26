@@ -49,10 +49,10 @@ const (
 	// up after the group's retention.
 	Failed Phase = "Failed"
 	// Finished means the server's round is over: it said so, and then its pod
-	// stopped. It is terminal like Failed and its group replaces it at once,
-	// but it is not a fault -- it is not counted against the backoff, it
-	// raises no Degraded, and it is kept for its own short retention rather
-	// than the hour a failure gets for diagnosis.
+	// stopped or stopped answering. It is terminal like Failed and its group
+	// replaces it at once, but it is not a fault -- it is not counted against
+	// the backoff, it raises no Degraded, and it is kept for its own short
+	// retention rather than the hour a failure gets for diagnosis.
 	Finished Phase = "Finished"
 )
 
@@ -615,6 +615,15 @@ func Decide(current Phase, in Inputs) Decision {
 					grace = ReconnectGrace
 				}
 				lost = in.AgentStreamDownFor >= grace
+			}
+		}
+		// After endRound the process stopping is the shutdown the round asked
+		// for. A silent agent is kept out: its players may be on a dead backend
+		// and still need the rescue below.
+		if lost && in.RoundEnded && !in.AgentSilent {
+			return Decision{
+				Next: Finished, Deregister: in.Registered,
+				Reason: ReasonRoundFinished, Message: "the round is over and the server is shutting down",
 			}
 		}
 		if lost {
