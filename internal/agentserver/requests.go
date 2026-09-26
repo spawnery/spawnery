@@ -244,7 +244,7 @@ func (s *Server) answerRetire(
 		// The snapshot said it was there and the cluster says otherwise --
 		// ordinary, since the snapshot is allowed to be a moment stale.
 		return refuse(reqID, agentpb.RequestError_NOT_FOUND,
-			"no server by that name is on this network")
+			"no server or proxy by that name is on this network")
 	case err != nil:
 		logger.V(1).Info("could not retire a server", "reason", err.Error())
 		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,

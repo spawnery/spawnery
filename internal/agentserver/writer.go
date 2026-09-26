@@ -21,6 +21,7 @@ import (
 	"errors"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -30,6 +31,7 @@ import (
 	"github.com/spawnery/spawnery/internal/instance"
 	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/phase"
+	"github.com/spawnery/spawnery/internal/podspec"
 )
 
 // ErrNoSuchServer is what a ClusterWriter reports for a server that is not
@@ -242,7 +244,7 @@ func (w KubeWriter) Retire(ctx context.Context, namespace, name string) (bool, e
 	var srv spawneryv1alpha1.Server
 	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &srv); err != nil {
 		if apierrors.IsNotFound(err) {
-			return false, ErrNoSuchServer
+			return w.retireProxy(ctx, namespace, name)
 		}
 		return false, err
 	}
@@ -252,6 +254,34 @@ func (w KubeWriter) Retire(ctx context.Context, namespace, name string) (bool, e
 	patch := client.MergeFrom(srv.DeepCopy())
 	srv.Spec.Retire = true
 	if err := w.Client.Patch(ctx, &srv, patch); err != nil {
+		return false, err
+	}
+	return true, nil
+}
+
+// retireProxy asks the proxy group to drain one proxy: it is replaced, takes
+// no new connections and stops once empty. A pod that is not a proxy is
+// answered as a name this network does not have.
+func (w KubeWriter) retireProxy(ctx context.Context, namespace, name string) (bool, error) {
+	var pod corev1.Pod
+	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &pod); err != nil {
+		if apierrors.IsNotFound(err) {
+			return false, ErrNoSuchServer
+		}
+		return false, err
+	}
+	if pod.Labels[podspec.LabelRole] != podspec.RoleProxy {
+		return false, ErrNoSuchServer
+	}
+	if pod.Annotations[podspec.AnnotationRetireRequested] != "" || pod.Annotations[podspec.AnnotationProxyDrainingSince] != "" {
+		return false, nil
+	}
+	patch := client.MergeFrom(pod.DeepCopy())
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	pod.Annotations[podspec.AnnotationRetireRequested] = w.now().UTC().Format(time.RFC3339)
+	if err := w.Client.Patch(ctx, &pod, patch); err != nil {
 		return false, err
 	}
 	return true, nil

@@ -32,11 +32,13 @@ import (
 	"fmt"
 	"sort"
 
+	corev1 "k8s.io/api/core/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/agentpb"
+	"github.com/spawnery/spawnery/internal/podspec"
 )
 
 // Audience is which kind of agent a picture is for.
@@ -255,7 +257,27 @@ func (s Source) Build(ctx context.Context, namespace string, audience Audience) 
 		})
 	}
 
+	var proxies corev1.PodList
+	if err := s.Reader.List(ctx, &proxies, client.InNamespace(namespace),
+		client.MatchingLabels{podspec.LabelRole: podspec.RoleProxy}); err != nil {
+		return nil, fmt.Errorf("list proxies in %s: %w", namespace, err)
+	}
+	for i := range proxies.Items {
+		pod := &proxies.Items[i]
+		if !pod.DeletionTimestamp.IsZero() {
+			continue
+		}
+		state.Proxies = append(state.Proxies, &agentpb.ProxyState{
+			Name:     pod.Name,
+			Group:    pod.Labels[podspec.LabelGroup],
+			Ready:    podReady(pod),
+			Draining: pod.Annotations[podspec.AnnotationProxyDrainingSince] != "",
+			Players:  s.Agents.Lookup(string(pod.UID)).Players,
+		})
+	}
+
 	sort.Slice(state.Groups, func(i, j int) bool { return state.Groups[i].Name < state.Groups[j].Name })
+	sort.Slice(state.Proxies, func(i, j int) bool { return state.Proxies[i].Name < state.Proxies[j].Name })
 	sort.Slice(state.Servers, func(i, j int) bool { return state.Servers[i].Name < state.Servers[j].Name })
 	sort.Slice(state.Players, func(i, j int) bool { return state.Players[i].Uuid < state.Players[j].Uuid })
 	return state, nil
@@ -278,4 +300,13 @@ func serverGroupKind(g *spawneryv1alpha1.ServerGroup) agentpb.GroupState_Kind {
 	default:
 		return agentpb.GroupState_KIND_UNSPECIFIED
 	}
+}
+
+func podReady(pod *corev1.Pod) bool {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodReady {
+			return c.Status == corev1.ConditionTrue
+		}
+	}
+	return false
 }

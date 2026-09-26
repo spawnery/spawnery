@@ -21,6 +21,7 @@ import (
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -48,6 +49,7 @@ func group(ns, name string) *spawneryv1alpha1.ServerGroup {
 func newRegistry(t *testing.T, opts serverreg.Options, objects ...client.Object) *serverreg.Registry {
 	t.Helper()
 	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
 	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme: %v", err)
 	}
