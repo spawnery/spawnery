@@ -207,7 +207,16 @@ spec:
 Two cases keep `spec.drain.timeoutSeconds` as a deadline. A proxy on a node
 that is leaving is removed at it, because the node goes either way. And a
 proxy whose player count nobody can read — its agent is gone or its report
-is stale — is removed at it too, so a dead proxy does not drain forever.
+is stale — is removed once it has been unreadable that long, so a dead proxy
+does not drain forever; an operator restart, after which every count is
+unreadable until the agents reconnect, does not end a drain.
+
+Proxies drain one at a time, so a roll of a group of N proxies waits N times
+for the last player on a proxy to leave, and the proxies still waiting their
+turn keep taking new players meanwhile. With
+`Network.spec.update.maxConcurrentChangeovers` set, the proxy group holds its
+changeover place for that whole time, and every server group in the network
+waits behind it. `spec.update.maxStaleSeconds` is what bounds both.
 
 ## Taking a retirement back
 
