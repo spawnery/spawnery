@@ -2,67 +2,29 @@
 # Checks that the agent jar is the jar the plugin needs: everything relocated,
 # the stubs present, and the descriptor expanded.
 #
-# Paper carries its own protobuf-java 4.29.0, guava 33.6.0, gson 2.14.0 and
-# netty 4.2.15 (see <paper-repo>/libraries); Velocity's fat jar carries guava,
-# gson, guice, netty, log4j, adventure and brigadier. A plugin that ships any of
-# those at their original coordinates meets the platform's copy at class load,
-# and the symptom is a NoSuchMethodError deep inside gRPC that names neither the
-# plugin nor the conflict. This check is what keeps that from being discovered
-# in a pod.
-#
-# The relocation is checked as an invariant and not as a list. A list of
-# packages has to be revisited every time a dependency changes, and the version
-# of this file that had one fell six packages behind without anything noticing,
-# three of them Paper's. So the check below fails on *any* class outside
-# cloud/spawnery/agent/, named or not.
-#
-# The per-flavour COLLIDES list is not a second check -- it could not be, since
-# every package it names is also outside cloud/spawnery/agent/ and the
-# invariant fails on it first. It is an explanation printed inside that
-# failure: of the packages that shipped unrelocated, these are the ones the
-# platform has its own copy of, so the symptom is a linkage error at class load
-# rather than a merely oversized jar. It used to sit below the exit, where it
-# could never run.
+# Paper and Velocity carry their own copies of several of the agent's
+# dependencies; an unrelocated one meets the platform's at class load as a
+# NoSuchMethodError inside gRPC. Relocation is checked as an invariant (any
+# class outside cloud/spawnery/agent/ fails), not a list. The per-flavour
+# COLLIDES list only explains that failure.
 set -euo pipefail
 
 JAR="${1:?usage: agent-jar-check.sh <jar> [source-dir [flavour]]}"
 # Optional: the Gradle root of agent/, not one subproject. Given one, the
-# no-Java constraint below is checked too. nix/agents.nix passes it; a hand
-# invocation on a store path has no source to point at and says so rather than
-# passing silently.
+# no-Java constraint below is checked too.
 SRC="${2:-}"
-# Which agent this jar is. Defaults to paper so the two-argument invocation
-# keeps working; every flavour-specific fact is looked up from here rather than
-# spelled inline, so a second agent adds a case and changes nothing else.
 FLAVOUR="${3:-paper}"
 
 case "$FLAVOUR" in
 paper)
-	# Every hand-written source directory the no-Java constraint below is
-	# checked over. Not the jar's inputs: the test directories are here and
-	# neither of them reaches any jar. What the list enumerates is where a
-	# human may write source at all, because the constraint is that all of
-	# it is Kotlin and the only Java in this build is generated, under
-	# common/src/proto/java. A directory left out is a directory where a
-	# stray .java would pass silently -- see the failure modes at the check
-	# itself -- so a new source set belongs here whether or not it ships.
-	#
-	# Listed rather than discovered: the whole value of the check is that a
-	# directory which has moved or vanished is a failure, and a `find` over
-	# whatever happens to be present cannot tell "moved" from "empty".
-	# :common's two are here for every flavour -- both agents compile its
-	# sources, and its test sources are the ones a second agent is most
-	# likely to reach for.
+	# Every hand-written source set, shipped or not. Listed rather than
+	# discovered, so a moved or vanished directory fails.
 	SRC_DIRS=(common/src/main common/src/test paper/src/main paper/src/test)
 	DESCRIPTOR="paper-plugin.yml"
-	# The line the descriptor states its version on. Read rather than merely
-	# counted, see below.
 	DESCRIPTOR_VERSION='^version:'
-	# The platform's own name, for the message the collision check prints.
 	PLATFORM="Paper"
-	# What this platform ships itself, out of <paper-repo>/libraries:
-	# protobuf-java, guava (both top-level packages), gson, netty and the
-	# three annotation-only artifacts guava drags along.
+	# Out of <paper-repo>/libraries: protobuf-java, guava (two top-level
+	# packages), gson, netty and guava's annotation-only artifacts.
 	COLLIDES=(
 		com/google/protobuf
 		com/google/common
@@ -76,28 +38,10 @@ paper)
 velocity)
 	SRC_DIRS=(common/src/main common/src/test velocity/src/main velocity/src/test)
 	DESCRIPTOR="velocity-plugin.json"
-	# JSON, so the version is a quoted key and not a line start. Anchoring
-	# on the quotes rather than the bare word keeps this from matching a
-	# "version" that turned up inside a description.
 	DESCRIPTOR_VERSION='"version"[[:space:]]*:'
 	PLATFORM="Velocity"
-	# Velocity ships as a fat jar, so this list is read out of the jar
-	# itself rather than a libraries tree. Measured 2026-08-11 against
-	# velocity 3.5.1 build 615, and 2026-09-29 against 4.2.0 build 30, with:
-	#
-	#   JAR=$(nix build .#velocity-jar --no-link --print-out-paths)
-	#   python3 -c "
-	#   import zipfile, collections
-	#   z = zipfile.ZipFile('$JAR')
-	#   names = [n for n in z.namelist() if n.endswith('.class')]
-	#   c = collections.Counter('/'.join(n.split('/')[:3]) for n in names)
-	#   [print(v, k) for k, v in sorted(c.items())]"
-	#
-	# 11 418 classes in 3.5.1 and 23 961 in 4.2.0 (fastutil grew), with the
-	# same packages but two dropped; these are the ones this plugin could
-	# also ship. Note what is absent and is the whole reason this list
-	# differs from Paper's: the jar carries no protobuf, no gRPC, no
-	# okhttp/okio and no Kotlin.
+	# Read out of Velocity's fat jar. It carries no protobuf, gRPC,
+	# okhttp/okio or Kotlin.
 	COLLIDES=(
 		com/google/common
 		com/google/thirdparty
@@ -124,8 +68,6 @@ fail() {
 	exit 1
 }
 
-# Every class in the jar is the plugin's own or one of its relocated
-# dependencies. Nothing else may be in it at all.
 stray="$(
 	{
 		grep '\.class$' <<<"$entries" |
@@ -138,15 +80,6 @@ if [ -n "$stray" ]; then
 	echo "agent-jar-check: these packages ship unrelocated:" >&2
 	sed -e 's|^|  |' <<<"$stray" >&2
 
-	# The enumeration, inside the failure it explains rather than after the
-	# exit. For these the consequence is a linkage error at class load rather
-	# than a merely broken invariant: the platform has its own copy on the
-	# classpath that loads the plugin, and the symptom is a NoSuchMethodError
-	# deep inside gRPC naming neither the plugin nor the conflict. Guava
-	# contributes two top-level packages, and missing the second is exactly how
-	# an earlier list-based version of this check went stale. The list is per
-	# flavour and lives in the case block, because the two platforms bundle
-	# different things.
 	collides=()
 	for pkg in "${COLLIDES[@]}"; do
 		if grep -q "^$pkg/" <<<"$entries"; then
@@ -161,8 +94,7 @@ if [ -n "$stray" ]; then
 	fail "every class the plugin ships must be under cloud/spawnery/agent/ -- add the package to the relocate list in agent/$FLAVOUR/build.gradle.kts"
 fi
 
-# Relocated packages must also be present under the prefix -- the checks above
-# pass just as well for a jar that lost the dependency altogether.
+# The check above passes just as well for a jar that lost a dependency.
 grep -q '^cloud/spawnery/agent/shaded/com/google/protobuf/' <<<"$entries" ||
 	fail "protobuf was not relocated under cloud/spawnery/agent/shaded/"
 grep -q '^cloud/spawnery/agent/shaded/io/grpc/' <<<"$entries" ||
@@ -170,46 +102,22 @@ grep -q '^cloud/spawnery/agent/shaded/io/grpc/' <<<"$entries" ||
 grep -q '^cloud/spawnery/agent/shaded/kotlin/' <<<"$entries" ||
 	fail "the Kotlin standard library was not relocated under cloud/spawnery/agent/shaded/"
 
-# The generated stubs are compiled in :common and reach this jar because
-# shadowJar bundles the project dependency on it. A :paper that stopped
-# depending on :common, or a :common whose src/proto/java srcDir was dropped,
-# produces a jar that installs, passes every check above, and cannot construct
-# a single message.
+# Without :common's stubs the jar installs and passes everything above.
 grep -q '^cloud/spawnery/agent/pb/AgentServiceGrpc.class$' <<<"$entries" ||
 	fail "the generated gRPC stubs are missing from the jar"
 
-# The one class the give-up path casts to, and the only class in this jar whose
-# absence is invisible at runtime.
-#
-# SessionLoop.close(cancel = true) casts the stub's request observer to
-# ClientCallStreamObserver in order to cancel the call, and that cast sits
-# inside a runCatching, which catches Throwable -- a NoClassDefFoundError from
-# a shading regression included. So a jar that lost this class would swallow
-# the error, fall through to shutdownNow(), and pass phase 3 of
-# hack/agent-test.sh: the give-up still bounds the attempt, because
-# shutdownNow() does not depend on the cast. Green there is evidence that the
-# bound holds and never was evidence that the cast resolves.
-#
-# Checked here instead, where it is a fact about the artifact rather than about
-# a code path that has to be reached. The runCatching stays as it is: what it
-# is for is a cancel that fails on a call already ending, which is ordinary,
-# and narrowing it to make one shading regression loud would trade a real
-# failure mode for a hypothetical one.
+# SessionLoop.close(cancel = true) casts to this inside a runCatching, which
+# would swallow its NoClassDefFoundError; no runtime test can see it missing.
 grep -q '^cloud/spawnery/agent/shaded/io/grpc/stub/ClientCallStreamObserver.class$' <<<"$entries" ||
 	fail "the relocated ClientCallStreamObserver is missing; the give-up path's cancel would fail silently"
 
-# gRPC resolves its transport through ServiceLoader. Relocation renames the
-# provider classes, so the service files have to be merged and rewritten with
-# them; without that the channel fails at runtime with "no functional channel
-# service provider found" and nothing points at the shading as the cause.
+# gRPC finds its transport through ServiceLoader, so the service files must be
+# rewritten with the relocated provider names.
 grep -q '^META-INF/services/cloud.spawnery.agent.shaded.io.grpc.ManagedChannelProvider$' <<<"$entries" ||
 	fail "the relocated ManagedChannelProvider service file is missing"
 
-# The plugin descriptor is what makes this a plugin at all -- and its version is
-# what the agent reports as Hello.version. processResources expands it from
-# -PagentVersion; losing that expansion ships a literal ${version} and the
-# operator records a server running "${version}". Presence alone does not see
-# that, so the contents are read.
+# The descriptor's version is what the agent reports as Hello.version, so an
+# unexpanded ${version} must fail here.
 grep -q "^$DESCRIPTOR\$" <<<"$entries" ||
 	fail "$DESCRIPTOR is missing from the jar"
 descriptor="$(unzip -p "$JAR" "$DESCRIPTOR")"
@@ -219,25 +127,11 @@ if grep -q '\${' <<<"$descriptor"; then
 	fail "$DESCRIPTOR still holds an unexpanded placeholder; processResources did not expand it"
 fi
 
-# The agents are Kotlin, and the generated Java is confined to
-# common/src/proto/java, which is the one directory that compiles with javac and
-# with no platform jar anywhere near it (see agent/common/build.gradle.kts). A
-# .java under any src/main or src/test would break that in a way that is silent
-# both ways: under src/main/java it compiles against the class-file-major-69
-# Paper jars and only fails if it resolves a class out of one, and under
-# src/main/kotlin kotlinc reads it for resolution and never emits it.
+# Generated Java is confined to common/src/proto/java. A stray .java elsewhere
+# fails silently: under src/main/java it compiles against the class-file-major-69
+# Paper jars, under src/main/kotlin kotlinc reads it and never emits it.
 if [ -n "$SRC" ]; then
-	# Without this the check passes silently when the directories are not
-	# there at all - a moved sourceRoot, a changed `src` in nix/agents.nix,
-	# or an invocation from the wrong directory would each read as "no stray
-	# Java" rather than "nothing was looked at". SRC is now the Gradle root,
-	# so every path is <project>/src/<set>.
-
-	# Unreachable today -- every case above sets a non-empty literal -- and
-	# guarded anyway, because the consequence is quiet rather than loud: with
-	# no paths at all `find` falls back to `.` and scans the whole source
-	# tree, which is neither the check the design intends nor a failure. A
-	# future flavour whose list is mistyped away fails here instead.
+	# With no paths at all, `find` would fall back to `.`.
 	[ "${#SRC_DIRS[@]}" -gt 0 ] ||
 		fail "flavour '$FLAVOUR' names no source directories, so the no-Java constraint would have checked nothing"
 	dirs=()

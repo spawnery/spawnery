@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
 # Renders docs/reference/chart-values.md from charts/spawnery/values.schema.json,
 # with defaults read from charts/spawnery/values.yaml.
-#
-# Run by `make manifests`, after hack/crd-docs.sh. Same shape as that script:
-# a thin bash entry point around an embedded Python program, which is where
-# the schema walk lives.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -45,10 +41,6 @@ def render_description(text):
         rendered.append(p)
     if len(rendered) <= 1:
         return rendered[0] if rendered else ""
-    # Same cut as hack/crd-docs.sh: the first paragraph, never a word count.
-    # No description in this schema is multi-paragraph today, so this branch
-    # is untested by the current data -- kept for the field that eventually
-    # is, rather than left for that day to discover the table has no answer.
     first, rest = rendered[0], rendered[1:]
     return first + "<details><summary>more</summary>" + "<br><br>".join(rest) + "</details>"
 
@@ -59,10 +51,7 @@ PY_TO_JSON_TYPE = {bool: "boolean", int: "integer", float: "number", str: "strin
 def type_of(schema):
     t = schema.get("type")
     if t is None and "enum" in schema and schema["enum"]:
-        # values.schema.json states a couple of enums (pullPolicy) with no
-        # "type" alongside -- valid JSON Schema, since the enum already
-        # constrains the value -- but leaving type_of to fall through to
-        # its object default here would call a plain string field an object.
+        # An enum without "type" is valid JSON Schema (pullPolicy has one).
         t = PY_TO_JSON_TYPE.get(type(schema["enum"][0]), "string")
     if t == "array":
         items = schema.get("items", {}) or {}
@@ -111,10 +100,7 @@ def format_value(v):
     if v is None:
         return "null"
     if isinstance(v, (dict, list)):
-        # Flow style, unwrapped: PyYAML line-wraps a long default-style value
-        # with a backslash continuation, unreadable once html-escaped into a
-        # single table cell. See hack/crd-docs.sh's default_cell for the twin
-        # of this.
+        # PyYAML otherwise wraps long values with a backslash continuation.
         return yaml.safe_dump(v, default_flow_style=True, sort_keys=False, width=10**6).strip()
     return str(v)
 
@@ -146,11 +132,7 @@ def walk(props, prefix, value_prefix, rows, values):
         elif t == "array":
             items = prop_schema.get("items", {}) or {}
             if items.get("type") == "object" and "properties" in items:
-                # Item fields have no default of their own to look up:
-                # values.yaml's own list is empty, and an item template is
-                # not a value. This is also why networkNamespaces itself
-                # still gets a row above -- the array's own default ([]) is
-                # real, its items' are not.
+                # Item fields have no default: an item template is not a value.
                 walk(items["properties"], disp_path + "[]", None, rows, values)
 
 

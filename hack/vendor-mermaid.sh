@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# Puts mermaid.min.js where mkdocs.yml expects it, so `mkdocs serve` renders a
-# diagram locally.
-#
-# Deliberately not committed: it is a dependency, and nix/mermaid.nix is where
-# it is pinned. nix/docs-site.nix takes the same derivation as an argument, so
-# a built site needs this script for nothing.
+# Puts mermaid.min.js where mkdocs.yml expects it, for `mkdocs serve`.
+# Not committed: nix/mermaid.nix pins it, and a built site does not need this.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."

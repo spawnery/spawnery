@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
 # Drives hack/metrics-docs.sh against the operator's real metrics registry
-# and the real chart. No synthetic fixture, for the same reason
-# hack/crd-docs-test.sh and hack/chart-values-docs-test.sh have none: the
-# interesting failure is a real alert naming a metric the real registry does
-# not export, and only the real registry and the real chart show that.
+# and the real chart; only those show a real alert naming an unexported metric.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,10 +32,7 @@ has() {
   fi
 }
 
-# The page is removed before the run, not just read afterward: without this,
-# a generator that exited before writing anything would leave the committed
-# copy in place, and the cases below would pass against that stale file
-# instead of against this run's output.
+# Otherwise a generator that wrote nothing leaves the committed copy to pass.
 rm -f "$page"
 
 run "the generator runs" 0 "$gen"
@@ -59,14 +53,8 @@ case "$first_line" in
     ;;
 esac
 
-# Case 2, the one this generator exists for: every spawnery_ metric name that
-# appears in a rendered alert expression also appears in the metrics table.
-# An alert on a metric the operator does not export is a rule that never
-# fires, and nothing else in this repository checks it. hack/metrics-docs.sh
-# already refuses to write the page over a mismatch (see its own check), so
-# this case re-derives the same answer independently, from the committed
-# chart and the page just written, rather than trusting the generator's exit
-# code to mean what it says.
+# Re-derives the generator's own check independently rather than trusting
+# its exit code.
 if python3 - "$root/charts/spawnery" "$page" <<'PY'
 import re
 import subprocess
@@ -115,9 +103,6 @@ else
   failures=$((failures + 1))
 fi
 
-# Case 3: every alert in the rendered PrometheusRule appears in the page with
-# its severity and for-duration. Independent of the case above -- this one
-# is about the page being complete, not about the rules being sound.
 if python3 - "$root/charts/spawnery" "$page" <<'PY'
 import subprocess
 import sys

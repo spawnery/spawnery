@@ -1,9 +1,5 @@
 #!/usr/bin/env bash
 # Renders docs/reference/crds.md from config/crd/bases/*.yaml.
-#
-# Run by `make manifests`, immediately after hack/chart-templates.sh. Like
-# that script, this one stays a thin bash entry point; the schema walk that
-# needs a real parser lives in the embedded Python program below.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -36,32 +32,12 @@ HEADER = (
 
 K8S_API_DOC = "https://pkg.go.dev/k8s.io/api/core/v1"
 
-# The stop-list. Each entry is a field spawnery's own CRDs embed by reference
-# from a Kubernetes API type rather than declaring themselves -- the fields
-# under it are the upstream type's, documented at the linked URL, and
-# expanding them here would bury spawnery's own ~250 fields under a couple of
-# hundred rows of PodAffinityTerm and EnvVarSource that kubernetes.io already
-# covers. affinity/tolerations/resources account for the bulk of it (97, 6
-# and 6 properties per occurrence); valueFrom and the two volume sources under
-# mounts are smaller but the same kind of field, by the same test: none of
-# their sub-fields is declared in this repository's own API package.
-#
-# A path belongs here only when its whole subtree is a Kubernetes type this
-# repository does not declare -- not when it merely sits next to one or is
-# named after one. spec.mounts[].persistentVolumeClaim reads like
-# corev1.PersistentVolumeClaimVolumeSource and is not: it is spawnery's own
-# MountClaim (api/v1alpha1/common_types.go), whose Writable field has no
-# upstream counterpart and is exactly the kind of field this page exists to
-# surface. It stays expanded. Network.spec.scheduling is the same trap from
-# the other direction -- named like the Kubernetes-facing scheduling defaults
-# next to it, but its own guardrail type (allowedAffinityNamespaces,
-# hostPortRange, ...) -- and also stays expanded.
-#
-# Kept as (kind, path) pairs, not bare paths, the same bargain
-# internal/rbacaudit/required.go makes: the walk below marks an entry seen
-# only when it finds that exact path in that exact kind's schema, so a field
-# renamed or moved out from under a kind turns this table's own check red
-# rather than silently expanding two hundred rows into the page.
+# Fields whose whole subtree is a Kubernetes type this repository does not
+# declare; they link upstream instead of expanding. Absent despite their
+# names, because they are spawnery's own types:
+# spec.mounts[].persistentVolumeClaim and Network.spec.scheduling.
+# Keyed by (kind, path) so a moved field fails the seen-check rather than
+# silently expanding.
 STOP_LIST = [
     ("Network", "spec.defaults.scheduling.affinity", "Affinity", f"{K8S_API_DOC}#Affinity"),
     ("Network", "spec.defaults.scheduling.tolerations", "[]Toleration", f"{K8S_API_DOC}#Toleration"),
@@ -81,10 +57,6 @@ STOP_LIST = [
 ]
 STOP_BY_KEY = {(k, p): (label, url) for k, p, label, url in STOP_LIST}
 
-# The order the rest of the site already tells this story in (see
-# CLAUDE.md's "What this is"): the network first, the two group kinds that
-# fill it, the per-pod object those groups own, and the auxiliary object
-# last.
 KIND_ORDER = ["Network", "ServerGroup", "ProxyGroup", "Server", "ScaleBoost"]
 
 URL_RE = re.compile(r"https?://[^\s<>\"]+")
@@ -126,13 +98,6 @@ def render_description(text):
         rendered.append(p)
     if len(rendered) <= 1:
         return rendered[0] if rendered else ""
-    # These doc comments are paragraph-structured -- the blank line between
-    # paragraphs is already meaningful, since that is what "<br><br>" above
-    # renders -- so the first paragraph is a cut that never lands mid-thought.
-    # A table where most rows are one sentence and a few run to 300 words is
-    # not scannable with all of it visible at once; a single-paragraph
-    # description is left alone; there is nothing to collapse and no reason
-    # to invite a click into an empty "more".
     first, rest = rendered[0], rendered[1:]
     return first + "<details><summary>more</summary>" + "<br><br>".join(rest) + "</details>"
 
@@ -191,9 +156,7 @@ def default_cell(schema):
     elif d is None:
         text = "null"
     elif isinstance(d, (dict, list)):
-        # A wide dump, not the default ~80 columns: PyYAML line-wraps a long
-        # flow-style value with a backslash continuation, which is unreadable
-        # once html-escaped into a single table cell.
+        # PyYAML otherwise wraps long values with a backslash continuation.
         text = yaml.safe_dump(d, default_flow_style=True, sort_keys=False, width=10**6).strip()
     else:
         text = str(d)
@@ -239,10 +202,7 @@ def relative(prefix, path):
 def render_field_table(prefix, rows):
     if not rows:
         return "*None.*\n"
-    # No blank lines inside the block: Python-Markdown treats a tag opening a
-    # line as a raw HTML block only while every following line stays part of
-    # the same block, and a blank line ends that early, leaving `<table>`
-    # onward parsed as a paragraph of literal text instead of HTML.
+    # No blank lines: one ends Python-Markdown's raw HTML block early.
     out = ['<div style="overflow-x: auto;"><table>']
     out.append("<thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Default</th><th>Description</th></tr></thead>")
     out.append("<tbody>")

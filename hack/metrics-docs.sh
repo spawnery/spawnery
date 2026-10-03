@@ -1,16 +1,7 @@
 #!/usr/bin/env bash
-# Renders docs/reference/metrics-and-alerts.md from two sources that only
-# agree with each other if this script checks: the metrics the operator
-# actually registers, from internal/docsgen/metrics, and the alerting rules
-# in charts/spawnery/templates/prometheusrule.yaml, rendered through `helm
-# template` because that file is a Helm chart template, not YAML, until Helm
-# has expanded it.
-#
-# Run by `make manifests`, after hack/chart-values-docs.sh. Same shape as its
-# two siblings: a thin bash entry point, with the part that needs a real
-# YAML parser (the alerts) in embedded Python and the part that needs the
-# running metrics registry (the metrics) in the Go program beside this
-# script.
+# Renders docs/reference/metrics-and-alerts.md from the metrics the operator
+# registers (internal/docsgen/metrics) and the alerting rules in the chart, and
+# refuses an alert naming a metric the operator does not export.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -22,8 +13,7 @@ trap 'rm -f "$tmp_metrics" "$tmp_rules"' EXIT
 
 go run ./internal/docsgen/metrics >"$tmp_metrics"
 
-# --namespace is arbitrary -- nothing on this page reads it -- but a
-# namespaced resource needs one to render at all.
+# --namespace is arbitrary; a namespaced resource needs one to render.
 helm template spawnery charts/spawnery \
 	--namespace spawnery-system \
 	--set metrics.prometheusRule.enabled=true \
@@ -46,10 +36,6 @@ HEADER = (
 with open(metrics_path) as f:
     metrics_table = f.read().strip()
 
-# The metrics table's own Name column, not a second query against the
-# registry: this is the exact set of names the page above is about to claim
-# it documents, and an alert naming anything else is a rule that can never
-# fire.
 documented = set(re.findall(r"<code>(spawnery_[A-Za-z0-9_]*)</code>", metrics_table))
 if not documented:
     sys.exit(f"metrics-docs: no metric names found in {metrics_path}")
@@ -86,14 +72,7 @@ if not alerts:
     sys.exit(f"metrics-docs: the rendered PrometheusRule in {rules_path} carries no alerts")
 alerts.sort(key=lambda a: a["name"])
 
-# The check this generator exists for: a PromQL expression naming a metric
-# the operator does not export is a rule that can never fire. The names all
-# start spawnery_, which is all a regex needs to pull them out of an
-# expression -- PromQL syntax around a metric name (label matchers, range
-# selectors, aggregation functions) never itself starts with that prefix, so
-# nothing about parsing the rest of the expression is needed here. A vector
-# match on a *different* Prometheus's metric (none of these alerts have one)
-# would be the case this shortcut cannot see through.
+# No PromQL parser needed: nothing around a metric name starts with spawnery_.
 undocumented = {}
 for a in alerts:
     for name in re.findall(r"spawnery_[A-Za-z0-9_]*", a["expr"]):

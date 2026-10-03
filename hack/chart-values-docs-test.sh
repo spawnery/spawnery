@@ -1,8 +1,6 @@
 #!/usr/bin/env bash
-# Drives hack/chart-values-docs.sh against the schema and values actually
-# checked into this tree. No synthetic fixture, for the same reason
-# hack/crd-docs-test.sh has none: the interesting failure is a real field
-# drifting out of step with a real default, and only the real files show that.
+# Drives hack/chart-values-docs.sh against the schema and values checked into
+# this tree; only the real files show a field drifting from its default.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -27,16 +25,8 @@ run() {
   fi
 }
 
-# Case 3 runs against the page exactly as it sits in the working tree, before
-# anything below regenerates it. Unlike hack/crd-docs-test.sh -- which
-# deletes its page up front so a crashing generator cannot hide behind a
-# stale copy -- this case exists to catch the opposite failure: a page that
-# was correct when committed and has since drifted from values.yaml, because
-# somebody changed a default and forgot to run `make manifests`. Regenerating
-# first would erase exactly the evidence this case is for: a mutated
-# values.yaml would flow straight into the fresh page, and the comparison
-# below would pass against a page that agrees with the file it was just
-# copied from, proving nothing about drift.
+# Runs against the committed page before anything regenerates it: the drift it
+# looks for is a default changed without `make manifests`.
 if python3 - "$schema" "$values" "$page" <<'PY'
 import html
 import json
@@ -117,10 +107,7 @@ else
   failures=$((failures + 1))
 fi
 
-# The page is removed before the run below, not just read afterward: without
-# this, a generator that exited before writing anything would leave the
-# committed copy in place, and the following cases would pass against that
-# stale file instead of against this run's output.
+# Otherwise a generator that wrote nothing leaves the committed copy to pass.
 rm -f "$page"
 
 run "the generator runs" 0 "$gen"
@@ -141,8 +128,6 @@ case "$first_line" in
     ;;
 esac
 
-# Every leaf in values.schema.json appears in the page. Walked here, not
-# hard-coded, so the test outlives the next field the schema grows.
 if python3 - "$schema" "$page" <<'PY'
 import json
 import sys
@@ -184,16 +169,8 @@ else
   failures=$((failures + 1))
 fi
 
-# Every top-level key in values.yaml appears in the page. This is the
-# invariant with real teeth: the schema-leaf case above and the
-# defaults-match case both start from values.schema.json and so cannot
-# notice a key that values.yaml carries and the schema does not -- a
-# key a user can copy out of values.yaml and edit, that this reference
-# would then never mention. Top-level only, deliberately not recursive:
-# `resources` shows its whole shipped default as one value
-# (requests/limits and all), and a key like resources.requests.cpu
-# rightly has no row of its own -- a recursive version of this check
-# would fail today on output nobody considers wrong.
+# Starts from values.yaml, so it sees a key the schema lacks. Top-level only:
+# `resources` is one row, and resources.requests.cpu rightly has none.
 if python3 - "$values" "$page" <<'PY'
 import sys
 

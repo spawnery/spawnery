@@ -1,21 +1,8 @@
 #!/usr/bin/env bash
-# Five cases for hack/require-green-ci.sh, exercised against this
-# repository's own live history wherever that history already contains the
-# state being tested, and against a fixture only where it cannot: neither a
-# live in-progress run nor a live empty response can be summoned to order, so
-# those two go through CI_RUNS_CMD -- the seam hack/require-green-ci.sh's own
-# header documents.
+# Five cases for hack/require-green-ci.sh: three against this repository's
+# live history, the two that history cannot supply through CI_RUNS_CMD.
 #
-# The green, red and no-run cases hit api.github.com through `gh` for real.
-# Each one names the commit it asserts about and the `gh run list` output
-# that was read, by hand, before this file was written, to confirm the claim
-# is still true of the live repository -- this plan was written from one
-# snapshot of it and commits move.
-#
-# Requires: GH_TOKEN or an already-authenticated `gh`, network access, and
-# `jq`. Run inside the dev shell, same as every other script here:
-# `make require-green-ci-test`. That target is in no other target for the same
-# reason, and its comment records when the two live cases below expire --
+# Requires GH_TOKEN or an authenticated `gh`, network access, and `jq`.
 # GitHub keeps workflow runs for about 90 days, so GREEN_SHA and RED_SHA stop
 # resolving around 2026-11-20.
 set -euo pipefail
@@ -37,15 +24,7 @@ fail() {
 }
 
 # ---------------------------------------------------------------------------
-# green: a commit whose ci.yml push run concluded success.
-#
-# Confirmed live before relying on it:
-#   $ gh run list --workflow=ci.yml --json headSha,event,headBranch,conclusion \
-#       -q '.[] | select(.headSha | startswith("1a9293b"))'
-#   {"conclusion":"success","event":"push","headBranch":"master", ...}
-# run 32580999843, on 2026-08-22. The plan named this commit as green when it
-# was written; this is this run's own re-check of that claim, not a repeat of
-# the plan's.
+# green: a commit whose ci.yml push run concluded success (run 32580999843).
 # ---------------------------------------------------------------------------
 GREEN_SHA="1a9293bd2b36ba6d694d1ca98413aafecc78da1f"
 out="$workdir/green"
@@ -56,13 +35,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# red: a commit whose ci.yml push run concluded failure.
-#
-# Confirmed live the same way:
-#   $ gh run list --workflow=ci.yml --json headSha,event,headBranch,conclusion \
-#       -q '.[] | select(.headSha | startswith("2ee9ce7"))'
-#   {"conclusion":"failure","event":"push","headBranch":"master", ...}
-# run 32580737899, on 2026-08-22.
+# red: a commit whose ci.yml push run concluded failure (run 32580737899).
 # ---------------------------------------------------------------------------
 RED_SHA="2ee9ce77954c3c49dc3d4d3b1a61c04a93ced7ec"
 out="$workdir/red"
@@ -75,13 +48,8 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# no run: a commit that was never pushed to master, so ci.yml never ran on
-# it at all -- not "ran and is pending", the absence-of-evidence case the
-# constraints call out by name.
-#
-# git commit-tree builds a real commit object -- a real sha `gh api` can be
-# asked about -- without moving any ref or touching the working tree, so it
-# is never on master and this holds no matter how many times the test runs.
+# no run: a commit ci.yml never saw. commit-tree moves no ref, so it is
+# never on master.
 # ---------------------------------------------------------------------------
 NO_RUN_SHA="$(git commit-tree "$(git rev-parse HEAD^{tree})" -p "$(git rev-parse HEAD)" \
 	-m "hack/require-green-ci-test.sh: unreachable fixture commit, never pushed to master")"
@@ -95,12 +63,8 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# in progress: the one case live history cannot supply on demand, because a
-# passing run finishes before a test could observe it still running. The
-# fixture never reports status=completed, so the script must poll at least
-# once and then, because CI_WAIT_LIMIT is short, give up on the *limit* --
-# and its message must say so, not claim CI failed. Two assertions, not one:
-# that it waited at all, and that it stopped for the right reason.
+# in progress: the script must poll at least once, then give up on the
+# limit without claiming a conclusion.
 # ---------------------------------------------------------------------------
 cat >"$workdir/in_progress.json" <<'EOF'
 {"total_count":1,"workflow_runs":[{"status":"in_progress","conclusion":null,"html_url":"https://example.invalid/runs/0"}]}
@@ -123,23 +87,9 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# not a count: the fetch succeeds and produces nothing. jq prints nothing and
-# exits 0 for empty stdin, so the run count comes back as the empty string --
-# and `[ "" -eq 0 ]` is a test *error* rather than false, which as an `if`
-# condition does not trip set -e. Before the guard this case fell through to
-# the status check, found that empty too, and polled for the whole of
-# CI_WAIT_LIMIT before refusing with a message naming an empty status: safe,
-# but twenty minutes and a nonsense reason.
-#
-# So the assertion is on the speed as much as on the exit code. CI_WAIT_LIMIT
-# is left at its 1200s default because the case has to fail the way the
-# defect would be met in production -- but be clear about what that costs: a
-# short limit would catch a regression here just as well. Measured against
-# the pre-guard script, CI_WAIT_LIMIT=20 gives 31s elapsed, which trips the
-# >= 14 assertion, and the "integer expected" assertion trips at any limit at
-# all. What the default buys is nothing; what it costs is that a regression
-# hangs this test for twenty minutes instead of failing in forty seconds. If
-# that ever bites, lower it -- the assertions do the work, not the wait.
+# not a count: an empty fetch must be refused before any polling. A
+# regression here hangs for the default CI_WAIT_LIMIT; a shorter one would
+# catch it just as well.
 # ---------------------------------------------------------------------------
 : >"$workdir/empty.txt"
 

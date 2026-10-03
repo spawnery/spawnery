@@ -1,28 +1,9 @@
 #!/usr/bin/env bash
-# Five cases for hack/require-no-red-nightly.sh.
+# Five cases for hack/require-no-red-nightly.sh. Only the passing case runs
+# live; a live refusal would need an open issue in the real tracker.
 #
-# One is driven against the live repository and four go through the seam. The
-# split is not the same as hack/require-green-ci-test.sh's, and the reason is
-# worth stating: that script's red and no-run cases could use real commits
-# because a commit with red CI is a thing this repository's history already
-# contains and nothing has to be created to observe it. The refusing case here
-# would need an *open issue in the live repository*, which is an object
-# somebody would have to look at and close again -- a test that leaves litter
-# in the tracker it is testing. So the refusal is a fixture, and the only live
-# call is the passing one, which asserts the ordinary state and needs nothing
-# to exist.
-#
-# That leaves the live half thin on purpose, and it is thin in the safe
-# direction: the case that can be wrong without anyone noticing is a gate that
-# passes when it should refuse, and that case is the one driven four ways
-# below.
-#
-# Requires: GH_TOKEN or an already-authenticated `gh`, network access for the
-# live case, and `jq`. Run inside the dev shell:
-# `make require-no-red-nightly-test`. That target is in no other target, for
-# the same reason require-green-ci-test is not: it talks to api.github.com,
-# and a commit-loop target that needs the network is a commit loop that breaks
-# on a train.
+# Requires GH_TOKEN or an authenticated `gh`, network access for the live
+# case, and `jq`.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -42,16 +23,8 @@ fail() {
 }
 
 # ---------------------------------------------------------------------------
-# live: no open nightly-red issue on the real repository.
-#
-# Confirmed before relying on it:
-#   $ gh api /repos/spawnery/spawnery --jq .open_issues_count
-#   0
-# The repository has never had an issue. This case therefore asserts the
-# ordinary state through the real `gh issue list` and the real label, and it
-# is the only case here that would notice the query itself being malformed --
-# a wrong flag or a label name gh rejects fails here and nowhere else, because
-# every case below replaces the command outright.
+# live: no open nightly-red issue on the real repository. The only case that
+# would notice the real `gh issue list` query being malformed.
 # ---------------------------------------------------------------------------
 out="$workdir/live"
 if "$sut" "$REPO" >"$out" 2>&1; then
@@ -61,9 +34,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# empty: the seam returns an empty list. The same verdict as the live case,
-# reached without the network, so a failure of the live case can be told apart
-# from a failure of the decision.
+# empty: the live case's verdict without the network.
 # ---------------------------------------------------------------------------
 echo '[]' >"$workdir/empty.json"
 out="$workdir/empty"
@@ -74,12 +45,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# open: one open issue. The case the gate exists for.
-#
-# Asserts three things, not one: that it refuses, that the refusal names the
-# issue number and its URL -- a refusal that does not say which issue leaves
-# the reader to find it, at whatever hour a release goes wrong -- and that the
-# message tells them closing it is the way through.
+# open: one open issue; the refusal names it, its URL and the remedy.
 # ---------------------------------------------------------------------------
 cat >"$workdir/open.json" <<'JSON'
 [{"number":7,"url":"https://github.com/spawnery/spawnery/issues/7","title":"Nightly: make image-repro failed"}]
@@ -96,12 +62,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# unreadable: the query itself fails.
-#
-# `false` exits 1 with no output, which is what a `gh` refused by a token
-# missing `issues: read` looks like to this script once gh's own message has
-# gone to stderr. The assertion that matters is the direction: not being able
-# to look must not read as nothing to find.
+# unreadable: the query itself fails, as gh does without `issues: read`.
 # ---------------------------------------------------------------------------
 out="$workdir/unreadable"
 if NIGHTLY_ISSUES_CMD="false" "$sut" "$REPO" >"$out" 2>&1; then
@@ -115,15 +76,8 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# silent: the query succeeds and produces nothing.
-#
-# `true` exits 0 with empty stdout, which is the shape hack/require-green-ci.sh
-# spent twenty wasted minutes on before its own guard existed: jq over empty
-# stdin prints nothing and exits 0, so the count is the empty string, and
-# `[ "" -eq 0 ]` is a test *error* rather than false -- invisible to set -e
-# inside an `if`. Here falling through that would mean passing. This is the
-# case that would fail silently in production and never in a fixture anyone
-# thought to write.
+# silent: the query succeeds and produces nothing; falling through the
+# count check would pass.
 # ---------------------------------------------------------------------------
 out="$workdir/silent"
 if NIGHTLY_ISSUES_CMD="true" "$sut" "$REPO" >"$out" 2>&1; then
