@@ -24,6 +24,7 @@ class NetworkMirror {
         val admissions: Map<String, GroupAdmission> = emptyMap(),
         val closedDoors: Set<String> = emptySet(),
         val acceptingTransfers: Set<String> = emptySet(),
+        val joinRules: Map<String, JoinRule> = emptyMap(),
     )
 
     // Swapped whole and never locked, so a read never mixes two states and never blocks.
@@ -36,6 +37,9 @@ class NetworkMirror {
             admissions = state.groupsList.associate { it.name to GroupAdmission(it.playableSlots, it.enforcePlayableSlots) },
             closedDoors = state.serversList.filter { it.joinsClosed }.mapTo(mutableSetOf()) { it.name },
             acceptingTransfers = state.proxiesList.filter { it.acceptsTransfers }.mapTo(mutableSetOf()) { it.name },
+            joinRules = state.groupsList
+                .filter { it.joinPermission.isNotEmpty() }
+                .associate { it.name to JoinRule(it.joinPermission, it.joinPermissionDenyOnly) },
             groups = state.groupsList.map {
                 Group(
                     it.name,
@@ -95,6 +99,8 @@ class NetworkMirror {
     fun closedDoors(): Set<String> = snapshot.closedDoors
 
     fun acceptingTransfers(): Set<String> = snapshot.acceptingTransfers
+
+    fun joinRule(group: String): JoinRule? = snapshot.joinRules[group]
 }
 
 internal fun kindOf(kind: GroupState.Kind): Group.Kind =
