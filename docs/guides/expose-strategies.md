@@ -5,7 +5,7 @@ decision after the tutorial: the tutorial uses `NodePort` because that is what
 works on a local `kind` cluster, and a network on a real cluster usually wants
 something else.
 
-Here is the common case — a proxy group behind a `LoadBalancer`, which is what
+Here is the common case: a proxy group behind a `LoadBalancer`, which is what
 most managed clusters want. It joins the Network of
 `config/samples/network.yaml`; apply that first if the namespace has none. Save
 this as `gateway.yaml`:
@@ -50,8 +50,8 @@ starting from one whose strategy cannot work here at all.
 **`LoadBalancer`** is the default answer where something assigns addresses. On
 bare metal that something has to be installed: RKE2 ships no active
 LoadBalancer controller, so without MetalLB or kube-vip no address is ever
-assigned and `ADDRESS` stays empty forever rather than merely late — a failure
-that looks exactly like slowness until you know to expect it.
+assigned and `ADDRESS` stays empty forever, which looks exactly like slowness
+until you know to expect it.
 
 `externalTrafficPolicy` defaults to `Local`, which is deliberate: it keeps the
 player's real IP instead of replacing it with the load balancer's, and bans and
@@ -59,7 +59,7 @@ rate limits depend on that. `loadBalancer.annotations` is copied onto the
 Service, which is where a MetalLB pool selector goes.
 
 **`NodePort`** needs nothing installed, which is why the tutorial uses it. The
-port must lie inside the API server's `service-node-port-range` — the usual
+port must lie inside the API server's `service-node-port-range`. The usual
 default is 30000–32767, so 25565 is not available to it.
 
 **`HostPort`** binds a fixed port directly on every node running a proxy pod,
@@ -89,7 +89,7 @@ unreachable, because whether the port is open to the world is a host-firewall
 question rather than a Kubernetes one. [Network
 boundaries](../explanation/network-boundaries.md) has that story.
 
-**`ClusterIP`** is for a network something else publishes — an ingress
+**`ClusterIP`** is for a network something else publishes: an ingress
 controller with a TCP entry point, a gateway, a tunnel. The operator creates
 the Service that thing routes to, and nothing else. Because it cannot learn the
 name players type, you give it:
@@ -102,15 +102,14 @@ name players type, you give it:
 ```
 
 `address` is required rather than optional, so that "empty" and "forgotten"
-cannot be the same state — closing that gap is the whole reason this strategy
+cannot be the same state. Closing that gap is the whole reason this strategy
 exists. Give a bare hostname and no port unless the entry point really is on
 another one: Minecraft clients default to 25565, so `mc.example.com` is the
 whole of what a player types.
 
-Nothing checks it. Not that it resolves, not that anything listens, not that it
-leads to this group's Service. It is a sign on a door, not a test of the door —
-and it is echoed into `ADDRESS` verbatim, so a typo there is a typo players
-will meet.
+Nothing checks that it resolves, that anything listens, or that it leads to this
+group's Service. It is echoed into `ADDRESS` verbatim, so a typo there is a typo
+players will meet.
 
 ## When the address stays empty
 
@@ -126,7 +125,7 @@ kubectl get proxygroup gateway -n minecraft \
 - `LoadBalancer` with no address and ready pods: no controller is assigning
   one. This is the bare-metal case above.
 - `HostPort` with no address and pods that never schedule: either the node
-  count is below `replicas`, or Pod Security is refusing them — the `Degraded`
+  count is below `replicas`, or Pod Security is refusing them. The `Degraded`
   condition says which.
 - `ClusterIP` publishes its address as soon as a pod is ready, whether or not
   anything outside routes to it. An address here is not evidence that players

@@ -1,8 +1,8 @@
 # Operator flags
 
 `cmd/spawnery-operator/main.go` reads these from the command line. This page
-is hand-written -- a flag's meaning is not in its usage string, `--help`
-already prints that -- and a Go test,
+is hand-written, because a flag's meaning is not in its usage string (`--help`
+already prints that). A Go test,
 [`cmd/spawnery-operator/flags_docs_test.go`](https://github.com/spawnery/spawnery/blob/master/cmd/spawnery-operator/flags_docs_test.go),
 fails if a flag is added here and not there, or there and not here.
 
@@ -10,9 +10,9 @@ The chart sets most of these through `values.yaml`'s `operator.*` keys; see
 [chart values](chart-values.md) for the ones it exposes and their own
 defaults, which are not always the flag's own.
 
-The manager also accepts controller-runtime's own logging flags --
-`--zap-log-level`, `--zap-devel`, `--zap-encoder`, `--zap-stacktrace-level`,
-`--zap-time-encoding` -- registered by `zap.Options.BindFlags` rather than by
+The manager also accepts controller-runtime's own logging flags
+(`--zap-log-level`, `--zap-devel`, `--zap-encoder`, `--zap-stacktrace-level`,
+`--zap-time-encoding`), registered by `zap.Options.BindFlags` rather than by
 this file. They belong to controller-runtime, not to spawnery, and are out of
 scope here.
 
@@ -30,7 +30,7 @@ Where the Prometheus metrics endpoint listens. See
 Default: `:8081`
 
 Where `/healthz` and `/readyz` listen. `/readyz` reports ready only once this
-replica holds the leader-election lock -- a standby answers `not the leader
+replica holds the leader-election lock. A standby answers `not the leader
 yet` rather than ready, because the agent gRPC endpoint is leader-bound and a
 standby serving readiness would attract agents into a registry no controller
 reads.
@@ -61,7 +61,7 @@ Default: `$POD_NAMESPACE`
 The namespace the operator itself runs in: where the TLS secret for the agent
 channel lives and where the agent-facing Service is expected. The chart sets
 `POD_NAMESPACE` from `metadata.namespace`, so this is normally never passed
-explicitly. Empty and unset together refuse to start -- see
+explicitly. Empty and unset together refuse to start; see
 [`--agent-session-deadline`](#-agent-session-deadline) below for why a wrong
 value here is worse than no value.
 
@@ -76,7 +76,7 @@ Default: `5s`
 
 How often an agent reports its player count. A count older than twice this is
 stale. It also sets the ceiling on how quickly the operator can notice a
-server on a node that has died and start moving players off it -- the
+server on a node that has died and start moving players off it. The
 operator logs a warning at startup if this value leaves too little room
 before Velocity's own read timeout disconnects them first.
 
@@ -92,8 +92,8 @@ How long a server may take to reach `Ready` before `phase.Decide` counts it
 Default: `30s`
 
 How often an unchanged player count is still written into the `Server`
-status. Status is for observers, not for the control loop -- nothing here
-reads it back -- so this trades API write volume against how stale the
+status. Status is for observers, not for the control loop (nothing here
+reads it back), so this trades API write volume against how stale the
 number looks to `kubectl get`.
 
 ### `--permission-check-interval`
@@ -110,7 +110,7 @@ measured at 73 reviews per check, 54ms.
 Default: `:9443`
 
 Where the agent gRPC endpoint listens. This is the port behind the Service a
-game server pod actually dials -- the leader, not the pod, since the
+game server pod actually dials: the leader, not the pod, since the
 endpoint is a leader-bound runnable.
 
 ### `--agent-session-renew-after`
@@ -127,7 +127,7 @@ Default: `10m`
 
 When the operator closes an agent's stream regardless of activity. Bounded
 above by the agent token's own lifetime: a stream is authenticated once, when
-it opens, so it may not outlive the token that opened it -- otherwise a
+it opens, so it may not outlive the token that opened it. Otherwise a
 stolen token would stay useful for longer than its own expiry says. The
 operator refuses to start if this is set above that lifetime. A CA rotation
 also waits out this same duration before switching the serving certificate,
@@ -141,8 +141,8 @@ the new one by the time the switch happens.
 Default: `1m`
 
 How often the orphan reconciler runs: the pass that catches the two
-directions no watch covers by itself -- a managed pod whose `Server` is
-gone, and a `Server` whose group is gone -- and drops registry entries for
+directions no watch covers by itself (a managed pod whose `Server` is
+gone, and a `Server` whose group is gone) and drops registry entries for
 pods that no longer exist, so that map stays bounded.
 
 ## Node draining
@@ -154,12 +154,12 @@ Default: none; repeatable
 A taint key, beside `spec.unschedulable`, that marks a node as departing.
 Pass it once per key: `--drain-taint karpenter.sh/disrupted --drain-taint
 node.kubernetes.io/unreachable`. Only the `NoSchedule` and `NoExecute`
-effects on a matching key count -- `PreferNoSchedule` does not stop the
+effects on a matching key count. `PreferNoSchedule` does not stop the
 scheduler putting the replacement pod straight back on the same node, so
 honouring it would condemn a pod, rebuild it there, and condemn that one
 next pass.
 
-This is a bare key, not `key=value:Effect` -- the value is never compared,
+This is a bare key, not `key=value:Effect`. The value is never compared,
 only the key and the effect read off the node's own taint. Passing a whole
 taint, the shape `kubectl taint` and most tutorials use, matches nothing:
 the flag is accepted, nothing ever drains, and nothing says why. The operator
@@ -168,13 +168,13 @@ warns only for a small set of taints other autoscalers are known to use
 `karpenter.sh/disruption`); a key of an operator's own choosing that is
 simply absent from the cluster cannot be told from a typo by anything here.
 
-**What condemning a server actually does depends on whether its group is
-ephemeral, persistent or on-demand, and this is the flag's real edge.** An
+What condemning a server does depends on whether its group is
+ephemeral, persistent or on-demand. An
 ephemeral group treats a condemned server exactly like a stale one: a
 replacement is created before the condemned server is removed, so the group
 never drops below its target count. A persistent group cannot do that. Its ordinal is
 tied to a `ReadWriteOnce` claim, and a second pod mounting that claim while
-the first is still draining does not fail cleanly, it hangs on the volume --
+the first is still draining does not fail cleanly, it hangs on the volume,
 so the replacement for a persistent ordinal waits for the condemned server's
 drain to finish, bounded by `spec.drain.timeoutSeconds`. Draining a node that
 holds a persistent world is a real, bounded gap for that world, not a hot
@@ -190,16 +190,15 @@ Three switches, one per field that can point a group at a
 default, and turning one on is a values edit and a Deployment restart, not a
 CRD change.
 
-**None of the three is a security control**, and this page will not pretend
-otherwise: a `PersistentVolumeClaim` is a namespaced object in the same trust
+None of the three is a security control: a `PersistentVolumeClaim` is a namespaced object in the same trust
 domain as the group that names it, so anybody who could write the group could
 have written the claim. What a switch actually buys is an installation being
-able to say *this cluster runs no third-party plugins* -- or files, or
-arbitrary mounts -- and have that be a fact the operator enforces rather than
+able to say *this cluster runs no third-party plugins* (or files, or
+arbitrary mounts) and have that be a fact the operator enforces rather than
 a convention nobody checks. The chart's own `values.schema.json` says the same
 thing about the matching values.
 
-Until 0.2.x, a single flag -- what is now `--allow-plugin-volumes` -- governed
+Until 0.2.x, a single flag (what is now `--allow-plugin-volumes`) governed
 both `spec.extraPlugins` and `spec.mounts` together. An installation upgrading
 from before that split needs both flags now if it relied on the old one for
 mount-backed claims; leaving only the old flag on will start refusing groups
@@ -218,7 +217,7 @@ copies into every server's `plugins/` directory on start. See
 Default: `false`
 
 Lets a group name a `spec.extraFiles` claim, whose tree the entrypoint copies
-into every server's whole working directory on start -- for files that do not
+into every server's whole working directory on start, for files that do not
 belong under `plugins/`, such as a Sponge configuration. See
 [files from a volume](../guides/plugins-from-a-volume.md#files-from-a-volume).
 

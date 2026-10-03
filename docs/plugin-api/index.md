@@ -58,19 +58,19 @@ the same dependency is an annotation argument:
 
 Either way it is not optional. `Spawnery.api()` throws
 `SpawneryUnavailableException` if you call it before the agent has enabled,
-and the message says which of the two causes it was — the agent is missing, or
+and the message says which of the two causes it was: the agent is missing, or
 it has not finished enabling.
 
 ## Depending on it
 
 **`compileOnly`, always.** The classes are loaded from the running agent
 plugin, and a plugin that bundles its own copy puts a second
-`cloud.spawnery.agent.api.SpawneryApi` on the server — a different type with
+`cloud.spawnery.agent.api.SpawneryApi` on the server: a different type with
 the same name, so the cast at your first call fails with a message about two
 classes that look identical.
 
 It is on Maven Central, so nothing has to be configured to resolve it. The
-version is the one the agent inside the game images carries — the same number,
+version is the one the agent inside the game images carries: the same number,
 because they are built from the same source, and a plugin compiled against one
 runs against the other.
 
@@ -83,9 +83,9 @@ first call the older jar does not have.
 ## What it can see
 
 Everything is scoped to the pod's own namespace, which is one `Network`. There
-is no call that reaches another network, and that is structural rather than a
-check: the agent's own credentials are a pod-bound ServiceAccount token, so
-there is nothing to widen.
+is no call that reaches another network. That limit is structural: the agent's
+own credentials are a pod-bound ServiceAccount token, so there is nothing to
+widen.
 
 **A backend's mirror leaves out the private servers of an on-demand group, and
 the group itself.** A plugin on a proxy sees them; one on a backend does not,
@@ -116,8 +116,8 @@ Reads never block, never time out, and throw nothing: the operator keeps a
 mirror current inside the agent, so `servers()` is a lookup in a local map.
 
 `CloudPlayer.server()` is empty for a player the proxy has and no backend does
-— during login, and between one backend and the next. That is ordinary, not an
-error, and it is exactly the player a drain is about.
+(during login, and between one backend and the next). That is ordinary, and it
+is exactly the player a drain is about.
 
 ## Version skew
 
@@ -129,8 +129,8 @@ throws, rather than `valueOf`, which does.
 
 The value records gain components as the operator learns to say more, and
 `ServerInfo` has gained two. Read them through their accessors, which is what
-they are for; a plugin that constructs a `ServerInfo` of its own — in a test
-double, say — is the one thing that has to be rebuilt when they do.
+they are for; a plugin that constructs a `ServerInfo` of its own (in a test
+double, say) is the one thing that has to be rebuilt when they do.
 
 ---
 

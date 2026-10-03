@@ -16,27 +16,27 @@ make e2e               # the driven run: the operator in a real kind cluster
 ## The targets
 
 The first six are the commit loop and run anywhere. Everything from
-`agent-test` down needs a container runtime and only works on `x86_64-linux` —
+`agent-test` down needs a container runtime and only works on `x86_64-linux`;
 pass `CONTAINER=podman` if `docker` is not your runtime. Three reach the network
 and are therefore part of no other target, not even `make all`: `agent-deps`,
 `publish` and `publish-chart`.
 
 | Target | What it does |
 |---|---|
-| `make test` | Unit and envtest tests, after `manifests`, `generate`, `fmt`, `vet` and the linters that guard what a compiler cannot — `chart-lint`, `toolchain-lint`, `image-tag-lint`, `docs-length-lint` and the three generated-docs checks |
-| `make lint` | `golangci-lint` — `errcheck` and `staticcheck`, uncapped |
+| `make test` | Unit and envtest tests, after `manifests`, `generate`, `fmt`, `vet` and the linters that guard what a compiler cannot: `chart-lint`, `toolchain-lint`, `image-tag-lint`, `docs-length-lint` and the three generated-docs checks |
+| `make lint` | `golangci-lint` with `errcheck` and `staticcheck`, uncapped |
 | `make build` | `bin/spawnery-operator` |
 | `make manifests` | CRDs, RBAC, the chart templates, and the generated `docs/reference` pages |
 | `make proto` | Go code under `internal/agentpb` from the `.proto` |
 | `make agent` | Both agent plugins, with their JUnit suites as the check phase |
-| `make docs` | The site, built through Nix — `mkdocs build --strict` inside it is the project's only link checker |
-| `make docs-assets` | Vendors `docs/assets/mermaid.min.js` and builds `docs/plugin-api/javadoc/` — both gitignored, needed once per checkout before `mkdocs serve`; the Javadoc build costs about 34s cold |
+| `make docs` | The site, built through Nix; `mkdocs build --strict` inside it is the project's only link checker |
+| `make docs-assets` | Vendors `docs/assets/mermaid.min.js` and builds `docs/plugin-api/javadoc/`; both gitignored, needed once per checkout before `mkdocs serve`; the Javadoc build costs about 34s cold |
 | `make docs-serve` | `mkdocs serve` for writing, after `docs-assets` |
-| `make agent-deps` | Regenerates `agent/deps.json`. Reaches Maven Central — part of no other target |
+| `make agent-deps` | Regenerates `agent/deps.json`. Reaches Maven Central, so it is part of no other target |
 | `make agent-test` | Both real images against the stub operator in `cmd/spawnery-stubop` |
 | `make paper-pin` | Computes the Paper pin; `paper-pin-check` fails if `nix/paper.nix` is behind |
 | `make image` | The Paper base image (`image-load`, `image-test` follow it) |
-| `make purpur-image` | The Purpur base image — the backend image going forward; `purpur-image-load`, `purpur-image-test` |
+| `make purpur-image` | The Purpur base image, the backend image going forward; `purpur-image-load`, `purpur-image-test` |
 | `make velocity-image` | The Velocity image, same three steps scoped to it alone |
 | `make operator-image` | The operator's own image, same three steps |
 | `make image-repro` | Builds each image twice and fails if the bytes differ |
@@ -54,9 +54,9 @@ change to the `.proto`, run `make proto` and commit the diff with it.
 
 ## The agent plugins
 
-`make agent` (`nix build .#agents`) builds Paper's plugin and Velocity's — they
-share the session loop, token source and channel construction in `agent/common`
-— and runs both JUnit suites as the derivations' check phases.
+`make agent` (`nix build .#agents`) builds Paper's plugin and Velocity's (they
+share the session loop, token source and channel construction in `agent/common`)
+and runs both JUnit suites as the derivations' check phases.
 
 `agent/deps.json` is the checked-in lockfile pinning every Maven artifact by
 hash across the Gradle subprojects. `make agent-deps` regenerates it, and is
@@ -66,18 +66,18 @@ reaches Maven Central, and a Nix build must never depend on the network.
 `make agent-test` runs both real images against the Go stub operator in
 `cmd/spawnery-stubop` and checks the handshake, the authorization header, the
 player reports, the overlapping renewal and the bound on a session the operator
-never answers — and, for the Velocity image, that its readiness port stays
+never answers. For the Velocity image it also checks that its readiness port stays
 closed until a server list has arrived and opens once one does.
 
 ## The images
 
-`make image-test` runs all three game images — Paper, Purpur and Velocity —
+`make image-test` runs all three game images (Paper, Purpur and Velocity)
 offline under the same constraints the podspec imposes, loading each first so
 the target needs no separate build step of its own.
 
 **Purpur goes through `hack/image-test.sh` unchanged**, the same script the
-Paper image does: its assertions are Paper's behaviour — config rewritten,
-plugin loaded, nothing downloaded at start — and Purpur is a Paper fork that
+Paper image does: its assertions are Paper's behaviour (config rewritten,
+plugin loaded, nothing downloaded at start), and Purpur is a Paper fork that
 does all of it. If they ever diverge enough for that to stop being true, that
 run fails and says so.
 
@@ -97,7 +97,7 @@ running again after any change to `nix/paper.nix` or `nix/paper-image.nix`.
 
 The plain build in front of each `--rebuild` is not redundant. `--rebuild`
 compares a fresh build against the output already in the store, and with
-nothing there it does not fail the check, it declines to run it — "some outputs
+nothing there it does not fail the check, it declines to run it: "some outputs
 … are not valid, so checking is not possible". All three image derivations take
 the working tree as their source: appending one line to a file in `docs/` was
 measured to change the derivation hash of `paper-image`, `velocity-image` and
@@ -107,8 +107,8 @@ empties the store of them.
 ### The operator's image
 
 `make operator-image-test` runs the operator image under the constraints
-`charts/spawnery/templates/deployment.yaml` imposes — non-root and a read-only
-root filesystem — rather than more comfortable ones, plus `--network none`,
+`charts/spawnery/templates/deployment.yaml` imposes (non-root and a read-only
+root filesystem) rather than more comfortable ones, plus `--network none`,
 which is the script's own choice and not the Deployment's, and cheap here
 because the run only asks the binary to print its usage. `make image-repro`
 covers this image beside the other two and the agent jars.
@@ -121,11 +121,11 @@ Five artefacts, three scripts, none of them part of another target.
 archives straight to `ghcr.io/spawnery/` with `skopeo`, so the registry gets
 what the flake describes, not what a previous `podman load` left in a local
 store. It needs a GitHub token with `write:packages`.
-`DRY_RUN=1` still builds every image it was asked for — on a machine without
-them cached that is the expensive part — then prints what it would copy where,
+`DRY_RUN=1` still builds every image it was asked for (on a machine without
+them cached, that is the expensive part), then prints what it would copy where,
 needing no credential. `FORCE=1` overwrites a tag that already exists, which it
 otherwise refuses to do with exit 3. `WRITE_DIGEST=1` writes the digest `skopeo
-copy` reported into `charts/spawnery/values.yaml`'s `image.digest` key — the
+copy` reported into `charts/spawnery/values.yaml`'s `image.digest` key. The
 chart is the only installation form, so the only place a digest means anything.
 
 `make publish IMAGES=operator-image` publishes one image, the ordinary case:
@@ -143,7 +143,7 @@ same file: `WRITE_DIGEST=1` rewrites `charts/spawnery/values.yaml` minutes
 before the chart step runs, and archiving `HEAD` makes the ordering irrelevant
 instead of a comment somebody must keep obeying. It also refuses, with no
 `FORCE=1` escape, to publish a chart whose *committed* `image.digest` is
-non-empty — the one state nothing else catches, because `internal/rbacaudit`'s
+non-empty. That is the one state nothing else catches, because `internal/rbacaudit`'s
 `TestTheOperatorImageIsNotAMutableTag` returns early when a digest is set
 instead of failing. Its "already there" refusal is exit 3 too, the ordinary
 outcome here since most tags change nothing under `charts/`.
@@ -157,7 +157,7 @@ plugin speaking the Central Portal's HTTP API is third-party and would enter
 can grant from inside a workflow**: a Central Portal token pair and an
 ASCII-armoured signing key, both belonging to a person. `release.yml` therefore
 skips this step rather than failing it when they are absent, and says which
-artefact it left out — a hard failure would hold every image and the chart
+artefact it left out; a hard failure would hold every image and the chart
 hostage to a secret that has nothing to do with them. `DRY_RUN=1` builds the
 bundle, prints what would go where, and needs neither.
 
@@ -165,7 +165,7 @@ A tag whose whole change is under `charts/` publishes a chart and no image, and
 is a correct release. **Both image numbers therefore have gaps, and none is a
 miscount**: `imageVersion` reads `0.2.5, 0.2.7, 0.2.9, 0.2.10, 0.2.12, 0.2.13`,
 `operatorVersion` reads `…, 0.2.9, 0.2.11, 0.2.12`, and the chart's own
-`version` tracks neither — it moves whenever anything under `charts/` does,
+`version` tracks neither: it moves whenever anything under `charts/` does,
 while its `appVersion` stays with the operator it deploys. A missing number is
 the record of a release that built nothing on that side. A local `make publish`
 is for the case a tag cannot cover.
@@ -173,12 +173,12 @@ is for the case a tag cannot cover.
 ## The end-to-end run
 
 `make e2e` (`hack/e2e.sh`) installs `charts/spawnery` with `helm install
---create-namespace` — which is also where the CRDs come from, so there is no
-separate apply — into `platform-system`, a namespace sharing nothing with the
-chart's documented default, `spawnery-system`. Its Go test package drives the
+--create-namespace` into `platform-system`, a namespace sharing nothing with the
+chart's documented default, `spawnery-system`. The CRDs come from that install
+too, so there is no separate apply. Its Go test package drives the
 operator under its own ServiceAccount, then reads the whole operator log and
 fails on `is forbidden:`. The operator runs *in* the cluster here, from its own
-image, so nothing hand-builds a `Service` — the difference between this and the
+image, so nothing hand-builds a `Service`; that is the difference between this and the
 local flow below. Under rootless Podman the invocation is:
 
 ```bash
@@ -197,8 +197,8 @@ writes `eula=true`, because Paper does not start otherwise.
 ## Trying it locally against kind
 
 This is the hand-driven flow, running the operator **outside** the cluster
-through `go run`. It gives what `make e2e` does not — a real Paper image, a
-server that reaches `Ready`, an agent that reports players — at the price of the
+through `go run`. It gives what `make e2e` does not (a real Paper image, a
+server that reaches `Ready`, an agent that reports players) at the price of the
 workarounds below, which `make e2e` avoids because its `Service` has a selector.
 
 Under rootless Podman (measured with 5.8.4) `k3d` cannot bring up a cluster at
@@ -212,7 +212,7 @@ client reaching the socket. The flow below uses `kind` under
 kind needs cgroup delegation under systemd as a regular user, hence the
 `systemd-run --scope --user --property=Delegate=yes` wrapper around every kind
 command below: without it kind refuses with a `Delegate=yes` error even when
-that property is already set on the user's systemd service — the scope is what
+that property is already set on the user's systemd service; the scope is what
 its check looks for.
 
 Running through `go run` there is no `POD_NAMESPACE` from the downward API, so
@@ -223,7 +223,7 @@ otherwise carry the wrong SANs.
 One gap decides whether a `Server` reaches `Ready`: the pod dials
 `spawnery-operator.<ns>.svc:9443` and nothing creates that Service, the operator
 being outside the cluster where no selector could find it. A selector-less
-`Service` with a hand-written `Endpoints` pointing at the host closes it — the
+`Service` with a hand-written `Endpoints` pointing at the host closes it. The
 serving certificate already carries that DNS name, so TLS verifies against the
 CA the pod was given.
 
@@ -232,8 +232,8 @@ Docker daemon it is the bridge gateway, `172.17.0.1`. Under rootless Podman it
 is none of the obvious candidates: the gateway of the `kind` network
 (`10.89.0.1` here) lives inside the rootless network namespace, where the
 operator is not listening and a connection is refused, and the one address that
-does reach the host — the pasta link-local `169.254.1.2`, which Podman also
-publishes as `host.containers.internal` — is rejected by the API server in both
+does reach the host (the pasta link-local `169.254.1.2`, which Podman also
+publishes as `host.containers.internal`) is rejected by the API server in both
 `Endpoints` and `EndpointSlice` with `may not be in the link-local range`. What
 works, measured, is one more container on the same Podman network relaying to
 the host: it gets a routable address on that network, and pods reach it.
@@ -299,24 +299,24 @@ The relay needs only a rootfs, which is why the Paper image stands in for one;
 The first server can take a good half minute: if the ServerGroup meets its
 network before the Network controller has accepted it, it retries only after
 `networkRetryInterval` (30 seconds). The 90 seconds also cover Paper's own start
-— about seven seconds to a first answered ping — and the agent's handshake.
+(about seven seconds to a first answered ping) and the agent's handshake.
 Loading the image beforehand is its own wait: at 26.2-0.2.1 the Paper image is
 372 MB as a tarball and the Velocity one 170 MB. They were 735 MB and 533 MB until 2026-08-25, when both
 stopped shipping a whole headless JDK and started shipping a runtime jlink'd
-to the modules each actually resolves — see `nix/paper-jre.nix` and
-`nix/velocity-jre.nix`.
+to the modules each actually resolves (see `nix/paper-jre.nix` and
+`nix/velocity-jre.nix`).
 
 Expected, as measured on 2026-08-10 against `kind` v1.36.1 under rootless
 Podman:
 
 - `network production` with `Accepted=True` and `SERVER GROUPS 1`,
-- `servergroup lobby` in phase `Ready` with `READY 1` and `FREE SLOTS 100` —
+- `servergroup lobby` in phase `Ready` with `READY 1` and `FREE SLOTS 100`;
   `READY` is `status.readyReplicas`,
-- a pod `lobby-xxxx` in `Running` with `READY 1/1` — the readiness probe spoke
+- a pod `lobby-xxxx` in `Running` with `READY 1/1`: the readiness probe spoke
   a real server list ping to a real Paper process,
 - a `server lobby-xxxx` in phase `Ready` with `SLOTS 100`, `PLAYERS 0` and
   `REGISTERED true`. `SLOTS` is what the agent reported from
-  `SPAWNERY_MAX_PLAYERS`, `PLAYERS` what it counted — zero, because nobody can
+  `SPAWNERY_MAX_PLAYERS`, `PLAYERS` what it counted: zero, because nobody can
   join yet.
 
 If the `Server` stops in `Starting`, the agent cannot reach the operator;
@@ -334,7 +334,7 @@ nix develop -c kubectl get server lobby-xxxx -n minecraft \
 ```
 
 `readinessLosses` still zero and `readySince` still the original timestamp,
-while `playersUpdatedAt` keeps moving — the renewal happened and cost the
+while `playersUpdatedAt` keeps moving. The renewal happened and cost the
 server nothing.
 
 Afterwards, clean up:

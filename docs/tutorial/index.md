@@ -1,19 +1,19 @@
 # From an empty machine to a player on a server
 
 By the end of this page a `kind` cluster runs the Spawnery operator, a lobby
-group of Paper servers, and one Velocity proxy in front of them — and your own
+group of Paper servers, and one Velocity proxy in front of them, and your own
 Minecraft client is standing on one of those servers. Every command below, and
 the output shown beside most of them, comes from a real run of exactly this
-path — not a description of what one would look like.
+path.
 
-You will need `kind`, `kubectl`, `helm`, a Minecraft client, and **7-8Gi of
-memory free**. Part of that is exact, from the manifest in step 3: a Paper
-server pod requests 2Gi, the proxy requests 1Gi, and — as step 4 explains —
-you end up with two Paper servers rather than one, so the pods alone request
+You will need `kind`, `kubectl`, `helm`, a Minecraft client, and 7-8Gi of
+memory free. Part of that is exact, from the manifest in step 3: a Paper
+server pod requests 2Gi, the proxy requests 1Gi, and (as step 4 explains)
+you end up with two Paper servers instead of one, so the pods alone request
 5Gi. The rest is an allowance, not a measurement: roughly 1Gi for `kind`'s own
 control plane, and 1-2Gi for the Minecraft client itself, which runs alongside
-the cluster rather than inside it and is easy to forget when counting. Budget
-for the client — leaving it out makes 4Gi look like enough right up to the
+the cluster instead of inside it and is easy to forget when counting. Budget
+for the client: leaving it out makes 4Gi look like enough right up to the
 step where it is not.
 
 ## 1. Create the cluster
@@ -35,8 +35,8 @@ nodes:
         protocol: TCP
 ```
 
-The `extraPortMappings` block, and its own comment, is the one part worth
-reading before you copy this: it is how a client running outside the cluster
+Read the `extraPortMappings` block and its comment before you copy this: it
+is how a client running outside the cluster
 reaches a proxy running inside it. Save it as `kind-config.yaml` and create
 the cluster:
 
@@ -88,7 +88,7 @@ has both procedures in full.
 ```
 
 That "one step" is about detecting a rotated secret later, which a namespace
-this tutorial deletes at the end will never need — skip it here, and see
+this tutorial deletes at the end will never need. Skip it here, and see
 [Getting started](../getting-started/index.md#the-one-manual-step-this-chart-cannot-make)
 for the real procedure on a network you keep. Wait for the rollout instead:
 
@@ -194,7 +194,7 @@ spec:
 ```
 
 One `Network`, one ephemeral `ServerGroup` of Paper backends, one `ProxyGroup`
-in front of it — the manifest creates its own namespace, so save it as
+in front of it. The manifest creates its own namespace, so save it as
 `network.yaml` and apply it directly:
 
 ```bash
@@ -212,10 +212,10 @@ NAME    TYPE        PHASE   READY   REPLICAS   PLAYERS   FREE SLOTS   BOOSTED   
 lobby   Ephemeral   Ready   2       2          0         40           0         76s
 ```
 
-Two servers, not the one `minReplicas: 1` asked for, and not something a join
-caused — nobody has joined yet: a server this new hasn't shown its pod to the
-operator's cache for one pass, so the group briefly builds a spare rather than
-risk coming up short, and sheds it again a few minutes later, well past where
+Two servers, not the one `minReplicas: 1` asked for, and no join caused it
+(nobody has joined yet). A server this new hasn't shown its pod to the
+operator's cache for one pass, so the group briefly builds a spare instead of
+risking coming up short, and sheds it again a few minutes later, well past where
 this tutorial ends. See [`ServerGroup`](../reference/crds.md#servergroup) for
 the field (`scaleDownStabilizationSeconds`) that governs the timing.
 
@@ -253,21 +253,20 @@ NAME      TYPE       CLUSTER-IP     EXTERNAL-IP   PORT(S)           AGE
 gateway   NodePort   10.96.56.131   <none>        25565:30001/TCP   77s
 ```
 
-`ADDRESS` is the proxy's address inside the cluster's own network — not
-reachable from your desktop. The `30001` in both lines is the same `NodePort`
+`ADDRESS` is the proxy's address inside the cluster's own network, which your
+desktop cannot reach. The `30001` in both lines is the same `NodePort`
 `kind-config.yaml` mapped to a host port in step 1, so point your client at
-**`localhost:30001`** instead.
+`localhost:30001` instead.
 
 Open your Minecraft client, add `localhost:30001` as a server, and connect.
 The proxy runs with `spec.config.onlineMode: false` because this is a local
-cluster on your own machine with no Mojang session to check — the same field
-that lets this project drive this exact path in its own CI — so a licensed
-client connects to it exactly as it would to any other server, nothing
-withheld.
+cluster on your own machine with no Mojang session to check. The same field
+lets this project drive this exact path in its own CI. A licensed
+client connects to it exactly as it would to any other server.
 
 If you want confirmation before you open a client: this project's own
 automated check joins the same address the same way, with a test-only tool
-that logs in and prints what it saw instead of rendering a world —
+that logs in and prints what it saw instead of rendering a world:
 
 ```json
 {"protocol":777,"username":"spawnery_probe","uuid":"bcc1dc19-a5eb-33a1-aa1b-4e3907d5e22f","compressed":true}

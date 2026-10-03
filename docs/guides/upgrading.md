@@ -23,8 +23,8 @@ reads `Ready` throughout, as at rest.
 A proxy pod is stale when its `spawnery.cloud/pod-hash` label differs from a
 digest of the pod the operator *would* render for its group right now, and
 that digest is taken over the rendered pod rather than over a chosen list of
-spec fields. So a change to the *rendering code* -- a new default in
-`internal/podspec`, an added environment variable, a renamed label -- moves
+spec fields. So a change to the *rendering code* (a new default in
+`internal/podspec`, an added environment variable, a renamed label) moves
 the digest for every `ProxyGroup` while every spec stays byte for byte what it
 was.
 
@@ -63,7 +63,7 @@ nothing in the pod-render path moved, the digest cannot have. That is how
 was: both proxies kept `pod-hash 2dd6593373a4ffd2` and 46 hours of uptime,
 because the only file that had moved was `netpol.go` and only its comments.
 
-Neither the golden tests nor the diff covers the triggers outside the code --
+Neither the golden tests nor the diff covers the triggers outside the code:
 the group's own namespace and name, the `Network`'s name, and the agent
 endpoint above. For those, run the new build against a scratch cluster over
 *the same* manifests and compare the `pod-hash` it stamps with what the
@@ -113,7 +113,7 @@ forward, so move a persistent group to the new version once, and not back.
 
 [Release notes](../archive/release-notes.md) carries the notes release by
 release: what each one rolled, and what it left stranded. The operator renames
-nothing -- it writes the new name and leaves whatever the old code wrote
-sitting there -- so an installation created before v0.1.0 still carries a
+nothing. It writes the new name and leaves whatever the old code wrote
+sitting there, so an installation created before v0.1.0 still carries a
 PodDisruptionBudget and a ConfigMap under their old names, and a `Ready: False`
 condition nothing republishes.

@@ -1,6 +1,6 @@
 # Where game pods land, and who decides
 
-A group can ask for node selectors, tolerations and affinity — but only as far
+A group can ask for node selectors, tolerations and affinity, but only as far
 as its `Network` lets it. This is the part of the operator that is not ordinary
 Kubernetes: the namespace is the boundary a group author is held to, and
 scheduling reaches past it, onto a control-plane node, a cordoned one, or
@@ -8,7 +8,7 @@ beside somebody else's workload. So the `Network`'s owner has to widen that
 boundary first.
 
 That makes the permission two-sided, and both halves have to exist before
-anything works. Here they are together — a network that allows one taint key
+anything works. Here they are together: a network that allows one taint key
 and one node label, and a group that uses both to keep off the database nodes.
 Save this as `scheduling.yaml`:
 
@@ -75,7 +75,7 @@ kubectl get servergroup lobby -n minecraft \
 
 The message names the key **and** the `Network` field that would allow it,
 because the person reading it is usually a group author who can write neither
-the taint nor the Network — "not allowed" on its own sends them to look through
+the taint nor the Network, and "not allowed" on its own sends them to look through
 the wrong object. The operator assembles the message at the moment it
 refuses, so the wording below is exactly what it writes, with this page's own
 network and key names substituted in:
@@ -91,7 +91,7 @@ with `node affinity key` in place of `nodeSelector key`.
 
 ## What the network can allow
 
-Each list is a plain allowlist. An absent or empty list allows **nothing** —
+Each list is a plain allowlist. An absent or empty list allows **nothing**;
 there is no "unset means anything" here, and a `Network` with no
 `spec.scheduling` at all refuses every group that asks for scheduling.
 
@@ -133,8 +133,8 @@ spec:
       max: 25599
 ```
 
-The other costs of `HostPort` — the node cap on replicas, and Pod Security
-refusing it outright in a `baseline` or `restricted` namespace — are in [How
+The other costs of `HostPort` (the node cap on replicas, and Pod Security
+refusing it outright in a `baseline` or `restricted` namespace) are in [How
 players reach the proxies](expose-strategies.md).
 
 ## Inheriting it instead of repeating it
@@ -142,7 +142,7 @@ players reach the proxies](expose-strategies.md).
 Scheduling can also come from `Network.spec.defaults.scheduling`, which every
 group inherits and any group may override. The allowlist is applied to the
 *effective* scheduling either way, so a default the Network sets for its own
-groups still has to be something the Network's policy permits — the two halves
+groups still has to be something the Network's policy permits; the two halves
 do not shortcut each other.
 
 ## A note for upgrades
