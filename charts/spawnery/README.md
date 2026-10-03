@@ -1,8 +1,8 @@
 # spawnery
 
 The Helm chart for the Spawnery operator. Since milestone 6d this is the only
-way the operator installs — `config/deploy/`, the flat manifests this chart
-replaces, no longer exists in this repository.
+way the operator installs. `config/deploy/`, the flat manifests this chart
+replaced, no longer exists in this repository.
 
 ```bash
 helm install spawnery oci://ghcr.io/spawnery/charts/spawnery \

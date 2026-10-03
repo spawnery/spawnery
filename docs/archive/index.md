@@ -1,6 +1,6 @@
 # Archive
 
-Three different things live here, and they are not read the same way.
+Three different things live here, each read differently.
 
 **[How it was built](history.md)** is a written history, kept current. It is
 the one page in this section that is brought forward: seven milestones and
@@ -15,12 +15,12 @@ are what a particular release cost, kept because an installation older than any
 that exists today would still meet them.
 
 **The handover notes and runbook evidence** are the rest, written during
-specific milestones. Each was accurate on the date it was written and **none
-has been maintained since.** Commands, paths, versions and cluster states
+specific milestones. Each was accurate on the date it was written, and none
+has been maintained since. Commands, paths, versions and cluster states
 described in them may no longer match the current codebase or any live
-deployment — that is expected, and freezing them is the point: they are the
+deployment. That is expected. They are frozen on purpose as the
 record of what a milestone started from and what was actually observed, which
-a later correction would destroy rather than improve.
+a later correction would destroy instead of improve.
 
 Several of those pages cite the design documents behind the milestone they
 cover. Those documents live in the repository, not on this site: see

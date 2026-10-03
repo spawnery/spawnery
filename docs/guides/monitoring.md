@@ -2,7 +2,7 @@
 
 The operator serves Prometheus metrics on port 8080: its own health (agent
 connections, certificates, changeovers) and a picture of every network it
-runs — players, groups, servers and proxies. The full list is in
+runs: players, groups, servers and proxies. The full list is in
 [metrics and alerts](../reference/metrics-and-alerts.md).
 
 ## Turning it on
@@ -60,7 +60,7 @@ selector:
 - **Network:** players, servers ready and total, free seats, proxies, lowest
   TPS; players per group over time.
 - **Groups:** players, free seats, servers, worst TPS and MSPT per group.
-- **Servers:** one row per server — group, phase, players / playable /
+- **Servers:** one row per server with group, phase, players / playable /
   slots, TPS, MSPT, heap used and max, container memory and CPU, node.
 - **Health over time:** lowest TPS and highest MSPT per group, heap and
   container memory per server, proxy players and heap.

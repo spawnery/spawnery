@@ -38,14 +38,13 @@ kubectl apply -f hub.yaml
 kubectl get servergroup hub -n minecraft
 ```
 
-The `PLAYERS`, `FREE SLOTS` and `BOOSTED` columns are the whole control loop
-made visible: `FREE SLOTS` is the number the scaler compares against
+The `PLAYERS`, `FREE SLOTS` and `BOOSTED` columns show the control loop: `FREE SLOTS` is the number the scaler compares against
 `spareSlots`, and `BOOSTED` is how much of the group's floor comes from boosts
 rather than from `minReplicas`.
 
 ## Two more servers, until Friday night is over
 
-A boost is its own object, applied and forgotten — it stops counting at the
+A boost is its own object, applied and forgotten: it stops counting at the
 instant it names. Save this as `boost.yaml`:
 
 ```yaml
@@ -71,7 +70,7 @@ kubectl get servergroup hub -n minecraft
 at all, because whether it is live is its expiry against the clock and what it
 did is on the group, as `status.boostedReplicas`. The floor of `hub` is now 4
 while the boost lasts, so the group builds up to it even with nobody online,
-and `maxReplicas: 8` still binds — a boost adds to the floor and never to the
+and `maxReplicas: 8` still binds: a boost adds to the floor and never to the
 ceiling.
 
 Timestamps are RFC 3339 and the operator's clock decides, not yours. A boost
@@ -106,17 +105,17 @@ spec:
 
 A server's free seats are then `max(0, playable − players)`, where `playable`
 is the figure its plugin set with `Spawnery.api().playableSlots(n)`, else
-`spec.playableSlots`, else its slots — never more than its slots. A lobby with
+`spec.playableSlots`, else its slots, and never more than its slots. A lobby with
 twelve players is full, and `spareSlots` orders the next server while its
 countdown runs, not after its round has started. Players beyond the twelve are
 still let in up to `maxPlayers` (unless the group enforces its playable seats,
-below), and make the server full rather than overfull. `status.freeSlots`, `/cloud` and a connect to the group all count
-the same seats.
+below), and make the server full rather than overfull. `status.freeSlots`,
+`/cloud` and a connect to the group all count the same seats.
 
 ### Making the playable seats a door
 
 `enforcePlayableSlots: true` turns the count into a limit. Once a server holds
-as many players as its playable seats, a further login is refused — except
+as many players as its playable seats, a further login is refused, except
 for a player with the permission `spawnery.join.full.<group>`, who is always
 let in up to `maxPlayers` and never takes a seat at the door, so an admin
 watching a round does not keep a player out. The operator still counts every
@@ -141,8 +140,8 @@ next server, as for any failed connect.
 
 ## The arithmetic, in the order the operator runs it
 
-Every five seconds, for each group, in this order — capacity first, then the
-ceiling, then demand. A group that is short of capacity never also shrinks in
+The operator runs this every five seconds for each group: capacity first, then
+the ceiling, then demand. A group that is short of capacity never also shrinks in
 the same pass.
 
 **Capacity.** Each server contributes its free seats, and the group wants
@@ -157,8 +156,8 @@ create = max(wanted, floor - alive)                      then capped at maxRepli
 `capacity` is `playableSlots` if the group sets it, else `maxPlayers`: what one
 server brings before it has said anything.
 
-With the group above and 75 players on it — one server full, one with 25 free
-seats — `provisional` is 25, the gap to `spareSlots: 30` is 5, and
+With the group above and 75 players on it (one server full, one with 25 free
+seats), `provisional` is 25, the gap to `spareSlots: 30` is 5, and
 `ceil(5 / 50)` is one more server. Not two: `capacity` is the unit the gap is
 divided by, so a group of large servers answers a small shortfall with one
 server and a group of small ones with several.
@@ -180,17 +179,17 @@ sum reads low, `wanted` reads high, and the group builds one more server than
 it needs. That is why a brand-new group with `minReplicas: 1` comes up with two
 servers, as the [tutorial](../tutorial/index.md) shows at its step 4.
 
-This is chosen, not tolerated: a server too many costs money, a server too few
+This is deliberate: a server too many costs money, a server too few
 costs joins. The correction is the scale-down rule, and it arrives once the
-extra server has been reporting empty for `scaleDownStabilizationSeconds` —
+extra server has been reporting empty for `scaleDownStabilizationSeconds`,
 five minutes by default, which is why a short demonstration never sees it.
 
 ## Coming back down
 
 A server is removed for lack of demand only when all of this holds:
 
-- the group has more servers than its floor — `minReplicas` **plus live
-  boosts**, so a boost stops a scale-down as firmly as the spec does;
+- the group has more servers than its floor (`minReplicas` **plus live
+  boosts**), so a boost stops a scale-down as firmly as the spec does;
 - no create is outstanding, because removing a server while capacity is on
   order is a decision made on two different readings of the same moment;
 - the server reports zero players, its counts are fresh, and it has been empty
@@ -211,8 +210,8 @@ servers hold 50 and whose `spareSlots` is 30 keeps well over half a server free
 at all times, which for a lobby is right and for a 20-slot minigame group would
 be nearly two whole servers of idle capacity.
 
-`minReplicas` is what stands ready before anyone arrives — the join at 03:00
-lands on it. `maxReplicas` is an instruction rather than a hint: it binds
+`minReplicas` is what stands ready before anyone arrives; the join at 03:00
+lands on it. `maxReplicas` binds
 against demand and against boosts alike, and a group at its ceiling that needs
 more says so on itself.
 
@@ -233,14 +232,14 @@ two is happening.
 
 **It is not an edit to the group.** The operator has no write access to a
 `ServerGroup`'s spec, and on a GitOps-managed cluster that spec belongs to a
-file — a floor raised there would be reverted at the next reconciliation. The
+file, and a floor raised there would be reverted at the next reconciliation. The
 boost is a separate object, which is what lets somebody raise capacity on a
 cluster whose manifests are owned elsewhere.
 
 A boost raised from in-game rather than from a terminal is created by the
 operator, which gives it an owner reference to the group, so deleting the group
 takes that boost with it. One you apply yourself carries whatever you wrote and
-nothing adds the reference for you — so if you delete the group, delete the
+nothing adds the reference for you. If you delete the group, delete the
 boost too, or it sits in the namespace naming a group that is gone.
 
 **It is not a setting with one value.** Boosts add. Two on one group are two
