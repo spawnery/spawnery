@@ -1,34 +1,14 @@
 name: E2E under rootless podman
 
-# ci.yml's e2e job runs hack/e2e.sh on a hosted runner's Docker daemon and
-# blocks every pull request on it. This runs the invocation a person actually
-# uses -- rootless podman under a systemd scope -- which milestone 6e left
-# exercised by nothing automatic, so a change that broke one container runtime
-# and not the other could sit green in CI indefinitely.
-#
-# Driven 2026-08-27 before this file was believed: run 33043446172, dispatched
-# by hand, green in seven minutes with the Go test time at 141s. What the
-# runner turned out to provide, which is why the diagnostic step below exists
-# and is worth keeping:
-#
-#   podman:  5.8.4          (the author's machine: 5.4.2)
-#   cgroup:  cgroup2fs
-#   subuid:  runner:165536:65536
-#   runtime: /run/user/1001 -- created by the enable-linger below, absent before
-#   deleg:   cpuset cpu io memory pids
-#
-# The same script had been driven under rootless podman on the author's machine
-# earlier the same day, all eighteen scenarios green. Two rootless podmans of
-# different versions now, which is the point.
+# ci.yml's e2e job runs on Docker; this runs the invocation a person uses,
+# rootless podman under a systemd scope.
 
 on:
   schedule:
-    # 05:41 UTC, clear of the nightly at 03:17 and the Paper watch at 04:23,
-    # and on an odd minute for the reason nightly.yml gives.
+    # Clear of the nightly (03:17) and the Paper watch (04:23).
     - cron: "41 5 * * *"
   workflow_dispatch:
 
-# issues: write for the report. contents: read is the checkout.
 permissions:
   contents: read
   issues: write
@@ -36,30 +16,16 @@ permissions:
 jobs:
   e2e-podman:
     runs-on: ubuntu-latest
-    # ci.yml's e2e job allows 45 under Docker. Rootless podman is slower at
-    # everything that touches the image store, and this is a stop for a wedged
-    # run rather than a description of one.
+    # 45 under Docker in ci.yml; rootless podman is slower on the image store.
     timeout-minutes: 60
     env:
-      # Not nightly-red. hack/require-no-red-nightly.sh refuses a release while
-      # an issue carrying that label is open, and this job must not: it is a
-      # second opinion about the harness, not a gate on what the harness tests.
-      # A change that breaks podman and not Docker is worth an issue and is not
-      # worth stopping a release that Docker proved.
+      # Not nightly-red, which blocks releases; a podman-only failure should not.
       PODMAN_LABEL: podman-red
     steps:
       - uses: actions/checkout@v4
 
-      # Rootless kind needs cgroup v2 with the controllers delegated to the
-      # user manager, and a user manager to delegate them to. A hosted runner
-      # has neither by default: the job's shell is not a login session, so
-      # there is no user@.service and no XDG_RUNTIME_DIR.
-      #
-      # The order below is load-bearing. A drop-in written after the user
-      # manager has started does not reach it -- delegation is read once, at
-      # its start -- so the drop-in goes first, then the reload, and only then
-      # enable-linger, which is what starts the manager for a user with no
-      # session.
+      # Order matters: the user manager reads delegation once at start, and
+      # enable-linger is what starts it.
       - name: Delegate the cgroup controllers rootless kind needs
         run: |
           set -euo pipefail
@@ -71,10 +37,7 @@ jobs:
           sudo systemctl daemon-reload
           sudo loginctl enable-linger "$(id -un)"
 
-      # Everything a failure would otherwise have to be guessed from. This job
-      # exists because nothing automatic exercises this path, so the first
-      # thing a red run needs to establish is whether the path was exercised at
-      # all or the environment refused to be built.
+      # Tells a runner that changed apart from a real podman failure.
       - name: What this runner actually provides
         run: |
           set -uo pipefail
@@ -90,29 +53,12 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
-            # Ten is the default and is not enough to see why a build failed
-            # here. Gradle's own "Try: run with --stacktrace / --info / --scan"
-            # block is eight of them, so a failing test's name -- which the
-            # agent build now throws as the failure text -- sits just outside
-            # the window. Measured 2026-08-27, when a Velocity test failed in
-            # CI, passed on a re-run of the identical derivation, and left no
-            # record anywhere of which test it was.
+            # The default ten lines end inside Gradle's eight-line "Try:" block,
+            # before the failing test's name.
             log-lines = 40
 
-      # The invocation hack/e2e.sh's own header documents for the author's
-      # machine, unchanged. That is the point: this job proves the path a
-      # person uses, so a job that reached the same result by a different
-      # route would prove something else.
-      #
-      # It is still not the same podman. This runner's is the version Ubuntu
-      # ships, with the delegation configured by the step above; the author's
-      # is a distribution's, configured by that distribution. Two rootless
-      # podmans rather than one, which is more than the one this repository had
-      # and less than the claim "podman is covered" would mean.
-      #
-      # XDG_RUNTIME_DIR and DBUS_SESSION_BUS_ADDRESS are set by hand because
-      # the job's shell is not a login session and systemd-run --user needs
-      # both to find the manager that enable-linger just started.
+      # Exactly the invocation hack/e2e.sh documents. The job's shell is no
+      # login session, so systemd-run --user needs both variables set by hand.
       - name: make e2e under rootless podman
         run: |
           set -euo pipefail
@@ -191,9 +137,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # A label that does not exist is an error rather than an empty list,
-          # and is read here as "nothing to close" -- the same reading
-          # nightly.yml takes, safe for the same reason.
+          # A missing label is an error, read here as "nothing to close".
           existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
             --label "${PODMAN_LABEL}" --state open --json number --limit 1 \
             --jq '.[0].number // empty' 2>/dev/null || true)"

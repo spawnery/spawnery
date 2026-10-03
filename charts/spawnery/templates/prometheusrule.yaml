@@ -1,14 +1,8 @@
 {{- if .Values.metrics.prometheusRule.enabled }}
-# Off by default for the same reason as the ServiceMonitor beside it: the kind
-# comes from the Prometheus Operator's CRDs.
+# Off by default for the same reason as the ServiceMonitor beside it.
 #
-# The four CA rules are the whole answer to "a CA rotation is asked for, never
-# scheduled" and "a RotationBlocked event does not repeat", both in
-# docs/reference/known-issues.md. Every one of them alerts on a gauge rather than on an
-# event, because a Kubernetes event expires out of the API within the hour and
-# the gauges do not. The two agent rules below are the only signal the
-# connection bounds produce, and the same argument applies to them: the refusal
-# is logged, and a log line is gone from a node long before anyone reads it.
+# Every rule alerts on a metric rather than an event or a log line: events
+# expire out of the API within the hour.
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
 metadata:
@@ -23,12 +17,8 @@ spec:
   groups:
     - name: spawnery-ca
       rules:
-        # The one this file exists for. Nothing in the operator watches the
-        # CA's remaining life: CALifetime is ten years, and the rotation
-        # procedure runs only because a human annotates the operator's secret.
-        # Ten years is not urgent and that is exactly the danger -- it is far
-        # enough away that nobody will think of it until something stops
-        # handshaking.
+        # Nothing in the operator watches the CA's ten-year lifetime; rotation
+        # only starts when a human annotates the secret.
         - alert: SpawneryCAExpiringSoon
           expr: |
             (spawnery_ca_expiry_timestamp_seconds - time())
@@ -47,9 +37,8 @@ spec:
               a start annotation can sit unread for up to an hour on an idle
               cluster, because the operator only re-reads it on its slow tick.
 
-        # The serving certificate renews itself at a third of its life
-        # remaining, so this does not fire on the ordinary path at all. It
-        # fires when renewal has stopped working, which nothing else reports.
+        # Renewal happens at a third of the lifetime left, so this fires only
+        # when renewal has stopped working.
         - alert: SpawneryServingCertificateNotRenewing
           expr: (spawnery_serving_cert_expiry_timestamp_seconds - time()) < 86400
           for: 1h
@@ -62,10 +51,7 @@ spec:
               left, so reaching one day means the renewal path has stopped.
               Every agent handshake fails when it expires.
 
-        # docs/reference/known-issues.md: a RotationBlocked event fires only when the
-        # list of blocked namespaces changes, and Kubernetes expires it within
-        # the hour, so a gate blocked for days is silent everywhere except
-        # here and the annotation on the secret.
+        # A RotationBlocked event fires only when the blocked list changes.
         - alert: SpawneryCARotationBlocked
           expr: spawnery_ca_rotation_blocked_namespaces > 0
           for: 6h
@@ -79,9 +65,8 @@ spec:
               Network blocks the gate by design; the remedy is to delete or
               drain those groups.
 
-        # "Stuck in distributing for two days" is the failure the rotation
-        # design most plausibly produces. A rotation that has not reached its
-        # own hold within a day is one nobody is driving.
+        # A rotation that has not reached its own hold within a day is one
+        # nobody is driving.
         - alert: SpawneryCARotationStalled
           expr: spawnery_ca_rotation_phase{phase="distributing"} == 1
           for: 24h
@@ -99,18 +84,8 @@ spec:
 
     - name: spawnery-agents
       rules:
-        # A healthy fleet never moves this counter. The bound label separates
-        # the two shapes a refusal has, and they are different incidents.
-        #
-        # bound="peer" is one pod over MaxConnectionsPerPeer, whose measured
-        # peak is 2 against a bound of 8 -- see MaxConnectionsPerPeer in
-        # internal/agentserver, where that measurement is written down. There
-        # are exactly two readings and they need opposite responses, so do not
-        # act before telling them apart. Either a pod is opening connections it
-        # has no use for, which is the compromise the bound exists for, or the
-        # bound has become too low for an agent that legitimately needs more --
-        # which can only happen after an agent change, and hack/agent-test.sh
-        # is meant to catch that first.
+        # A healthy fleet never moves this counter. bound="peer": one pod over
+        # MaxConnectionsPerPeer (measured peak 2, bound 8).
         - alert: SpawneryAgentConnectionsRefused
           expr: increase(spawnery_agent_connections_refused_total{bound="peer"}[15m]) > 0
           for: 15m
@@ -127,13 +102,8 @@ spec:
               a fleet at its pod count with one peer refusing is a single
               misbehaving pod, and a fleet well above it is something else.
 
-        # bound="fleet" is that something else, and it is the more serious of
-        # the two: the connections open across the whole endpoint had passed
-        # what the operator's own pod count can account for, so it withdrew
-        # every peer's slack at once. The peer named in the log may be
-        # blameless. A legitimate fleet holds one connection per pod and two
-        # through a handover, so anything near four times the pod count is not
-        # agents doing their job.
+        # bound="fleet": connections across the endpoint exceed what the pod
+        # count explains, so every peer's slack was withdrawn at once.
         - alert: SpawneryAgentFleetOverItsBound
           expr: increase(spawnery_agent_connections_refused_total{bound="fleet"}[15m]) > 0
           for: 5m
@@ -156,19 +126,9 @@ spec:
 
     - name: spawnery-permissions
       rules:
-        # The operator asks the API server every ten minutes whether it still
-        # has the permissions it needs, and this is what survives the asking.
-        # The reason it is not enough to watch for denials in the log was
-        # measured during milestone 6a: a permission reached only through the
-        # manager's cache is claimed by a watch, and a watch that cannot start
-        # is retried silently forever -- seven and three-quarter minutes with
-        # pods:list revoked produced no log line, no 403 in
-        # rest_client_requests_total, and no restart. The operator sits there
-        # looking healthy and reconciling nothing.
-        #
-        # Five minutes rather than none: a check runs every ten, so a single
-        # scrape landing between a revocation and the next round is not
-        # something to page on. Anything that survives one full round is real.
+        # A watch that lacks its permission retries silently forever, so the
+        # log shows nothing. The check runs every ten minutes; for: 5m keeps one
+        # scrape between a revocation and the next round from paging.
         - alert: SpawneryOperatorMissingPermissions
           expr: spawnery_permissions_missing > 0
           for: 5m

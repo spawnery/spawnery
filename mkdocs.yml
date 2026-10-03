@@ -35,9 +35,7 @@ theme:
 extra_css:
   - assets/stylesheets/zen.css
 
-# The design record: dated specs and plans, written for the person building
-# the thing rather than the person running it. Kept in the repository, kept
-# out of the search index.
+# Dated specs and plans, kept out of the site and search index.
 exclude_docs: |
   superpowers/
 
@@ -57,9 +55,8 @@ markdown_extensions:
   - toc:
       permalink: true
 
-# --strict turns these into errors. Without the anchor rule it checks that a
-# linked file exists and not that the heading it jumps to does, so a renamed
-# heading silently strips the fragment instead of failing the build.
+# Without the anchor rule --strict checks that a linked file exists but not the
+# heading it jumps to.
 validation:
   links:
     anchors: warn

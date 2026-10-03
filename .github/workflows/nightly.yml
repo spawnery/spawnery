@@ -2,15 +2,10 @@ name: Nightly
 
 on:
   schedule:
-    # 03:17 UTC. The odd minute is deliberate: the top of an hour is when
-    # every other repository's cron fires, and a job that waits in a queue
-    # for its runner is a job whose duration measures the queue.
+    # Off the hour, when every other repository's cron fires.
     - cron: "17 3 * * *"
   workflow_dispatch:
 
-# issues: write is what the two reporting steps below need. contents: read is
-# the checkout. Nothing here publishes anything, so nothing here gets
-# packages: write.
 permissions:
   contents: read
   issues: write
@@ -18,17 +13,10 @@ permissions:
 jobs:
   image-repro:
     runs-on: ubuntu-latest
-    # Three images, built twice and compared. Milestone 6a's acceptance
-    # criterion 2 is the bit-identical rebuild; this turns it from a thing
-    # measured once into a thing measured continuously. It does not block a
-    # pull request, because a nightly failure says nothing about the code
-    # somebody proposed today.
+    # Images built twice and compared for a bit-identical rebuild.
     timeout-minutes: 90
     env:
-      # One name, read by both steps below and by
-      # hack/require-no-red-nightly.sh, which defaults to the same string.
-      # They are two files and this is the seam between them, so changing it
-      # means changing both -- the script does not read this variable.
+      # hack/require-no-red-nightly.sh hardcodes the same string; change both.
       NIGHTLY_LABEL: nightly-red
     steps:
       - uses: actions/checkout@v4
@@ -37,43 +25,14 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
-            # Ten is the default and is not enough to see why a build failed
-            # here. Gradle's own "Try: run with --stacktrace / --info / --scan"
-            # block is eight of them, so a failing test's name -- which the
-            # agent build now throws as the failure text -- sits just outside
-            # the window. Measured 2026-08-27, when a Velocity test failed in
-            # CI, passed on a re-run of the identical derivation, and left no
-            # record anywhere of which test it was.
+            # The default ten lines end inside Gradle's eight-line "Try:" block,
+            # before the failing test's name.
             log-lines = 40
       - name: make image-repro
         run: nix develop -c make image-repro
 
-      # The two steps below exist because on 2026-08-22 this workflow went red
-      # at 03:56Z and nobody read it. Eleven hours later a release died on the
-      # same cause -- a stale vendorHash that .#operator-image would not build
-      # against. This job is also the only thing in the repository that builds
-      # .#paper-image and .#velocity-image at all, so for those two it is not
-      # merely the earliest signal, it is the only one.
-      #
-      # A signal nobody reads is not a signal, so the failure now lands
-      # somewhere with a state: an open issue, which hack/require-no-red-nightly.sh
-      # refuses to release over.
-      #
-      # Driven 2026-08-27, and until then this step had never run: the only red
-      # night this project has had was 2026-08-22, the day before it landed.
-      # The drive was a throwaway branch carrying one wrong character in
-      # nix/paper.nix's launcher hash -- the same shape of fault that killed the
-      # 2026-08-22 release, and the one this job is the only place to see. Run
-      # 33045207363 went red on `hash mismatch in fixed-output derivation`,
-      # this step opened spawnery/spawnery#3, and
-      # hack/require-no-red-nightly.sh then refused a release with exit 1
-      # against the live repository rather than a fixture. The green run
-      # dispatched afterwards closed it through the step below.
-      #
-      # Neither step fires on a cancelled or timed-out run: failure() is false
-      # for a cancellation, and that is right. A cancelled run found nothing,
-      # and reporting it would put an issue in front of somebody that says
-      # only that a job was interrupted.
+      # A red nightly opens an issue, which hack/require-no-red-nightly.sh
+      # refuses to release over. failure() is false for a cancelled run.
       - name: Report the failure where somebody will meet it
         if: failure()
         env:
@@ -82,10 +41,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Idempotent, and only ever run on a night that is already failing,
-          # so it costs a green nightly nothing. It exists so that a fresh
-          # clone or a fork does not have its first failure swallowed by
-          # `gh issue create` refusing a label that was never created by hand.
+          # gh issue create refuses a label that does not exist yet.
           gh label create "${NIGHTLY_LABEL}" \
             --color b60205 \
             --description "The nightly reproducibility build is failing. Closing this is how you say the cause is fixed." \
@@ -122,10 +78,7 @@ jobs:
           EOF
 
           if [ -n "${existing}" ]; then
-            # Edited rather than commented on. A red state that lasts a
-            # fortnight is one issue, not fourteen notifications, and the body
-            # is the place a reader looks first -- so it carries the newest
-            # failing run rather than the oldest.
+            # Edited, not commented on: one issue rather than a notification a night.
             gh issue edit "${existing}" --repo "${GITHUB_REPOSITORY}" \
               --body-file /tmp/nightly-body.md
             echo "::notice::updated ${GITHUB_REPOSITORY}#${existing}, which was already open"
@@ -144,15 +97,8 @@ jobs:
         run: |
           set -euo pipefail
 
-          # No label yet means no failure has ever been reported, which is the
-          # state this repository was in when these steps were written. `gh
-          # issue list` on a label that does not exist is an error rather than
-          # an empty list, so the query is allowed to fail and is read as
-          # "nothing to close" -- the opposite reading from the one
-          # hack/require-no-red-nightly.sh takes of the same failure, and
-          # deliberately so: there, not being able to look must not permit a
-          # release; here, not being able to look can only fail to close
-          # something, which the next green run tries again.
+          # A missing label is an error, read here as "nothing to close"; the
+          # release gate reads the same failure the other way, on purpose.
           existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
             --label "${NIGHTLY_LABEL}" --state open --json number --limit 1 \
             --jq '.[0].number // empty' 2>/dev/null || true)"
@@ -165,22 +111,9 @@ jobs:
             --comment "Closed by the nightly run that passed: ${RUN_URL}"
           echo "::notice::closed ${GITHUB_REPOSITORY}#${existing}"
 
-  # The tutorial's own path, join included -- test/e2e/tutorial_test.go, gated
-  # behind SPAWNERY_E2E_TUTORIAL so hack/e2e.sh's own run never reaches it. A
-  # real Purpur and Velocity image are built and loaded here, for the same
-  # reason image-repro builds them, which is why this lives beside it rather
-  # than in ci.yml: the per-push suite's declared non-goal is exactly what
-  # this job pays for, on a schedule instead of on every commit.
-  #
-  # A separate job and a separate label rather than folding this into
-  # image-repro's: the two report unrelated failures, and image-repro's issue
-  # text names a bit-identical rebuild, which a broken join is not.
-  #
-  # nightly-tutorial-red gates no release, deliberately:
-  # hack/require-no-red-nightly.sh reads nightly-red alone, and a tutorial path
-  # that broke says nothing about whether the artefact being released works --
-  # it says the page somebody follows on their own cluster no longer leads
-  # where it claims, which is fixed by editing docs, not by holding a tag.
+  # The tutorial path with real game images, too heavy for every push.
+  # nightly-tutorial-red deliberately gates no release: a broken tutorial is
+  # fixed in the docs, not by holding a tag.
   tutorial-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -264,16 +197,8 @@ jobs:
             --comment "Closed by the nightly run that passed: ${RUN_URL}"
           echo "::notice::closed ${GITHUB_REPOSITORY}#${existing}"
 
-  # The on-demand path, which needs a real game image for the same reason the
-  # job above does and is out of ci.yml's e2e for the same reason: that run
-  # builds .#operator-image alone and its manifest names images that never
-  # resolve, so nothing there ever writes a world.
-  #
-  # Its own label rather than nightly-tutorial-red: the two fail over different
-  # things, and an issue saying the tutorial's page no longer leads where it
-  # claims is the wrong text to reopen when what broke is a player's world.
-  # Like that one it gates no release, for the same reason --
-  # hack/require-no-red-nightly.sh reads nightly-red alone.
+  # The on-demand path; ci.yml's e2e has no real game image, so nothing there
+  # writes a world. Its label gates no release either.
   ondemand-e2e:
     runs-on: ubuntu-latest
     timeout-minutes: 45

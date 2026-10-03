@@ -2,14 +2,11 @@ name: Paper watch
 
 on:
   schedule:
-    # 04:23 UTC, after the nightly at 03:17 and on an odd minute for the same
-    # reason: the top of an hour is when every other repository's cron fires.
+    # After the nightly at 03:17, off the hour.
     - cron: "23 4 * * *"
   workflow_dispatch:
 
-# issues: write for the report. contents: read is the checkout. Deliberately
-# no contents: write and no pull-requests: write -- see the comment on the
-# report step for why this watches and does not act.
+# No contents/pull-requests write: this watches and does not act (see below).
 permissions:
   contents: read
   issues: write
@@ -17,15 +14,9 @@ permissions:
 jobs:
   paper-build:
     runs-on: ubuntu-latest
-    # A jar download and two API calls. Twenty minutes is a stop for a wedged
-    # run, not a description of one.
     timeout-minutes: 20
     env:
-      # Not nightly-red. hack/require-no-red-nightly.sh refuses a release while
-      # an issue carrying that label is open, and a new Paper build upstream is
-      # not a defect in this repository -- blocking a release over it would be
-      # this workflow deciding something it has no business deciding. One label
-      # per meaning, and this one blocks nothing.
+      # Not nightly-red: a new upstream build is no reason to block a release.
       WATCH_LABEL: paper-build-available
     steps:
       - uses: actions/checkout@v4
@@ -35,31 +26,10 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
-      # `CHECK=1 hack/paper-pin.sh` with no arguments asks exactly the question
-      # this workflow exists for: does nix/paper.nix name the newest STABLE (or,
-      # without one, BETA) build of the version we are already on.
-      #
-      # The script and not `make paper-pin-check`, though a person should use
-      # the target: make adds `*** [Makefile:133: paper-pin-check] Error 2` to
-      # the output on the exit status that means "a newer build exists", and
-      # that line ends up quoted in the issue body reading like a failure. Not "of any version" -- a Minecraft
-      # upgrade is a different decision wearing the clothes of a patch bump,
-      # and hack/paper-pin.sh's own header says so.
-      #
-      # Three outcomes, and each goes somewhere different on purpose:
-      #
-      #   0  the pin is current            -> close the issue if one is open
-      #   2  a newer build exists          -> open or update the issue
-      #   *  the script refused            -> the job fails, and that is all
-      #
-      # The third is a state, not a report, and it is left as a red run rather
-      # than an issue: a scheduled workflow that fails emails the people
-      # watching the repository, which is the right shape for "PaperMC's API
-      # moved" or "the launcher no longer carries META-INF/download-context" --
-      # one-off news that somebody reads once. A newer build is the opposite:
-      # it persists until somebody acts, and a thing that persists belongs in
-      # an issue where it can be closed. That is the same argument nightly.yml
-      # makes for its own failure, applied to the other half of the split.
+      # The script, not `make paper-pin-check`: make's "Error 2" line would land
+      # in the issue body looking like a failure. Exit 0: pin current, close the
+      # issue; 2: newer build, open or update it; anything else fails the run,
+      # which emails watchers once instead of leaving an issue to close.
       - name: Is the pin current
         id: check
         run: |
@@ -80,25 +50,8 @@ jobs:
             exit "${code}"
           fi
 
-      # Why an issue and not a pull request.
-      #
-      # A bot that ran `make paper-pin`, pushed a branch and opened a pull
-      # request would look like the stronger automation, and against this
-      # repository's CI it is not: no job anywhere runs a Paper server. ci.yml's
-      # images job builds .#paper-image and says in its own comment that it
-      # deliberately does not load or run it; the e2e job builds
-      # .#operator-image and nothing else; nightly.yml builds every image twice
-      # and compares them. So a green pull request would establish that the new
-      # jar's fixed-output hashes are right and nothing whatever about whether
-      # the build works, while looking exactly like a validated change. The
-      # things that actually exercise a Paper build -- `make image-test`, which
-      # loads the image into kind and starts a server, and `make agent-test` --
-      # are local targets needing a container runtime, and are not CI jobs.
-      #
-      # So this watches. What would make the other half worth building is a CI
-      # job that runs the new build rather than merely hashing it; until then a
-      # pull request would automate the cheap half of the risk and dress up the
-      # expensive half as done.
+      # An issue, not a pull request: no CI job runs a Paper server, so a green
+      # PR would only prove the hashes and look like a validated upgrade.
       - name: Report a newer build where somebody will meet it
         if: steps.check.outputs.code == '2'
         env:
@@ -108,10 +61,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Idempotent, and only ever run when there is something to report, so
-          # it costs an up-to-date pin nothing. It exists so that a fresh clone
-          # or a fork does not have its first report swallowed by
-          # `gh issue create` refusing a label that was never created by hand.
+          # gh issue create refuses a label that does not exist yet.
           gh label create "${WATCH_LABEL}" \
             --color 1d76db \
             --description "PaperMC has published a build newer than nix/paper.nix. Closing this is how you say you have looked." \
@@ -172,10 +122,7 @@ jobs:
           EOF
 
           if [ -n "${existing}" ]; then
-            # Edited rather than commented on, and for the same reason
-            # nightly.yml edits: a pin left a fortnight behind is one issue,
-            # not fourteen notifications, and the body is where a reader looks
-            # first, so it carries the newest build rather than the oldest.
+            # Edited, not commented on: one issue rather than a notification a day.
             gh issue edit "${existing}" --repo "${GITHUB_REPOSITORY}" \
               --body-file /tmp/paper-body.md
             echo "::notice::updated ${GITHUB_REPOSITORY}#${existing}, which was already open"
@@ -194,12 +141,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          # No label yet means nothing has ever been reported. `gh issue list`
-          # on a label that does not exist is an error rather than an empty
-          # list, so the query is allowed to fail and is read as "nothing to
-          # close" -- the same reading nightly.yml takes, and safe for the same
-          # reason: not being able to look can only fail to close something,
-          # which the next run tries again.
+          # A missing label is an error, read here as "nothing to close".
           existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
             --label "${WATCH_LABEL}" --state open --json number --limit 1 \
             --jq '.[0].number // empty' 2>/dev/null || true)"

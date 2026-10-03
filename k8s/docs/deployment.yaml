@@ -18,10 +18,8 @@ spec:
         runAsGroup: 10001
         seccompProfile:
           type: RuntimeDefault
-      # maxSkew 1 with DoNotSchedule: three nodes and two replicas means the
-      # constraint can always be satisfied, so a pod that cannot spread is
-      # left Pending rather than doubled up with the other on a node a drain
-      # would then take both replicas down with.
+      # DoNotSchedule: better Pending than both replicas on the node a drain
+      # takes down.
       topologySpreadConstraints:
         - maxSkew: 1
           topologyKey: kubernetes.io/hostname
@@ -40,9 +38,8 @@ spec:
             allowPrivilegeEscalation: false
             capabilities:
               drop: ["ALL"]
-          # The server writes nothing to the site, but Caddy initialises a
-          # data directory at startup even with automatic HTTPS off, and
-          # XDG_DATA_HOME in the image points here.
+          # Caddy initialises a data directory at startup even with automatic
+          # HTTPS off; XDG_DATA_HOME in the image points here.
           volumeMounts:
             - name: tmp
               mountPath: /tmp

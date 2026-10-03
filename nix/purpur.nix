@@ -1,21 +1,14 @@
-# The pinned Purpur artifacts, patched at build time exactly the way
-# nix/paper.nix patches Paper's.
-#
-# Purpur is a fork of Paper and ships the same paperclip bootstrap: its jar
-# carries META-INF/license/paperclip-LICENSE.txt and a META-INF/download-context
-# in the identical format, so the patch-only build below is Paper's unchanged.
+# The pinned Purpur artifacts. Purpur ships Paper's paperclip bootstrap, so
+# the patch-only build is nix/paper.nix's unchanged.
 { fetchurl
 , jdk25_headless
 , stdenvNoCC
 , mojangJar
 }:
 
-# Both values a Purpur bump moves -- the build number and the hash -- are what
-# hack/purpur-pin.sh computes and writes, the same way hack/paper-pin.sh does
-# for Paper. It differs in one respect worth knowing: PaperMC's API publishes a
-# SHA-256 for its launcher and Purpur's publishes an MD5, so the check the pin
-# script makes on its first download is weaker. What actually freezes the input
-# is the hash below, which is the same either way.
+# hack/purpur-pin.sh writes the build number and the hash. Purpur's API
+# publishes only an MD5 to check the download against; the hash below is
+# what freezes the input.
 rec {
   purpurVersion = "26.3";
   purpurBuild = "2642";
@@ -25,18 +18,8 @@ rec {
     hash = "sha256-zAdiFPyFb1XlL3/oPhL7Q2HeCWd/XIncrwJKKlgs21A=";
   };
 
-  # Mojang's server jar arrives as an argument, and the flake passes Paper's.
-  # Measured on 2026-09-29: Purpur 26.3 build 2642 names exactly the object
-  # nix/paper.nix already pins --
-  # 33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c -- because both forks are the same
-  # Minecraft version and there is only one such jar.
-  #
-  # Sharing it is safe rather than convenient, and the reason is that paperclip
-  # verifies the cached original against the hash in its own
-  # META-INF/download-context before patching. A Purpur and a Paper pin that
-  # ever drift onto different Minecraft versions therefore fail this build
-  # loudly, in the sandbox, rather than producing a server patched against the
-  # wrong original.
+  # Paper's Mojang jar: same Minecraft version, same object. paperclip verifies
+  # it against its own download-context, so a drifted pair fails the build.
   repo = stdenvNoCC.mkDerivation {
     pname = "purpur-repo";
     version = "${purpurVersion}+${purpurBuild}";

@@ -1,43 +1,20 @@
 #!/bin/sh
-# Entrypoint of the Spawnery Paper base image.
-#
-# It renders configuration and starts the server. Everything it used to
-# validate or rewrite server.properties by hand — max-players, the port, the
-# status flag — lives in spawnery-config now, which has the values and can
-# name the key that is missing; see docs/reference/known-issues.md for why the shell
-# version it replaces did not generalise. /data/config is not an override
-# slot — it is Paper's own writable directory, where Paper itself writes
-# paper-global.yml and paper-world-defaults.yml at startup, which is why the
-# operator's own target was moved to /etc/spawnery rather than fought over.
-# (The plugins directory below could not be moved the same way, so
-# internal/podspec refuses a user mount at it instead.) See section 6 of
-# docs/superpowers/specs/2026-08-08-paper-base-image-design.md.
+# Entrypoint of the Spawnery Paper base image: renders configuration and
+# starts the server.
 set -eu
 
-# Every variable this script reads from its environment is SPAWNERY_-prefixed:
-# that prefix is reserved by api/v1alpha1.ReservedEnvPrefix, so a group's
-# spec.env cannot set it and nobody can point a running server at a directory
-# or a jar of their choosing through a field meant for game settings. The
-# image's own directory is one of them -- it decides which jar runs and where
-# the operator's agent jar is taken from. image/reserved_env_test.go reads this
-# file and fails on an unprefixed one.
+# Every variable read from the environment is SPAWNERY_-prefixed, a prefix
+# spec.env cannot set; image/reserved_env_test.go fails on an unprefixed one.
 PAPER_HOME="${SPAWNERY_PAPER_HOME:-/opt/paper}"
 
-# The server jar inside PAPER_HOME. It is a variable because this one script
-# serves two images: the Paper image, where the default is exactly what it has
-# always been, and the Purpur image, which sets it. Forking the script instead
-# would have meant maintaining two copies of the plugin copying, the cgroup
-# reading and the flag list below, and every one of the tests in
-# image/entrypoint_test.go twice.
+# Set by the Purpur image, which shares this script.
 SERVER_JAR="${SPAWNERY_SERVER_JAR:-$PAPER_HOME/paper.jar}"
 
 MOUNTINFO="${SPAWNERY_MOUNTINFO:-/proc/self/mountinfo}"
 FILE_SOURCE="${SPAWNERY_FILE_SOURCE:-/var/run/spawnery/files}"
 PLUGIN_SOURCE="${SPAWNERY_PLUGIN_SOURCE:-/var/run/spawnery/plugins}"
 
-# A read-only spec.mounts entry under /data is a writer the scans below cannot
-# see: a copy onto it dies with a bare "Read-only file system". mountinfo writes
-# a space in a path as \040, which printf %b turns back.
+# mountinfo writes a space in a path as \040, which printf %b turns back.
 readonly_mounts_below_here() {
 	[ -r "$MOUNTINFO" ] || return 0
 	here=$(pwd -P)
@@ -74,35 +51,19 @@ refuse_mounted() {
 	done
 }
 
-# The scans of both sources, before anything on the claim changes.
-#
-# **The scan runs before the copy, and that is the whole safety property.**
-# Three things write into /data on a start: spawnery-config, the file copy
-# and the plugin copy below. Refusing a source that carries a path one of the
-# others owns makes their paths disjoint, so the order between them cannot
-# decide the result -- rather than a rule about which runs first, which would
-# make these line numbers load-bearing.
-#
-# Before the prune as well: it deletes what a source ships without asking,
-# since the copy writes it back, and a source refused after it would never be
-# copied.
+# The scans run before the prune and before any writer. Refusing a source
+# that carries a path another writer owns keeps the writers' paths disjoint,
+# so the order between them cannot decide the result.
 if [ -d "$FILE_SOURCE" ]; then
-	# The renderer's own files, and the directory extraPlugins owns. A Paper
-	# server does not refuse velocity.toml or lang/: nothing writes them here,
-	# and refusing a path no owner claims would be a rule with no reason.
-	# -e and not -d, for the same reason the renderer's files below use it: a
-	# *regular file* named plugins is still a path extraPlugins owns, and
-	# letting it through only postpones the failure to the `mkdir -p plugins`
-	# further down, which dies under `set -eu` with "can't create directory
-	# 'plugins': File exists" and names neither the claim nor the field.
+	# -e and not -d: a regular file named plugins would still break the
+	# `mkdir -p plugins` below, with a message naming neither claim nor field.
 	if [ -e "$FILE_SOURCE/plugins" ]; then
 		echo "spawnery: spec.extraFiles carries plugins/, which spec.extraPlugins owns." >&2
 		echo "spawnery: move those files to the extraPlugins claim. Refusing to start." >&2
 		exit 1
 	fi
-	# The image's own file, outside the renderer loop the drift test reads:
-	# accepting the EULA is running this image, and a claim carrying its own
-	# eula.txt would replace that with whatever it says.
+	# Outside the loop below, which image/refusal_lists_test.go holds to
+	# render.PaperFiles: eula.txt is the image's, not the renderer's.
 	if [ -e "$FILE_SOURCE/eula.txt" ]; then
 		echo "spawnery: spec.extraFiles carries eula.txt, which this image writes itself." >&2
 		echo "spawnery: running the image is accepting the EULA; drop the file. Refusing to start." >&2
@@ -122,33 +83,18 @@ if [ -d "$PLUGIN_SOURCE" ]; then
 	refuse_mounted "$PLUGIN_SOURCE" plugins extraPlugins || exit 1
 fi
 
-# spec.storage.keep: delete what the claim holds beyond the keep list, so
-# that everything below writes into a claim that is already clean and a
-# refusal leaves it untouched. It cannot run at stop: the JVM is PID 1 and a
-# hard kill runs no hook.
+# spec.storage.keep. It cannot run at stop: the JVM is PID 1 and a hard kill
+# runs no hook.
 if [ -n "${SPAWNERY_KEEP:-}" ]; then
 	spawnery-config --prune "$SPAWNERY_KEEP" --mountinfo "$MOUNTINFO" \
 		--pair "$FILE_SOURCE=." --pair "$PLUGIN_SOURCE=plugins" || exit 1
 fi
 
-# Mojang's EULA. Running this image is accepting it, and the README says so
-# rather than leaving it buried here.
 printf 'eula=true\n' >eula.txt
 
-# The configuration Paper actually reads, written from the operator's
-# rendered ConfigMap, the user's overlay and the fields neither may move. It
-# replaces the three set_property calls this script used to make: a
-# .properties helper in shell could not reach paper-global.yml, which is
-# YAML, and it failed on a read-only file with a bare mv message that said
-# nothing about why. Invoked unqualified, the same way java is below —
-# /usr/local/bin is already ahead on this image's PATH, and going through
-# PATH rather than a hardcoded path is what lets a test double stand in for
-# it below.
 spawnery-config --flavor paper
 
-# Files an administrator put on a volume, copied into the working directory.
-# lost+found and the two globs are the plugin copy's reasoning exactly; see
-# the comment on PLUGIN_SOURCE below for the measurements behind both.
+# lost+found: see the plugin copy below.
 if [ -d "$FILE_SOURCE" ]; then
 	for entry in "$FILE_SOURCE"/* "$FILE_SOURCE"/.[!.]*; do
 		[ -e "$entry" ] || continue
@@ -157,68 +103,21 @@ if [ -d "$FILE_SOURCE" ]; then
 		lost+found) continue ;;
 		esac
 		cp -R "$entry" ./
-		# The whole of "./$name", not only what this loop just placed there --
-		# when $name is a directory that already existed, that recurses over
-		# files spawnery-config wrote into it too, such as paper-global.yml.
-		# That is fine rather than merely tolerated: spawnery-config ran as
-		# this same non-root user moments earlier, so those files are already
-		# writable and the recursion is a no-op on them.
-		#
-		# Not `chmod -R u+w .`, though: this script runs under `set -eu`,
-		# every user mount is read-only, and a group with a claim mount
-		# somewhere else under /data would die on that wider chmod with a
-		# bare `chmod:` naming no cause. -xdev is the same rule one level
-		# down: a mount nested inside "./$name" is another filesystem, and
-		# find stops at it rather than dying on it. The mount this copies from is
-		# read-only too, so the copies arrive read-only and the files it
-		# carries are exactly the ones a server rewrites -- Sponge writes
-		# sponge.conf back on every start.
+		# The source mount is read-only, so the copies arrive read-only, and
+		# servers rewrite these files. Not `chmod -R u+w .`: a read-only claim
+		# mount elsewhere under /data would kill the start under `set -eu`.
 		find "./$name" -xdev -exec chmod u+w {} +
 	done
 fi
 
-# Plugins from the group's own volume, if it has one.
-#
-# The default is internal/podspec.PluginSourceMountPath. The operator mounts
-# exactly there and passes nothing -- the variable is overridable only so the
-# tests can point it at a temporary directory, which is the same seam
-# SPAWNERY_PAPER_HOME already is. Creating /var/run/spawnery/plugins needs
-# root, so without it this copy would have no test at all.
-#
-# The whole tree, not just *.jar. A plugin's configuration lives at
-# plugins/<Name>/config.yml, and copying jars without it would leave every
-# plugin at its defaults on an ephemeral group, whose /data is an emptyDir.
-#
-# The source wins on every start. A plugin that rewrote its own config at
-# runtime loses that change here: on an ephemeral group it was going anyway,
-# and this makes the persistent case predictable rather than accumulating.
-#
-# The trailing dot copies the directory's *contents*. Without it the tree lands
-# at plugins/plugins.
-#
-# **This runs before the agent jar below, and the order is the bound.** That
-# copy overwrites whatever landed here, so a spawnery-agent.jar on the volume
-# cannot displace the one the operator shipped -- otherwise somebody pinning an
-# older agent would leave the operator talking to a version it never published,
-# with every object in the cluster saying the right thing.
+# The whole tree, not just *.jar: plugin configuration lives in
+# plugins/<Name>/. This runs before the agent copy, which overwrites any
+# spawnery-agent.jar the volume carries.
 if [ -d "$PLUGIN_SOURCE" ]; then
 	mkdir -p plugins
-	# cp -R and not cp -a, and lost+found skipped by name. Both were measured
-	# on a live Longhorn claim on 2026-08-29, and either one alone kills the
-	# start under `set -eu`:
-	#
-	#   cp: can't preserve ownership of '.../lost+found': Operation not permitted
-	#   cp: can't preserve ownership of '.../.': Operation not permitted
-	#
-	# `-a` implies --preserve=all, and this container is not root, so it cannot
-	# set an owner on anything -- not even on the destination directory. `-R`
-	# copies the tree and leaves ownership to the process, which is what a
-	# non-root container can actually do. chmod below then makes it writable.
-	#
-	# lost+found is created by mkfs on every ext4 filesystem and is mode 0700
-	# owned by root, so a non-root copy cannot read it at all. Longhorn formats
-	# ext4 by default, which makes this the ordinary case rather than an exotic
-	# one. It is never a plugin, so skipping it by name loses nothing.
+	# cp -R and not cp -a: a non-root container cannot preserve ownership, and
+	# -a fails on it. lost+found (root, 0700, on every ext4 claim) is
+	# unreadable to this user and never a plugin.
 	for entry in "$PLUGIN_SOURCE"/* "$PLUGIN_SOURCE"/.[!.]*; do
 		[ -e "$entry" ] || continue
 		case "${entry##*/}" in
@@ -226,74 +125,32 @@ if [ -d "$PLUGIN_SOURCE" ]; then
 		esac
 		cp -R "$entry" plugins/
 	done
-	# The mount is read-only, so the copies arrive read-only too. Paper writes
-	# its plugins' data folders inside this directory, and a plugin that cannot
-	# rewrite its own config file fails in its own way rather than in one the
-	# server reports.
+	# Read-only copies of a read-only mount; plugins rewrite their own configs.
 	find plugins -xdev -exec chmod u+w {} +
 fi
 
-# The agent plugin. It ships in the read-only part of the image and is copied
-# out on every start, unconditionally: the image is the truth, not whatever a
-# previous start left in the volume.
-#
-# It cannot simply be loaded from where it ships. Paper writes its plugins'
-# data folders inside the plugins directory - measured in milestone 2b, which
-# saw plugins/spark/config.json and plugins/bStats/config.yml appear on a plain
-# run - so pointing --plugins at a read-only directory takes Paper's own
-# bundled plugins down with it.
-#
-# A read-only mount at /data/plugins would break the copy, which is why
-# internal/podspec refuses one.
+# Copied rather than loaded where it ships: Paper writes its plugins' data
+# folders inside the plugins directory, so it cannot be read-only.
 if [ -f "$PAPER_HOME/agent/spawnery-agent.jar" ]; then
 	mkdir -p plugins
 	cp -f "$PAPER_HOME/agent/spawnery-agent.jar" plugins/spawnery-agent.jar
 fi
 
-# spec.substitution: fill the placeholders in what was just copied, and only
-# there. After the agent copy, so the agent jar is never touched; before the
-# JVM, so a missing secret stops this start instead of a plugin later.
+# After the agent copy, so the agent jar is never touched; before the JVM, so
+# a missing secret stops this start instead of a plugin later.
 if [ -n "${SPAWNERY_SUBSTITUTION_PREFIX:-}" ]; then
 	spawnery-config --substitute "$SPAWNERY_SUBSTITUTION_PREFIX" \
 		--pair "$PLUGIN_SOURCE=plugins" --pair "$FILE_SOURCE=." || exit 1
 fi
 
-# exec, so the JVM becomes PID 1 and receives SIGTERM directly. With a shell in
-# between, the group's termination grace period would run out empty and every
-# server would lose its last world state on every stop.
+# MaxRAMPercentage rather than -Xmx: the image does not know the group's
+# memory limit. The remaining flags are the ones Paper recommends.
 #
-# MaxRAMPercentage rather than a fixed -Xmx: the memory bound comes from the
-# group's resources, and the image does not know it. The remaining flags are
-# the ones Paper itself recommends.
-# AlwaysPreTouch is dropped when nothing bounds this container's memory.
-#
-# The flag makes the JVM claim its whole heap from the operating system at
-# start rather than growing into it. Paired with MaxRAMPercentage that is a
-# good trade *inside a limit*: the share is the container's, and touching it
-# up front costs a slower start and buys stable latency afterwards. With no
-# limit the share is the node's, so a single server with no
-# resources.limits.memory takes three quarters of the machine the instant it
-# starts -- from every other pod on it, before it has served anybody.
-#
-# Read from the kernel rather than from the pod spec, because this script has
-# no access to the pod spec and the kernel is where the answer actually is.
-# cgroup v2 writes the literal "max" when unbounded; v1 writes a sentinel so
-# large it is indistinguishable from unbounded in practice, and the comparison
-# below treats anything at or above 2^60 as unbounded rather than trying to
-# name the exact sentinel, which differs by kernel and by page size.
-#
-# An unreadable cgroup is treated as *limited*, which is the direction that
-# changes nothing: the flags stay exactly as they were before this check
-# existed, so a kernel layout nobody here anticipated cannot turn a working
-# start into a different one. It is only the case this can positively identify
-# -- an unbounded limit, read from a file that exists -- that drops the flag.
-# That is also why the host running this image's tests needs no cgroup of any
-# particular shape: it lands on the unreadable branch and nothing changes.
-#
-# SPAWNERY_CGROUP_ROOT exists for those tests and for nothing else. Both
-# branches below are unreachable from a test host otherwise -- the root cgroup
-# has no memory.max, and no test may write under /sys -- so without it the one
-# case this check exists for would ship unexercised.
+# AlwaysPreTouch claims the whole heap at start. Without a memory limit that
+# is three quarters of the node, so the flag is dropped then. cgroup v1's
+# "unbounded" sentinel differs by kernel and page size, hence anything at or
+# above 2^60. An unreadable cgroup counts as limited, which changes nothing.
+# SPAWNERY_CGROUP_ROOT exists only for the tests.
 CGROUP_ROOT="${SPAWNERY_CGROUP_ROOT:-/sys/fs/cgroup}"
 PRETOUCH="-XX:+AlwaysPreTouch"
 memory_unbounded() {

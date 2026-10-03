@@ -188,7 +188,6 @@ func TestAMountBesideThePluginsIsNoReasonToRefuse(t *testing.T) {
 	}
 }
 
-// A writable claim mount takes the copy like any directory does.
 func TestAWritableMountIsNoReasonToRefuse(t *testing.T) {
 	for flavour, run := range bothFlavours {
 		t.Run(flavour, func(t *testing.T) {

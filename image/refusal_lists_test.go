@@ -26,41 +26,15 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// Design spec 3.3 says the entrypoints' refusal entries are "read from the
-// same lists the renderer refuses overlay keys against, so the two can never
-// drift". A shell script cannot read a Go slice, so the entries are typed out
-// twice -- and until this file existed, "can never drift" was a sentence with
-// nothing behind it.
-//
-// This is what holds it instead: the scripts stay the source of what they
-// refuse, and the lists are compared here. A fourth file added to
-// render.PaperFiles without a matching entry in image/entrypoint.sh is the
-// case worth naming. It fails no test today: the renderer writes the file, the
-// entrypoint accepts it from an extraFiles claim, the copy lands, the renderer
-// overwrites it, and the administrator's file is gone with nothing said. That
-// silent no-op is what design 3.3 calls the worst outcome, and it is the one
-// this test turns into a red build.
-//
-// The reverse direction matters too, and is the likelier mistake: an entry
-// left in a script after the renderer stopped writing that file refuses a path
-// no owner claims, which crash-loops a group for nothing.
+// A shell script cannot read a Go slice, so the entrypoints' refusal lists are
+// typed out by hand; these tests hold them to the renderer's lists both ways.
 
-// ownedLoop matches the one scan in each entrypoint that walks the renderer's
-// own files:
-//
-//	for owned in server.properties config/paper-global.yml ...; do
-//
-// The directory refusals above it -- plugins/ and, on the proxy, lang/ -- are
-// deliberately not matched. Neither comes from a renderer list: plugins/
-// belongs to extraPlugins and lang/ to Velocity itself, so there is nothing on
-// the Go side for them to drift against.
+// ownedLoop matches the scan over the renderer's own files. The directory
+// refusals above it (plugins/, lang/) have no renderer list to drift against.
 var ownedLoop = regexp.MustCompile(`(?m)^[ \t]*for owned in (.+); do[ \t]*$`)
 
-// scriptRefusalList reads an entrypoint and returns the paths its scan
-// refuses. It fails rather than returning nothing when the loop it is looking
-// for is missing or duplicated: a regexp that quietly matches nothing would
-// make every assertion below pass against an empty list, which is the one way
-// a drift test can be worse than no test at all.
+// scriptRefusalList returns the paths an entrypoint's scan refuses. It fails
+// on a missing or duplicated loop: an empty list would pass every assertion.
 func scriptRefusalList(t *testing.T, repoScript string) []string {
 	t.Helper()
 
@@ -92,10 +66,8 @@ func scriptRefusalList(t *testing.T, repoScript string) []string {
 	return list
 }
 
-// assertNoRefusalDrift compares one script's list against one renderer list
-// and says which way they went apart. "They differ" would send somebody to
-// diff two files by hand; the direction is the whole diagnosis, because the
-// two directions are different bugs with different fixes.
+// assertNoRefusalDrift names the direction of a drift: the two directions are
+// different bugs with different fixes.
 func assertNoRefusalDrift(t *testing.T, repoScript, goListName string, goList []string) {
 	t.Helper()
 
@@ -154,14 +126,8 @@ func TestTheVelocityEntrypointRefusesExactlyWhatTheRendererOwns(t *testing.T) {
 	assertNoRefusalDrift(t, "image/velocity-entrypoint.sh", "render.VelocityFiles", render.VelocityFiles)
 }
 
-// TestTheTwoFlavoursRefusalListsAreNotTheSame is the other half of the
-// promise. Design 3.3 says the entries are "the running flavour's own", and a
-// well-meant tidy-up that gave both scripts the union of the two lists would
-// pass every assertion above -- each script would still match its own Go list
-// only if the Go lists were merged too, but the tempting version of that
-// mistake merges the shell and leaves the Go alone. This says out loud that a
-// Paper server must not refuse velocity.toml and a proxy must not refuse
-// server.properties.
+// TestTheTwoFlavoursRefusalListsAreNotTheSame catches a tidy-up that gives both
+// scripts the union of the lists while leaving the Go lists apart.
 func TestTheTwoFlavoursRefusalListsAreNotTheSame(t *testing.T) {
 	paper := scriptRefusalList(t, "image/entrypoint.sh")
 	velocity := scriptRefusalList(t, "image/velocity-entrypoint.sh")

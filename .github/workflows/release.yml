@@ -3,21 +3,14 @@ name: Release
 on:
   push:
     tags: ["v*"]
-  # A dispatch can only ever dry-run. It takes no input, and the DRY_RUN below
-  # is not conditional on one: publishing this project's images under its
-  # name is a decision a tag records, and a button that could take it by
-  # accident is not the same decision. What a dispatch is for is the thing
-  # design §5 said DRY_RUN was for and no mechanism actually offered --
-  # exercising this file's own shape, on a runner, before a real tag exists.
+  # A dispatch can only dry-run: publishing is a decision a tag records.
   workflow_dispatch:
 
 permissions:
   contents: write
   packages: write
   actions: read
-  # issues: read, for the nightly gate below. Read and not write: this
-  # workflow asks whether a report is open and never touches one. Closing it
-  # is the release owner's act, which is the whole point of that gate.
+  # issues: read only: closing a nightly report is the release owner's act.
   issues: read
 
 jobs:
@@ -25,65 +18,21 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 90
     outputs:
-      # The digest of the operator image this run pushed, for anything that
-      # wants it machine-readably rather than out of the Release body.
       digest: ${{ steps.digest.outputs.digest }}
     steps:
       - uses: actions/checkout@v4
         with:
-          # The chart-version guard below compares this tag against the one
-          # before it, which needs more than the shallow clone actions/checkout
-          # takes by default.
           fetch-depth: 0
 
-      # ci.yml's e2e job had already failed on the same Nix hash mismatch
-      # three times -- on two merges to master and on this release commit
-      # itself -- before a tag was pushed anyway. Each failure was visible in
-      # its own place and nobody read it; the tag was the fourth place the
-      # repository said so, and the first place anybody looked. This step is
-      # the read that should have happened automatically: it asks GitHub for
-      # ci.yml's own verdict on GITHUB_SHA and refuses to publish on anything
-      # but an explicit success. hack/require-green-ci.sh carries the rest of
-      # that reasoning -- why it reads the run's conclusion and not a job's,
-      # and why it filters on the push event rather than head_sha alone.
-      #
-      # First among the steps that can fail, and placed after checkout rather
-      # than before it only because the script above is not on disk until
-      # checkout has run. That costs seconds; cachix/install-nix-action below
-      # costs minutes, and this is what stands between a red or missing run
-      # and ever starting it. Fetching the script by some other means ahead of
-      # checkout would spend effort avoiding a cost that is already small, so
-      # it waits the one step it has to.
+      # Refuses to publish unless ci.yml concluded success on this commit.
       - name: CI, on the commit this tag points at
         if: github.event_name == 'push'
         env:
           GH_TOKEN: ${{ github.token }}
         run: hack/require-green-ci.sh "${GITHUB_REPOSITORY}" "${GITHUB_SHA}"
 
-      # The gate above asks ci.yml, and ci.yml builds .#operator-image and no
-      # other image derivation. .#paper-image and .#velocity-image carry three
-      # fixed-output hashes between them that nothing on the commit loop ever
-      # fetches against, and nightly.yml is the only job in this repository
-      # that does -- so for those two it is not the earliest signal, it is the
-      # only one. Without this step a stale Paper or Velocity hash is green
-      # through CI, green through the gate above, and first meets somebody in
-      # hack/publish.sh below, on a runner, after the tag has been pushed and
-      # the release has therefore already been announced.
-      #
-      # It reads an issue rather than nightly.yml's own runs, and that is the
-      # staleness rule rather than a shortcut around one. A nightly's verdict
-      # is about the night it ran, not about this commit, so "the last one was
-      # green" and "the last one was red" both age badly on their own -- the
-      # red one especially, since a cause fixed at noon leaves a red run
-      # standing until 03:17 the next morning and would block its own fix. An
-      # issue is a state somebody can end, and ending it is what this gate is
-      # for: on 2026-08-22 the nightly went red, nobody read it, and eleven
-      # hours later a release died on the same cause. Closing the issue is the
-      # reader arriving.
-      #
-      # docs/superpowers/specs/2026-08-22-release-requires-green-ci-design.md
-      # §2 says this workflow does not consult nightly.yml. That was true when
-      # it was written and this step changes it; §2 carries the correction.
+      # Reads an open issue rather than nightly.yml's last run: a run's verdict is
+      # about its night, and a red one would block its own fix until the next one.
       - name: The nightly reproducibility build
         if: github.event_name == 'push'
         env:
@@ -96,75 +45,23 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
-      # skopeo writes its credential to $XDG_RUNTIME_DIR/containers/auth.json,
-      # and GitHub's hosted Ubuntu runners do not set XDG_RUNTIME_DIR. With it
-      # unset, containers/image falls back to /run/containers/$UID/auth.json --
-      # a path a non-root runner cannot create. Reproduced in this repository's
-      # own dev shell:
-      #
-      #   $ env -u XDG_RUNTIME_DIR skopeo logout --all
-      #   level=fatal msg="mkdir /run/containers: permission denied"
-      #
-      # and containers/skopeo#1654 reports the identical failure on a hosted
-      # runner at /run/containers/1001/auth.json. Naming the file directly is
-      # what fixes it, and REGISTRY_AUTH_FILE is preferred over setting
-      # XDG_RUNTIME_DIR because it names exactly this one file: XDG_RUNTIME_DIR
-      # is a broader contract -- an owner-only, login-lifetime directory that
-      # several other tools in this dev shell would also start writing into --
-      # and pointing it at a scratch path to fix a credential path changes more
-      # than the credential path. Verified in the dev shell that both
-      # --authfile and REGISTRY_AUTH_FILE take the /run/containers path out of
-      # play; this is the one that also reaches skopeo inspect and skopeo copy
-      # inside hack/publish.sh without the script learning a new flag.
-      #
-      # It matters more than a failed step would suggest. If the credential
-      # were merely absent rather than the step failing, hack/publish.sh's
-      # inspect would go to ghcr.io anonymously, which answers 403 Forbidden
-      # rather than "manifest unknown" -- and 403 is not the one answer that
-      # guard reads as permission to proceed, so the run would stop at
-      # "cannot tell whether ... already exists" instead.
+      # skopeo writes its credential under $XDG_RUNTIME_DIR, which hosted runners
+      # leave unset, and its fallback /run/containers is not creatable by a non-root
+      # runner. REGISTRY_AUTH_FILE names just this file and also reaches
+      # hack/publish.sh's skopeo calls.
       - name: Where skopeo keeps its credential
         run: echo "REGISTRY_AUTH_FILE=$RUNNER_TEMP/auth.json" >> "$GITHUB_ENV"
 
-      # The git tag and flake.nix's versions are decoupled on purpose --
-      # imageVersion is the agent's and operatorVersion is the reconciler's,
-      # and flake.nix:128-134 explains why hanging one off the other would be
-      # wrong. Nothing coupled them here either; what this refuses is only the
-      # tag that names none of them, which is a tag nobody meant to push.
-      #
-      # *None of them* is three numbers since v0.2.14, not two. The chart
-      # became a published artefact of its own, so charts/spawnery/Chart.yaml's
-      # version is a version this repository ships under, and a tag naming it
-      # is a tag that means something. v0.2.14 was refused here for naming
-      # "no image in flake.nix" -- correctly, by this step's old premise, and
-      # wrongly by the one the release now has. The guard further down that
-      # asks whether a tag publishes anything had already been taught the
-      # chart; this one is the half that was missed, and the two now agree. The table
-      # is printed either way, so the run's log says what v0.1.1 actually
-      # released without anyone opening flake.nix.
-      #
-      # It reads .#agents.version and .#spawnery-operator.version, and not the
-      # imageTag attributes it read until v0.1.0. Those are composed: paper's
-      # is "${paper.paperVersion}-${imageVersion}" (nix/paper-image.nix:36),
-      # so the value this compared against was 26.2-0.2.0 and never 0.2.0. The
-      # accident is that operatorVersion reaches operator-image.nix's tag
-      # bare, so v0.1.0 -- the one tag this project has -- matched and the
-      # guard passed. The first release that bumped only imageVersion would
-      # have had no valid tag at all: v0.3.0 refused, and only the unusable
-      # v26.2-0.3.0 accepted. nix/agents.nix:31 sets version = imageVersion
-      # and flake.nix:202 sets version = operatorVersion, so these two
-      # attributes are the versions themselves rather than a string built out
-      # of them.
+      # The tag must name one of imageVersion, operatorVersion or the chart's
+      # version; they move independently. .#agents.version and
+      # .#spawnery-operator.version are the versions themselves, unlike the composed
+      # imageTag attributes.
       - name: The tag, against the versions in flake.nix
         if: github.event_name == 'push'
         run: |
           set -euo pipefail
           agent="$(nix eval --raw .#agents.version)"
           operator="$(nix eval --raw .#spawnery-operator.version)"
-          # Read as text, the way every other version comparison in this file
-          # reads a YAML number: no helm on this step's path, and rendering a
-          # chart to learn what its own Chart.yaml says would be a heavier
-          # answer to a smaller question.
           chart="$(grep -E '^version:' charts/spawnery/Chart.yaml | head -1 | awk '{print $2}')"
           if [ -z "$chart" ]; then
             echo "no version: line in charts/spawnery/Chart.yaml; this step reads it as text" >&2
@@ -184,12 +81,6 @@ jobs:
           echo "  velocity  ${velocity_tag}"
           echo "  operator  ${operator_tag}"
           echo "  chart     ${chart}"
-          # And check that the versions above are still the versions those tags
-          # carry. Reading a version from one attribute and publishing a tag
-          # built in another is precisely how the old shape of this step came
-          # to compare the wrong string for two milestones without anybody
-          # noticing: nothing ever asserted the relationship, so the guard
-          # measured a number that had quietly stopped being the one it named.
           for pair in "paper:${paper_tag}" "velocity:${velocity_tag}"; do
             case "${pair#*:}" in
               *-"${agent}") ;;
@@ -221,28 +112,9 @@ jobs:
             exit 1
           fi
 
-      # A chart whose contents moved while its own version stood still never
-      # reaches a cluster, and nothing else in this pipeline can tell.
-      #
-      # Flux packages a chart from a GitRepository and names the artifact after
-      # Chart.yaml's version. Leave that number alone and the artifact is
-      # considered unchanged, so a HelmRelease keeps serving the previous
-      # chart -- with the previous CRDs -- however new the tag it points at is.
-      # Measured on 2026-08-20: v0.1.1 carried a CRD with a fourth expose
-      # strategy, Chart.yaml stayed at 0.1.0, and the cluster's CRD never
-      # learned the new value. The operator image still moved, because the
-      # deployment pins its digest in values, which is what made the failure
-      # look like a success.
-      #
-      # No unit test can ask this: it is a question about two commits.
-      # appVersion and values.yaml's tag are checked against flake.nix by
-      # internal/rbacaudit's TestTheChartAgreesWithTheFlakeAboutTheOperatorRelease;
-      # this is the other half.
-      #
-      # It also answers a second question, now that the chart is itself a
-      # published artefact: whether this tag has a chart to publish at all.
-      # That is the same comparison, so it is made once here rather than a
-      # second time further down.
+      # Flux names a packaged chart after Chart.yaml's version, so a chart that
+      # moved without a version bump never reaches a cluster. Also decides whether
+      # this tag has a chart to publish.
       - name: The chart's own version, against the previous tag
         id: chart_version
         if: github.event_name == 'push'
@@ -285,23 +157,8 @@ jobs:
             -u "${{ github.actor }}" \
             --password-stdin <<< "${{ secrets.GITHUB_TOKEN }}"
 
-      # One invocation per image, and not one invocation for all four.
-      #
-      # hack/publish.sh's own header says why: the versions move
-      # independently, so the ordinary case after a reconciler fix is that
-      # exactly one tag is new. Publishing them together refuses at the first image
-      # whose tag is already there -- correctly -- and never reaches the one
-      # that changed, which would make this workflow a release path that works
-      # exactly once. The script's answer for a human is to name the image; a
-      # tag push has nobody to name it, so the naming happens here, and the
-      # script's refusal now carries a distinct exit status (3) so that "this
-      # tag is already there" is separable from "I could not tell whether it
-      # is" without re-implementing the guard in YAML. Nothing is overwritten
-      # and FORCE is never set: an image already at its tag is skipped, not
-      # re-pushed.
-      #
-      # WRITE_DIGEST=1 on every invocation, and only the operator's writes
-      # anything -- the script keys that on the image it just pushed.
+      # One invocation per image: hack/publish.sh refuses at the first tag already
+      # there (exit 3), and usually only one version moved. Nothing is overwritten.
       - name: hack/publish.sh, one image at a time
         id: publish
         run: |
@@ -333,44 +190,9 @@ jobs:
             esac
           done
           echo "operator_published=${operator_published}" >> "$GITHUB_OUTPUT"
-          # "This tag published nothing" means two different things, and only
-          # one of them is a mistake.
-          #
-          # On the first attempt it is the mistake the guard exists for: a v*
-          # tag pushed without bumping anything in flake.nix, which the
-          # preflight above cannot catch on its own -- the tag matches a
-          # version, that version is simply already on the registry. Failing
-          # loudly there is right, and the remedy it prints is right.
-          #
-          # On a re-run it is the expected state. The steps after this one --
-          # the WRITE_DIGEST guard, which is the first thing in this project's
-          # history ever to exercise that path against a registry, and the
-          # Release creation -- can each fail on their own, and when they do,
-          # the owner clicks Re-run. The job restarts from the top, every tag
-          # this run already pushed now exists, all three exit 3, and without
-          # this exemption the guard would stop the recovery attempt before it
-          # reached the very steps it was re-run for -- printing "bump and tag
-          # again", which would re-publish images that were never the problem.
-          # The Release step below was written to be idempotent precisely so a
-          # re-run could recover; this is what lets the re-run get there.
-          #
-          # The alternative shape was to drop the dependency instead -- run the
-          # digest and Release steps with if: always(), so nothing upstream can
-          # keep them from firing. That costs more than it saves: it would
-          # create a GitHub Release for a tag whose publish genuinely failed,
-          # announcing images that are not in the registry, and it would fire on
-          # the first-attempt mistake above too, turning the loud refusal into a
-          # Release. Keying on the attempt number keeps the guard's teeth on the
-          # attempt where the mistake is possible and takes them out on the
-          # attempt where the same state is the normal one.
-          #
-          # Since the chart became a published artefact of its own, "no image
-          # moved" stopped being the same statement as "this tag releases
-          # nothing": a tag whose whole change is under charts/ -- a template
-          # fix, a default, a values comment -- publishes a chart and no image,
-          # and is a correct release. The guard therefore asks the chart step's
-          # question too, through the output the version guard above already
-          # computed, rather than re-deriving it here.
+          # Publishing nothing is a mistake on the first attempt, and expected on a
+          # re-run after a later step failed. Not if: always() on the later steps: that
+          # would create a Release for a publish that genuinely failed.
           if [ "$dry_run" = "0" ] && [ "$published" -eq 0 ] \
             && [ "${{ steps.chart_version.outputs.chart_changed }}" != "true" ]; then
             if [ "${GITHUB_RUN_ATTEMPT:-1}" -gt 1 ]; then
@@ -385,16 +207,8 @@ jobs:
             fi
           fi
 
-      # The digest is emitted, not committed -- design §5, and the comment the
-      # previous shape of this file carried. What it now also does is put the
-      # digest somewhere a machine can read: a step id, so the job output above
-      # resolves, and the Release body below.
-      #
-      # This is the first real test of hack/publish.sh's WRITE_DIGEST path
-      # against a registry, so it fails loudly rather than continuing -- but
-      # only when the operator image was actually pushed on this tag. A release
-      # that bumps only imageVersion leaves the operator at a digest already in
-      # the chart, and demanding a new one there would fail a correct release.
+      # Emitted, not committed. Fails only when the operator image was pushed on
+      # this tag; otherwise the chart's digest is already current.
       - name: Emit the digest
         id: digest
         if: github.event_name == 'push'
@@ -404,14 +218,8 @@ jobs:
           if [ "${{ steps.publish.outputs.operator_published }}" != "true" ]; then
             echo "the operator image was already published at this version; charts/spawnery/values.yaml"
             echo "keeps the digest it already carries (${digest:-none})."
-            # Note what a re-run cannot recover, and why nothing here tries.
-            # hack/publish.sh takes the digest from skopeo copy's own
-            # --digestfile, so it exists only on the attempt that did the
-            # copying. Reading it back with skopeo inspect would need exactly
-            # the read scope the script's guard is built to survive without,
-            # and would re-read a mutable tag. So on a re-run the digest is in
-            # the log of the attempt that published it, and the Release body
-            # below says so rather than implying there was never one.
+            # On a re-run the digest is only in the publishing attempt's log:
+            # hack/publish.sh takes it from skopeo copy --digestfile.
             exit 0
           fi
           if [ -z "$digest" ]; then
@@ -421,20 +229,7 @@ jobs:
           echo "operator image digest: $digest"
           echo "digest=$digest" >> "$GITHUB_OUTPUT"
 
-      # The chart, beside the images rather than in a second place. This
-      # is what makes `helm install oci://ghcr.io/spawnery/charts/spawnery`
-      # possible; until this step existed, every README in this repository
-      # told people to install from a checkout, and one of them claimed the
-      # chart was published when nothing published it.
-      #
-      # After the images, and deliberately: a chart on the registry whose
-      # operator image failed to push would send installers at a tag that is
-      # not there. The reverse ordering costs nothing to avoid.
-      #
-      # The credential is separate from skopeo's because the tools keep their
-      # own. skopeo's lives at REGISTRY_AUTH_FILE, set near the top of this
-      # job; helm's goes to its registry config, and asking one to read the
-      # other's would be a third arrangement to maintain.
+      # After the images, so a published chart never points at a missing image.
       - name: Authenticate helm to ghcr.io
         if: github.event_name == 'push'
         run: |
@@ -442,11 +237,7 @@ jobs:
             -u "${{ github.actor }}" \
             --password-stdin <<< "${{ secrets.GITHUB_TOKEN }}"
 
-      # Exit 3 is "this chart version is already on the registry", which after
-      # the version guard above is the ordinary state of a tag that changed no
-      # chart -- most of them. It is a notice, not a failure, exactly as it is
-      # for an image whose tag has not moved. Every other non-zero status
-      # fails the release, including "I could not tell whether it is there".
+      # Exit 3: this chart version is already on the registry, the usual case.
       - name: hack/publish-chart.sh
         id: publish_chart
         run: |
@@ -471,27 +262,11 @@ jobs:
               ;;
           esac
 
-      # The fifth artefact, and the only one that is not a container: a plugin
-      # has to be able to compile against the API, and until this existed the
-      # only way was a jar somebody carried by hand.
-      #
-      # Skipped rather than failed when the credentials are absent. They are
-      # the one secret in this workflow that nobody can grant from inside it --
-      # a Central Portal token and a signing key both belong to a person -- so
-      # a release before somebody adds them publishes the four artefacts it
-      # can and says which one it left out. A hard failure there would make
-      # every image and the chart hostage to a secret that has nothing to do
-      # with them.
+      # Skipped rather than failed without credentials: they belong to a person,
+      # and the other artefacts should not wait on them.
       - name: hack/publish-api.sh
         id: publish_api
         env:
-          # No PUBLISHING_TYPE here, so the script's own default of AUTOMATIC
-          # applies. 0.2.22 went through the Portal by hand -- the one
-          # deployment that had to, because the namespace had never published
-          # anything and Maven Central takes nothing back -- and that question
-          # is now answered. A deployment nobody remembers to release would be
-          # a release that silently did not happen, which this file has already
-          # met once in another guise.
           CENTRAL_USERNAME: ${{ secrets.CENTRAL_USERNAME }}
           CENTRAL_PASSWORD: ${{ secrets.CENTRAL_PASSWORD }}
           SIGNING_KEY: ${{ secrets.SIGNING_KEY }}
@@ -523,9 +298,6 @@ jobs:
               ;;
           esac
 
-      # The other half of design §5's "the digest goes into the GitHub Release
-      # body and a job output". contents: write is granted for exactly this and
-      # for nothing else -- the workflow still commits nothing.
       - name: The GitHub Release, carrying the digest
         if: github.event_name == 'push'
         env:
@@ -570,11 +342,7 @@ jobs:
               echo "\`flake.nix\` names, and \`charts/spawnery/values.yaml\`'s \`image.digest\` is"
               echo "unchanged."
             fi
-            # The install line, with the chart version rather than the tag.
-            # Those two are not the same number and are not meant to be: the
-            # chart moves when charts/ does, which is neither every release
-            # nor only when the operator moves. Printing the tag here would
-            # give people a --version that resolves to nothing.
+            # The chart version, not the tag: the two numbers differ.
             chart_version="$(grep -E '^version:' charts/spawnery/Chart.yaml | head -1 | awk '{print $2}')"
             echo
             echo "## Install"
@@ -591,9 +359,7 @@ jobs:
               echo "already pushed, and it is the right one to install."
             fi
           } > "$notes"
-          # Created if absent, updated if a release for this tag already
-          # exists: re-running a release must not fail on the artefact of its
-          # own earlier attempt.
+          # Updated if present, so a re-run does not fail on its own earlier attempt.
           if gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1; then
             gh release edit "$GITHUB_REF_NAME" --notes-file "$notes"
           else

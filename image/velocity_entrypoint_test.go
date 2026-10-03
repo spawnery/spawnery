@@ -23,26 +23,12 @@ import (
 	"testing"
 )
 
-// runVelocityEntrypoint runs image/velocity-entrypoint.sh through the same
-// stub harness runEntrypoint uses for Paper's — the harness only works here
-// because the script calls spawnery-config unqualified, the same way
-// image/entrypoint.sh does, rather than by the hardcoded
-// /usr/local/bin/spawnery-config it used to carry. SPAWNERY_VELOCITY_HOME defaults to
-// /opt/velocity, overridable through env like any other variable runScript
-// passes.
 func runVelocityEntrypoint(t *testing.T, workDir string, configExit int, env ...string) (string, error) {
 	t.Helper()
 	return runScript(t, "image/velocity-entrypoint.sh", workDir, configExit,
 		append([]string{"SPAWNERY_VELOCITY_HOME=/opt/velocity"}, env...)...)
 }
 
-// TestVelocityEntrypointInvokesSpawneryConfigWithTheVelocityFlavor is the
-// mirror of TestEntrypointInvokesSpawneryConfigWithThePaperFlavor, and the
-// reason both need to exist rather than just one: the two scripts are nearly
-// identical shell, and the plausible copy-paste mistake in either direction —
-// this file's own namesake risk — is passing the wrong --flavor. What
-// spawnery-config does with that flag is internal/render's and
-// cmd/spawnery-config's coverage, not this package's.
 func TestVelocityEntrypointInvokesSpawneryConfigWithTheVelocityFlavor(t *testing.T) {
 	dir := t.TempDir()
 
@@ -74,13 +60,8 @@ func TestVelocityEntrypointExecsJavaWithTheVelocityJar(t *testing.T) {
 	}
 }
 
-// TestVelocityEntrypointStopsIfSpawneryConfigRefuses is the property
-// TestEntrypointStopsIfSpawneryConfigRefuses already proves for Paper, and
-// the one this file exists most for: a Velocity proxy that starts against
-// wrong or missing forwarding configuration does not merely serve one broken
-// backend, it makes every join on the network fail with "Unable to verify
-// player details" while looking like a running proxy. The JVM must never
-// start once the renderer has refused.
+// A proxy started without valid forwarding configuration fails every join on
+// the network while looking healthy, so the JVM must not start.
 func TestVelocityEntrypointStopsIfSpawneryConfigRefuses(t *testing.T) {
 	dir := t.TempDir()
 
@@ -108,10 +89,6 @@ func TestVelocityEntrypointStopsIfSpawneryConfigRefuses(t *testing.T) {
 	}
 }
 
-// TestVelocityEntrypointCopiesTheAgentPluginIntoAWritablePluginsDirectory
-// mirrors the Paper case: the jar ships in the read-only image and the
-// entrypoint's job is to get it somewhere Velocity may also write, replacing
-// whatever a previous start left there — the image is the truth.
 func TestVelocityEntrypointCopiesTheAgentPluginIntoAWritablePluginsDirectory(t *testing.T) {
 	dir := t.TempDir()
 
@@ -145,11 +122,6 @@ func TestVelocityEntrypointCopiesTheAgentPluginIntoAWritablePluginsDirectory(t *
 	}
 }
 
-// TestTheVelocityJVMDoesNotPreTouchWithoutAMemoryLimit is the mirror of the
-// Paper test, and needs to exist for the reason every mirrored test in this
-// file does: the two scripts are nearly identical and diverge silently. A
-// proxy holds every player's connection, so a proxy that claims three quarters
-// of an unbounded node at start takes the whole network's front door with it.
 func TestTheVelocityJVMDoesNotPreTouchWithoutAMemoryLimit(t *testing.T) {
 	out, err := runVelocityEntrypoint(t, t.TempDir(), 0, cgroupRoot(t, "max", false))
 	if err != nil {
@@ -164,8 +136,6 @@ func TestTheVelocityJVMDoesNotPreTouchWithoutAMemoryLimit(t *testing.T) {
 	}
 }
 
-// TestTheVelocityJVMStillPreTouchesUnderALimit keeps the removal from being
-// unconditional here too.
 func TestTheVelocityJVMStillPreTouchesUnderALimit(t *testing.T) {
 	out, err := runVelocityEntrypoint(t, t.TempDir(), 0, cgroupRoot(t, "2147483648", false))
 	if err != nil {
@@ -177,11 +147,6 @@ func TestTheVelocityJVMStillPreTouchesUnderALimit(t *testing.T) {
 }
 
 func TestVelocityRefusesLangOnTheFileVolume(t *testing.T) {
-	// lang/ belongs to Velocity itself: it migrates lang/messages.properties
-	// to MiniMessage on every start and writes the result back, so a file
-	// placed there is overwritten before anybody reads it. Nothing breaks,
-	// which is exactly why it is refused -- a copy that silently does nothing
-	// is worse than a collision that announces itself.
 	dir := t.TempDir()
 	source := filepath.Join(dir, "volume")
 	if err := os.MkdirAll(filepath.Join(source, "lang"), 0o755); err != nil {
@@ -222,10 +187,6 @@ func TestVelocityRefusesItsOwnRenderedFile(t *testing.T) {
 	}
 }
 
-// TestVelocityRefusesPluginsOnTheFileVolume is the third entry design 5 lists
-// for the proxy, alongside velocity.toml and lang/. The other two had tests
-// and this one did not, which is how a proxy could have ended up quietly
-// accepting a plugins/ tree that extraPlugins owns.
 func TestVelocityRefusesPluginsOnTheFileVolume(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "volume")
@@ -247,8 +208,6 @@ func TestVelocityRefusesPluginsOnTheFileVolume(t *testing.T) {
 }
 
 func TestVelocityDoesNotRefuseThePaperFiles(t *testing.T) {
-	// The list follows the flavour. Nothing writes server.properties on a
-	// proxy, so refusing it would be a rule with no reason behind it.
 	dir := t.TempDir()
 	source := filepath.Join(dir, "volume")
 	if err := os.MkdirAll(source, 0o755); err != nil {

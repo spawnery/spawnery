@@ -1,13 +1,6 @@
-# The documentation site's image: a static tree and something to serve it.
-#
-# Like the operator image and unlike the two game images, this takes from
-# oci-common only the identity -- so all images run as the same uid and
-# runAsNonRoot has a passwd entry to resolve -- and builds its own frame.
-#
-# The server writes nothing. Caddy nevertheless initialises a data directory
-# at startup even with automatic HTTPS off, so the Deployment gives it an
-# emptyDir at /tmp and points XDG_DATA_HOME and XDG_CONFIG_HOME there; that
-# is what lets the root filesystem stay read-only.
+# The documentation site's image. Takes only the identity from oci-common.
+# Caddy initialises a data directory even with automatic HTTPS off, so the
+# Deployment points XDG_DATA_HOME and XDG_CONFIG_HOME at an emptyDir.
 { dockerTools
 , writeTextDir
 , caddy
@@ -42,7 +35,7 @@ dockerTools.buildLayeredImage {
   name = "ghcr.io/spawnery/docs";
   tag = "dev";
 
-  # A label, not a cross-compile, exactly as in nix/oci-common.nix.
+  # A label, not a cross-compile; see nix/oci-common.nix.
   architecture = "amd64";
 
   contents = [
