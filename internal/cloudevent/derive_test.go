@@ -48,8 +48,6 @@ func TestAServerPhaseTransitionBecomesAnEvent(t *testing.T) {
 	if ev.GetKind() != "ReadyGatePassed" {
 		t.Errorf("kind = %q, want the operator's own reason", ev.GetKind())
 	}
-	// The operator's words, unchanged. Rewording them here is how a chat feed
-	// comes to disagree with kubectl about the same event.
 	if ev.GetMessage() != "phase Starting -> Ready: the agent reported ready" {
 		t.Errorf("message = %q, want the recorded note verbatim", ev.GetMessage())
 	}
@@ -69,10 +67,7 @@ func TestAWarningKeepsItsSeverity(t *testing.T) {
 }
 
 func TestAnObjectTheFeedCannotAddressProducesNothing(t *testing.T) {
-	// The certs recorder reports on Secrets in spawnery-system, which is not a
-	// game namespace and has no agents in it. More to the point, an object
-	// this cannot name is one the feed cannot address: a CloudEvent with no
-	// namespace has nowhere to go, and inventing one is worse than dropping it.
+	// The certs recorder reports on Secrets in spawnery-system, which has no agents.
 	if _, _, ok := Derive(nil, corev1.EventTypeNormal, "Whatever", "note"); ok {
 		t.Error("a nil object produced an event")
 	}
@@ -83,8 +78,6 @@ func TestAnObjectTheFeedCannotAddressProducesNothing(t *testing.T) {
 }
 
 func TestAGroupEventNamesTheGroupAsBothSubjectAndGroup(t *testing.T) {
-	// So that collapsing has something to group by without a special case:
-	// every event has a group, and for a group's own event it is itself.
 	g := &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "lobby", Namespace: "minecraft"},
 	}

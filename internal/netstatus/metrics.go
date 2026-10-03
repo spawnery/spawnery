@@ -28,21 +28,18 @@ import (
 	"k8s.io/client-go/rest"
 )
 
-// Usage is what one pod, or a set of them, uses right now.
 type Usage struct {
 	CPUMilli    int64
 	MemoryBytes int64
 }
 
-// MetricsReader lists the current usage of every pod in a namespace, keyed by
-// pod name. A pod without a sample is absent, which is not the same as zero.
+// MetricsReader: a pod without a sample is absent, which is not zero.
 type MetricsReader interface {
 	PodUsage(ctx context.Context, namespace string) (map[string]Usage, error)
 }
 
-// APIMetrics reads metrics.k8s.io with a plain GET rather than the typed
-// client from k8s.io/metrics, which would be a new module for one list call.
-// The list is live and never cached: the manager's cache cannot watch it.
+// APIMetrics uses a plain GET rather than k8s.io/metrics, a new module for
+// one list call. The manager's cache cannot watch this list.
 type APIMetrics struct {
 	REST rest.Interface
 }

@@ -53,9 +53,6 @@ func (f *fakeSink) Publish(namespace string, ev *agentpb.CloudEvent) {
 }
 
 func TestTheWrapperStillRecordsToKubernetes(t *testing.T) {
-	// The first thing to protect. A wrapper that fed the chat and swallowed
-	// the Kubernetes event would be invisible in every test that looks at the
-	// feed, and would take `kubectl get events` with it.
 	inner, sink := &fakeRecorder{}, &fakeSink{}
 	r := Recorder{Inner: inner, Sink: sink}
 
@@ -68,9 +65,8 @@ func TestTheWrapperStillRecordsToKubernetes(t *testing.T) {
 	if inner.calls[0].reason != "ReadyGatePassed" {
 		t.Errorf("reason = %q, want it passed through unchanged", inner.calls[0].reason)
 	}
-	// The note reaches Kubernetes unformatted, with its args, exactly as it
-	// did before the wrapper existed: the recorder does its own formatting,
-	// and pre-formatting here would change what the API server stores.
+	// The recorder does its own formatting; pre-formatting here would change
+	// what the API server stores.
 	if inner.calls[0].note != "phase %s -> %s" || len(inner.calls[0].args) != 2 {
 		t.Errorf("note/args = %q/%v, want them passed through untouched",
 			inner.calls[0].note, inner.calls[0].args)
@@ -78,7 +74,6 @@ func TestTheWrapperStillRecordsToKubernetes(t *testing.T) {
 }
 
 func TestTheFeedGetsTheSameSentenceKubectlDoes(t *testing.T) {
-	// The property section 4.4 asks for, asserted rather than assumed.
 	inner, sink := &fakeRecorder{}, &fakeSink{}
 	r := Recorder{Inner: inner, Sink: sink}
 
@@ -97,8 +92,6 @@ func TestTheFeedGetsTheSameSentenceKubectlDoes(t *testing.T) {
 }
 
 func TestAnEventTheFeedDoesNotWantIsStillRecorded(t *testing.T) {
-	// Derive returns ok=false for a Secret. That must not cost Kubernetes its
-	// event: the feed is the optional half.
 	inner, sink := &fakeRecorder{}, &fakeSink{}
 	r := Recorder{Inner: inner, Sink: sink}
 
@@ -114,9 +107,6 @@ func TestAnEventTheFeedDoesNotWantIsStillRecorded(t *testing.T) {
 }
 
 func TestANilSinkIsNotACrash(t *testing.T) {
-	// A recorder may be built before the fan-outs exist. A wrapper that
-	// panicked on a nil sink would turn an ordering detail into a startup
-	// crash, and the ordering is not this type's business.
 	inner := &fakeRecorder{}
 	r := Recorder{Inner: inner}
 

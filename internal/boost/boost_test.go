@@ -40,7 +40,6 @@ func boostFor(group string, replicas int32, expires *time.Time) spawneryv1alpha1
 }
 
 func TestBoostsAddUpRatherThanReplacing(t *testing.T) {
-	// Two people boosting the same group at once is a non-event, not a race.
 	now := time.Unix(1000, 0)
 	later := now.Add(time.Hour)
 
@@ -81,8 +80,7 @@ func TestAnotherGroupsBoostIsNotThisGroupsCapacity(t *testing.T) {
 }
 
 func TestABoostExpiringExactlyNowHasExpired(t *testing.T) {
-	// The boundary, asserted rather than left to whichever way the comparison
-	// happened to be written. "Until 20:00" means it is over at 20:00.
+	// "Until 20:00" is over at 20:00.
 	now := time.Unix(1000, 0)
 
 	if got := Live([]spawneryv1alpha1.ScaleBoost{boostFor("lobby", 2, &now)}, "lobby", now); got != 0 {

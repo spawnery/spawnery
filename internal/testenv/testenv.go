@@ -46,8 +46,7 @@ var (
 	boot error
 )
 
-// crdPath walks up from the test's working directory until it finds
-// config/crd/bases, so tests work from any package.
+// crdPath walks up from the working directory until it finds config/crd/bases.
 func crdPath(t *testing.T) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -67,10 +66,8 @@ func crdPath(t *testing.T) string {
 	}
 }
 
-// RepoPath resolves a repository-relative path by walking up from the test's
-// working directory until it finds go.mod. Tests run with their package
-// directory as the working directory, so a plain relative path would break as
-// soon as a test moves to another package.
+// RepoPath resolves a repository-relative path by walking up to go.mod; tests
+// run in their package directory.
 func RepoPath(t *testing.T, rel string) string {
 	t.Helper()
 	dir, err := os.Getwd()
@@ -112,7 +109,6 @@ func Config(t *testing.T) *rest.Config {
 	return cfg
 }
 
-// Scheme returns the scheme the shared control plane was started with.
 func Scheme(t *testing.T) *runtime.Scheme {
 	Config(t)
 	return sch
@@ -131,9 +127,8 @@ func Client(t *testing.T) (client.Client, context.Context) {
 	return c, ctx
 }
 
-// Namespace creates a unique namespace for one test and returns its name.
-// Every test gets its own, so the one-network-per-namespace rule and the
-// group names never collide across tests.
+// Namespace creates a unique namespace for one test, so network and group names
+// never collide across tests.
 func Namespace(t *testing.T, ctx context.Context, c client.Client) string {
 	t.Helper()
 	ns := &corev1.Namespace{
@@ -164,18 +159,13 @@ var (
 )
 
 // RestrictedClient returns a client that acts as the operator does in a
-// cluster: under OperatorUser, holding exactly the ClusterRole that
-// config/rbac/role.yaml generates from the kubebuilder markers.
-//
-// Hand this to a reconciler under test and keep [Client]'s admin client for
-// arranging and asserting -- the test harness legitimately does things the
-// operator may not, such as creating a ServerGroup. That split is the whole
-// point: a reconciler that reaches for a verb no marker declares fails here,
-// in the test that already drives it, instead of on a cluster months later.
+// cluster: under OperatorUser, holding exactly the generated ClusterRole. Hand
+// it to the reconciler under test and keep [Client]'s admin client for
+// arranging and asserting, so a verb no marker declares fails in the test.
 //
 // Impersonation rather than envtest's AddUser: the authorization decision is
-// the same one the API server makes for a real ServiceAccount, and this needs
-// no second kubeconfig or client certificate.
+// the one the API server makes for a real ServiceAccount, with no second
+// kubeconfig.
 func RestrictedClient(t *testing.T) client.Client {
 	t.Helper()
 	c, err := client.New(RestrictedConfig(t), client.Options{Scheme: Scheme(t)})
@@ -185,16 +175,11 @@ func RestrictedClient(t *testing.T) client.Client {
 	return c
 }
 
-// RestrictedConfig is [RestrictedClient]'s config, for the callers that need a
-// typed clientset rather than a controller-runtime client -- the TokenReview
-// the agent channel's authenticator issues is the one that matters, since
-// `authentication.k8s.io/tokenreviews: create` is otherwise granted and never
-// exercised by any test.
+// RestrictedConfig is [RestrictedClient]'s config, for callers that need a
+// typed clientset, such as the agent channel's TokenReview.
 //
-// Hand it only to the thing under test. A harness minting a ServiceAccount
-// token needs `serviceaccounts/token: create`, which the operator does not
-// have and must not: that grant would let it forge an identity for any
-// ServiceAccount in the cluster.
+// Hand it only to the thing under test. Minting a ServiceAccount token needs
+// serviceaccounts/token: create, which the operator must not have.
 func RestrictedConfig(t *testing.T) *rest.Config {
 	t.Helper()
 	cfg := Config(t)
@@ -211,7 +196,7 @@ func RestrictedConfig(t *testing.T) *rest.Config {
 }
 
 // grantOperatorRole applies the generated ClusterRole and binds it to
-// OperatorUser. Once per control plane, which is shared across the package.
+// OperatorUser, once per control plane.
 func grantOperatorRole(cfg *rest.Config, rolePath string) error {
 	c, err := client.New(cfg, client.Options{})
 	if err != nil {

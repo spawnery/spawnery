@@ -15,12 +15,9 @@ limitations under the License.
 */
 
 // Package cloudevent turns what the operator records into what an
-// administrator reads in chat.
-//
-// Its own package because three packages need it and none may import the
-// others: internal/controller records the events, and internal/serverreg and
-// internal/proxyreg deliver them. A copy in each would be the two independent
-// derivations section 4.4 of the design exists to prevent.
+// administrator reads in chat. It is its own package because internal/controller
+// records the events and internal/serverreg and internal/proxyreg deliver them,
+// and none of them may import the others.
 package cloudevent
 
 import (
@@ -32,18 +29,11 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// Derive turns one recorded event into at most one CloudEvent.
+// Derive turns one recorded event into at most one CloudEvent. The note is
+// carried verbatim so the chat feed agrees with `kubectl get events`.
 //
-// **The note is carried verbatim.** It is the operator's own sentence, already
-// written for a person, and rewording it here is exactly how a chat feed comes
-// to disagree with `kubectl get events` about the same fact -- which is the
-// property section 4.4 of the design is protecting.
-//
-// It reports ok=false for anything the feed cannot address. An object with no
-// namespace has nowhere to go, and a kind this has never seen is one nobody
-// decided was worth a chat line: defaulting to "show it" would make every
-// event type added later a surprise in somebody's chat, which is how a feed
-// becomes one people turn off.
+// It reports ok=false for an object with no namespace and for a kind it has
+// never seen, so an event type added later does not surprise anybody's chat.
 func Derive(
 	regarding runtime.Object, eventtype, reason, note string,
 ) (string, *agentpb.CloudEvent, bool) {
@@ -52,8 +42,7 @@ func Derive(
 	case *spawneryv1alpha1.Server:
 		namespace, subject, group = o.Namespace, o.Name, o.Spec.GroupRef.Name
 	case *spawneryv1alpha1.ServerGroup:
-		// Its own group, so that collapsing needs no special case for events
-		// about groups.
+		// Its own group, so collapsing needs no special case.
 		namespace, subject, group = o.Namespace, o.Name, o.Name
 	case *spawneryv1alpha1.ProxyGroup:
 		namespace, subject, group = o.Namespace, o.Name, o.Name

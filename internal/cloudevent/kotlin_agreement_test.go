@@ -25,18 +25,11 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// The agent's feed opens each line with a sign saying whether the network grew
-// or shrank, and it decides that from a table of this operator's event
-// reasons, spelled as strings in Kotlin. Derive passes the Kubernetes reason
-// through untouched, so a renamed reason does not break either side: the
-// agent simply stops recognising it and prints the neutral sign forever. That
-// is a wrong line nobody would report, and this is the only thing that catches
-// it.
+// The agent's feed picks each line's sign from a table of this operator's event
+// reasons, spelled as strings in Kotlin. A renamed reason breaks nothing
+// visibly: the agent just prints the neutral sign forever.
 //
-// It checks one direction only. A reason this operator has that the table does
-// not is deliberate — the table names what is worth a sign, not everything
-// that happens, and the agent's own test covers an unknown reason reading as
-// neutral.
+// One direction only: the table names what is worth a sign, not every reason.
 func TestTheAgentsDirectionTableNamesReasonsThisOperatorHas(t *testing.T) {
 	const table = "agent/common/src/main/kotlin/cloud/spawnery/agent/EventDirection.kt"
 	raw, err := os.ReadFile(testenv.RepoPath(t, table))
@@ -44,8 +37,8 @@ func TestTheAgentsDirectionTableNamesReasonsThisOperatorHas(t *testing.T) {
 		t.Fatalf("read the agent's direction table: %v", err)
 	}
 
-	// Only inside the two set literals. Reading every quoted word in the file
-	// would pick up the prose above them, which names types and packages.
+	// Only inside the two set literals; the prose above them names types and
+	// packages.
 	sets := regexp.MustCompile(`(?s)private val (?:ADDED|REMOVED) = setOf\((.*?)\)`).FindAllSubmatch(raw, -1)
 	if len(sets) != 2 {
 		t.Fatalf("found %d `private val ADDED/REMOVED = setOf(...)` blocks in %s, want 2. "+

@@ -15,13 +15,8 @@ limitations under the License.
 */
 
 // Package boost holds the one rule for what a ScaleBoost is currently worth.
-//
-// Its own package because two things need it and neither may import the
-// other: the ServerGroup controller adds live boosts to a group's floor, and
-// the agent endpoint subtracts them when bounding a new one. A copy in each
-// would be two definitions of "live" that agree until somebody changes one,
-// and the disagreement would show up as a group sized differently from what
-// the command that sized it said.
+// Its own package because the ServerGroup controller and the agent endpoint
+// both need it and must not import each other.
 package boost
 
 import (
@@ -30,20 +25,9 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
-// Live is how many extra servers a group's unexpired boosts ask for.
-//
-// **The clock is the rule, and the sweep is not.** A boost stops counting the
-// moment it expires, which is not the same as when the sweep next removes the
-// object: otherwise a boost's effect would outlive its own stated end by up to
-// a sweep interval, and the object would be telling the truth while the group
-// did not. The sweep only tidies away what has already stopped counting.
-//
-// now is a parameter rather than a call, so a test asserts the boundary
-// instead of racing it.
-//
-// Boosts add. Two on one group are two boosts and a second does not replace a
-// first, which is what makes "somebody else already boosted this" a non-event
-// rather than a race between two people typing.
+// Live is how many extra servers a group's unexpired boosts ask for. A boost
+// stops counting when it expires, not when the sweep removes it. Boosts on one
+// group add up.
 func Live(boosts []spawneryv1alpha1.ScaleBoost, group string, now time.Time) int32 {
 	var total int32
 	for i := range boosts {
@@ -51,9 +35,7 @@ func Live(boosts []spawneryv1alpha1.ScaleBoost, group string, now time.Time) int
 		if b.Spec.GroupRef.Name != group {
 			continue
 		}
-		// Expiring exactly now has expired: "until 20:00" means it is over at
-		// 20:00, and a boundary left to whichever way a comparison happened to
-		// be written is a boundary somebody will read the other way.
+		// Expiring exactly now has expired: "until 20:00" is over at 20:00.
 		if b.Spec.ExpiresAt != nil && !b.Spec.ExpiresAt.After(now) {
 			continue
 		}

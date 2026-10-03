@@ -35,29 +35,22 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// REASON_UNSPECIFIED is both what a newer operator sends for a reason this
-// agent predates and what proto3 hands an older one. Reading either as
-// "something went wrong and I do not know what" is the only reading that
-// cannot be wrong.
+// REASON_UNSPECIFIED is also what a reason this agent predates arrives as.
+// Read it as "failed, cause unknown".
 type RequestError_Reason int32
 
 const (
 	RequestError_REASON_UNSPECIFIED RequestError_Reason = 0
-	// The player or the target is not on this network. Also what an agent
-	// gets for a player who logged out between the call and the request, which
-	// is ordinary rather than exceptional.
+	// The player or the target is not on this network, including a player
+	// who logged out in the meantime.
 	RequestError_NOT_FOUND RequestError_Reason = 1
-	// The operator understood and declined, and asking again unchanged will be
-	// declined again while the same state holds: the request met a bound, or
-	// it is itself wrong -- a replica count below one, a name that is not a
-	// DNS label, a server that is not of the kind the verb acts on. A bound
-	// that can clear is refused this way too, and the clause above is why the
-	// promise is no stronger: a group at its instance ceiling and one with no
-	// boost headroom both answer the same request differently once capacity
-	// frees. There is no reason of its own for bad input; a boost for fewer
-	// than one replica was already refused this way.
+	// The operator understood and declined: the request met a bound, or it
+	// is itself wrong (a replica count below one, a name that is not a DNS
+	// label, a server not of the kind the verb acts on). A bound such as an
+	// instance ceiling can clear later, so a retry may succeed once state
+	// changes.
 	RequestError_REFUSED RequestError_Reason = 2
-	// This pod has asked too often. See the operator's own bound.
+	// This pod has asked too often.
 	RequestError_RATE_LIMITED RequestError_Reason = 3
 	// The operator could not carry it out right now: no proxy has the player,
 	// or the one that does has no live stream.
@@ -109,12 +102,8 @@ func (RequestError_Reason) EnumDescriptor() ([]byte, []int) {
 	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{33, 0}
 }
 
-// Which sizing rule the group answers to.
-//
-// KIND_UNSPECIFIED is what an operator sends for a kind this proto predates,
-// and what a proto3 default gives an agent that predates a value. Both read
-// as "unknown" rather than as a specific kind, which is the only reading
-// that cannot be wrong.
+// Which sizing rule the group answers to. KIND_UNSPECIFIED is also what a
+// kind this agent predates arrives as; read it as unknown.
 type GroupState_Kind int32
 
 const (
@@ -282,20 +271,8 @@ type Hello struct {
 	Ready bool `protobuf:"varint,2,opt,name=ready,proto3" json:"ready,omitempty"`
 	// read_timeout_millis is meaningful for proxy agents only: how long this
 	// proxy waits on a silent backend before it disconnects the players on it.
-	//
-	// It is the *effective* value, read from
-	// ProxyServer.getConfiguration().getReadTimeout() rather than from any file,
-	// so it survives a velocity.toml overlay, an image that ships its own
-	// defaults, and Velocity's own. The operator races this deadline when a
-	// backend's node dies -- see phase.RescueWindow -- and could otherwise only
-	// assume the value this repository ships.
-	//
-	// Sent on the Hello because it cannot change without the proxy restarting,
-	// and a fact that cannot change does not belong on a periodic report.
-	//
-	// Zero means not reported, which is what a proxy agent older than this field
-	// sends and what every server agent sends. The operator falls back to the
-	// shipped default there, which is the reading it took before this existed.
+	// The effective value, from ProxyServer.getConfiguration().getReadTimeout().
+	// Zero means not reported; the operator then assumes the shipped default.
 	ReadTimeoutMillis int32 `protobuf:"varint,3,opt,name=read_timeout_millis,json=readTimeoutMillis,proto3" json:"read_timeout_millis,omitempty"`
 	unknownFields     protoimpl.UnknownFields
 	sizeCache         protoimpl.SizeCache
@@ -354,30 +331,22 @@ func (x *Hello) GetReadTimeoutMillis() int32 {
 
 // PlayerCount is the periodic report.
 //
-// A proxy reports its configured player limit as slots. The obvious
-// alternative — leaving slots at zero, as an earlier draft of this file said —
-// collides with the registry, which discards any report where players exceed
-// slots: a proxy with one player online would have every report thrown away,
-// visible only as a counter, while its connected player count sat at zero.
-// One rule in the registry is worth more than a role-dependent one, and a
-// proxy does have a capacity: ProxyGroup.spec.config.playerLimit.
+// A proxy reports its configured player limit as slots, not zero: the
+// registry discards any report where players exceed slots.
 type PlayerCount struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Players int32                  `protobuf:"varint,1,opt,name=players,proto3" json:"players,omitempty"`
 	Slots   int32                  `protobuf:"varint,2,opt,name=slots,proto3" json:"slots,omitempty"`
 	// Server agents only: the server's one-minute TPS average and its mean tick
-	// duration in milliseconds. 0 means not reported -- what a proxy and an
-	// agent older than these fields send.
+	// duration in milliseconds. 0 means not reported.
 	Tps  float64 `protobuf:"fixed64,3,opt,name=tps,proto3" json:"tps,omitempty"`
 	Mspt float64 `protobuf:"fixed64,4,opt,name=mspt,proto3" json:"mspt,omitempty"`
 	// Server agents only: the seats the plugin says count as capacity. 0 means
-	// it said nothing -- what a proxy and an agent older than this field send --
-	// and the group's spec.playableSlots decides. It cannot ride in slots: the
-	// registry discards a report with more players than slots, and players
-	// beyond the playable seats are legitimate.
+	// it said nothing, and the group's spec.playableSlots decides. Not carried
+	// in slots, because players beyond the playable seats are legitimate.
 	PlayableSlots int32 `protobuf:"varint,5,opt,name=playable_slots,json=playableSlots,proto3" json:"playable_slots,omitempty"`
 	// Both agents: the JVM heap in use and its maximum, in bytes. 0 means not
-	// reported -- what an agent older than these fields sends.
+	// reported.
 	HeapUsedBytes int64 `protobuf:"varint,6,opt,name=heap_used_bytes,json=heapUsedBytes,proto3" json:"heap_used_bytes,omitempty"`
 	HeapMaxBytes  int64 `protobuf:"varint,7,opt,name=heap_max_bytes,json=heapMaxBytes,proto3" json:"heap_max_bytes,omitempty"`
 	unknownFields protoimpl.UnknownFields
@@ -465,17 +434,10 @@ func (x *PlayerCount) GetHeapMaxBytes() int64 {
 
 // CloudRequest is an agent asking the operator for something.
 //
-// **The first message on this channel that is a question.** Until 7b-5 an
-// agent reported upward and the operator instructed downward; nothing asked,
-// and the three things that follow from asking are all new here.
-//
-// The id is the *agent's*, minted per stream and monotonic. The operator
-// echoes it on the answer and never remembers one across a reconnect, so a
-// renewal leaves nothing to reconcile on either side -- which matters because
-// SessionLoop renews make-before-break and two streams are briefly live at
-// once. An in-flight request does not survive that changeover: the agent fails
-// it rather than resending on the new stream, because only the caller knows
-// whether their request is safe to repeat and none of these is.
+// The id is the agent's, minted per stream and monotonic. The operator echoes
+// it on the answer and never remembers one across a reconnect. A request in
+// flight during a stream renewal is failed by the agent, not resent: none of
+// these is safe to repeat.
 type CloudRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Id    uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -710,12 +672,9 @@ func (*CloudRequest_Status) isCloudRequest_Request() {}
 
 func (*CloudRequest_DeleteServer) isCloudRequest_Request() {}
 
-// CloudResponse answers exactly one CloudRequest.
-//
-// An answer for an id nobody is waiting on is dropped by the agent rather than
-// treated as an error: a late answer to a request that already reached its
-// deadline is ordinary, and throwing on one inside a gRPC callback would cost
-// the agent every other request it has outstanding.
+// CloudResponse answers exactly one CloudRequest. An answer for an id nobody
+// is waiting on is dropped by the agent: a late answer after a deadline is
+// ordinary.
 type CloudResponse struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	Id    uint64                 `protobuf:"varint,1,opt,name=id,proto3" json:"id,omitempty"`
@@ -966,13 +925,11 @@ func (*CloudResponse_Status) isCloudResponse_Result() {}
 
 func (*CloudResponse_DeleteServer) isCloudResponse_Result() {}
 
-// ConnectRequest asks that a player be moved.
+// ConnectRequest asks that a player be moved, to a named server or to
+// wherever a group has room, which the operator chooses.
 //
-// The target is a oneof rather than a string the operator parses, so the
-// difference between "this server" and "wherever that group has room" is on
-// the wire instead of in a convention two sides have to agree about. Naming a
-// group hands the choice to the operator, which is the only side that knows
-// what every backend's occupancy is.
+// Requests carry no namespace: names are resolved inside the namespace the
+// pod's own token authenticated.
 type ConnectRequest struct {
 	state      protoimpl.MessageState `protogen:"open.v1"`
 	PlayerUuid string                 `protobuf:"bytes,1,opt,name=player_uuid,json=playerUuid,proto3" json:"player_uuid,omitempty"`
@@ -1066,23 +1023,11 @@ func (*ConnectRequest_Group) isConnectRequest_Target() {}
 // ConnectResult is what the operator did, which is not the same as what
 // happened to the player.
 //
-// **`ordered` and not `moved`, and the difference is not pedantry.** The proxy
-// that carries a move calls Velocity's connectWithIndication and deliberately
-// does not wait on the future it returns -- PlayerRef.moveTo returns nothing,
-// and VelocityPlayer's comment gives the reason: blocking a gRPC callback
-// thread on a round trip to a backend is a cost this agent cannot pay, and
-// that decision is load-bearing for the drain. So no proxy in this system can
-// report whether a player arrived, and an operator claiming to would be
-// inventing the answer.
+// `ordered` says the instruction reached a proxy holding the player. No proxy
+// waits on the move, so whether the player arrived shows only in the next
+// NetworkState.
 //
-// What a caller does with that: `ordered` says the instruction reached a
-// proxy holding the player. Whether they arrived shows up in the next
-// NetworkState, which is what the mirror is for -- a plugin that needs to know
-// reads players() a moment later rather than trusting this field to mean more
-// than it does.
-//
-// `already_there` is the one case where nothing was ordered and nothing is
-// wrong: the player was on the target when the request arrived.
+// `already_there`: nothing was ordered because the player was on the target.
 type ConnectResult struct {
 	state        protoimpl.MessageState `protogen:"open.v1"`
 	Ordered      bool                   `protobuf:"varint,1,opt,name=ordered,proto3" json:"ordered,omitempty"`
@@ -1146,15 +1091,6 @@ func (x *ConnectResult) GetTarget() string {
 }
 
 // RetireRequest asks that one server stop taking joins and empty out.
-//
-// It carries no namespace, for the reason ConnectRequest carries none: the
-// server is resolved inside the namespace the pod's own token authenticated,
-// so there is no field an agent could name another network's server in.
-//
-// This is the first request on this channel that *writes*. Everything before
-// it read the operator's picture or instructed a proxy that was already
-// listening; this one changes an object in the cluster, and the operator's
-// answer is therefore about what it wrote rather than about what it saw.
 type RetireRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Server        string                 `protobuf:"bytes,1,opt,name=server,proto3" json:"server,omitempty"`
@@ -1199,16 +1135,11 @@ func (x *RetireRequest) GetServer() string {
 	return ""
 }
 
-// RetireResult says the server is now retiring.
-//
-// It has no "was it already retiring" field on purpose: that case is a
-// RequestError with REFUSED, because an operator that answers "done" to the
-// second person to type the command teaches both of them that the command did
-// nothing the first time.
+// RetireResult says the server is now retiring. A server that was already
+// retiring is answered with REFUSED instead.
 type RetireResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The server that is now retiring, echoed so a caller that asked by a name
-	// it built from a string sees what the operator matched.
+	// The server that is now retiring, as the operator matched it.
 	Server        string `protobuf:"bytes,1,opt,name=server,proto3" json:"server,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -1344,8 +1275,8 @@ func (x *UnretireResult) GetServer() string {
 }
 
 // StatusRequest asks how the network is doing: its CPU and memory against
-// what it asked for, and each server's tick rate. Namespace-bound like every
-// request; nothing cluster-scoped is ever in the answer.
+// what it asked for, and each server's tick rate. Nothing cluster-scoped is
+// ever in the answer.
 type StatusRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Empty for the whole network, else a server group, a proxy group, a
@@ -1881,20 +1812,13 @@ func (x *StatusResult) GetProxies() int32 {
 
 // BoostRequest asks for extra capacity on a group, for a while.
 //
-// It carries no namespace, for the reason RetireRequest carries none.
-//
-// **A duration and not an instant.** The agent and the operator do not share a
-// clock, and an absolute expiry from a pod whose clock is minutes fast would
-// create a boost that ends early or late by exactly that error -- silently,
-// since nothing on either side can see the difference. A duration is
-// interpreted against the operator's own clock, which is the clock the scaler
-// then reads.
+// A duration and not an instant, because the agent's clock is not the
+// operator's; the operator measures it on its own.
 type BoostRequest struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Group    string                 `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
 	Replicas int32                  `protobuf:"varint,2,opt,name=replicas,proto3" json:"replicas,omitempty"`
-	// Zero means the operator's default. The operator also bounds the maximum;
-	// see its own answer for what it refuses and why.
+	// Zero means the operator's default. The operator also bounds the maximum.
 	DurationSeconds int64 `protobuf:"varint,3,opt,name=duration_seconds,json=durationSeconds,proto3" json:"duration_seconds,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
@@ -1952,17 +1876,11 @@ func (x *BoostRequest) GetDurationSeconds() int64 {
 }
 
 // BoostResult is the boost that now exists.
-//
-// It repeats the replica count back rather than assuming the caller's, because
-// the request may have been for zero seconds and this says what the default
-// resolved to.
 type BoostResult struct {
 	state    protoimpl.MessageState `protogen:"open.v1"`
 	Replicas int32                  `protobuf:"varint,1,opt,name=replicas,proto3" json:"replicas,omitempty"`
 	// When it stops counting, as seconds since the epoch on the operator's
-	// clock. An instant here and a duration on the way in, and the asymmetry is
-	// the point: the operator is the side with the authoritative clock, so it
-	// states the answer and the agent states the ask.
+	// clock.
 	ExpiresAtUnix int64 `protobuf:"varint,2,opt,name=expires_at_unix,json=expiresAtUnix,proto3" json:"expires_at_unix,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2012,11 +1930,7 @@ func (x *BoostResult) GetExpiresAtUnix() int64 {
 	return 0
 }
 
-// StopBoostRequest ends a group's boosts early.
-//
-// Every boost on the group, not one: a partial reduction across several boosts
-// with different expiries is arithmetic nobody asked for, and "stop" is what a
-// person means when they want the extra servers gone.
+// StopBoostRequest ends every boost on a group early.
 type StopBoostRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Group         string                 `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
@@ -2061,11 +1975,7 @@ func (x *StopBoostRequest) GetGroup() string {
 	return ""
 }
 
-// StopBoostResult says how many boosts were removed.
-//
-// Zero is an ordinary answer and not an error: it means the group had no
-// boosts, which is what an admin needs to hear when they expected it to have
-// some.
+// StopBoostResult says how many boosts were removed. Zero is not an error.
 type StopBoostResult struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Removed       int32                  `protobuf:"varint,1,opt,name=removed,proto3" json:"removed,omitempty"`
@@ -2112,45 +2022,21 @@ func (x *StopBoostResult) GetRemoved() int32 {
 
 // AcceptJoinsRequest is a server opening or closing its own door.
 //
-// **Closing is not retiring, and the difference is the whole reason this verb
-// exists.** RetireRequest says the server is finished: it stops taking joins,
-// empties out, and is taken down by the rules that take down any server its
-// group no longer needs. This says only the first of those, it says it for as
-// long as the server likes, and it can be taken back. A round that has started
-// is not a server that is going away, and asking for the one when you mean the
-// other reads as a decommissioning to everybody who looks afterwards.
+// Closing is not retiring: the server is not going away, and it can open
+// again. The phase stays Ready; what changes is whether the server counts as
+// capacity (and, with round_ended, whether the proxies route to it).
+// ServerState.registered and joins_closed show the result. Nobody already on
+// the server is moved.
 //
-// **The phase does not change.** A closed server stays Ready, because the
-// phase is the operator's account of a server's lifecycle and closing the door
-// is not a lifecycle event. What changes is whether the proxies have it in
-// their routing tables, which is exactly the question ServerState.registered
-// answers -- so a plugin choosing where to send somebody already reads the
-// right field and needs to learn nothing new.
-//
-// **Nobody is moved.** The players on a closed server go on playing until they
-// leave on their own. This verb has no effect on anybody who is already there,
-// which is the other half of what distinguishes it from a drain.
-//
-// It is refused from a proxy. A proxy is not in anybody's routing table -- it
-// *is* the routing table -- so there is nothing for this to close.
+// Refused from a proxy.
 type AcceptJoinsRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// False closes the door, true opens it again. A server that has never asked
-	// is open, which is what makes this safe to add to a network whose agents
-	// predate it.
+	// is open.
 	Accept bool `protobuf:"varint,1,opt,name=accept,proto3" json:"accept,omitempty"`
 	// True says the server's round is over: take it out of the routing table
 	// and treat the pod stopping after this as an ending rather than a fault.
-	//
-	// Unset is a server that stays in the table, which is what every agent that
-	// predates this field does and what closing the door alone now means. The
-	// two fields are two claims: `accept` is about capacity -- do not count my
-	// seats -- and this one is about reachability and about how the end of this
-	// pod is to be read.
-	//
-	// It is here rather than in AnnounceRequest because the operator acts on it.
-	// What the operator acts on needs a schema, an error path and a version
-	// story; what it only carries needs a length bound.
+	// Unset, the server stays in the routing table.
 	RoundEnded    bool `protobuf:"varint,2,opt,name=round_ended,json=roundEnded,proto3" json:"round_ended,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2200,12 +2086,8 @@ func (x *AcceptJoinsRequest) GetRoundEnded() bool {
 	return false
 }
 
-// AcceptJoinsResult says the operator has it.
-//
-// It carries nothing, for the reason AnnounceResult does. Whether the proxies
-// have caught up is a question ServerState.registered answers a moment later,
-// and inventing a second answer here would be a promise about a broadcast this
-// verb does not wait for.
+// AcceptJoinsResult says the operator has it. Whether the proxies have caught
+// up shows in ServerState.registered.
 type AcceptJoinsResult struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -2244,38 +2126,17 @@ func (*AcceptJoinsResult) Descriptor() ([]byte, []int) {
 
 // AnnounceRequest is a server describing itself.
 //
-// **The operator does not read any of this.** Nothing here reaches a decision
-// it makes: not scheduling, not routing, not scaling. The operator carries the
-// words to the other agents in the namespace and no further, which is the
-// whole of what this verb does and the reason it can afford to be free-form.
-// A field the operator acted on would need a schema, a validation error path
-// and a version story; a field it only carries needs a length bound.
+// The operator reads none of it; it carries the words to the other agents in
+// the namespace and no further. It is not the phase, and the two may disagree.
 //
-// **It is not the phase.** ServerState.phase is the operator's own account of
-// a server's lifecycle and an agent cannot write it. This is the server's
-// account of itself, and the two are allowed to disagree -- a server is Ready
-// for a long time, and what it is *doing* in that time is a question only the
-// thing running on it can answer.
+// The last one wins, whole: an announcement replaces its predecessor rather
+// than merging into it.
 //
-// **The last one wins, whole.** An announcement replaces its predecessor
-// rather than merging into it: a caller that sends two attributes and then one
-// has one, and a caller that wants the other kept sends it again. Merging
-// would mean an attribute could never be removed without a second verb for
-// removing it, and the first plugin to typo a key would have poisoned that
-// server's description for the life of the pod.
-//
-// The bounds are the operator's and it refuses rather than trims -- see its
-// own answer for the numbers. They are small on purpose: this travels to every
-// agent in the namespace on every resync, so a description that grew to
-// kilobytes would be paid for by every pod, forever, at the resync interval.
+// The operator bounds the size and refuses rather than trims, since this
+// travels to every agent in the namespace on every resync.
 type AnnounceRequest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// What the server says it is doing. Free-form, and empty clears it.
-	//
-	// No enum, and that is deliberate rather than unfinished. The states a game
-	// has are the game's -- waiting, running, ending, whatever a mode invents --
-	// and an enum here would be this repository guessing at them and then
-	// shipping a new operator whenever somebody guessed wrong.
 	State string `protobuf:"bytes,1,opt,name=state,proto3" json:"state,omitempty"`
 	// Anything else this server wants other servers to know. Empty clears them.
 	Attributes    map[string]string `protobuf:"bytes,2,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
@@ -2328,11 +2189,6 @@ func (x *AnnounceRequest) GetAttributes() map[string]string {
 }
 
 // AnnounceResult says the operator has it.
-//
-// It carries nothing. Everything it could echo is something the caller just
-// sent, and a result that repeats its own input teaches a reader that the
-// operator changed something when it did not. What the caller learns is which
-// of two things happened -- it was accepted, or it was refused with a reason.
 type AnnounceResult struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	unknownFields protoimpl.UnknownFields
@@ -2372,21 +2228,13 @@ func (*AnnounceResult) Descriptor() ([]byte, []int) {
 // StartServerRequest asks for the member of an OnDemand group that carries
 // this key.
 //
-// It carries no namespace, for the reason RetireRequest carries none: the
-// group is resolved inside the namespace the pod's own token authenticated.
+// The key is the caller's name for a world: the operator composes
+// "<group>-<key>", and that server is where this key's world is, every time.
+// Asking twice while it runs is answered, not refused (see already_running).
 //
-// The key is the caller's name for a world, not a name for a server: the
-// operator composes "<group>-<key>" and that server is where this key's world
-// is, this time and every later time. Asking twice while it runs is answered
-// rather than refused -- see already_running -- because a caller that has to
-// take a lock to ask a question is a caller that will forget to.
-//
-// **The key is a DNS label, and the name built from it has to be one too.**
-// "<group>-<key>" becomes a server and a pod name, so it is at most 63
-// characters: a key that is a UUID takes 36 of them and the joining hyphen one
-// more, which leaves a group name of at most 26. The operator refuses a key or
-// a group that does not fit, with REFUSED, rather than shortening either --
-// a name trimmed to fit is a name two different keys can end up sharing.
+// "<group>-<key>" becomes a server and pod name, so it must be a DNS label of
+// at most 63 characters: a UUID key leaves 26 for the group name. A key or
+// group that does not fit is REFUSED, never shortened.
 type StartServerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Group         string                 `protobuf:"bytes,1,opt,name=group,proto3" json:"group,omitempty"`
@@ -2440,31 +2288,17 @@ func (x *StartServerRequest) GetKey() string {
 }
 
 // StartServerResult says the member has been asked for, which is not the same
-// as being able to join it.
+// as being able to join it: readiness shows in the next NetworkState, in the
+// server's phase and `registered`.
 //
-// **`already_running` and not `ready`, for the reason ConnectResult says
-// `ordered` and not `moved`.** The operator's answer is about the Server it
-// holds, not about the pod behind it: whether that pod is up and registered
-// shows up in the next NetworkState, in the server's phase and `registered`,
-// which is what the mirror is for. A caller that means to send somebody there
-// waits for that and does not read more into this than it says.
-//
-// **A member that is stopping is not already running.** A stop deletes the
-// member, but it lingers while its players are moved, for up to the group's
-// drain timeout, and answering "already running" for it would send a player to
-// a server that is about to go. A start on such a key is answered
-// UNAVAILABLE and not REFUSED, because the reason is what a caller branches on
-// and this is the one case where the same request succeeds a moment later:
-// once the member is gone it starts a fresh one. Nothing in the request waits
-// for that; a caller told to try again shortly can do exactly that.
+// A start for a member that is still stopping is answered UNAVAILABLE: the
+// same request succeeds once the member is gone.
 type StartServerResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The server the operator composed, echoed so a caller that built the key
-	// from a UUID sees the name players and logs will use.
+	// The server the operator composed.
 	Server string `protobuf:"bytes,1,opt,name=server,proto3" json:"server,omitempty"`
 	// True when the member was already there and not stopping, which is a
-	// success and not a refusal: what the caller asked for is the case. It says
-	// nothing about the member being ready.
+	// success. It says nothing about the member being ready.
 	AlreadyRunning bool `protobuf:"varint,2,opt,name=already_running,json=alreadyRunning,proto3" json:"already_running,omitempty"`
 	unknownFields  protoimpl.UnknownFields
 	sizeCache      protoimpl.SizeCache
@@ -2516,18 +2350,11 @@ func (x *StartServerResult) GetAlreadyRunning() bool {
 
 // StopServerRequest deletes one member of an OnDemand group.
 //
-// It carries no namespace, for the reason RetireRequest carries none: the
-// server is resolved inside the namespace the pod's own token authenticated.
+// Its players are moved through the proxies within the group's drain timeout
+// and the pod goes. The world stays on its claim, and the next start of the
+// same key finds it.
 //
-// **A stop and not a retire.** Retiring closes a server's door and waits for
-// it to empty in its own time; this says the owner is done with it, so the
-// players on it are moved through the proxies inside the group's own drain
-// timeout and the pod goes. The world is untouched: it is on a claim this
-// operator never deletes, and the next start of the same key finds it.
-//
-// It refuses, with REFUSED, a server that is not a member of an OnDemand
-// group. A caller naming an ordinary backend here has made a mistake that
-// would otherwise delete a lobby.
+// REFUSED for a server that is not a member of an OnDemand group.
 type StopServerRequest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Server        string                 `protobuf:"bytes,1,opt,name=server,proto3" json:"server,omitempty"`
@@ -2572,19 +2399,11 @@ func (x *StopServerRequest) GetServer() string {
 	return ""
 }
 
-// StopServerResult says the member is going.
-//
-// A second stop on a member that is already being deleted succeeds and echoes
-// the name. RetireResult refuses the same repetition because an admin who
-// types the command twice needs to learn it did nothing the first time; the
-// caller here is a plugin, and "it is going" is exactly what it asked for.
-//
-// Once the member is gone the same request is answered NOT_FOUND: there is no
-// server by that name left to match.
+// StopServerResult says the member is going. A second stop while it is being
+// deleted succeeds again; once it is gone the answer is NOT_FOUND.
 type StopServerResult struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The server that is going, echoed so a caller sees what the operator
-	// matched.
+	// The server that is going, as the operator matched it.
 	Server        string `protobuf:"bytes,1,opt,name=server,proto3" json:"server,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -2630,13 +2449,9 @@ func (x *StopServerResult) GetServer() string {
 // DeleteServerRequest deletes a member of an OnDemand group for good: its
 // server, if one is running, and its world.
 //
-// Group and key rather than a server name, because a stopped member has no
-// server any more and its world is what the caller wants gone.
-//
-// A running member is stopped as StopServerRequest stops one -- its players
-// are moved through the proxies within the group's drain timeout -- and its
-// claim is deleted at once; Kubernetes keeps the claim until the pod no
-// longer uses it. The answer comes when both deletions are accepted.
+// A running member is stopped as StopServerRequest stops one, and its claim is
+// deleted at once; Kubernetes keeps the claim until the pod no longer uses it.
+// The answer comes when both deletions are accepted.
 //
 // NOT_FOUND for a group this network does not have, and for a key with
 // neither a server nor a world; REFUSED for a group that is not OnDemand, a
@@ -2750,33 +2565,21 @@ func (x *DeleteServerResult) GetWorld() bool {
 
 // CloudEvent is something that happened, on its way to somebody's chat.
 //
-// **A feed and not a ledger.** An agent that was disconnected missed what
-// happened while it was gone, and nothing here resends it: the NetworkState it
-// re-syncs on reconnect is the correction, and a better one than a replay
-// would be -- it says what is true now rather than what was true in an order
-// nobody was watching.
-//
-// It is derived from the event the operator records to Kubernetes rather than
-// computed beside it. Two independent derivations of the same fact eventually
-// disagree, and the one in the chat is the one nobody can audit.
+// A feed and not a ledger: nothing is resent to an agent that was
+// disconnected. It is derived from the event the operator records to
+// Kubernetes.
 type CloudEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// The operator's own reason, in UpperCamelCase -- ReadyGatePassed,
-	// PodRejected. A string and not an enum, for the reason NetworkState.phase
-	// is a string: the operator's vocabulary gains values, and an agent older
-	// than a value must show it rather than fail to parse the message it
-	// arrived in.
+	// PodRejected. A string, not an enum, because the vocabulary grows.
 	Kind string `protobuf:"bytes,1,opt,name=kind,proto3" json:"kind,omitempty"`
 	// The object this is about -- a server name, or a group name for an event
 	// about a group.
 	Subject string `protobuf:"bytes,2,opt,name=subject,proto3" json:"subject,omitempty"`
 	// The group the subject belongs to, and the subject itself when the subject
-	// is a group. Never empty, so that collapsing by group needs no special
-	// case for the events that are about one.
+	// is a group. Never empty.
 	Group string `protobuf:"bytes,3,opt,name=group,proto3" json:"group,omitempty"`
-	// One sentence for a person. The operator's own words, carried verbatim, so
-	// that rewording them in an agent cannot make the chat disagree with
-	// kubectl about the same fact.
+	// One sentence for a person, the operator's own words, verbatim.
 	Message string `protobuf:"bytes,4,opt,name=message,proto3" json:"message,omitempty"`
 	// Whether this is the ordinary case or the one somebody should look at.
 	Warning       bool `protobuf:"varint,5,opt,name=warning,proto3" json:"warning,omitempty"`
@@ -2851,19 +2654,9 @@ func (x *CloudEvent) GetWarning() bool {
 
 // EventInterest says whether this agent has anybody to show events to.
 //
-// **A state and not a subscription.** Every message carries the whole answer,
-// so a reconnect needs no catch-up and the operator remembers nothing across
-// the make-before-break renewal that briefly runs two streams -- which is the
-// same reason CloudRequest ids are not remembered either.
-//
-// The agent sends one whenever the answer changes: an administrator holding
-// the permission joined or left, or somebody typed `/cloud events off`. It
-// sends one on every new stream regardless, because the operator's answer for
-// a session it has never seen is "no".
-//
-// It is an optimisation and not a bound. An agent that lied and asked for
-// events would receive events about its own namespace, which it can already
-// see in its NetworkState.
+// A state, not a subscription. The agent sends it whenever the answer
+// changes and on every new stream, since the operator's answer for a session
+// it has not heard from is "no".
 type EventInterest struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Wanted        bool                   `protobuf:"varint,1,opt,name=wanted,proto3" json:"wanted,omitempty"`
@@ -2908,13 +2701,8 @@ func (x *EventInterest) GetWanted() bool {
 	return false
 }
 
-// RequestError is why a request was not carried out.
-//
-// The reason is an enum and the message is free text, and the split is
-// deliberate: a caller branches on the reason, a person reads the message. A
-// reason carried as a string would have every caller matching on prose the
-// operator is free to reword, which is a compatibility break nobody would see
-// coming.
+// RequestError is why a request was not carried out. A caller branches on the
+// reason; the message is for a person.
 type RequestError struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Reason        RequestError_Reason    `protobuf:"varint,1,opt,name=reason,proto3,enum=spawnery.agent.v1alpha1.RequestError_Reason" json:"reason,omitempty"`
@@ -3355,30 +3143,13 @@ func (x *PlayerJoinedServer) GetServer() string {
 // BackendPlayers is what only a proxy knows: how many of its players are on,
 // or on their way to, each backend it has been told about.
 //
-// It exists because the drain's exit condition could not see a player who was
-// arriving. Occupied() reads what the *backend* has reported, and a backend
-// counts a player only once they finish the configuration phase --
-// disassembling velocity 3.5.1 build 615, VelocityRegisteredServer.addPlayer
-// is called from exactly one place, BackendPlaySessionHandler.activated().
-// The proxy's own getPlayersConnected() is the same view for the same reason,
-// so reporting *that* would have closed nothing. What the proxy has and
-// nobody else does is ConnectedPlayer.getConnectionInFlightOrConnectedServer:
-// the backend a player is attached to *or heading for*.
+// A backend counts a player only after the configuration phase, so a player
+// still arriving is invisible to it. The proxy's
+// ConnectedPlayer.getConnectionInFlightOrConnectedServer is not.
 //
-// A state and not an event, the same way SetReady is: every report carries the
-// whole map, so a dropped message, a reconnect or an operator restart cannot
-// leave a count stranded. A server absent from the map has nobody attaching to
-// it -- there is no separate "left" to miss.
-//
-// Keyed by the name the operator registered the backend under
-// (RegisteredServer.name, which is the Server object's own name), so the
-// operator needs no translation. A proxy only ever hears about servers in its
-// own namespace, so the names cannot collide across one.
-//
-// The operator adds these counts to occupancy and never subtracts from it,
-// which is what makes this safe to deploy in any order: an agent too old to
-// send it contributes nothing and behaves exactly as before, and one that
-// sends it can only make the operator more careful.
+// Every report carries the whole map; a server absent from it has nobody
+// attaching. Keyed by the Server object's name. The operator only adds these
+// counts to occupancy, never subtracts.
 type BackendPlayers struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Players       map[string]int32       `protobuf:"bytes,1,rep,name=players,proto3" json:"players,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"varint,2,opt,name=value"`
@@ -3425,25 +3196,9 @@ func (x *BackendPlayers) GetPlayers() map[string]int32 {
 
 // PlayerRoster is who this proxy is serving, by identity.
 //
-// It exists because the operator had no source for one. PlayerJoinedServer
-// carries a username and is accepted and ignored; PlayerCount and
-// BackendPlayers are counts. So the operator could say how many people were on
-// a backend and never who, and an API promising a player list had nothing to
-// answer from.
-//
-// **Beside BackendPlayers rather than replacing it, deliberately.** That
-// message is load-bearing for the drain, and its own comment reasons carefully
-// about which players it counts --
-// ConnectedPlayer.getConnectionInFlightOrConnectedServer, so that a player
-// still handshaking is included. Deriving it from this one would put the
-// drain's correctness at the mercy of a change made for a reporting feature.
-// The two are built from one read of the same roster on the same tick, and
-// only this one is new.
-//
-// A state and not an event, like every other report here: each message carries
-// the whole roster, so a dropped one costs a report interval of freshness
-// rather than leaving somebody stranded on a list forever. A player absent
-// from the roster is a player this proxy no longer has.
+// Kept beside BackendPlayers rather than replacing it, so the drain does not
+// depend on a reporting feature. Both are built from one read of the roster.
+// Every message carries the whole roster.
 type PlayerRoster struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Players       []*RosterEntry         `protobuf:"bytes,1,rep,name=players,proto3" json:"players,omitempty"`
@@ -3491,16 +3246,13 @@ func (x *PlayerRoster) GetPlayers() []*RosterEntry {
 // RosterEntry is one player, as the proxy sees them right now.
 type RosterEntry struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// The Minecraft UUID, which is the only stable identity here: a name can be
-	// changed and reused, a UUID cannot.
+	// The Minecraft UUID, the only stable identity here.
 	Uuid string `protobuf:"bytes,1,opt,name=uuid,proto3" json:"uuid,omitempty"`
-	// The username, for a plugin that wants to print something a person
-	// recognises. The operator holds it in memory and puts it nowhere else --
-	// no CR, no etcd, no metric label.
+	// The username. The operator holds it in memory only -- no CR, no etcd, no
+	// metric label.
 	Name string `protobuf:"bytes,2,opt,name=name,proto3" json:"name,omitempty"`
 	// The backend this player is on, or on their way to, empty when neither.
-	// Read from the same field BackendPlayers counts, so the two agree by
-	// construction rather than by two implementations staying in step.
+	// The same field BackendPlayers counts.
 	Server        string `protobuf:"bytes,3,opt,name=server,proto3" json:"server,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -3559,49 +3311,25 @@ func (x *RosterEntry) GetServer() string {
 
 // NetworkState is the whole picture of one namespace, as the operator sees it.
 //
-// The mirror the plugin API reads from. It goes to both agent kinds, in the
-// same shape, because the API's whole premise is that a plugin author moving
-// between a backend and a proxy does not have to think differently -- and two
-// shapes here would make that a lie one layer down.
+// It is the mirror the plugin API reads from, sent to both agent kinds in the
+// same shape. Every message carries the whole picture; a dropped one costs a
+// resync interval of freshness.
 //
-// A state and not a diff. Every message carries the whole picture, so a
-// reconnect needs no catch-up and a dropped one costs a resync interval of
-// freshness. That is the same rule FullSync follows, for the same reason.
-//
-// The phase is a string rather than an enum, and deliberately: the operator's
-// phase vocabulary lives in internal/phase and gains values, and an agent that
-// is older than a value must read it as "something I do not know" rather than
-// fail to parse the message it arrived in. The plugin API's own
-// ServerPhase.fromWire is the other half of that decision.
+// The phase is a string, not an enum: the operator's vocabulary grows, and an
+// older agent must read an unknown value rather than fail to parse.
 type NetworkState struct {
 	state   protoimpl.MessageState `protogen:"open.v1"`
 	Groups  []*GroupState          `protobuf:"bytes,1,rep,name=groups,proto3" json:"groups,omitempty"`
 	Servers []*ServerState         `protobuf:"bytes,2,rep,name=servers,proto3" json:"servers,omitempty"`
 	// Every player on this network, aggregated across the proxies. Empty when
-	// no proxy has reported recently -- which is a real state and not an error,
-	// and is why the API documents an empty list as ordinary.
+	// no proxy has reported recently, which is not an error.
 	//
-	// Every player, in both pictures. The audience split above leaves on-demand
-	// groups and their members out of a backend's, and a player is not left out
-	// with them: dropping one would take somebody off players() while they are
-	// still on the network. The entry's server is what is withheld instead --
-	// blank for a player on a private server, the same blank a player between
-	// two backends already has -- so no NetworkState names a server it does not
-	// itself list.
-	//
-	// That bound is this message's and not the whole channel's: CloudEvent
-	// carries a subject and a group, and the event path has no audience, so a
-	// backend that asked for events still meets a private member's name there.
+	// A backend's picture leaves out on-demand groups and their members but
+	// keeps every player; for a player on such a server, server is blank. A
+	// CloudEvent can still name a private member to a backend.
 	Players []*RosterEntry `protobuf:"bytes,3,rep,name=players,proto3" json:"players,omitempty"`
 	// The line a cloud event becomes in chat, from the Network's own spec.
-	//
-	// Carried in this state message rather than in the pod, and that placement
-	// is the point: a pod's environment is part of podspec.DesiredServerHash, so
-	// a format in one would make re-wording a chat line replace every server on
-	// the network. Here a change costs a resync interval and rolls nothing.
-	//
-	// Empty is what an operator older than this field sends, and the agent reads
-	// it as "use my own default" rather than as "print nothing".
+	// Empty means the agent's own default.
 	FeedFormat string `protobuf:"bytes,4,opt,name=feed_format,json=feedFormat,proto3" json:"feed_format,omitempty"`
 	// Every proxy of the namespace, sorted by name.
 	Proxies       []*ProxyState `protobuf:"bytes,5,rep,name=proxies,proto3" json:"proxies,omitempty"`
@@ -3686,27 +3414,15 @@ type GroupState struct {
 	// current spec. Not a sum an agent could compute from the servers below, and
 	// the two can disagree while a rolling update is in flight.
 	FreeSlots int32 `protobuf:"varint,6,opt,name=free_slots,json=freeSlots,proto3" json:"free_slots,omitempty"`
-	// What whoever runs this network wrote down about this group, from its own
-	// definition, and nothing the operator decided. Empty for a group nobody has
-	// written anything about, which is every group until somebody does.
-	//
-	// The counterpart of ServerState.attributes, and the difference is who
-	// writes it: that one is a server describing what it is doing right now,
-	// this one is a person describing what the group is. A plugin that needs to
-	// know something no server could tell it -- which permission a group is
-	// behind, which of several games it runs -- reads it here.
+	// The group's spec.attributes: what a person wrote about the group, as
+	// opposed to ServerState.attributes, which a server announces.
 	Attributes map[string]string `protobuf:"bytes,7,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
-	// What this group is called where a person reads it, from its own
-	// definition. A group's name is a DNS label and a name people say out loud
-	// rarely is, so this is where "Bingo-Team" lives while the name stays
-	// "bingo-team". Empty for a group nobody has named, and the agent -- not the
-	// operator -- then stands the name in for it, so that a picture from an
-	// operator that predates the field reads the same as one that left it out.
+	// The group's spec.displayName. Empty when unset; the agent then shows the
+	// group's name.
 	DisplayName string `protobuf:"bytes,8,opt,name=display_name,json=displayName,proto3" json:"display_name,omitempty"`
 	// The group's spec.playableSlots, 0 if unset.
 	PlayableSlots int32 `protobuf:"varint,9,opt,name=playable_slots,json=playableSlots,proto3" json:"playable_slots,omitempty"`
-	// spec.enforcePlayableSlots. An operator older than the field sends
-	// neither, which reads as not enforced.
+	// spec.enforcePlayableSlots.
 	EnforcePlayableSlots bool `protobuf:"varint,10,opt,name=enforce_playable_slots,json=enforcePlayableSlots,proto3" json:"enforce_playable_slots,omitempty"`
 	unknownFields        protoimpl.UnknownFields
 	sizeCache            protoimpl.SizeCache
@@ -3825,44 +3541,19 @@ type ServerState struct {
 	// be Ready and not registered -- that is the first half of a drain -- so a
 	// plugin choosing where to send somebody wants this and not the phase.
 	Registered bool `protobuf:"varint,6,opt,name=registered,proto3" json:"registered,omitempty"`
-	// What this server last said about itself, and nothing the operator decided.
-	// See AnnounceRequest. Both are empty for a server that has announced
-	// nothing, which is every server until something on it says otherwise --
-	// absent and "announced nothing" are the same state here on purpose, because
-	// a plugin that has to tell them apart is asking about the agent rather than
-	// about the game.
+	// What this server last said about itself; see AnnounceRequest. Empty for a
+	// server that has announced nothing.
 	State      string            `protobuf:"bytes,7,opt,name=state,proto3" json:"state,omitempty"`
 	Attributes map[string]string `protobuf:"bytes,8,rep,name=attributes,proto3" json:"attributes,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	// Which run of this server this is: an opaque token that changes whenever
-	// the process behind the name is replaced, and never otherwise.
-	//
-	// The name alone cannot answer that, and for one kind of server it never
-	// will: an ephemeral server is named afresh every time, but a persistent one
-	// keeps its name across every restart because that name is the identity of
-	// its world. Anything that remembers a server and later asks "is this still
-	// the one I meant" -- a rejoin, a queue, a scoreboard that survives a
-	// reconnect -- compares this and not the name.
-	//
-	// Opaque on purpose. It is a pod UID today and this contract does not say
-	// so: what is promised is that two equal values mean the same run and two
-	// different ones mean different runs. Empty for a server whose pod the
-	// operator has not seen yet, which is a server nobody is being sent to.
+	// the process behind the name is replaced, and never otherwise. A
+	// persistent server keeps its name across restarts, so compare this, not
+	// the name. Empty while the operator has not seen the pod.
 	Incarnation string `protobuf:"bytes,9,opt,name=incarnation,proto3" json:"incarnation,omitempty"`
 	// Which of its group's servers this is, counted the way a person counts:
-	// the second hub is 2. Stable for as long as the server exists, and given
-	// out again only after it is gone -- two servers that were both "Hub-2" at
-	// different times are told apart by incarnation, not by this.
-	//
-	// 0 means nobody numbered this server: every server that was already
-	// running when this field arrived, and the ordinal-zero server of a
-	// persistent group. A reader showing this to a player falls back to the
-	// name it already has for those.
-	//
-	// A persistent server reports its ordinal here, so its number agrees with
-	// the name it already carries. That is why these start at 0 where an
-	// ephemeral group's start at 1, and why one persistent server per group is
-	// indistinguishable from an unnumbered one. It costs nothing: that server
-	// is referred to by the name that names its world.
+	// the second hub is 2. Stable while the server exists, reused only after it
+	// is gone. A persistent server reports its ordinal. 0 means unnumbered (a
+	// server older than this field, or ordinal zero); fall back to the name.
 	Number int32 `protobuf:"varint,10,opt,name=number,proto3" json:"number,omitempty"`
 	// Whether an admin took this server's retirement back: spec.hold.
 	Held bool `protobuf:"varint,11,opt,name=held,proto3" json:"held,omitempty"`
@@ -4476,16 +4167,9 @@ func (x *UnregisterServer) GetName() string {
 	return ""
 }
 
-// MovePlayer asks one proxy to move one player.
-//
-// Broadcast to every proxy of the namespace rather than addressed to the one
-// holding the player, because the operator does not know which one that is:
-// Registry.Roster merges the rosters of every proxy and drops which reported
-// what, since every reader until now wanted the union. A proxy that does not
-// have this player does nothing, which makes the broadcast correct rather than
-// merely tolerable -- and cheap, since a namespace has a handful of proxies.
-//
-// The proxy reports no outcome, and cannot: see ConnectResult.
+// MovePlayer asks one proxy to move one player. It is broadcast to every
+// proxy of the namespace, since the operator does not track which proxy holds
+// whom; a proxy without the player ignores it. No outcome is reported.
 type MovePlayer struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	PlayerUuid    string                 `protobuf:"bytes,1,opt,name=player_uuid,json=playerUuid,proto3" json:"player_uuid,omitempty"`
@@ -4591,27 +4275,16 @@ func (x *DrainPlayers) GetToGroups() []string {
 }
 
 // SetReady is the operator asserting whether this proxy should be taking new
-// connections. It is a state and not an event, the same way Hello.ready is:
-// the operator re-sends the value it last asserted on every resync — one every
-// 30 seconds, on the same tick as FullSync and after it — so a reconnect
-// cannot leave a proxy stuck in the wrong one, a cancelled drain simply
-// reverts, and an agent whose gate has come to disagree with what the operator
-// asserted is corrected within one interval rather than never. Between those
-// ticks it is sent only when the value changes, so an agent sees repeats at
-// the resync rate and not at the reconcile rate; applying a value the agent
-// already holds has to be harmless.
+// connections. A state, not an event: the operator re-sends it on every
+// resync, after FullSync, and otherwise only on a change, so applying a value
+// the agent already holds must be harmless.
 //
-// The agent maps it onto its readiness gate, which the kubelet probes. So the
-// effect an operator is really asking for is "leave the Service's endpoints" —
-// established connections are not touched, because Kubernetes does not close
-// them when an endpoint is removed.
+// The agent maps it onto its readiness gate. Established connections are not
+// touched.
 //
-// An agent must not open that gate before a FullSync has applied. Readiness
-// means routable, and a proxy with no server list disconnects every player it
-// is sent with "no available server", so a ready=true asserted that early is
-// recorded and takes effect with the first FullSync that applies rather than
-// on arrival. ready=false is applied whenever it arrives: an agent that cannot
-// build its server list has no business in the endpoints either.
+// An agent must not open the gate before a FullSync has applied: a proxy with
+// no server list disconnects every player it is sent. An early ready=true is
+// held until then; ready=false applies on arrival.
 type SetReady struct {
 	state         protoimpl.MessageState `protogen:"open.v1"`
 	Ready         bool                   `protobuf:"varint,1,opt,name=ready,proto3" json:"ready,omitempty"`

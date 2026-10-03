@@ -17,28 +17,9 @@ limitations under the License.
 // Package serverreg is every live backend session, and the path the operator
 // uses to send one anything.
 //
-// # The session machinery here is Fleet's, duplicated rather than extracted
-//
-// Fleet is eighteen functions and they split almost exactly in half. Nine are
-// this machinery -- New, Join, leave, close, send, broadcast, Resync, Start,
-// NeedLeaderElection. Nine are the proxy protocol: fallback lists, drain
-// orders, registered-server construction, the lastReady memo, and a snapshot
-// scoped to one group rather than a namespace. A backend needs none of the
-// second half, so a generic carrying the proxy's per-session hooks would be a
-// parameterised version of the harder case serving the easier one.
-//
-// What is genuinely shared is the picture, and the picture *is* shared: both
-// packages build theirs through netstate.Source, so the two cannot come to
-// disagree about what a network looks like -- which is the promise the plugin
-// API makes and the only one a divergence here would break. The one difference
-// is the filter netstate.Audience names, applied there and not here.
-//
-// The two rules that matter in the eighty lines below are stated in both
-// places on purpose, because they are the ones a reader has to get right:
-// build a session's first message under the same lock a broadcast takes, so
-// nothing can overtake it; and cut a session that falls behind rather than
-// dropping its message, because an agent serving a mirror it cannot know is
-// wrong looks healthy the whole time.
+// The session machinery duplicates proxyreg.Fleet's rather than sharing a
+// generic: half of Fleet is proxy protocol a backend does not need. The network
+// picture itself is shared through netstate.Source.
 package serverreg
 
 import (
@@ -53,43 +34,28 @@ import (
 )
 
 const (
-	// DefaultResyncInterval is how often every live session is re-sent its
-	// state. The same figure proxyreg uses, and for the same reason: a state
-	// is only as true as its last delivery.
+	// DefaultResyncInterval matches proxyreg's: a state is only as true as its
+	// last delivery.
 	DefaultResyncInterval = 30 * time.Second
-	// DefaultOutboxSize is how far a session may fall behind before it is cut.
-	DefaultOutboxSize = 8
+	DefaultOutboxSize     = 8
 )
 
 // Options configures a Registry.
 type Options struct {
-	// State builds what a session is sent on join and on every resync.
-	State netstate.Source
-	// ResyncInterval is how often Start re-syncs. Zero means the default.
+	State          netstate.Source
 	ResyncInterval time.Duration
-	// OutboxSize bounds a session's queue. Zero means the default.
-	//
-	// Smaller than proxyreg's 64 on purpose: that queue absorbs a burst of
-	// per-server registrations during a rollout, and this one carries one
-	// message per resync. A backend that cannot read eight of those is not
-	// reading its stream at all.
+	// OutboxSize bounds a session's queue. Zero means the default. Smaller than
+	// proxyreg's 64: this queue carries one message per resync, not a rollout's
+	// burst of registrations.
 	OutboxSize int
 }
 
-// session is one live backend stream's queue.
 type session struct {
 	namespace string
 	outbox    chan *agentpb.OperatorToServer
-	// closed guards against a double close: a session ends either because its
-	// stream left or because it fell behind, and both can happen.
-	closed bool
-	// wantsEvents is what this agent last reported about whether anybody is
-	// there to read a cloud event.
-	//
-	// It belongs to the session and not to the Registry, for the reason
-	// proxyreg's lastReady does: a new stream starts without one, so the
-	// answer is re-asserted on reconnect without the operator having to know a
-	// reconnect happened -- and it cannot outlive the stream that gave it.
+	closed    bool
+	// wantsEvents lives on the session so a new stream starts without it and it
+	// cannot outlive the stream that reported it.
 	wantsEvents bool
 }
 
@@ -101,7 +67,6 @@ type Registry struct {
 	opts     Options
 }
 
-// New creates a Registry.
 func New(opts Options) *Registry {
 	if opts.ResyncInterval <= 0 {
 		opts.ResyncInterval = DefaultResyncInterval
@@ -113,14 +78,8 @@ func New(opts Options) *Registry {
 }
 
 // Join enters a session and returns its outbox together with the function that
-// removes it. The first message on the channel is always the network state.
-//
-// That guarantee is the shape of this function. Everything between the lock
-// and the unlock -- building the state, filling the queue, entering the
-// session -- happens where no resync can run, because Resync takes the same
-// mutex. So a resync cannot overtake the state it would be repeating, and the
-// ordering is a property of the code rather than of a test that has to win a
-// race to observe it.
+// removes it. The first message on the channel is always the network state:
+// it is built under the mutex Resync takes, so no resync can overtake it.
 //
 // The Registry closes the channel if the session falls too far behind. A
 // caller that reads a closed channel must end its stream; see send.
@@ -143,9 +102,8 @@ func (r *Registry) Join(ctx context.Context, namespace, podUID string) (<-chan *
 	}
 	s.outbox <- stateMessage(state)
 	if previous, ok := r.sessions[podUID]; ok {
-		// A second stream from one pod supersedes the first, which is what
-		// makes a make-before-break renewal work: the new session is entered
-		// here and the old one's reader sees a closed channel and ends.
+		// A second stream from one pod supersedes the first (make-before-break
+		// renewal); the old reader sees a closed channel and ends.
 		r.close(previous)
 	}
 	r.sessions[podUID] = s
@@ -153,20 +111,17 @@ func (r *Registry) Join(ctx context.Context, namespace, podUID string) (<-chan *
 	return s.outbox, func() { r.leave(podUID, s) }, nil
 }
 
-// leave removes a session, unless a later one has already replaced it.
 func (r *Registry) leave(podUID string, s *session) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	if r.sessions[podUID] != s {
-		// Superseded by a renewal. The map already holds the newer session and
-		// closing on this one's behalf would cut the live stream.
 		return
 	}
 	r.close(s)
 	delete(r.sessions, podUID)
 }
 
-// close ends a session's channel at most once. Callers hold r.mu.
+// Callers hold r.mu.
 func (r *Registry) close(s *session) {
 	if s.closed {
 		return
@@ -176,12 +131,8 @@ func (r *Registry) close(s *session) {
 }
 
 // send queues a message, or cuts the session loose if its queue is full.
-//
-// Dropping instead would leave the agent serving a mirror it has no way of
-// knowing is stale, looking healthy the whole time, until the next resync
-// happened to get through. Closing is loud: the stream ends, the agent
-// reconnects, and it is rebuilt from a fresh state. proxyreg made this same
-// choice for the same reason.
+// Dropping instead would leave the agent serving a stale mirror while looking
+// healthy; a cut stream reconnects and is rebuilt from a fresh state.
 //
 // Callers hold r.mu.
 func (r *Registry) send(s *session, msg *agentpb.OperatorToServer) {
@@ -196,17 +147,8 @@ func (r *Registry) send(s *session, msg *agentpb.OperatorToServer) {
 	}
 }
 
-// broadcast sends one message to every session in a namespace.
-//
-// A build that returns nil sends nothing, which is what lets one helper serve
-// both "everybody in this namespace" and "only the sessions that asked" -- the
-// filter lives in the caller's build, where the reason for it is readable,
-// rather than as a second broadcast that would drift from this one.
-//
-// Modelled on internal/proxyreg.Fleet.broadcast. The duplication is the same
-// one this package's own comment argues for: two fan-outs over two message
-// types, kept as two readable copies rather than one generic that neither side
-// could follow.
+// broadcast sends one message to every session in a namespace. A build that
+// returns nil skips that session.
 func (r *Registry) broadcast(namespace string, build func(*session) *agentpb.OperatorToServer) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -221,12 +163,8 @@ func (r *Registry) broadcast(namespace string, build func(*session) *agentpb.Ope
 }
 
 // SetInterest records whether this session's agent has anybody to show events
-// to.
-//
-// An unknown pod is ignored rather than remembered. A report can arrive from a
-// session a renewal has just displaced, and creating an entry for it would
-// leak one per reconnect and leave the operator holding interest for a stream
-// that no longer exists.
+// to. An unknown pod is ignored: the report may come from a session a renewal
+// just displaced.
 func (r *Registry) SetInterest(podUID string, wanted bool) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -235,11 +173,7 @@ func (r *Registry) SetInterest(podUID string, wanted bool) {
 	}
 }
 
-// Interested reports what SetInterest last recorded.
-//
-// Exported for tests, and that is a cost paid deliberately: the alternative is
-// asserting a leak through a channel that stays empty whether or not the entry
-// is there, which is the same as not asserting it.
+// Interested reports what SetInterest last recorded. Exported for tests.
 func (r *Registry) Interested(podUID string) bool {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -248,13 +182,8 @@ func (r *Registry) Interested(podUID string) bool {
 }
 
 // Publish sends one event to every session in the namespace that asked for
-// events. It implements cloudevent.Sink.
-//
-// It reports nothing, and cannot: this is called from inside a reconcile, and
-// a feed nobody is watching must not be able to fail one. A session whose
-// outbox is full is cut by send, exactly as it is for every other message --
-// agentpb.CloudEvent documents a missed event as ordinary rather than an
-// error, and the NetworkState that follows is the correction.
+// events. It implements cloudevent.Sink. It reports nothing: a feed nobody
+// watches must not fail a reconcile, and a missed event is ordinary.
 func (r *Registry) Publish(namespace string, ev *agentpb.CloudEvent) {
 	r.broadcast(namespace, func(s *session) *agentpb.OperatorToServer {
 		if !s.wantsEvents {
@@ -266,14 +195,10 @@ func (r *Registry) Publish(namespace string, ev *agentpb.CloudEvent) {
 	})
 }
 
-// Resync re-sends every live session its namespace's state.
 func (r *Registry) Resync(ctx context.Context) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	// Built once per namespace rather than once per session: a namespace with
-	// twenty backends would otherwise do twenty identical List passes on every
-	// tick, and they cannot differ -- the lock is held throughout.
 	built := make(map[string]*agentpb.NetworkState)
 	for podUID, s := range r.sessions {
 		state, ok := built[s.namespace]
@@ -281,10 +206,8 @@ func (r *Registry) Resync(ctx context.Context) {
 			var err error
 			state, err = r.opts.State.Build(ctx, s.namespace, netstate.ForServers)
 			if err != nil {
-				// One unreadable namespace must not stop the others. The next
-				// tick tries again and the session keeps its last known state
-				// until then, which is the correct answer while the operator
-				// cannot read.
+				// One unreadable namespace must not stop the others; the session keeps
+				// its last state until the next tick.
 				log.FromContext(ctx).V(1).Info("skipped a server resync",
 					"pod", podUID, "namespace", s.namespace, "reason", err.Error())
 				continue
@@ -310,8 +233,7 @@ func (r *Registry) Start(ctx context.Context) error {
 	}
 }
 
-// NeedLeaderElection makes this leader-bound, for the reason proxyreg gives:
-// only the leader holds the streams these messages go to.
+// NeedLeaderElection is true: only the leader holds the streams.
 func (r *Registry) NeedLeaderElection() bool { return true }
 
 func stateMessage(state *agentpb.NetworkState) *agentpb.OperatorToServer {

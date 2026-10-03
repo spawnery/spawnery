@@ -28,8 +28,8 @@ import (
 	"github.com/spawnery/spawnery/internal/mcproto"
 )
 
-// serve starts a one-shot fake Minecraft server on a loopback port and hands
-// the accepted connection to handle. It returns the address Ping should dial.
+// serve hands one accepted loopback connection to handle and returns the
+// address to dial.
 func serve(t *testing.T, handle func(net.Conn)) (string, int) {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -50,9 +50,8 @@ func serve(t *testing.T, handle func(net.Conn)) (string, int) {
 	return "127.0.0.1", ln.Addr().(*net.TCPAddr).Port
 }
 
-// drainRequest reads the handshake and the status request. Without it, closing
-// the connection in a handler can reset the client mid-write, and the test
-// would fail on the wrong error.
+// drainRequest reads the handshake and the status request; closing without it
+// can reset the client mid-write.
 func drainRequest(c net.Conn) {
 	_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
 	buf := make([]byte, 256)
@@ -60,7 +59,6 @@ func drainRequest(c net.Conn) {
 	_ = c.SetReadDeadline(time.Time{})
 }
 
-// statusResponse frames a status document the way a server does.
 func statusResponse(doc string) []byte {
 	var body []byte
 	body = mcproto.AppendVarInt(body, 0x00)
@@ -93,9 +91,7 @@ func TestPingReadsTheStatusDocument(t *testing.T) {
 }
 
 func TestPingVersionAnnouncesTheVersionItWasGiven(t *testing.T) {
-	// A proxy answers a status request with the version it was asked about
-	// when it supports it, so the caller that has to log in afterwards
-	// (internal/mcjoin) depends on this field being exactly what it passed.
+	// internal/mcjoin depends on this being exactly what it passed.
 	announced := make(chan int32, 1)
 	host, port := serve(t, func(c net.Conn) {
 		_ = c.SetReadDeadline(time.Now().Add(2 * time.Second))
@@ -150,11 +146,8 @@ func TestPingAnnouncesTheDefaultVersion(t *testing.T) {
 	if _, err := Ping(ctx, host, port); err != nil {
 		t.Fatalf("Ping: %v", err)
 	}
-	// 771 written out rather than compared against handshakeProtocolVersion:
-	// an assertion phrased in terms of the constant it is pinning passes
-	// whatever that constant is changed to, and this test's whole purpose is
-	// that Ping's own version does not move. The value is the one measured in
-	// milestone 2b — a Paper 26.2 server answers it with 776.
+	// 771 written out rather than compared against handshakeProtocolVersion, so
+	// changing the constant fails this.
 	if got := <-announced; got != 771 {
 		t.Errorf("the handshake announced protocol %d, want 771", got)
 	}
@@ -233,8 +226,7 @@ func TestPingRejects(t *testing.T) {
 }
 
 func TestPingHonoursTheDeadline(t *testing.T) {
-	// A server that accepts and then says nothing is the case the tool exists
-	// for: the port is open long before the world is loaded.
+	// The port is open long before the world is loaded.
 	host, port := serve(t, func(c net.Conn) {
 		drainRequest(c)
 		_, _ = io.Copy(io.Discard, c)

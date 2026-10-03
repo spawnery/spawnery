@@ -25,44 +25,26 @@ import (
 	"github.com/spawnery/spawnery/internal/agentpb"
 )
 
-// Sink is where derived events go. The two fan-outs implement it.
-//
-// One method, and no error: a feed nobody is watching must not be able to fail
-// a reconcile. Delivery is best-effort by design -- see agentpb.CloudEvent.
+// Sink is where derived events go. No error: a feed nobody is watching must not
+// fail a reconcile.
 type Sink interface {
 	Publish(namespace string, ev *agentpb.CloudEvent)
 }
 
 // Recorder records an event to Kubernetes and derives a CloudEvent from the
-// same call.
-//
-// **One seam and not thirty.** The operator records through this interface in
-// thirty places across five controllers, and every one of them now feeds the
-// chat without knowing it does. The alternative -- a second call beside each
-// recorder call -- is thirty chances to forget, and forgetting is invisible:
-// the Kubernetes event is still there, so nothing looks broken except that one
-// kind of thing never appears in chat.
-//
-// It implements events.EventRecorder, so wrapping is a one-line change at each
-// construction site and no call site changes at all.
+// same call, so no call site can forget to feed the chat. It implements
+// events.EventRecorder, so wrapping changes no call site.
 type Recorder struct {
 	// Inner is the manager's own recorder. Required.
 	Inner events.EventRecorder
-	// Sink is where the feed's copy goes. Nil means no feed, which is a state
-	// and not a bug: a recorder may be built before the fan-outs exist.
+	// Sink is where the feed's copy goes. Nil means no feed: a recorder may be
+	// built before the fan-outs exist.
 	Sink Sink
 }
 
-// Eventf records, then derives.
-//
-// Kubernetes first, deliberately. If deriving ever panicked, the recorded
-// event would already be queued -- and the feed is the half this project can
-// afford to lose.
-//
-// The note reaches Kubernetes unformatted with its args, exactly as it did
-// before this wrapper existed, and is formatted only for the feed. Both sides
-// therefore say the same sentence, which is what makes "the chat shows what
-// kubectl shows" true of the text and not merely of the fact.
+// Eventf records to Kubernetes first, so a panic while deriving cannot lose the
+// event. The note reaches Kubernetes unformatted with its args and is
+// formatted only for the feed.
 func (r Recorder) Eventf(
 	regarding runtime.Object, related runtime.Object,
 	eventtype, reason, action, note string, args ...interface{},
@@ -71,16 +53,8 @@ func (r Recorder) Eventf(
 	if r.Sink == nil {
 		return
 	}
-	// Only when there are args, so a note carrying a bare percent sign is not
-	// mangled by a Sprintf that has nothing to substitute.
-	//
-	// **Deliberately untested, and that is worth stating.** `go vet` is the
-	// real defence here and it is thorough: it refuses such a note at a direct
-	// call site, through a variadic forwarder like internal/certs/events.go's,
-	// and as a non-constant format string. Every way of writing the test is
-	// something vet will not let compile, which is the same as saying the case
-	// cannot reach this line in a repository whose CI runs vet. The branch
-	// stays because it is one line and vet is a lint rather than a compiler.
+	// Only with args, so a bare percent sign is not mangled. Untested: go vet
+	// refuses every way of writing such a note.
 	formatted := note
 	if len(args) > 0 {
 		formatted = fmt.Sprintf(note, args...)
