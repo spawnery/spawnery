@@ -4,6 +4,7 @@ import cloud.spawnery.agent.JoinRule
 import cloud.spawnery.agent.PermissionValue
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertSame
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.util.UUID
@@ -15,7 +16,7 @@ class JoinPermissionsTest {
     @Test
     fun `a group without a rule is open and nobody is asked`() {
         var asked = 0
-        val access = JoinPermissions(rules::get, { "tutorial" }, listOf(
+        val access = JoinPermissions(rules::get, { "tutorial" }, { _, _ -> }, listOf(
             PermissionLookup { _, _, _ ->
                 asked++
                 null
@@ -28,7 +29,7 @@ class JoinPermissionsTest {
     @Test
     fun `the lookup is asked in the target server's contexts`() {
         var asked: Map<String, String>? = null
-        val access = JoinPermissions(rules::get, { "tutorial" }, listOf(
+        val access = JoinPermissions(rules::get, { "tutorial" }, { _, _ -> }, listOf(
             PermissionLookup { _, node, contexts ->
                 asked = contexts
                 if (node == "network.vip") PermissionValue.TRUE else PermissionValue.UNDEFINED
@@ -43,7 +44,7 @@ class JoinPermissionsTest {
 
     @Test
     fun `a lookup that cannot answer hands over to the next`() {
-        val access = JoinPermissions(rules::get, { "tutorial" }, listOf(
+        val access = JoinPermissions(rules::get, { "tutorial" }, { _, _ -> }, listOf(
             PermissionLookup { _, _, _ -> null },
             PermissionLookup { _, _, _ -> PermissionValue.FALSE },
         ))
@@ -52,16 +53,31 @@ class JoinPermissionsTest {
 
     @Test
     fun `no lookup answering reads as undefined`() {
-        val access = JoinPermissions(rules::get, { "tutorial" }, listOf(PermissionLookup { _, _, _ -> null }))
+        val access = JoinPermissions(rules::get, { "tutorial" }, { _, _ -> }, listOf(PermissionLookup { _, _, _ -> null }))
         assertFalse(access.mayJoin(player, "vip-x1", "vip"))
     }
 
     @Test
     fun `a lookup that throws counts as no answer`() {
-        val access = JoinPermissions(rules::get, { "tutorial" }, listOf(
+        val access = JoinPermissions(rules::get, { "tutorial" }, { _, _ -> }, listOf(
             PermissionLookup { _, _, _ -> throw IllegalStateException("LuckPerms is not loaded") },
             PermissionLookup { _, _, _ -> PermissionValue.TRUE },
         ))
         assertTrue(access.mayJoin(player, "vip-x1", "vip"))
+    }
+
+    @Test
+    fun `a lookup that keeps throwing is logged once with its exception`() {
+        val logged = mutableListOf<Pair<String, Throwable?>>()
+        val failure = IllegalStateException("LuckPerms is not loaded")
+        val access = JoinPermissions(rules::get, { "tutorial" }, { message, error -> logged += message to error }, listOf(
+            PermissionLookup { _, _, _ -> throw failure },
+        ))
+
+        access.mayJoin(player, "vip-x1", "vip")
+        access.mayJoin(player, "vip-x1", "vip")
+
+        assertEquals(1, logged.size)
+        assertSame(failure, logged.single().second)
     }
 }

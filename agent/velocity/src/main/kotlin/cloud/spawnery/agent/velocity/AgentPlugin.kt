@@ -177,6 +177,7 @@ class AgentPlugin @Inject constructor(
         val access = JoinPermissions(
             rules = mirror::joinRule,
             network = self::network,
+            log = ::warn,
             lookups = listOfNotNull(
                 LuckPermsPermissions.lookupIfPresent()?.let { f -> PermissionLookup { p, n, c -> f(p, n, c) } },
                 VelocityPermissionLookup(proxy),
@@ -412,9 +413,11 @@ class AgentPlugin @Inject constructor(
             }
             is PreConnectDecision.Redirect -> {
                 event.result = ServerPreConnectEvent.ServerResult.allowed(decision.server)
-                event.player.sendMessage(joinDenied(group))
             }
-            PreConnectDecision.Disconnect -> event.player.disconnect(joinDenied(group))
+            PreConnectDecision.Disconnect -> {
+                event.result = ServerPreConnectEvent.ServerResult.denied()
+                event.player.disconnect(joinDenied(group))
+            }
         }
     }
 
