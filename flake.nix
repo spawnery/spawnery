@@ -578,7 +578,11 @@
           # 0.16.0 moves it with the chart and the images: storage.keep reaches
           # the pod, a spec change the operator has not reconciled holds later
           # changeover stages, and a refused proxy group observes its spec.
-          operatorVersion = "0.16.0";
+          #
+          # 0.17.0 moves it with the chart: storage.size may be lowered for
+          # claims created afterwards, storage.annotations reach each data
+          # claim, and a refused claim create is reported on the Server.
+          operatorVersion = "0.17.0";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";

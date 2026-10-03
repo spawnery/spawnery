@@ -8,7 +8,7 @@ type: application
 # version bump alone. Since v0.2.14 this number is also the address people
 # install by -- `--version` against oci://ghcr.io/spawnery/charts/spawnery --
 # so it is no longer only what Flux names a packaged artifact after.
-version: 0.16.1
+version: 0.17.0
 # appVersion beschreibt den Operator, den dieses Chart ausliefert, und nicht die
 # Release-Nummer. v0.2.13 aendert nur die Agenten und einen Kommentar an einer
 # CRD, v0.2.14 gar kein Image -- sein ganzer Inhalt ist der Veroeffentlichungs-
@@ -159,7 +159,10 @@ version: 0.16.1
 #
 # 0.16.1 does not: only the StorageSpec.keep description in the CRD moved;
 # the operator binary is unchanged.
-appVersion: "0.16.0"
+#
+# 0.17.0 moves it with the operator: ServerGroup gains storage.annotations
+# and storage.size may be lowered. Every existing object validates unchanged.
+appVersion: "0.17.0"
 
 # The floor is the world-deletion policy's: admissionregistration.k8s.io/v1
 # ValidatingAdmissionPolicy is GA from 1.30. The CRDs alone would need 1.25,
