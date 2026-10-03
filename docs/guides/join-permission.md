@@ -33,24 +33,29 @@ holds every node, so they pass.
 
 ## Scoping a grant with contexts
 
-The agents register four LuckPerms contexts: `server`, `group`, `network` and
-`environment`. A grant can be limited to one of them. This one holds only for
+The agents register `group`, `network` and `environment` as LuckPerms contexts,
+and `server` as well when the backend's LuckPerms server name is unset
+(`global`). A grant can be limited to one of them. This one holds only for
 players on a server of the `vip-lobby` group:
 
 ```
 /lp group vip permission set network.vip true group=vip-lobby
 ```
 
-The proxy asks with `server=<server name>`. That matches only when the backend's
-LuckPerms server name is unset, which means `global`. A grant scoped to a
-configured LuckPerms server name is seen by the backend but not by the proxy.
-The proxy then routes the player around the group, and the backend never
-decides.
+The proxy asks with `server=<server name>`, the name the operator gave the
+server. A backend has that same context only when its LuckPerms server name is
+unset. Then a grant scoped to `server=<server name>` holds on both sides. With a
+configured name, the two sides disagree. A grant on the spawnery name is seen by
+the proxy, which lets the player through, and a `Required` backend refuses them.
+A grant on the configured name is seen by the backend but not by the proxy,
+which routes the player around the group.
 
 ## What a player sees
 
 - On join, the proxy skips a fallback group the player may not join and tries
   the next group in the list.
+- When no fallback group is open to the player, the proxy disconnects them with
+  Velocity's own "no available server" message instead.
 - `/server` and other connects to such a group are refused with
   `You may not join <group>.`
 - When the proxy lets a player through and the backend refuses the login, the
