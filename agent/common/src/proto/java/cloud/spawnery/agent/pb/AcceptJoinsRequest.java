@@ -9,27 +9,13 @@ package cloud.spawnery.agent.pb;
  * <pre>
  * AcceptJoinsRequest is a server opening or closing its own door.
  *
- * **Closing is not retiring, and the difference is the whole reason this verb
- * exists.** RetireRequest says the server is finished: it stops taking joins,
- * empties out, and is taken down by the rules that take down any server its
- * group no longer needs. This says only the first of those, it says it for as
- * long as the server likes, and it can be taken back. A round that has started
- * is not a server that is going away, and asking for the one when you mean the
- * other reads as a decommissioning to everybody who looks afterwards.
+ * Closing is not retiring: the server is not going away, and it can open
+ * again. The phase stays Ready; what changes is whether the server counts as
+ * capacity (and, with round_ended, whether the proxies route to it).
+ * ServerState.registered and joins_closed show the result. Nobody already on
+ * the server is moved.
  *
- * **The phase does not change.** A closed server stays Ready, because the
- * phase is the operator's account of a server's lifecycle and closing the door
- * is not a lifecycle event. What changes is whether the proxies have it in
- * their routing tables, which is exactly the question ServerState.registered
- * answers -- so a plugin choosing where to send somebody already reads the
- * right field and needs to learn nothing new.
- *
- * **Nobody is moved.** The players on a closed server go on playing until they
- * leave on their own. This verb has no effect on anybody who is already there,
- * which is the other half of what distinguishes it from a drain.
- *
- * It is refused from a proxy. A proxy is not in anybody's routing table -- it
- * *is* the routing table -- so there is nothing for this to close.
+ * Refused from a proxy.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.AcceptJoinsRequest}
@@ -79,8 +65,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * False closes the door, true opens it again. A server that has never asked
-   * is open, which is what makes this safe to add to a network whose agents
-   * predate it.
+   * is open.
    * </pre>
    *
    * <code>bool accept = 1;</code>
@@ -97,16 +82,7 @@ private static final long serialVersionUID = 0L;
    * <pre>
    * True says the server's round is over: take it out of the routing table
    * and treat the pod stopping after this as an ending rather than a fault.
-   *
-   * Unset is a server that stays in the table, which is what every agent that
-   * predates this field does and what closing the door alone now means. The
-   * two fields are two claims: `accept` is about capacity -- do not count my
-   * seats -- and this one is about reachability and about how the end of this
-   * pod is to be read.
-   *
-   * It is here rather than in AnnounceRequest because the operator acts on it.
-   * What the operator acts on needs a schema, an error path and a version
-   * story; what it only carries needs a length bound.
+   * Unset, the server stays in the routing table.
    * </pre>
    *
    * <code>bool round_ended = 2;</code>
@@ -295,27 +271,13 @@ private static final long serialVersionUID = 0L;
    * <pre>
    * AcceptJoinsRequest is a server opening or closing its own door.
    *
-   * **Closing is not retiring, and the difference is the whole reason this verb
-   * exists.** RetireRequest says the server is finished: it stops taking joins,
-   * empties out, and is taken down by the rules that take down any server its
-   * group no longer needs. This says only the first of those, it says it for as
-   * long as the server likes, and it can be taken back. A round that has started
-   * is not a server that is going away, and asking for the one when you mean the
-   * other reads as a decommissioning to everybody who looks afterwards.
+   * Closing is not retiring: the server is not going away, and it can open
+   * again. The phase stays Ready; what changes is whether the server counts as
+   * capacity (and, with round_ended, whether the proxies route to it).
+   * ServerState.registered and joins_closed show the result. Nobody already on
+   * the server is moved.
    *
-   * **The phase does not change.** A closed server stays Ready, because the
-   * phase is the operator's account of a server's lifecycle and closing the door
-   * is not a lifecycle event. What changes is whether the proxies have it in
-   * their routing tables, which is exactly the question ServerState.registered
-   * answers -- so a plugin choosing where to send somebody already reads the
-   * right field and needs to learn nothing new.
-   *
-   * **Nobody is moved.** The players on a closed server go on playing until they
-   * leave on their own. This verb has no effect on anybody who is already there,
-   * which is the other half of what distinguishes it from a drain.
-   *
-   * It is refused from a proxy. A proxy is not in anybody's routing table -- it
-   * *is* the routing table -- so there is nothing for this to close.
+   * Refused from a proxy.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.AcceptJoinsRequest}
@@ -469,8 +431,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * False closes the door, true opens it again. A server that has never asked
-     * is open, which is what makes this safe to add to a network whose agents
-     * predate it.
+     * is open.
      * </pre>
      *
      * <code>bool accept = 1;</code>
@@ -483,8 +444,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * False closes the door, true opens it again. A server that has never asked
-     * is open, which is what makes this safe to add to a network whose agents
-     * predate it.
+     * is open.
      * </pre>
      *
      * <code>bool accept = 1;</code>
@@ -501,8 +461,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * False closes the door, true opens it again. A server that has never asked
-     * is open, which is what makes this safe to add to a network whose agents
-     * predate it.
+     * is open.
      * </pre>
      *
      * <code>bool accept = 1;</code>
@@ -520,16 +479,7 @@ private static final long serialVersionUID = 0L;
      * <pre>
      * True says the server's round is over: take it out of the routing table
      * and treat the pod stopping after this as an ending rather than a fault.
-     *
-     * Unset is a server that stays in the table, which is what every agent that
-     * predates this field does and what closing the door alone now means. The
-     * two fields are two claims: `accept` is about capacity -- do not count my
-     * seats -- and this one is about reachability and about how the end of this
-     * pod is to be read.
-     *
-     * It is here rather than in AnnounceRequest because the operator acts on it.
-     * What the operator acts on needs a schema, an error path and a version
-     * story; what it only carries needs a length bound.
+     * Unset, the server stays in the routing table.
      * </pre>
      *
      * <code>bool round_ended = 2;</code>
@@ -543,16 +493,7 @@ private static final long serialVersionUID = 0L;
      * <pre>
      * True says the server's round is over: take it out of the routing table
      * and treat the pod stopping after this as an ending rather than a fault.
-     *
-     * Unset is a server that stays in the table, which is what every agent that
-     * predates this field does and what closing the door alone now means. The
-     * two fields are two claims: `accept` is about capacity -- do not count my
-     * seats -- and this one is about reachability and about how the end of this
-     * pod is to be read.
-     *
-     * It is here rather than in AnnounceRequest because the operator acts on it.
-     * What the operator acts on needs a schema, an error path and a version
-     * story; what it only carries needs a length bound.
+     * Unset, the server stays in the routing table.
      * </pre>
      *
      * <code>bool round_ended = 2;</code>
@@ -570,16 +511,7 @@ private static final long serialVersionUID = 0L;
      * <pre>
      * True says the server's round is over: take it out of the routing table
      * and treat the pod stopping after this as an ending rather than a fault.
-     *
-     * Unset is a server that stays in the table, which is what every agent that
-     * predates this field does and what closing the door alone now means. The
-     * two fields are two claims: `accept` is about capacity -- do not count my
-     * seats -- and this one is about reachability and about how the end of this
-     * pod is to be read.
-     *
-     * It is here rather than in AnnounceRequest because the operator acts on it.
-     * What the operator acts on needs a schema, an error path and a version
-     * story; what it only carries needs a length bound.
+     * Unset, the server stays in the routing table.
      * </pre>
      *
      * <code>bool round_ended = 2;</code>

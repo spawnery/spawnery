@@ -65,15 +65,8 @@ public interface GroupStateOrBuilder extends
 
   /**
    * <pre>
-   * What whoever runs this network wrote down about this group, from its own
-   * definition, and nothing the operator decided. Empty for a group nobody has
-   * written anything about, which is every group until somebody does.
-   *
-   * The counterpart of ServerState.attributes, and the difference is who
-   * writes it: that one is a server describing what it is doing right now,
-   * this one is a person describing what the group is. A plugin that needs to
-   * know something no server could tell it -- which permission a group is
-   * behind, which of several games it runs -- reads it here.
+   * The group's spec.attributes: what a person wrote about the group, as
+   * opposed to ServerState.attributes, which a server announces.
    * </pre>
    *
    * <code>map&lt;string, string&gt; attributes = 7;</code>
@@ -81,15 +74,8 @@ public interface GroupStateOrBuilder extends
   int getAttributesCount();
   /**
    * <pre>
-   * What whoever runs this network wrote down about this group, from its own
-   * definition, and nothing the operator decided. Empty for a group nobody has
-   * written anything about, which is every group until somebody does.
-   *
-   * The counterpart of ServerState.attributes, and the difference is who
-   * writes it: that one is a server describing what it is doing right now,
-   * this one is a person describing what the group is. A plugin that needs to
-   * know something no server could tell it -- which permission a group is
-   * behind, which of several games it runs -- reads it here.
+   * The group's spec.attributes: what a person wrote about the group, as
+   * opposed to ServerState.attributes, which a server announces.
    * </pre>
    *
    * <code>map&lt;string, string&gt; attributes = 7;</code>
@@ -104,15 +90,8 @@ public interface GroupStateOrBuilder extends
   getAttributes();
   /**
    * <pre>
-   * What whoever runs this network wrote down about this group, from its own
-   * definition, and nothing the operator decided. Empty for a group nobody has
-   * written anything about, which is every group until somebody does.
-   *
-   * The counterpart of ServerState.attributes, and the difference is who
-   * writes it: that one is a server describing what it is doing right now,
-   * this one is a person describing what the group is. A plugin that needs to
-   * know something no server could tell it -- which permission a group is
-   * behind, which of several games it runs -- reads it here.
+   * The group's spec.attributes: what a person wrote about the group, as
+   * opposed to ServerState.attributes, which a server announces.
    * </pre>
    *
    * <code>map&lt;string, string&gt; attributes = 7;</code>
@@ -121,15 +100,8 @@ public interface GroupStateOrBuilder extends
   getAttributesMap();
   /**
    * <pre>
-   * What whoever runs this network wrote down about this group, from its own
-   * definition, and nothing the operator decided. Empty for a group nobody has
-   * written anything about, which is every group until somebody does.
-   *
-   * The counterpart of ServerState.attributes, and the difference is who
-   * writes it: that one is a server describing what it is doing right now,
-   * this one is a person describing what the group is. A plugin that needs to
-   * know something no server could tell it -- which permission a group is
-   * behind, which of several games it runs -- reads it here.
+   * The group's spec.attributes: what a person wrote about the group, as
+   * opposed to ServerState.attributes, which a server announces.
    * </pre>
    *
    * <code>map&lt;string, string&gt; attributes = 7;</code>
@@ -141,15 +113,8 @@ java.lang.String getAttributesOrDefault(
 java.lang.String defaultValue);
   /**
    * <pre>
-   * What whoever runs this network wrote down about this group, from its own
-   * definition, and nothing the operator decided. Empty for a group nobody has
-   * written anything about, which is every group until somebody does.
-   *
-   * The counterpart of ServerState.attributes, and the difference is who
-   * writes it: that one is a server describing what it is doing right now,
-   * this one is a person describing what the group is. A plugin that needs to
-   * know something no server could tell it -- which permission a group is
-   * behind, which of several games it runs -- reads it here.
+   * The group's spec.attributes: what a person wrote about the group, as
+   * opposed to ServerState.attributes, which a server announces.
    * </pre>
    *
    * <code>map&lt;string, string&gt; attributes = 7;</code>
@@ -159,12 +124,8 @@ java.lang.String defaultValue);
 
   /**
    * <pre>
-   * What this group is called where a person reads it, from its own
-   * definition. A group's name is a DNS label and a name people say out loud
-   * rarely is, so this is where "Bingo-Team" lives while the name stays
-   * "bingo-team". Empty for a group nobody has named, and the agent -- not the
-   * operator -- then stands the name in for it, so that a picture from an
-   * operator that predates the field reads the same as one that left it out.
+   * The group's spec.displayName. Empty when unset; the agent then shows the
+   * group's name.
    * </pre>
    *
    * <code>string display_name = 8;</code>
@@ -173,12 +134,8 @@ java.lang.String defaultValue);
   java.lang.String getDisplayName();
   /**
    * <pre>
-   * What this group is called where a person reads it, from its own
-   * definition. A group's name is a DNS label and a name people say out loud
-   * rarely is, so this is where "Bingo-Team" lives while the name stays
-   * "bingo-team". Empty for a group nobody has named, and the agent -- not the
-   * operator -- then stands the name in for it, so that a picture from an
-   * operator that predates the field reads the same as one that left it out.
+   * The group's spec.displayName. Empty when unset; the agent then shows the
+   * group's name.
    * </pre>
    *
    * <code>string display_name = 8;</code>
@@ -199,8 +156,7 @@ java.lang.String defaultValue);
 
   /**
    * <pre>
-   * spec.enforcePlayableSlots. An operator older than the field sends
-   * neither, which reads as not enforced.
+   * spec.enforcePlayableSlots.
    * </pre>
    *
    * <code>bool enforce_playable_slots = 10;</code>

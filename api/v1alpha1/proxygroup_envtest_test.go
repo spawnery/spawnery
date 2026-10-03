@@ -49,9 +49,8 @@ func TestProxyGroupExposeValidation(t *testing.T) {
 		name    string
 		expose  spawneryv1alpha1.ExposeSpec
 		wantErr bool
-		// wantMsg is a substring of the refusal. Empty means the row only
-		// claims that the API server refused, which is the weaker claim the
-		// rows written before CEL messages were worth asserting still make.
+		// wantMsg is a substring of the refusal; empty checks only that it
+		// was refused.
 		wantMsg string
 	}{
 		{
@@ -168,9 +167,6 @@ func TestProxyGroupExposeValidation(t *testing.T) {
 	}
 }
 
-// TestProxyGroupTransferForceAfterSecondsMinimum proves the
-// +kubebuilder:validation:Minimum=0 marker on ProxyTransferSpec.ForceAfterSeconds
-// is actually in the installed CRD, not just in the source.
 func TestProxyGroupTransferForceAfterSecondsMinimum(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -187,13 +183,8 @@ func TestProxyGroupTransferForceAfterSecondsMinimum(t *testing.T) {
 	}
 }
 
-// A live networkRef edit would otherwise leave the existing pods labelled
-// with the old network: invisible to ProxyGroupReconciler.pods() and to the
-// Service selector, which both derive from the current spec, and never swept
-// because their ProxyGroup still exists. They would run forever, holding
-// their agent sessions. The CEL rule on ProxyGroupSpec is what rules that out
-// before it can happen, and this proves the rule actually rejects the update
-// rather than only being present in the schema.
+// A networkRef edit would orphan the running pods under the old network's
+// labels, where nothing sweeps them.
 func TestProxyGroupNetworkRefIsImmutable(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -211,10 +202,6 @@ func TestProxyGroupNetworkRefIsImmutable(t *testing.T) {
 	if err == nil {
 		t.Fatal("update changed spec.networkRef, want rejection")
 	}
-	// Matching only "rejected" would pass for any error at all — a conflict, a
-	// schema violation, an unrelated CEL rule. The CEL rule's own message is
-	// what proves this update was refused for being a networkRef change and
-	// not for some other reason.
 	if want := "spec.networkRef is immutable"; !strings.Contains(err.Error(), want) {
 		t.Fatalf("update rejected as %q, want it to mention %q", err, want)
 	}

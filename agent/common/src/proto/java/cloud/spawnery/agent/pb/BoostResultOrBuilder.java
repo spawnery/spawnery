@@ -19,9 +19,7 @@ public interface BoostResultOrBuilder extends
   /**
    * <pre>
    * When it stops counting, as seconds since the epoch on the operator's
-   * clock. An instant here and a duration on the way in, and the asymmetry is
-   * the point: the operator is the side with the authoritative clock, so it
-   * states the answer and the agent states the ask.
+   * clock.
    * </pre>
    *
    * <code>int64 expires_at_unix = 2;</code>

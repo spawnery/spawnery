@@ -9,13 +9,8 @@ package cloud.spawnery.agent.pb;
  * <pre>
  * PlayerCount is the periodic report.
  *
- * A proxy reports its configured player limit as slots. The obvious
- * alternative — leaving slots at zero, as an earlier draft of this file said —
- * collides with the registry, which discards any report where players exceed
- * slots: a proxy with one player online would have every report thrown away,
- * visible only as a counter, while its connected player count sat at zero.
- * One rule in the registry is worth more than a role-dependent one, and a
- * proxy does have a capacity: ProxyGroup.spec.config.playerLimit.
+ * A proxy reports its configured player limit as slots, not zero: the
+ * registry discards any report where players exceed slots.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.PlayerCount}
@@ -87,8 +82,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * Server agents only: the server's one-minute TPS average and its mean tick
-   * duration in milliseconds. 0 means not reported -- what a proxy and an
-   * agent older than these fields send.
+   * duration in milliseconds. 0 means not reported.
    * </pre>
    *
    * <code>double tps = 3;</code>
@@ -115,10 +109,8 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * Server agents only: the seats the plugin says count as capacity. 0 means
-   * it said nothing -- what a proxy and an agent older than this field send --
-   * and the group's spec.playableSlots decides. It cannot ride in slots: the
-   * registry discards a report with more players than slots, and players
-   * beyond the playable seats are legitimate.
+   * it said nothing, and the group's spec.playableSlots decides. Not carried
+   * in slots, because players beyond the playable seats are legitimate.
    * </pre>
    *
    * <code>int32 playable_slots = 5;</code>
@@ -134,7 +126,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * Both agents: the JVM heap in use and its maximum, in bytes. 0 means not
-   * reported -- what an agent older than these fields sends.
+   * reported.
    * </pre>
    *
    * <code>int64 heap_used_bytes = 6;</code>
@@ -393,13 +385,8 @@ private static final long serialVersionUID = 0L;
    * <pre>
    * PlayerCount is the periodic report.
    *
-   * A proxy reports its configured player limit as slots. The obvious
-   * alternative — leaving slots at zero, as an earlier draft of this file said —
-   * collides with the registry, which discards any report where players exceed
-   * slots: a proxy with one player online would have every report thrown away,
-   * visible only as a counter, while its connected player count sat at zero.
-   * One rule in the registry is worth more than a role-dependent one, and a
-   * proxy does have a capacity: ProxyGroup.spec.config.playerLimit.
+   * A proxy reports its configured player limit as slots, not zero: the
+   * registry discards any report where players exceed slots.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.PlayerCount}
@@ -677,8 +664,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Server agents only: the server's one-minute TPS average and its mean tick
-     * duration in milliseconds. 0 means not reported -- what a proxy and an
-     * agent older than these fields send.
+     * duration in milliseconds. 0 means not reported.
      * </pre>
      *
      * <code>double tps = 3;</code>
@@ -691,8 +677,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Server agents only: the server's one-minute TPS average and its mean tick
-     * duration in milliseconds. 0 means not reported -- what a proxy and an
-     * agent older than these fields send.
+     * duration in milliseconds. 0 means not reported.
      * </pre>
      *
      * <code>double tps = 3;</code>
@@ -709,8 +694,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Server agents only: the server's one-minute TPS average and its mean tick
-     * duration in milliseconds. 0 means not reported -- what a proxy and an
-     * agent older than these fields send.
+     * duration in milliseconds. 0 means not reported.
      * </pre>
      *
      * <code>double tps = 3;</code>
@@ -759,10 +743,8 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Server agents only: the seats the plugin says count as capacity. 0 means
-     * it said nothing -- what a proxy and an agent older than this field send --
-     * and the group's spec.playableSlots decides. It cannot ride in slots: the
-     * registry discards a report with more players than slots, and players
-     * beyond the playable seats are legitimate.
+     * it said nothing, and the group's spec.playableSlots decides. Not carried
+     * in slots, because players beyond the playable seats are legitimate.
      * </pre>
      *
      * <code>int32 playable_slots = 5;</code>
@@ -775,10 +757,8 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Server agents only: the seats the plugin says count as capacity. 0 means
-     * it said nothing -- what a proxy and an agent older than this field send --
-     * and the group's spec.playableSlots decides. It cannot ride in slots: the
-     * registry discards a report with more players than slots, and players
-     * beyond the playable seats are legitimate.
+     * it said nothing, and the group's spec.playableSlots decides. Not carried
+     * in slots, because players beyond the playable seats are legitimate.
      * </pre>
      *
      * <code>int32 playable_slots = 5;</code>
@@ -795,10 +775,8 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Server agents only: the seats the plugin says count as capacity. 0 means
-     * it said nothing -- what a proxy and an agent older than this field send --
-     * and the group's spec.playableSlots decides. It cannot ride in slots: the
-     * registry discards a report with more players than slots, and players
-     * beyond the playable seats are legitimate.
+     * it said nothing, and the group's spec.playableSlots decides. Not carried
+     * in slots, because players beyond the playable seats are legitimate.
      * </pre>
      *
      * <code>int32 playable_slots = 5;</code>
@@ -815,7 +793,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Both agents: the JVM heap in use and its maximum, in bytes. 0 means not
-     * reported -- what an agent older than these fields sends.
+     * reported.
      * </pre>
      *
      * <code>int64 heap_used_bytes = 6;</code>
@@ -828,7 +806,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Both agents: the JVM heap in use and its maximum, in bytes. 0 means not
-     * reported -- what an agent older than these fields sends.
+     * reported.
      * </pre>
      *
      * <code>int64 heap_used_bytes = 6;</code>
@@ -845,7 +823,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Both agents: the JVM heap in use and its maximum, in bytes. 0 means not
-     * reported -- what an agent older than these fields sends.
+     * reported.
      * </pre>
      *
      * <code>int64 heap_used_bytes = 6;</code>

@@ -239,12 +239,8 @@ private static final long serialVersionUID = 0L;
   private volatile java.lang.Object state_ = "";
   /**
    * <pre>
-   * What this server last said about itself, and nothing the operator decided.
-   * See AnnounceRequest. Both are empty for a server that has announced
-   * nothing, which is every server until something on it says otherwise --
-   * absent and "announced nothing" are the same state here on purpose, because
-   * a plugin that has to tell them apart is asking about the agent rather than
-   * about the game.
+   * What this server last said about itself; see AnnounceRequest. Empty for a
+   * server that has announced nothing.
    * </pre>
    *
    * <code>string state = 7;</code>
@@ -265,12 +261,8 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * What this server last said about itself, and nothing the operator decided.
-   * See AnnounceRequest. Both are empty for a server that has announced
-   * nothing, which is every server until something on it says otherwise --
-   * absent and "announced nothing" are the same state here on purpose, because
-   * a plugin that has to tell them apart is asking about the agent rather than
-   * about the game.
+   * What this server last said about itself; see AnnounceRequest. Empty for a
+   * server that has announced nothing.
    * </pre>
    *
    * <code>string state = 7;</code>
@@ -376,19 +368,9 @@ java.lang.String defaultValue) {
   /**
    * <pre>
    * Which run of this server this is: an opaque token that changes whenever
-   * the process behind the name is replaced, and never otherwise.
-   *
-   * The name alone cannot answer that, and for one kind of server it never
-   * will: an ephemeral server is named afresh every time, but a persistent one
-   * keeps its name across every restart because that name is the identity of
-   * its world. Anything that remembers a server and later asks "is this still
-   * the one I meant" -- a rejoin, a queue, a scoreboard that survives a
-   * reconnect -- compares this and not the name.
-   *
-   * Opaque on purpose. It is a pod UID today and this contract does not say
-   * so: what is promised is that two equal values mean the same run and two
-   * different ones mean different runs. Empty for a server whose pod the
-   * operator has not seen yet, which is a server nobody is being sent to.
+   * the process behind the name is replaced, and never otherwise. A
+   * persistent server keeps its name across restarts, so compare this, not
+   * the name. Empty while the operator has not seen the pod.
    * </pre>
    *
    * <code>string incarnation = 9;</code>
@@ -410,19 +392,9 @@ java.lang.String defaultValue) {
   /**
    * <pre>
    * Which run of this server this is: an opaque token that changes whenever
-   * the process behind the name is replaced, and never otherwise.
-   *
-   * The name alone cannot answer that, and for one kind of server it never
-   * will: an ephemeral server is named afresh every time, but a persistent one
-   * keeps its name across every restart because that name is the identity of
-   * its world. Anything that remembers a server and later asks "is this still
-   * the one I meant" -- a rejoin, a queue, a scoreboard that survives a
-   * reconnect -- compares this and not the name.
-   *
-   * Opaque on purpose. It is a pod UID today and this contract does not say
-   * so: what is promised is that two equal values mean the same run and two
-   * different ones mean different runs. Empty for a server whose pod the
-   * operator has not seen yet, which is a server nobody is being sent to.
+   * the process behind the name is replaced, and never otherwise. A
+   * persistent server keeps its name across restarts, so compare this, not
+   * the name. Empty while the operator has not seen the pod.
    * </pre>
    *
    * <code>string incarnation = 9;</code>
@@ -448,20 +420,9 @@ java.lang.String defaultValue) {
   /**
    * <pre>
    * Which of its group's servers this is, counted the way a person counts:
-   * the second hub is 2. Stable for as long as the server exists, and given
-   * out again only after it is gone -- two servers that were both "Hub-2" at
-   * different times are told apart by incarnation, not by this.
-   *
-   * 0 means nobody numbered this server: every server that was already
-   * running when this field arrived, and the ordinal-zero server of a
-   * persistent group. A reader showing this to a player falls back to the
-   * name it already has for those.
-   *
-   * A persistent server reports its ordinal here, so its number agrees with
-   * the name it already carries. That is why these start at 0 where an
-   * ephemeral group's start at 1, and why one persistent server per group is
-   * indistinguishable from an unnumbered one. It costs nothing: that server
-   * is referred to by the name that names its world.
+   * the second hub is 2. Stable while the server exists, reused only after it
+   * is gone. A persistent server reports its ordinal. 0 means unnumbered (a
+   * server older than this field, or ordinal zero); fall back to the name.
    * </pre>
    *
    * <code>int32 number = 10;</code>
@@ -1568,12 +1529,8 @@ java.lang.String defaultValue) {
     private java.lang.Object state_ = "";
     /**
      * <pre>
-     * What this server last said about itself, and nothing the operator decided.
-     * See AnnounceRequest. Both are empty for a server that has announced
-     * nothing, which is every server until something on it says otherwise --
-     * absent and "announced nothing" are the same state here on purpose, because
-     * a plugin that has to tell them apart is asking about the agent rather than
-     * about the game.
+     * What this server last said about itself; see AnnounceRequest. Empty for a
+     * server that has announced nothing.
      * </pre>
      *
      * <code>string state = 7;</code>
@@ -1593,12 +1550,8 @@ java.lang.String defaultValue) {
     }
     /**
      * <pre>
-     * What this server last said about itself, and nothing the operator decided.
-     * See AnnounceRequest. Both are empty for a server that has announced
-     * nothing, which is every server until something on it says otherwise --
-     * absent and "announced nothing" are the same state here on purpose, because
-     * a plugin that has to tell them apart is asking about the agent rather than
-     * about the game.
+     * What this server last said about itself; see AnnounceRequest. Empty for a
+     * server that has announced nothing.
      * </pre>
      *
      * <code>string state = 7;</code>
@@ -1619,12 +1572,8 @@ java.lang.String defaultValue) {
     }
     /**
      * <pre>
-     * What this server last said about itself, and nothing the operator decided.
-     * See AnnounceRequest. Both are empty for a server that has announced
-     * nothing, which is every server until something on it says otherwise --
-     * absent and "announced nothing" are the same state here on purpose, because
-     * a plugin that has to tell them apart is asking about the agent rather than
-     * about the game.
+     * What this server last said about itself; see AnnounceRequest. Empty for a
+     * server that has announced nothing.
      * </pre>
      *
      * <code>string state = 7;</code>
@@ -1641,12 +1590,8 @@ java.lang.String defaultValue) {
     }
     /**
      * <pre>
-     * What this server last said about itself, and nothing the operator decided.
-     * See AnnounceRequest. Both are empty for a server that has announced
-     * nothing, which is every server until something on it says otherwise --
-     * absent and "announced nothing" are the same state here on purpose, because
-     * a plugin that has to tell them apart is asking about the agent rather than
-     * about the game.
+     * What this server last said about itself; see AnnounceRequest. Empty for a
+     * server that has announced nothing.
      * </pre>
      *
      * <code>string state = 7;</code>
@@ -1660,12 +1605,8 @@ java.lang.String defaultValue) {
     }
     /**
      * <pre>
-     * What this server last said about itself, and nothing the operator decided.
-     * See AnnounceRequest. Both are empty for a server that has announced
-     * nothing, which is every server until something on it says otherwise --
-     * absent and "announced nothing" are the same state here on purpose, because
-     * a plugin that has to tell them apart is asking about the agent rather than
-     * about the game.
+     * What this server last said about itself; see AnnounceRequest. Empty for a
+     * server that has announced nothing.
      * </pre>
      *
      * <code>string state = 7;</code>
@@ -1813,19 +1754,9 @@ java.lang.String defaultValue) {
     /**
      * <pre>
      * Which run of this server this is: an opaque token that changes whenever
-     * the process behind the name is replaced, and never otherwise.
-     *
-     * The name alone cannot answer that, and for one kind of server it never
-     * will: an ephemeral server is named afresh every time, but a persistent one
-     * keeps its name across every restart because that name is the identity of
-     * its world. Anything that remembers a server and later asks "is this still
-     * the one I meant" -- a rejoin, a queue, a scoreboard that survives a
-     * reconnect -- compares this and not the name.
-     *
-     * Opaque on purpose. It is a pod UID today and this contract does not say
-     * so: what is promised is that two equal values mean the same run and two
-     * different ones mean different runs. Empty for a server whose pod the
-     * operator has not seen yet, which is a server nobody is being sent to.
+     * the process behind the name is replaced, and never otherwise. A
+     * persistent server keeps its name across restarts, so compare this, not
+     * the name. Empty while the operator has not seen the pod.
      * </pre>
      *
      * <code>string incarnation = 9;</code>
@@ -1846,19 +1777,9 @@ java.lang.String defaultValue) {
     /**
      * <pre>
      * Which run of this server this is: an opaque token that changes whenever
-     * the process behind the name is replaced, and never otherwise.
-     *
-     * The name alone cannot answer that, and for one kind of server it never
-     * will: an ephemeral server is named afresh every time, but a persistent one
-     * keeps its name across every restart because that name is the identity of
-     * its world. Anything that remembers a server and later asks "is this still
-     * the one I meant" -- a rejoin, a queue, a scoreboard that survives a
-     * reconnect -- compares this and not the name.
-     *
-     * Opaque on purpose. It is a pod UID today and this contract does not say
-     * so: what is promised is that two equal values mean the same run and two
-     * different ones mean different runs. Empty for a server whose pod the
-     * operator has not seen yet, which is a server nobody is being sent to.
+     * the process behind the name is replaced, and never otherwise. A
+     * persistent server keeps its name across restarts, so compare this, not
+     * the name. Empty while the operator has not seen the pod.
      * </pre>
      *
      * <code>string incarnation = 9;</code>
@@ -1880,19 +1801,9 @@ java.lang.String defaultValue) {
     /**
      * <pre>
      * Which run of this server this is: an opaque token that changes whenever
-     * the process behind the name is replaced, and never otherwise.
-     *
-     * The name alone cannot answer that, and for one kind of server it never
-     * will: an ephemeral server is named afresh every time, but a persistent one
-     * keeps its name across every restart because that name is the identity of
-     * its world. Anything that remembers a server and later asks "is this still
-     * the one I meant" -- a rejoin, a queue, a scoreboard that survives a
-     * reconnect -- compares this and not the name.
-     *
-     * Opaque on purpose. It is a pod UID today and this contract does not say
-     * so: what is promised is that two equal values mean the same run and two
-     * different ones mean different runs. Empty for a server whose pod the
-     * operator has not seen yet, which is a server nobody is being sent to.
+     * the process behind the name is replaced, and never otherwise. A
+     * persistent server keeps its name across restarts, so compare this, not
+     * the name. Empty while the operator has not seen the pod.
      * </pre>
      *
      * <code>string incarnation = 9;</code>
@@ -1910,19 +1821,9 @@ java.lang.String defaultValue) {
     /**
      * <pre>
      * Which run of this server this is: an opaque token that changes whenever
-     * the process behind the name is replaced, and never otherwise.
-     *
-     * The name alone cannot answer that, and for one kind of server it never
-     * will: an ephemeral server is named afresh every time, but a persistent one
-     * keeps its name across every restart because that name is the identity of
-     * its world. Anything that remembers a server and later asks "is this still
-     * the one I meant" -- a rejoin, a queue, a scoreboard that survives a
-     * reconnect -- compares this and not the name.
-     *
-     * Opaque on purpose. It is a pod UID today and this contract does not say
-     * so: what is promised is that two equal values mean the same run and two
-     * different ones mean different runs. Empty for a server whose pod the
-     * operator has not seen yet, which is a server nobody is being sent to.
+     * the process behind the name is replaced, and never otherwise. A
+     * persistent server keeps its name across restarts, so compare this, not
+     * the name. Empty while the operator has not seen the pod.
      * </pre>
      *
      * <code>string incarnation = 9;</code>
@@ -1937,19 +1838,9 @@ java.lang.String defaultValue) {
     /**
      * <pre>
      * Which run of this server this is: an opaque token that changes whenever
-     * the process behind the name is replaced, and never otherwise.
-     *
-     * The name alone cannot answer that, and for one kind of server it never
-     * will: an ephemeral server is named afresh every time, but a persistent one
-     * keeps its name across every restart because that name is the identity of
-     * its world. Anything that remembers a server and later asks "is this still
-     * the one I meant" -- a rejoin, a queue, a scoreboard that survives a
-     * reconnect -- compares this and not the name.
-     *
-     * Opaque on purpose. It is a pod UID today and this contract does not say
-     * so: what is promised is that two equal values mean the same run and two
-     * different ones mean different runs. Empty for a server whose pod the
-     * operator has not seen yet, which is a server nobody is being sent to.
+     * the process behind the name is replaced, and never otherwise. A
+     * persistent server keeps its name across restarts, so compare this, not
+     * the name. Empty while the operator has not seen the pod.
      * </pre>
      *
      * <code>string incarnation = 9;</code>
@@ -1970,20 +1861,9 @@ java.lang.String defaultValue) {
     /**
      * <pre>
      * Which of its group's servers this is, counted the way a person counts:
-     * the second hub is 2. Stable for as long as the server exists, and given
-     * out again only after it is gone -- two servers that were both "Hub-2" at
-     * different times are told apart by incarnation, not by this.
-     *
-     * 0 means nobody numbered this server: every server that was already
-     * running when this field arrived, and the ordinal-zero server of a
-     * persistent group. A reader showing this to a player falls back to the
-     * name it already has for those.
-     *
-     * A persistent server reports its ordinal here, so its number agrees with
-     * the name it already carries. That is why these start at 0 where an
-     * ephemeral group's start at 1, and why one persistent server per group is
-     * indistinguishable from an unnumbered one. It costs nothing: that server
-     * is referred to by the name that names its world.
+     * the second hub is 2. Stable while the server exists, reused only after it
+     * is gone. A persistent server reports its ordinal. 0 means unnumbered (a
+     * server older than this field, or ordinal zero); fall back to the name.
      * </pre>
      *
      * <code>int32 number = 10;</code>
@@ -1996,20 +1876,9 @@ java.lang.String defaultValue) {
     /**
      * <pre>
      * Which of its group's servers this is, counted the way a person counts:
-     * the second hub is 2. Stable for as long as the server exists, and given
-     * out again only after it is gone -- two servers that were both "Hub-2" at
-     * different times are told apart by incarnation, not by this.
-     *
-     * 0 means nobody numbered this server: every server that was already
-     * running when this field arrived, and the ordinal-zero server of a
-     * persistent group. A reader showing this to a player falls back to the
-     * name it already has for those.
-     *
-     * A persistent server reports its ordinal here, so its number agrees with
-     * the name it already carries. That is why these start at 0 where an
-     * ephemeral group's start at 1, and why one persistent server per group is
-     * indistinguishable from an unnumbered one. It costs nothing: that server
-     * is referred to by the name that names its world.
+     * the second hub is 2. Stable while the server exists, reused only after it
+     * is gone. A persistent server reports its ordinal. 0 means unnumbered (a
+     * server older than this field, or ordinal zero); fall back to the name.
      * </pre>
      *
      * <code>int32 number = 10;</code>
@@ -2026,20 +1895,9 @@ java.lang.String defaultValue) {
     /**
      * <pre>
      * Which of its group's servers this is, counted the way a person counts:
-     * the second hub is 2. Stable for as long as the server exists, and given
-     * out again only after it is gone -- two servers that were both "Hub-2" at
-     * different times are told apart by incarnation, not by this.
-     *
-     * 0 means nobody numbered this server: every server that was already
-     * running when this field arrived, and the ordinal-zero server of a
-     * persistent group. A reader showing this to a player falls back to the
-     * name it already has for those.
-     *
-     * A persistent server reports its ordinal here, so its number agrees with
-     * the name it already carries. That is why these start at 0 where an
-     * ephemeral group's start at 1, and why one persistent server per group is
-     * indistinguishable from an unnumbered one. It costs nothing: that server
-     * is referred to by the name that names its world.
+     * the second hub is 2. Stable while the server exists, reused only after it
+     * is gone. A persistent server reports its ordinal. 0 means unnumbered (a
+     * server older than this field, or ordinal zero); fall back to the name.
      * </pre>
      *
      * <code>int32 number = 10;</code>

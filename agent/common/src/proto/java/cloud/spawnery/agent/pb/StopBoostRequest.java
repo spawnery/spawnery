@@ -7,11 +7,7 @@ package cloud.spawnery.agent.pb;
 
 /**
  * <pre>
- * StopBoostRequest ends a group's boosts early.
- *
- * Every boost on the group, not one: a partial reduction across several boosts
- * with different expiries is arithmetic nobody asked for, and "stop" is what a
- * person means when they want the extra servers gone.
+ * StopBoostRequest ends every boost on a group early.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.StopBoostRequest}
@@ -258,11 +254,7 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * StopBoostRequest ends a group's boosts early.
-   *
-   * Every boost on the group, not one: a partial reduction across several boosts
-   * with different expiries is arithmetic nobody asked for, and "stop" is what a
-   * person means when they want the extra servers gone.
+   * StopBoostRequest ends every boost on a group early.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.StopBoostRequest}

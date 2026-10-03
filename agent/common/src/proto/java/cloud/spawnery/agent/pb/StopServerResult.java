@@ -7,15 +7,8 @@ package cloud.spawnery.agent.pb;
 
 /**
  * <pre>
- * StopServerResult says the member is going.
- *
- * A second stop on a member that is already being deleted succeeds and echoes
- * the name. RetireResult refuses the same repetition because an admin who
- * types the command twice needs to learn it did nothing the first time; the
- * caller here is a plugin, and "it is going" is exactly what it asked for.
- *
- * Once the member is gone the same request is answered NOT_FOUND: there is no
- * server by that name left to match.
+ * StopServerResult says the member is going. A second stop while it is being
+ * deleted succeeds again; once it is gone the answer is NOT_FOUND.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.StopServerResult}
@@ -66,8 +59,7 @@ private static final long serialVersionUID = 0L;
   private volatile java.lang.Object server_ = "";
   /**
    * <pre>
-   * The server that is going, echoed so a caller sees what the operator
-   * matched.
+   * The server that is going, as the operator matched it.
    * </pre>
    *
    * <code>string server = 1;</code>
@@ -88,8 +80,7 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * The server that is going, echoed so a caller sees what the operator
-   * matched.
+   * The server that is going, as the operator matched it.
    * </pre>
    *
    * <code>string server = 1;</code>
@@ -272,15 +263,8 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * StopServerResult says the member is going.
-   *
-   * A second stop on a member that is already being deleted succeeds and echoes
-   * the name. RetireResult refuses the same repetition because an admin who
-   * types the command twice needs to learn it did nothing the first time; the
-   * caller here is a plugin, and "it is going" is exactly what it asked for.
-   *
-   * Once the member is gone the same request is answered NOT_FOUND: there is no
-   * server by that name left to match.
+   * StopServerResult says the member is going. A second stop while it is being
+   * deleted succeeds again; once it is gone the answer is NOT_FOUND.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.StopServerResult}
@@ -423,8 +407,7 @@ private static final long serialVersionUID = 0L;
     private java.lang.Object server_ = "";
     /**
      * <pre>
-     * The server that is going, echoed so a caller sees what the operator
-     * matched.
+     * The server that is going, as the operator matched it.
      * </pre>
      *
      * <code>string server = 1;</code>
@@ -444,8 +427,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The server that is going, echoed so a caller sees what the operator
-     * matched.
+     * The server that is going, as the operator matched it.
      * </pre>
      *
      * <code>string server = 1;</code>
@@ -466,8 +448,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The server that is going, echoed so a caller sees what the operator
-     * matched.
+     * The server that is going, as the operator matched it.
      * </pre>
      *
      * <code>string server = 1;</code>
@@ -484,8 +465,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The server that is going, echoed so a caller sees what the operator
-     * matched.
+     * The server that is going, as the operator matched it.
      * </pre>
      *
      * <code>string server = 1;</code>
@@ -499,8 +479,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The server that is going, echoed so a caller sees what the operator
-     * matched.
+     * The server that is going, as the operator matched it.
      * </pre>
      *
      * <code>string server = 1;</code>

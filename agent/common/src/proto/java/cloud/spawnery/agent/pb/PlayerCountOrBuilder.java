@@ -25,8 +25,7 @@ public interface PlayerCountOrBuilder extends
   /**
    * <pre>
    * Server agents only: the server's one-minute TPS average and its mean tick
-   * duration in milliseconds. 0 means not reported -- what a proxy and an
-   * agent older than these fields send.
+   * duration in milliseconds. 0 means not reported.
    * </pre>
    *
    * <code>double tps = 3;</code>
@@ -43,10 +42,8 @@ public interface PlayerCountOrBuilder extends
   /**
    * <pre>
    * Server agents only: the seats the plugin says count as capacity. 0 means
-   * it said nothing -- what a proxy and an agent older than this field send --
-   * and the group's spec.playableSlots decides. It cannot ride in slots: the
-   * registry discards a report with more players than slots, and players
-   * beyond the playable seats are legitimate.
+   * it said nothing, and the group's spec.playableSlots decides. Not carried
+   * in slots, because players beyond the playable seats are legitimate.
    * </pre>
    *
    * <code>int32 playable_slots = 5;</code>
@@ -57,7 +54,7 @@ public interface PlayerCountOrBuilder extends
   /**
    * <pre>
    * Both agents: the JVM heap in use and its maximum, in bytes. 0 means not
-   * reported -- what an agent older than these fields sends.
+   * reported.
    * </pre>
    *
    * <code>int64 heap_used_bytes = 6;</code>

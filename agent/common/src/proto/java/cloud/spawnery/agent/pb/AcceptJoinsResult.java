@@ -7,12 +7,8 @@ package cloud.spawnery.agent.pb;
 
 /**
  * <pre>
- * AcceptJoinsResult says the operator has it.
- *
- * It carries nothing, for the reason AnnounceResult does. Whether the proxies
- * have caught up is a question ServerState.registered answers a moment later,
- * and inventing a second answer here would be a promise about a broadcast this
- * verb does not wait for.
+ * AcceptJoinsResult says the operator has it. Whether the proxies have caught
+ * up shows in ServerState.registered.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.AcceptJoinsResult}
@@ -204,12 +200,8 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * AcceptJoinsResult says the operator has it.
-   *
-   * It carries nothing, for the reason AnnounceResult does. Whether the proxies
-   * have caught up is a question ServerState.registered answers a moment later,
-   * and inventing a second answer here would be a promise about a broadcast this
-   * verb does not wait for.
+   * AcceptJoinsResult says the operator has it. Whether the proxies have caught
+   * up shows in ServerState.registered.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.AcceptJoinsResult}

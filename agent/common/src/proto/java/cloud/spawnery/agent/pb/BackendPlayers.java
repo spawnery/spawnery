@@ -10,30 +10,13 @@ package cloud.spawnery.agent.pb;
  * BackendPlayers is what only a proxy knows: how many of its players are on,
  * or on their way to, each backend it has been told about.
  *
- * It exists because the drain's exit condition could not see a player who was
- * arriving. Occupied() reads what the *backend* has reported, and a backend
- * counts a player only once they finish the configuration phase --
- * disassembling velocity 3.5.1 build 615, VelocityRegisteredServer.addPlayer
- * is called from exactly one place, BackendPlaySessionHandler.activated().
- * The proxy's own getPlayersConnected() is the same view for the same reason,
- * so reporting *that* would have closed nothing. What the proxy has and
- * nobody else does is ConnectedPlayer.getConnectionInFlightOrConnectedServer:
- * the backend a player is attached to *or heading for*.
+ * A backend counts a player only after the configuration phase, so a player
+ * still arriving is invisible to it. The proxy's
+ * ConnectedPlayer.getConnectionInFlightOrConnectedServer is not.
  *
- * A state and not an event, the same way SetReady is: every report carries the
- * whole map, so a dropped message, a reconnect or an operator restart cannot
- * leave a count stranded. A server absent from the map has nobody attaching to
- * it -- there is no separate "left" to miss.
- *
- * Keyed by the name the operator registered the backend under
- * (RegisteredServer.name, which is the Server object's own name), so the
- * operator needs no translation. A proxy only ever hears about servers in its
- * own namespace, so the names cannot collide across one.
- *
- * The operator adds these counts to occupancy and never subtracts from it,
- * which is what makes this safe to deploy in any order: an agent too old to
- * send it contributes nothing and behaves exactly as before, and one that
- * sends it can only make the operator more careful.
+ * Every report carries the whole map; a server absent from it has nobody
+ * attaching. Keyed by the Server object's name. The operator only adds these
+ * counts to occupancy, never subtracts.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.BackendPlayers}
@@ -344,30 +327,13 @@ private static final long serialVersionUID = 0L;
    * BackendPlayers is what only a proxy knows: how many of its players are on,
    * or on their way to, each backend it has been told about.
    *
-   * It exists because the drain's exit condition could not see a player who was
-   * arriving. Occupied() reads what the *backend* has reported, and a backend
-   * counts a player only once they finish the configuration phase --
-   * disassembling velocity 3.5.1 build 615, VelocityRegisteredServer.addPlayer
-   * is called from exactly one place, BackendPlaySessionHandler.activated().
-   * The proxy's own getPlayersConnected() is the same view for the same reason,
-   * so reporting *that* would have closed nothing. What the proxy has and
-   * nobody else does is ConnectedPlayer.getConnectionInFlightOrConnectedServer:
-   * the backend a player is attached to *or heading for*.
+   * A backend counts a player only after the configuration phase, so a player
+   * still arriving is invisible to it. The proxy's
+   * ConnectedPlayer.getConnectionInFlightOrConnectedServer is not.
    *
-   * A state and not an event, the same way SetReady is: every report carries the
-   * whole map, so a dropped message, a reconnect or an operator restart cannot
-   * leave a count stranded. A server absent from the map has nobody attaching to
-   * it -- there is no separate "left" to miss.
-   *
-   * Keyed by the name the operator registered the backend under
-   * (RegisteredServer.name, which is the Server object's own name), so the
-   * operator needs no translation. A proxy only ever hears about servers in its
-   * own namespace, so the names cannot collide across one.
-   *
-   * The operator adds these counts to occupancy and never subtracts from it,
-   * which is what makes this safe to deploy in any order: an agent too old to
-   * send it contributes nothing and behaves exactly as before, and one that
-   * sends it can only make the operator more careful.
+   * Every report carries the whole map; a server absent from it has nobody
+   * attaching. Keyed by the Server object's name. The operator only adds these
+   * counts to occupancy, never subtracts.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.BackendPlayers}

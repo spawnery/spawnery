@@ -7,16 +7,9 @@ package cloud.spawnery.agent.pb;
 
 /**
  * <pre>
- * MovePlayer asks one proxy to move one player.
- *
- * Broadcast to every proxy of the namespace rather than addressed to the one
- * holding the player, because the operator does not know which one that is:
- * Registry.Roster merges the rosters of every proxy and drops which reported
- * what, since every reader until now wanted the union. A proxy that does not
- * have this player does nothing, which makes the broadcast correct rather than
- * merely tolerable -- and cheap, since a namespace has a handful of proxies.
- *
- * The proxy reports no outcome, and cannot: see ConnectResult.
+ * MovePlayer asks one proxy to move one player. It is broadcast to every
+ * proxy of the namespace, since the operator does not track which proxy holds
+ * whom; a proxy without the player ignores it. No outcome is reported.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.MovePlayer}
@@ -313,16 +306,9 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * MovePlayer asks one proxy to move one player.
-   *
-   * Broadcast to every proxy of the namespace rather than addressed to the one
-   * holding the player, because the operator does not know which one that is:
-   * Registry.Roster merges the rosters of every proxy and drops which reported
-   * what, since every reader until now wanted the union. A proxy that does not
-   * have this player does nothing, which makes the broadcast correct rather than
-   * merely tolerable -- and cheap, since a namespace has a handful of proxies.
-   *
-   * The proxy reports no outcome, and cannot: see ConnectResult.
+   * MovePlayer asks one proxy to move one player. It is broadcast to every
+   * proxy of the namespace, since the operator does not track which proxy holds
+   * whom; a proxy without the player ignores it. No outcome is reported.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.MovePlayer}

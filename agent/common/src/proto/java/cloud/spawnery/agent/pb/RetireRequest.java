@@ -8,15 +8,6 @@ package cloud.spawnery.agent.pb;
 /**
  * <pre>
  * RetireRequest asks that one server stop taking joins and empty out.
- *
- * It carries no namespace, for the reason ConnectRequest carries none: the
- * server is resolved inside the namespace the pod's own token authenticated,
- * so there is no field an agent could name another network's server in.
- *
- * This is the first request on this channel that *writes*. Everything before
- * it read the operator's picture or instructed a proxy that was already
- * listening; this one changes an object in the cluster, and the operator's
- * answer is therefore about what it wrote rather than about what it saw.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.RetireRequest}
@@ -264,15 +255,6 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * RetireRequest asks that one server stop taking joins and empty out.
-   *
-   * It carries no namespace, for the reason ConnectRequest carries none: the
-   * server is resolved inside the namespace the pod's own token authenticated,
-   * so there is no field an agent could name another network's server in.
-   *
-   * This is the first request on this channel that *writes*. Everything before
-   * it read the operator's picture or instructed a proxy that was already
-   * listening; this one changes an object in the cluster, and the operator's
-   * answer is therefore about what it wrote rather than about what it saw.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.RetireRequest}

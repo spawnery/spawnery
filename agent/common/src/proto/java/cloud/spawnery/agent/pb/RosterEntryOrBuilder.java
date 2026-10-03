@@ -12,8 +12,7 @@ public interface RosterEntryOrBuilder extends
 
   /**
    * <pre>
-   * The Minecraft UUID, which is the only stable identity here: a name can be
-   * changed and reused, a UUID cannot.
+   * The Minecraft UUID, the only stable identity here.
    * </pre>
    *
    * <code>string uuid = 1;</code>
@@ -22,8 +21,7 @@ public interface RosterEntryOrBuilder extends
   java.lang.String getUuid();
   /**
    * <pre>
-   * The Minecraft UUID, which is the only stable identity here: a name can be
-   * changed and reused, a UUID cannot.
+   * The Minecraft UUID, the only stable identity here.
    * </pre>
    *
    * <code>string uuid = 1;</code>
@@ -34,9 +32,8 @@ public interface RosterEntryOrBuilder extends
 
   /**
    * <pre>
-   * The username, for a plugin that wants to print something a person
-   * recognises. The operator holds it in memory and puts it nowhere else --
-   * no CR, no etcd, no metric label.
+   * The username. The operator holds it in memory only -- no CR, no etcd, no
+   * metric label.
    * </pre>
    *
    * <code>string name = 2;</code>
@@ -45,9 +42,8 @@ public interface RosterEntryOrBuilder extends
   java.lang.String getName();
   /**
    * <pre>
-   * The username, for a plugin that wants to print something a person
-   * recognises. The operator holds it in memory and puts it nowhere else --
-   * no CR, no etcd, no metric label.
+   * The username. The operator holds it in memory only -- no CR, no etcd, no
+   * metric label.
    * </pre>
    *
    * <code>string name = 2;</code>
@@ -59,8 +55,7 @@ public interface RosterEntryOrBuilder extends
   /**
    * <pre>
    * The backend this player is on, or on their way to, empty when neither.
-   * Read from the same field BackendPlayers counts, so the two agree by
-   * construction rather than by two implementations staying in step.
+   * The same field BackendPlayers counts.
    * </pre>
    *
    * <code>string server = 3;</code>
@@ -70,8 +65,7 @@ public interface RosterEntryOrBuilder extends
   /**
    * <pre>
    * The backend this player is on, or on their way to, empty when neither.
-   * Read from the same field BackendPlayers counts, so the two agree by
-   * construction rather than by two implementations staying in step.
+   * The same field BackendPlayers counts.
    * </pre>
    *
    * <code>string server = 3;</code>

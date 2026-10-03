@@ -13,8 +13,7 @@ public interface AcceptJoinsRequestOrBuilder extends
   /**
    * <pre>
    * False closes the door, true opens it again. A server that has never asked
-   * is open, which is what makes this safe to add to a network whose agents
-   * predate it.
+   * is open.
    * </pre>
    *
    * <code>bool accept = 1;</code>
@@ -26,16 +25,7 @@ public interface AcceptJoinsRequestOrBuilder extends
    * <pre>
    * True says the server's round is over: take it out of the routing table
    * and treat the pod stopping after this as an ending rather than a fault.
-   *
-   * Unset is a server that stays in the table, which is what every agent that
-   * predates this field does and what closing the door alone now means. The
-   * two fields are two claims: `accept` is about capacity -- do not count my
-   * seats -- and this one is about reachability and about how the end of this
-   * pod is to be read.
-   *
-   * It is here rather than in AnnounceRequest because the operator acts on it.
-   * What the operator acts on needs a schema, an error path and a version
-   * story; what it only carries needs a length bound.
+   * Unset, the server stays in the routing table.
    * </pre>
    *
    * <code>bool round_ended = 2;</code>

@@ -9,30 +9,14 @@ package cloud.spawnery.agent.pb;
  * <pre>
  * AnnounceRequest is a server describing itself.
  *
- * **The operator does not read any of this.** Nothing here reaches a decision
- * it makes: not scheduling, not routing, not scaling. The operator carries the
- * words to the other agents in the namespace and no further, which is the
- * whole of what this verb does and the reason it can afford to be free-form.
- * A field the operator acted on would need a schema, a validation error path
- * and a version story; a field it only carries needs a length bound.
+ * The operator reads none of it; it carries the words to the other agents in
+ * the namespace and no further. It is not the phase, and the two may disagree.
  *
- * **It is not the phase.** ServerState.phase is the operator's own account of
- * a server's lifecycle and an agent cannot write it. This is the server's
- * account of itself, and the two are allowed to disagree -- a server is Ready
- * for a long time, and what it is *doing* in that time is a question only the
- * thing running on it can answer.
+ * The last one wins, whole: an announcement replaces its predecessor rather
+ * than merging into it.
  *
- * **The last one wins, whole.** An announcement replaces its predecessor
- * rather than merging into it: a caller that sends two attributes and then one
- * has one, and a caller that wants the other kept sends it again. Merging
- * would mean an attribute could never be removed without a second verb for
- * removing it, and the first plugin to typo a key would have poisoned that
- * server's description for the life of the pod.
- *
- * The bounds are the operator's and it refuses rather than trims -- see its
- * own answer for the numbers. They are small on purpose: this travels to every
- * agent in the namespace on every resync, so a description that grew to
- * kilobytes would be paid for by every pod, forever, at the resync interval.
+ * The operator bounds the size and refuses rather than trims, since this
+ * travels to every agent in the namespace on every resync.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.AnnounceRequest}
@@ -96,11 +80,6 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * What the server says it is doing. Free-form, and empty clears it.
-   *
-   * No enum, and that is deliberate rather than unfinished. The states a game
-   * has are the game's -- waiting, running, ending, whatever a mode invents --
-   * and an enum here would be this repository guessing at them and then
-   * shipping a new operator whenever somebody guessed wrong.
    * </pre>
    *
    * <code>string state = 1;</code>
@@ -122,11 +101,6 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * What the server says it is doing. Free-form, and empty clears it.
-   *
-   * No enum, and that is deliberate rather than unfinished. The states a game
-   * has are the game's -- waiting, running, ending, whatever a mode invents --
-   * and an enum here would be this repository guessing at them and then
-   * shipping a new operator whenever somebody guessed wrong.
    * </pre>
    *
    * <code>string state = 1;</code>
@@ -428,30 +402,14 @@ java.lang.String defaultValue) {
    * <pre>
    * AnnounceRequest is a server describing itself.
    *
-   * **The operator does not read any of this.** Nothing here reaches a decision
-   * it makes: not scheduling, not routing, not scaling. The operator carries the
-   * words to the other agents in the namespace and no further, which is the
-   * whole of what this verb does and the reason it can afford to be free-form.
-   * A field the operator acted on would need a schema, a validation error path
-   * and a version story; a field it only carries needs a length bound.
+   * The operator reads none of it; it carries the words to the other agents in
+   * the namespace and no further. It is not the phase, and the two may disagree.
    *
-   * **It is not the phase.** ServerState.phase is the operator's own account of
-   * a server's lifecycle and an agent cannot write it. This is the server's
-   * account of itself, and the two are allowed to disagree -- a server is Ready
-   * for a long time, and what it is *doing* in that time is a question only the
-   * thing running on it can answer.
+   * The last one wins, whole: an announcement replaces its predecessor rather
+   * than merging into it.
    *
-   * **The last one wins, whole.** An announcement replaces its predecessor
-   * rather than merging into it: a caller that sends two attributes and then one
-   * has one, and a caller that wants the other kept sends it again. Merging
-   * would mean an attribute could never be removed without a second verb for
-   * removing it, and the first plugin to typo a key would have poisoned that
-   * server's description for the life of the pod.
-   *
-   * The bounds are the operator's and it refuses rather than trims -- see its
-   * own answer for the numbers. They are small on purpose: this travels to every
-   * agent in the namespace on every resync, so a description that grew to
-   * kilobytes would be paid for by every pod, forever, at the resync interval.
+   * The operator bounds the size and refuses rather than trims, since this
+   * travels to every agent in the namespace on every resync.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.AnnounceRequest}
@@ -634,11 +592,6 @@ java.lang.String defaultValue) {
     /**
      * <pre>
      * What the server says it is doing. Free-form, and empty clears it.
-     *
-     * No enum, and that is deliberate rather than unfinished. The states a game
-     * has are the game's -- waiting, running, ending, whatever a mode invents --
-     * and an enum here would be this repository guessing at them and then
-     * shipping a new operator whenever somebody guessed wrong.
      * </pre>
      *
      * <code>string state = 1;</code>
@@ -659,11 +612,6 @@ java.lang.String defaultValue) {
     /**
      * <pre>
      * What the server says it is doing. Free-form, and empty clears it.
-     *
-     * No enum, and that is deliberate rather than unfinished. The states a game
-     * has are the game's -- waiting, running, ending, whatever a mode invents --
-     * and an enum here would be this repository guessing at them and then
-     * shipping a new operator whenever somebody guessed wrong.
      * </pre>
      *
      * <code>string state = 1;</code>
@@ -685,11 +633,6 @@ java.lang.String defaultValue) {
     /**
      * <pre>
      * What the server says it is doing. Free-form, and empty clears it.
-     *
-     * No enum, and that is deliberate rather than unfinished. The states a game
-     * has are the game's -- waiting, running, ending, whatever a mode invents --
-     * and an enum here would be this repository guessing at them and then
-     * shipping a new operator whenever somebody guessed wrong.
      * </pre>
      *
      * <code>string state = 1;</code>
@@ -707,11 +650,6 @@ java.lang.String defaultValue) {
     /**
      * <pre>
      * What the server says it is doing. Free-form, and empty clears it.
-     *
-     * No enum, and that is deliberate rather than unfinished. The states a game
-     * has are the game's -- waiting, running, ending, whatever a mode invents --
-     * and an enum here would be this repository guessing at them and then
-     * shipping a new operator whenever somebody guessed wrong.
      * </pre>
      *
      * <code>string state = 1;</code>
@@ -726,11 +664,6 @@ java.lang.String defaultValue) {
     /**
      * <pre>
      * What the server says it is doing. Free-form, and empty clears it.
-     *
-     * No enum, and that is deliberate rather than unfinished. The states a game
-     * has are the game's -- waiting, running, ending, whatever a mode invents --
-     * and an enum here would be this repository guessing at them and then
-     * shipping a new operator whenever somebody guessed wrong.
      * </pre>
      *
      * <code>string state = 1;</code>

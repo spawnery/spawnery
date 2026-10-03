@@ -8,23 +8,11 @@ package cloud.spawnery.agent.pb;
 /**
  * <pre>
  * StartServerResult says the member has been asked for, which is not the same
- * as being able to join it.
+ * as being able to join it: readiness shows in the next NetworkState, in the
+ * server's phase and `registered`.
  *
- * **`already_running` and not `ready`, for the reason ConnectResult says
- * `ordered` and not `moved`.** The operator's answer is about the Server it
- * holds, not about the pod behind it: whether that pod is up and registered
- * shows up in the next NetworkState, in the server's phase and `registered`,
- * which is what the mirror is for. A caller that means to send somebody there
- * waits for that and does not read more into this than it says.
- *
- * **A member that is stopping is not already running.** A stop deletes the
- * member, but it lingers while its players are moved, for up to the group's
- * drain timeout, and answering "already running" for it would send a player to
- * a server that is about to go. A start on such a key is answered
- * UNAVAILABLE and not REFUSED, because the reason is what a caller branches on
- * and this is the one case where the same request succeeds a moment later:
- * once the member is gone it starts a fresh one. Nothing in the request waits
- * for that; a caller told to try again shortly can do exactly that.
+ * A start for a member that is still stopping is answered UNAVAILABLE: the
+ * same request succeeds once the member is gone.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.StartServerResult}
@@ -75,8 +63,7 @@ private static final long serialVersionUID = 0L;
   private volatile java.lang.Object server_ = "";
   /**
    * <pre>
-   * The server the operator composed, echoed so a caller that built the key
-   * from a UUID sees the name players and logs will use.
+   * The server the operator composed.
    * </pre>
    *
    * <code>string server = 1;</code>
@@ -97,8 +84,7 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * The server the operator composed, echoed so a caller that built the key
-   * from a UUID sees the name players and logs will use.
+   * The server the operator composed.
    * </pre>
    *
    * <code>string server = 1;</code>
@@ -124,8 +110,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * True when the member was already there and not stopping, which is a
-   * success and not a refusal: what the caller asked for is the case. It says
-   * nothing about the member being ready.
+   * success. It says nothing about the member being ready.
    * </pre>
    *
    * <code>bool already_running = 2;</code>
@@ -311,23 +296,11 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * StartServerResult says the member has been asked for, which is not the same
-   * as being able to join it.
+   * as being able to join it: readiness shows in the next NetworkState, in the
+   * server's phase and `registered`.
    *
-   * **`already_running` and not `ready`, for the reason ConnectResult says
-   * `ordered` and not `moved`.** The operator's answer is about the Server it
-   * holds, not about the pod behind it: whether that pod is up and registered
-   * shows up in the next NetworkState, in the server's phase and `registered`,
-   * which is what the mirror is for. A caller that means to send somebody there
-   * waits for that and does not read more into this than it says.
-   *
-   * **A member that is stopping is not already running.** A stop deletes the
-   * member, but it lingers while its players are moved, for up to the group's
-   * drain timeout, and answering "already running" for it would send a player to
-   * a server that is about to go. A start on such a key is answered
-   * UNAVAILABLE and not REFUSED, because the reason is what a caller branches on
-   * and this is the one case where the same request succeeds a moment later:
-   * once the member is gone it starts a fresh one. Nothing in the request waits
-   * for that; a caller told to try again shortly can do exactly that.
+   * A start for a member that is still stopping is answered UNAVAILABLE: the
+   * same request succeeds once the member is gone.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.StartServerResult}
@@ -482,8 +455,7 @@ private static final long serialVersionUID = 0L;
     private java.lang.Object server_ = "";
     /**
      * <pre>
-     * The server the operator composed, echoed so a caller that built the key
-     * from a UUID sees the name players and logs will use.
+     * The server the operator composed.
      * </pre>
      *
      * <code>string server = 1;</code>
@@ -503,8 +475,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The server the operator composed, echoed so a caller that built the key
-     * from a UUID sees the name players and logs will use.
+     * The server the operator composed.
      * </pre>
      *
      * <code>string server = 1;</code>
@@ -525,8 +496,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The server the operator composed, echoed so a caller that built the key
-     * from a UUID sees the name players and logs will use.
+     * The server the operator composed.
      * </pre>
      *
      * <code>string server = 1;</code>
@@ -543,8 +513,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The server the operator composed, echoed so a caller that built the key
-     * from a UUID sees the name players and logs will use.
+     * The server the operator composed.
      * </pre>
      *
      * <code>string server = 1;</code>
@@ -558,8 +527,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The server the operator composed, echoed so a caller that built the key
-     * from a UUID sees the name players and logs will use.
+     * The server the operator composed.
      * </pre>
      *
      * <code>string server = 1;</code>
@@ -580,8 +548,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * True when the member was already there and not stopping, which is a
-     * success and not a refusal: what the caller asked for is the case. It says
-     * nothing about the member being ready.
+     * success. It says nothing about the member being ready.
      * </pre>
      *
      * <code>bool already_running = 2;</code>
@@ -594,8 +561,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * True when the member was already there and not stopping, which is a
-     * success and not a refusal: what the caller asked for is the case. It says
-     * nothing about the member being ready.
+     * success. It says nothing about the member being ready.
      * </pre>
      *
      * <code>bool already_running = 2;</code>
@@ -612,8 +578,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * True when the member was already there and not stopping, which is a
-     * success and not a refusal: what the caller asked for is the case. It says
-     * nothing about the member being ready.
+     * success. It says nothing about the member being ready.
      * </pre>
      *
      * <code>bool already_running = 2;</code>

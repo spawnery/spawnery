@@ -9,20 +9,12 @@ package cloud.spawnery.agent.pb;
  * <pre>
  * NetworkState is the whole picture of one namespace, as the operator sees it.
  *
- * The mirror the plugin API reads from. It goes to both agent kinds, in the
- * same shape, because the API's whole premise is that a plugin author moving
- * between a backend and a proxy does not have to think differently -- and two
- * shapes here would make that a lie one layer down.
+ * It is the mirror the plugin API reads from, sent to both agent kinds in the
+ * same shape. Every message carries the whole picture; a dropped one costs a
+ * resync interval of freshness.
  *
- * A state and not a diff. Every message carries the whole picture, so a
- * reconnect needs no catch-up and a dropped one costs a resync interval of
- * freshness. That is the same rule FullSync follows, for the same reason.
- *
- * The phase is a string rather than an enum, and deliberately: the operator's
- * phase vocabulary lives in internal/phase and gains values, and an agent that
- * is older than a value must read it as "something I do not know" rather than
- * fail to parse the message it arrived in. The plugin API's own
- * ServerPhase.fromWire is the other half of that decision.
+ * The phase is a string, not an enum: the operator's vocabulary grows, and an
+ * older agent must read an unknown value rather than fail to parse.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.NetworkState}
@@ -160,20 +152,11 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * Every player on this network, aggregated across the proxies. Empty when
-   * no proxy has reported recently -- which is a real state and not an error,
-   * and is why the API documents an empty list as ordinary.
+   * no proxy has reported recently, which is not an error.
    *
-   * Every player, in both pictures. The audience split above leaves on-demand
-   * groups and their members out of a backend's, and a player is not left out
-   * with them: dropping one would take somebody off players() while they are
-   * still on the network. The entry's server is what is withheld instead --
-   * blank for a player on a private server, the same blank a player between
-   * two backends already has -- so no NetworkState names a server it does not
-   * itself list.
-   *
-   * That bound is this message's and not the whole channel's: CloudEvent
-   * carries a subject and a group, and the event path has no audience, so a
-   * backend that asked for events still meets a private member's name there.
+   * A backend's picture leaves out on-demand groups and their members but
+   * keeps every player; for a player on such a server, server is blank. A
+   * CloudEvent can still name a private member to a backend.
    * </pre>
    *
    * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -185,20 +168,11 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * Every player on this network, aggregated across the proxies. Empty when
-   * no proxy has reported recently -- which is a real state and not an error,
-   * and is why the API documents an empty list as ordinary.
+   * no proxy has reported recently, which is not an error.
    *
-   * Every player, in both pictures. The audience split above leaves on-demand
-   * groups and their members out of a backend's, and a player is not left out
-   * with them: dropping one would take somebody off players() while they are
-   * still on the network. The entry's server is what is withheld instead --
-   * blank for a player on a private server, the same blank a player between
-   * two backends already has -- so no NetworkState names a server it does not
-   * itself list.
-   *
-   * That bound is this message's and not the whole channel's: CloudEvent
-   * carries a subject and a group, and the event path has no audience, so a
-   * backend that asked for events still meets a private member's name there.
+   * A backend's picture leaves out on-demand groups and their members but
+   * keeps every player; for a player on such a server, server is blank. A
+   * CloudEvent can still name a private member to a backend.
    * </pre>
    *
    * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -211,20 +185,11 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * Every player on this network, aggregated across the proxies. Empty when
-   * no proxy has reported recently -- which is a real state and not an error,
-   * and is why the API documents an empty list as ordinary.
+   * no proxy has reported recently, which is not an error.
    *
-   * Every player, in both pictures. The audience split above leaves on-demand
-   * groups and their members out of a backend's, and a player is not left out
-   * with them: dropping one would take somebody off players() while they are
-   * still on the network. The entry's server is what is withheld instead --
-   * blank for a player on a private server, the same blank a player between
-   * two backends already has -- so no NetworkState names a server it does not
-   * itself list.
-   *
-   * That bound is this message's and not the whole channel's: CloudEvent
-   * carries a subject and a group, and the event path has no audience, so a
-   * backend that asked for events still meets a private member's name there.
+   * A backend's picture leaves out on-demand groups and their members but
+   * keeps every player; for a player on such a server, server is blank. A
+   * CloudEvent can still name a private member to a backend.
    * </pre>
    *
    * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -236,20 +201,11 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * Every player on this network, aggregated across the proxies. Empty when
-   * no proxy has reported recently -- which is a real state and not an error,
-   * and is why the API documents an empty list as ordinary.
+   * no proxy has reported recently, which is not an error.
    *
-   * Every player, in both pictures. The audience split above leaves on-demand
-   * groups and their members out of a backend's, and a player is not left out
-   * with them: dropping one would take somebody off players() while they are
-   * still on the network. The entry's server is what is withheld instead --
-   * blank for a player on a private server, the same blank a player between
-   * two backends already has -- so no NetworkState names a server it does not
-   * itself list.
-   *
-   * That bound is this message's and not the whole channel's: CloudEvent
-   * carries a subject and a group, and the event path has no audience, so a
-   * backend that asked for events still meets a private member's name there.
+   * A backend's picture leaves out on-demand groups and their members but
+   * keeps every player; for a player on such a server, server is blank. A
+   * CloudEvent can still name a private member to a backend.
    * </pre>
    *
    * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -261,20 +217,11 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * Every player on this network, aggregated across the proxies. Empty when
-   * no proxy has reported recently -- which is a real state and not an error,
-   * and is why the API documents an empty list as ordinary.
+   * no proxy has reported recently, which is not an error.
    *
-   * Every player, in both pictures. The audience split above leaves on-demand
-   * groups and their members out of a backend's, and a player is not left out
-   * with them: dropping one would take somebody off players() while they are
-   * still on the network. The entry's server is what is withheld instead --
-   * blank for a player on a private server, the same blank a player between
-   * two backends already has -- so no NetworkState names a server it does not
-   * itself list.
-   *
-   * That bound is this message's and not the whole channel's: CloudEvent
-   * carries a subject and a group, and the event path has no audience, so a
-   * backend that asked for events still meets a private member's name there.
+   * A backend's picture leaves out on-demand groups and their members but
+   * keeps every player; for a player on such a server, server is blank. A
+   * CloudEvent can still name a private member to a backend.
    * </pre>
    *
    * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -291,14 +238,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * The line a cloud event becomes in chat, from the Network's own spec.
-   *
-   * Carried in this state message rather than in the pod, and that placement
-   * is the point: a pod's environment is part of podspec.DesiredServerHash, so
-   * a format in one would make re-wording a chat line replace every server on
-   * the network. Here a change costs a resync interval and rolls nothing.
-   *
-   * Empty is what an operator older than this field sends, and the agent reads
-   * it as "use my own default" rather than as "print nothing".
+   * Empty means the agent's own default.
    * </pre>
    *
    * <code>string feed_format = 4;</code>
@@ -320,14 +260,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * The line a cloud event becomes in chat, from the Network's own spec.
-   *
-   * Carried in this state message rather than in the pod, and that placement
-   * is the point: a pod's environment is part of podspec.DesiredServerHash, so
-   * a format in one would make re-wording a chat line replace every server on
-   * the network. Here a change costs a resync interval and rolls nothing.
-   *
-   * Empty is what an operator older than this field sends, and the agent reads
-   * it as "use my own default" rather than as "print nothing".
+   * Empty means the agent's own default.
    * </pre>
    *
    * <code>string feed_format = 4;</code>
@@ -645,20 +578,12 @@ private static final long serialVersionUID = 0L;
    * <pre>
    * NetworkState is the whole picture of one namespace, as the operator sees it.
    *
-   * The mirror the plugin API reads from. It goes to both agent kinds, in the
-   * same shape, because the API's whole premise is that a plugin author moving
-   * between a backend and a proxy does not have to think differently -- and two
-   * shapes here would make that a lie one layer down.
+   * It is the mirror the plugin API reads from, sent to both agent kinds in the
+   * same shape. Every message carries the whole picture; a dropped one costs a
+   * resync interval of freshness.
    *
-   * A state and not a diff. Every message carries the whole picture, so a
-   * reconnect needs no catch-up and a dropped one costs a resync interval of
-   * freshness. That is the same rule FullSync follows, for the same reason.
-   *
-   * The phase is a string rather than an enum, and deliberately: the operator's
-   * phase vocabulary lives in internal/phase and gains values, and an agent that
-   * is older than a value must read it as "something I do not know" rather than
-   * fail to parse the message it arrived in. The plugin API's own
-   * ServerPhase.fromWire is the other half of that decision.
+   * The phase is a string, not an enum: the operator's vocabulary grows, and an
+   * older agent must read an unknown value rather than fail to parse.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.NetworkState}
@@ -1517,20 +1442,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1545,20 +1461,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1573,20 +1480,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1601,20 +1499,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1636,20 +1525,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1668,20 +1548,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1702,20 +1573,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1737,20 +1599,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1769,20 +1622,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1801,20 +1645,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1834,20 +1669,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1865,20 +1691,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1896,20 +1713,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1921,20 +1729,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1949,20 +1748,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -1978,20 +1768,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -2003,20 +1784,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -2029,20 +1801,11 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * Every player on this network, aggregated across the proxies. Empty when
-     * no proxy has reported recently -- which is a real state and not an error,
-     * and is why the API documents an empty list as ordinary.
+     * no proxy has reported recently, which is not an error.
      *
-     * Every player, in both pictures. The audience split above leaves on-demand
-     * groups and their members out of a backend's, and a player is not left out
-     * with them: dropping one would take somebody off players() while they are
-     * still on the network. The entry's server is what is withheld instead --
-     * blank for a player on a private server, the same blank a player between
-     * two backends already has -- so no NetworkState names a server it does not
-     * itself list.
-     *
-     * That bound is this message's and not the whole channel's: CloudEvent
-     * carries a subject and a group, and the event path has no audience, so a
-     * backend that asked for events still meets a private member's name there.
+     * A backend's picture leaves out on-demand groups and their members but
+     * keeps every player; for a player on such a server, server is blank. A
+     * CloudEvent can still name a private member to a backend.
      * </pre>
      *
      * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -2070,14 +1833,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The line a cloud event becomes in chat, from the Network's own spec.
-     *
-     * Carried in this state message rather than in the pod, and that placement
-     * is the point: a pod's environment is part of podspec.DesiredServerHash, so
-     * a format in one would make re-wording a chat line replace every server on
-     * the network. Here a change costs a resync interval and rolls nothing.
-     *
-     * Empty is what an operator older than this field sends, and the agent reads
-     * it as "use my own default" rather than as "print nothing".
+     * Empty means the agent's own default.
      * </pre>
      *
      * <code>string feed_format = 4;</code>
@@ -2098,14 +1854,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The line a cloud event becomes in chat, from the Network's own spec.
-     *
-     * Carried in this state message rather than in the pod, and that placement
-     * is the point: a pod's environment is part of podspec.DesiredServerHash, so
-     * a format in one would make re-wording a chat line replace every server on
-     * the network. Here a change costs a resync interval and rolls nothing.
-     *
-     * Empty is what an operator older than this field sends, and the agent reads
-     * it as "use my own default" rather than as "print nothing".
+     * Empty means the agent's own default.
      * </pre>
      *
      * <code>string feed_format = 4;</code>
@@ -2127,14 +1876,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The line a cloud event becomes in chat, from the Network's own spec.
-     *
-     * Carried in this state message rather than in the pod, and that placement
-     * is the point: a pod's environment is part of podspec.DesiredServerHash, so
-     * a format in one would make re-wording a chat line replace every server on
-     * the network. Here a change costs a resync interval and rolls nothing.
-     *
-     * Empty is what an operator older than this field sends, and the agent reads
-     * it as "use my own default" rather than as "print nothing".
+     * Empty means the agent's own default.
      * </pre>
      *
      * <code>string feed_format = 4;</code>
@@ -2152,14 +1894,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The line a cloud event becomes in chat, from the Network's own spec.
-     *
-     * Carried in this state message rather than in the pod, and that placement
-     * is the point: a pod's environment is part of podspec.DesiredServerHash, so
-     * a format in one would make re-wording a chat line replace every server on
-     * the network. Here a change costs a resync interval and rolls nothing.
-     *
-     * Empty is what an operator older than this field sends, and the agent reads
-     * it as "use my own default" rather than as "print nothing".
+     * Empty means the agent's own default.
      * </pre>
      *
      * <code>string feed_format = 4;</code>
@@ -2174,14 +1909,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The line a cloud event becomes in chat, from the Network's own spec.
-     *
-     * Carried in this state message rather than in the pod, and that placement
-     * is the point: a pod's environment is part of podspec.DesiredServerHash, so
-     * a format in one would make re-wording a chat line replace every server on
-     * the network. Here a change costs a resync interval and rolls nothing.
-     *
-     * Empty is what an operator older than this field sends, and the agent reads
-     * it as "use my own default" rather than as "print nothing".
+     * Empty means the agent's own default.
      * </pre>
      *
      * <code>string feed_format = 4;</code>

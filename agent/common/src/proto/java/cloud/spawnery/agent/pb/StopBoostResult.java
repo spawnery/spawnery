@@ -7,11 +7,7 @@ package cloud.spawnery.agent.pb;
 
 /**
  * <pre>
- * StopBoostResult says how many boosts were removed.
- *
- * Zero is an ordinary answer and not an error: it means the group had no
- * boosts, which is what an admin needs to hear when they expected it to have
- * some.
+ * StopBoostResult says how many boosts were removed. Zero is not an error.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.StopBoostResult}
@@ -230,11 +226,7 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * StopBoostResult says how many boosts were removed.
-   *
-   * Zero is an ordinary answer and not an error: it means the group had no
-   * boosts, which is what an admin needs to hear when they expected it to have
-   * some.
+   * StopBoostResult says how many boosts were removed. Zero is not an error.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.StopBoostResult}
