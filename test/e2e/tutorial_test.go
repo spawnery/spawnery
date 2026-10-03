@@ -707,7 +707,7 @@ func TestTutorialJoinPermission(t *testing.T) {
 		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("2Gi")},
 		Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
 	}
-	vip.Spec.JoinPermission = &spawneryv1alpha1.JoinPermission{Mode: spawneryv1alpha1.JoinPermissionRequired}
+	vip.Spec.JoinPermission = &spawneryv1alpha1.JoinPermission{Mode: spawneryv1alpha1.JoinPermissionDenyOnly}
 	if err := k8s.Create(ctx, vip); err != nil {
 		t.Fatalf("create ServerGroup %s: %v", vipGroup, err)
 	}
@@ -774,11 +774,31 @@ func TestTutorialJoinPermission(t *testing.T) {
 			fmt.Sprintf("vip server %q; gateway pods %d, on %s %d", vipServer, len(pods), wantFallback, current)
 	})
 
-	// No observable says an agent has applied a sync; 15 s covers at least two.
+	// No observable says an agent has applied a sync; the change push normally lands in well under a second.
 	time.Sleep(15 * time.Second)
 
-	j := startHeldJoin(t, joinPath, "required", 20*time.Second)
+	// DenyOnly admits everyone, so this join lands in vip only if the proxy knows vip.
+	j := startHeldJoin(t, joinPath, "denyonly", 20*time.Second)
 	_, server := whereIs(t, j, gatewayPods)
+	j.stop()
+	if g := groupOf(server); g != vipGroup {
+		t.Errorf("denyonly landed on %s of group %q, want group %q", server, g, vipGroup)
+	}
+
+	if err := k8s.Get(ctx, vipKey, vip); err != nil {
+		t.Fatalf("get ServerGroup %s: %v", vipGroup, err)
+	}
+	vipPatch := client.MergeFrom(vip.DeepCopy())
+	vip.Spec.JoinPermission.Mode = spawneryv1alpha1.JoinPermissionRequired
+	if err := k8s.Patch(ctx, vip, vipPatch); err != nil {
+		t.Fatalf("patch ServerGroup %s: %v", vipGroup, err)
+	}
+
+	// No observable says an agent has applied a sync; the change push normally lands in well under a second.
+	time.Sleep(15 * time.Second)
+
+	j = startHeldJoin(t, joinPath, "required", 20*time.Second)
+	_, server = whereIs(t, j, gatewayPods)
 	j.stop()
 	if g := groupOf(server); g != tutorialServerGroup {
 		t.Errorf("required landed on %s of group %q, want group %q", server, g, tutorialServerGroup)
@@ -789,25 +809,6 @@ func TestTutorialJoinPermission(t *testing.T) {
 	}
 	if refused := regexp.MustCompile(`spawnery: refused 'required'[^\n]*`).FindString(vipLog); refused != "" {
 		t.Errorf("the proxy sent required into a refusal instead of around %s: %s", vipGroup, refused)
-	}
-
-	if err := k8s.Get(ctx, vipKey, vip); err != nil {
-		t.Fatalf("get ServerGroup %s: %v", vipGroup, err)
-	}
-	vipPatch := client.MergeFrom(vip.DeepCopy())
-	vip.Spec.JoinPermission.Mode = spawneryv1alpha1.JoinPermissionDenyOnly
-	if err := k8s.Patch(ctx, vip, vipPatch); err != nil {
-		t.Fatalf("patch ServerGroup %s: %v", vipGroup, err)
-	}
-
-	// No observable says an agent has applied a sync; 15 s covers at least two.
-	time.Sleep(15 * time.Second)
-
-	j = startHeldJoin(t, joinPath, "denyonly", 20*time.Second)
-	_, server = whereIs(t, j, gatewayPods)
-	j.stop()
-	if g := groupOf(server); g != vipGroup {
-		t.Errorf("denyonly landed on %s of group %q, want group %q", server, g, vipGroup)
 	}
 }
 
