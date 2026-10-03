@@ -588,10 +588,11 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	// StorageResize is the persistent-only counterpart to ScalingLimited
-	// above: each condition belongs to the group type whose question it
-	// answers, and an ephemeral group has no claim for this one to be about
-	// -- group.Spec.Storage is a persistent group's field, and growClaim in
+	// StorageResize is the counterpart to ScalingLimited above for the group
+	// types that keep claims, persistent and on-demand: each condition
+	// belongs to the group type whose question it answers, and an ephemeral
+	// group has no claim for this one to be about -- group.Spec.Storage is
+	// not set on an ephemeral group, and growClaim in
 	// the Server controller is skipped outright for an ephemeral one, so
 	// every view's ResizeError here would read "" for an ephemeral group
 	// regardless.
@@ -1150,9 +1151,11 @@ func (r *ServerGroupReconciler) condemn(
 	return nil
 }
 
-// storageResizeCondition reports whether every persistent server's claim
-// currently matches spec.storage.size. True is the ordinary case. False
-// carries the message the offending server's own status already worked out
+// storageResizeCondition reports whether any server's claim has a failed
+// resize: a patch of this operator's own that the API server refused, or a
+// resize from any requester that the storage driver failed. A patch another
+// controller had refused is not visible here. False carries the message
+// the offending server's own status already worked out
 // -- growClaim's synchronous rejection, or resizeConditionError's read of
 // the claim's ControllerResizeError/NodeResizeError condition -- taken from
 // the lowest-ordinal view that has one, deterministically rather than by
@@ -1173,7 +1176,7 @@ func storageResizeCondition(views []ServerView) metav1.Condition {
 		Type:    spawneryv1alpha1.ConditionStorageResize,
 		Status:  metav1.ConditionTrue,
 		Reason:  spawneryv1alpha1.ReasonStorageResized,
-		Message: "every claim matches spec.storage.size",
+		Message: "no claim reports a failed resize",
 	}
 	var worst *ServerView
 	for i := range views {

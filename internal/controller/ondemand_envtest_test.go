@@ -17,11 +17,13 @@ limitations under the License.
 package controller
 
 import (
+	"context"
 	"slices"
 	"strings"
 	"testing"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -403,5 +405,110 @@ func TestAnOnDemandMembersOldWorldIsNotRelabelled(t *testing.T) {
 	}
 	if got, ok := claim.Labels[podspec.LabelKey]; ok {
 		t.Fatalf("key label = %q: the operator relabelled a claim it did not create keyed", got)
+	}
+}
+
+// Lowering spec.storage.size changes what a new claim asks for and nothing
+// about a claim that exists: growClaim only ever raises.
+func TestALoweredSizeReachesOnlyNewClaims(t *testing.T) {
+	f := newFixture(t)
+	group := f.createOnDemandGroup(t, "private-servers", 50)
+	a := f.createOnDemandMember(t, group, "c0ffee")
+	f.reconcile(a.Name)
+	before := f.claim(podspec.DataClaimName(a.Name))
+	if before == nil {
+		t.Fatal("member A has no claim")
+	}
+
+	if err := f.c.Get(f.ctx, client.ObjectKeyFromObject(group), group); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	group.Spec.Storage.Size = resource.MustParse("1Gi")
+	group.Spec.Storage.Annotations = map[string]string{"resize.topolvm.io/storage_limit": "20Gi"}
+	if err := f.c.Update(f.ctx, group); err != nil {
+		t.Fatalf("lower the size: %v", err)
+	}
+	f.reconcile(a.Name)
+
+	after := f.claim(podspec.DataClaimName(a.Name))
+	if after.ResourceVersion != before.ResourceVersion {
+		t.Errorf("claim of A was written: resourceVersion %s -> %s", before.ResourceVersion, after.ResourceVersion)
+	}
+	if got := f.server(a.Name).Status.StorageResizeError; got != "" {
+		t.Errorf("storageResizeError = %q, want empty", got)
+	}
+
+	b := f.createOnDemandMember(t, group, "decaf")
+	f.reconcile(b.Name)
+	claimB := f.claim(podspec.DataClaimName(b.Name))
+	if claimB == nil {
+		t.Fatal("member B has no claim")
+	}
+	if got := claimB.Spec.Resources.Requests[corev1.ResourceStorage]; got.Cmp(resource.MustParse("1Gi")) != 0 {
+		t.Errorf("claim of B requests %v, want 1Gi", got.String())
+	}
+	if got := claimB.Annotations["resize.topolvm.io/storage_limit"]; got != "20Gi" {
+		t.Errorf("claim of B annotations = %v, want the group's", claimB.Annotations)
+	}
+}
+
+// rejectClaimCreates makes every PVC create fail the way the API server does
+// for an invalid object.
+type rejectClaimCreates struct{ client.Client }
+
+func (r rejectClaimCreates) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
+	if _, ok := obj.(*corev1.PersistentVolumeClaim); ok {
+		return apierrors.NewInvalid(corev1.SchemeGroupVersion.WithKind("PersistentVolumeClaim").GroupKind(), obj.GetName(), nil)
+	}
+	return r.Client.Create(ctx, obj, opts...)
+}
+
+// A claim that exists is not created again, so nothing the API server would
+// refuse on create can keep its server from getting a pod.
+func TestAnExistingClaimIsNotCreatedAgain(t *testing.T) {
+	f := newFixture(t)
+	group := f.createOnDemandGroup(t, "private-servers", 50)
+	member := f.createOnDemandMember(t, group, "c0ffee")
+	if err := f.c.Create(f.ctx, podspec.BuildDataClaim(group, member)); err != nil {
+		t.Fatalf("create the existing claim: %v", err)
+	}
+	f.reconc.Client = rejectClaimCreates{f.reconc.Client}
+
+	f.reconcile(member.Name)
+
+	if _, ok := f.pod(member.Name); !ok {
+		t.Fatal("no pod: the reconcile tried to create the existing claim")
+	}
+}
+
+// A claim the API server refuses leaves the Server without a pod and says why
+// on its status and in an event, instead of a bare reconcile error.
+func TestARefusedClaimCreateIsReported(t *testing.T) {
+	f := newFixture(t)
+	rec := newRecorder()
+	f.reconc.Recorder = rec
+	group := f.createOnDemandGroup(t, "private-servers", 50)
+	member := f.createOnDemandMember(t, group, "c0ffee")
+	f.reconc.Client = rejectClaimCreates{f.reconc.Client}
+
+	f.reconcile(member.Name)
+
+	if _, ok := f.pod(member.Name); ok {
+		t.Fatal("a pod exists although its claim was refused")
+	}
+	got := f.server(member.Name)
+	if !hasCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted,
+		metav1.ConditionFalse, ReasonServerClaimRejected) {
+		t.Errorf("conditions = %+v, want Accepted=False with reason %s",
+			got.Status.Conditions, ReasonServerClaimRejected)
+	}
+	found := false
+	for _, ev := range drainEvents(rec) {
+		if strings.Contains(ev, ReasonServerClaimRejected) {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("no event names %s", ReasonServerClaimRejected)
 	}
 }

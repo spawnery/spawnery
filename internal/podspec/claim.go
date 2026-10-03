@@ -17,6 +17,8 @@ limitations under the License.
 package podspec
 
 import (
+	"maps"
+
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -58,9 +60,10 @@ func BuildDataClaim(
 	}
 	return &corev1.PersistentVolumeClaim{
 		ObjectMeta: metav1.ObjectMeta{
-			Name:      DataClaimName(srv.Name),
-			Namespace: srv.Namespace,
-			Labels:    labels,
+			Name:        DataClaimName(srv.Name),
+			Namespace:   srv.Namespace,
+			Labels:      labels,
+			Annotations: maps.Clone(group.Spec.Storage.Annotations),
 		},
 		Spec: corev1.PersistentVolumeClaimSpec{
 			AccessModes:      group.Spec.Storage.AccessModes,

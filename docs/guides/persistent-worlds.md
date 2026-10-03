@@ -18,7 +18,8 @@ spec:
   maxPlayers: 20
   replicas: 2
   storage:
-    # May grow, never shrink, and the storage class is immutable once set.
+    # Raising it grows existing claims; lowering it only shapes new ones, and
+    # no claim ever shrinks. The storage class is immutable once set.
     # One claim per ordinal, and nothing in this operator ever deletes one.
     size: 10Gi
 ```
@@ -216,6 +217,49 @@ Upgrade the operator and the chart before a group uses `keep`, and the image
 with them. An operator older than the field drops it from the spec, and an
 image older than the field ignores `SPAWNERY_KEEP`. Both keep everything, so the
 group runs without the cleanup it asks for and nothing says so.
+
+## Claims that grow by themselves
+
+A group can start every claim small and let an external autoresizer grow the
+ones that fill up. The operator's part is small:
+
+- Each new claim requests `spec.storage.size`. Lower it to start new claims
+  smaller; existing claims are never shrunk.
+- `spec.storage.annotations` are copied onto each claim when it is created. Existing
+  claims are not changed. Keys must be valid Kubernetes annotation keys, and
+  at most 64 are allowed.
+- A claim larger than `spec.storage.size`, grown by hand or by an autoresizer,
+  is left alone. Raising `size` above the annotated ceiling still grows claims;
+  the autoresizer just stops at its ceiling.
+- The server's `status.storageResizeError` and the group's `StorageResize`
+  condition report a patch of this operator's own that the API server refused,
+  or a resize from any requester that the storage driver failed. A patch the
+  autoresizer had refused, for example for a missing `allowVolumeExpansion` or
+  a quota, shows only in the autoresizer's own events and logs.
+- In a persistent group, a driver that expands offline sets
+  `FileSystemResizePending`; the operator then drains and restarts that server
+  at a time the autoresizer picks. Drivers that expand online are unaffected.
+
+```yaml
+  storage:
+    size: 5Gi
+    annotations:
+      resize.topolvm.io/storage_limit: 20Gi
+```
+
+The cluster has to provide the rest. The StorageClass needs
+`allowVolumeExpansion: true`. For
+[pvc-autoresizer](https://github.com/topolvm/pvc-autoresizer), the StorageClass
+needs the annotation `resize.topolvm.io/enabled: "true"` (or the autoresizer runs
+with `--no-annotation-check`), and Prometheus has to scrape the kubelet's volume
+stats.
+
+Claims that exist already do not get the annotations. Add them by hand:
+
+```bash
+kubectl annotate pvc -n <namespace> -l spawnery.cloud/group=<group> \
+  resize.topolvm.io/storage_limit=20Gi --overwrite
+```
 
 ## The failure clock, and why `Degraded` is late
 

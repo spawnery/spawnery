@@ -17,6 +17,7 @@ limitations under the License.
 package podspec
 
 import (
+	"maps"
 	"testing"
 
 	corev1 "k8s.io/api/core/v1"
@@ -81,6 +82,29 @@ func TestBuildDataClaim(t *testing.T) {
 	}
 	if len(claim.Spec.AccessModes) != 1 || claim.Spec.AccessModes[0] != corev1.ReadWriteOnce {
 		t.Errorf("accessModes = %v, want [ReadWriteOnce]", claim.Spec.AccessModes)
+	}
+	if claim.Annotations != nil {
+		t.Errorf("annotations = %v, want nil when spec.storage.annotations is unset", claim.Annotations)
+	}
+}
+
+func TestBuildDataClaimCopiesStorageAnnotations(t *testing.T) {
+	group := persistentGroupFixture(t)
+	group.Spec.Storage.Annotations = map[string]string{"resize.topolvm.io/storage_limit": "20Gi"}
+	srv := serverFixture(t, "survival-0")
+	plain := BuildDataClaim(persistentGroupFixture(t), srv)
+
+	claim := BuildDataClaim(group, srv)
+
+	if got := claim.Annotations["resize.topolvm.io/storage_limit"]; got != "20Gi" {
+		t.Fatalf("annotations = %v, want the group's copied onto the claim", claim.Annotations)
+	}
+	claim.Annotations["other"] = "x"
+	if _, ok := group.Spec.Storage.Annotations["other"]; ok {
+		t.Fatal("the claim shares its annotation map with the group")
+	}
+	if !maps.Equal(claim.Labels, plain.Labels) {
+		t.Fatalf("labels = %v, want %v: annotations must not touch the operator's labels", claim.Labels, plain.Labels)
 	}
 }
 

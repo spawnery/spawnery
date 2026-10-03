@@ -72,6 +72,10 @@ const ReasonPodNameTerminating = "PodNameTerminating"
 // quota, not at anything this operator can retry its way out of.
 const ReasonServerPodRejected = "ServerPodRejected"
 
+// ReasonServerClaimRejected marks a Server whose data claim the API server
+// refused. It is ReasonServerPodRejected for the claim that goes in first.
+const ReasonServerClaimRejected = "ServerClaimRejected"
+
 // These mirror the kubebuilder defaults on ServerGroupSpec. They are what a
 // Server falls back to when its group is gone, so drain and cleanup keep sane
 // timings. TestTheFallbackGroupCarriesEveryCrdDefault reads the markers out of
@@ -281,8 +285,10 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// persistent server's pod usually already exists, so createPod is false
 	// for the reconcile that actually has to notice spec.storage.size grew,
 	// or the claim's FileSystemResizePending condition.
+	claimExists := false
 	if !group.IsEphemeral() {
-		if err := r.growClaim(ctx, group, srv); err != nil {
+		var err error
+		if claimExists, err = r.growClaim(ctx, group, srv); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.readResizePending(ctx, srv); err != nil {
@@ -343,26 +349,42 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	if createPod {
-		// The claim goes in before the pod that mounts it, and nothing here
-		// waits for it to reach Bound. Under volumeBindingMode:
-		// WaitForFirstConsumer — the default of most topology-aware storage
-		// classes, and of the node-local ones — a volume binds only once a pod
-		// demands it, so waiting
-		// for Bound would deadlock against the pod this block goes on to
-		// create.
-		//
-		// AlreadyExists is the ordinary case rather than an error: an ordinal
-		// recreated after its server was deleted is *supposed* to find the
-		// claim it had before. growClaim above is what grows it; this call
-		// only ever creates.
-		if !group.IsEphemeral() {
-			claim := podspec.BuildDataClaim(group, srv)
-			if err := r.Create(ctx, claim); err != nil && !apierrors.IsAlreadyExists(err) {
-				return ctrl.Result{}, err
-			}
+	// The claim goes in before the pod that mounts it, and nothing here
+	// waits for it to reach Bound. Under volumeBindingMode:
+	// WaitForFirstConsumer, the default of most topology-aware storage
+	// classes and of the node-local ones, a volume binds only once a pod
+	// demands it, so waiting
+	// for Bound would deadlock against the pod this block goes on to
+	// create.
+	//
+	// An ordinal recreated after its server was deleted is *supposed* to
+	// find the claim it had before, so an existing claim is never
+	// created again: anything the API server would refuse on create
+	// must not keep an existing server from getting a pod. growClaim
+	// above is what grows it. AlreadyExists still covers a claim that
+	// appeared since that read.
+	if createPod && !group.IsEphemeral() && !claimExists {
+		claim := podspec.BuildDataClaim(group, srv)
+		err := r.Create(ctx, claim)
+		switch {
+		case err == nil, apierrors.IsAlreadyExists(err):
+		case apierrors.IsForbidden(err), apierrors.IsInvalid(err):
+			// The same report the pod create below gives a refusal: a quota,
+			// a webhook, or storage.annotations over the API server's total
+			// annotation size. No pod is created without its claim.
+			r.Recorder.Eventf(srv, nil, corev1.EventTypeWarning, ReasonServerClaimRejected,
+				actionCreatePod, "%s",
+				eventNote("the API server refused this server's data claim: %v", err))
+			setAccepted(srv, false, ReasonServerClaimRejected,
+				fmt.Sprintf("the API server refused this server's data claim: %v; "+
+					"the remedy is the namespace's quota or the group's spec.storage, not a retry", err))
+			createPod = false
+		default:
+			return ctrl.Result{}, err
 		}
+	}
 
+	if createPod {
 		built, err := podspec.BuildServerPod(network, group, srv, r.AgentEndpoint)
 		if err != nil {
 			return ctrl.Result{}, err
@@ -482,8 +504,8 @@ func persistedServer(err error) error {
 	return client.IgnoreNotFound(err)
 }
 
-// growClaim raises the claim's storage request to match spec.storage.size,
-// and never lowers it. It is the only write this operator makes to an
+// growClaim reports whether the claim exists, and raises the claim's
+// storage request to match spec.storage.size, and never lowers it. It is the only write this operator makes to an
 // *existing* claim — the reconcile above creates one alongside the pod, and
 // nothing anywhere deletes one — and the RBAC it needs is patch, not update,
 // which would replace the whole object for one field, and never delete, which
@@ -491,9 +513,9 @@ func persistedServer(err error) error {
 //
 // A claim already at or above the size asked for is left untouched, byte for
 // byte: that covers both the ordinary case (nothing to do) and the one a
-// controller has no business correcting — a claim someone grew by hand, which
-// the CRD's own shrink guard on spec.storage.size means this function will
-// never be asked to shrink anyway.
+// controller has no business correcting: a claim grown by hand or by
+// another controller; the API server's refusal to shrink a PVC is the
+// backstop.
 //
 // A resize can fail two different ways, and this function is where the
 // choice was made to catch both rather than only the one Design §4 names.
@@ -518,9 +540,9 @@ func (r *ServerReconciler) growClaim(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
 	srv *spawneryv1alpha1.Server,
-) error {
+) (exists bool, err error) {
 	if group.Spec.Storage == nil {
-		return nil
+		return false, nil
 	}
 	claim := &corev1.PersistentVolumeClaim{}
 	key := types.NamespacedName{Name: podspec.DataClaimName(srv.Name), Namespace: srv.Namespace}
@@ -528,19 +550,19 @@ func (r *ServerReconciler) growClaim(
 		if apierrors.IsNotFound(err) {
 			srv.Status.StorageResizeError = ""
 		}
-		return client.IgnoreNotFound(err)
+		return false, client.IgnoreNotFound(err)
 	}
 	want := group.Spec.Storage.Size
 	have := claim.Spec.Resources.Requests[corev1.ResourceStorage]
 	if want.Cmp(have) <= 0 {
 		srv.Status.StorageResizeError = resizeConditionError(claim)
-		return nil
+		return true, nil
 	}
 	patched := claim.DeepCopy()
 	patched.Spec.Resources.Requests[corev1.ResourceStorage] = want
 	if err := r.Patch(ctx, patched, client.MergeFrom(claim)); err != nil {
 		if !apierrors.IsInvalid(err) && !apierrors.IsForbidden(err) {
-			return err
+			return true, err
 		}
 		// Refused synchronously by the API server's own resize admission,
 		// rather than returned as a reconcile error: returning it here would
@@ -564,10 +586,10 @@ func (r *ServerReconciler) growClaim(
 			"claim %s: the patch growing it to %s was refused by the API server: %v; "+
 				"check storage class %q first, in particular whether it sets allowVolumeExpansion: true",
 			claim.Name, want.String(), err, className)
-		return nil
+		return true, nil
 	}
 	srv.Status.StorageResizeError = resizeConditionError(claim)
-	return nil
+	return true, nil
 }
 
 // resizeConditionError names the reason a claim's resize did not go through,
@@ -575,7 +597,7 @@ func (r *ServerReconciler) growClaim(
 // let a resize patch through: PersistentVolumeClaimControllerResizeError and
 // PersistentVolumeClaimNodeResizeError. This is the asynchronous half of what
 // growClaim's own doc comment describes; growClaim calls this both after a
-// patch it just made and on a pass where the claim already matched
+// patch it just made and on a pass where the claim was already at or above
 // spec.storage.size, since a driver can fail a resize well after the pass
 // that requested it.
 //

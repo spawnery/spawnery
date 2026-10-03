@@ -1159,6 +1159,13 @@ func (in *ServerStatus) DeepCopy() *ServerStatus {
 func (in *StorageSpec) DeepCopyInto(out *StorageSpec) {
 	*out = *in
 	out.Size = in.Size.DeepCopy()
+	if in.Annotations != nil {
+		in, out := &in.Annotations, &out.Annotations
+		*out = make(map[string]string, len(*in))
+		for key, val := range *in {
+			(*out)[key] = val
+		}
+	}
 	if in.StorageClassName != nil {
 		in, out := &in.StorageClassName, &out.StorageClassName
 		*out = new(string)

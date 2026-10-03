@@ -2316,10 +2316,9 @@ func TestAResizePendingClaimMarksItsServer(t *testing.T) {
 // TestAClaimLargerThanTheSpecIsLeftAlone is a regression guard, not a new
 // property: it already passed before growClaim existed, because 5a never
 // wrote to a claim at all, and it has to go on passing now that growClaim
-// does. A claim someone grew by hand is not the operator's to shrink —
-// want.Cmp(have) <= 0 in growClaim is what leaves it alone — and the CRD's
-// own shrink guard on spec.storage.size means the API would refuse the
-// correction anyway, even if growClaim tried.
+// does. A claim someone grew by hand is not the operator's to shrink:
+// want.Cmp(have) <= 0 in growClaim is what leaves it alone, and the API
+// server would refuse a PVC shrink anyway, even if growClaim tried.
 func TestAClaimLargerThanTheSpecIsLeftAlone(t *testing.T) {
 	f := newFixture(t)
 	f.createPersistentGroup(t, "survival", 1) // 10Gi, per the fixture.

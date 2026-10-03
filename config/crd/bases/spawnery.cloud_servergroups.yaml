@@ -1829,6 +1829,21 @@ spec:
                     items:
                       type: string
                     type: array
+                  annotations:
+                    additionalProperties:
+                      type: string
+                    description: |-
+                      Annotations are copied onto each data claim when it is created, e.g. for
+                      a volume autoresizer's per-claim ceiling. Existing claims are not changed.
+                    maxProperties: 64
+                    type: object
+                    x-kubernetes-validations:
+                    - message: 'every key must be a valid Kubernetes annotation key:
+                        an optional DNS subdomain prefix and ''/'', then a name of
+                        at most 63 characters'
+                      rule: self.all(k, k.matches('^([A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$')
+                        && k.split('/')[size(k.split('/')) - 1].size() <= 63 && (!k.contains('/')
+                        || k.split('/')[0].size() <= 253))
                   keep:
                     description: |-
                       Keep lists the paths on the data claim, relative to /data, that survive
@@ -1861,8 +1876,10 @@ spec:
                     - type: integer
                     - type: string
                     description: |-
-                      Size of the volume. May grow, never shrink; actual expansion requires
-                      allowVolumeExpansion on the StorageClass.
+                      Size of each new claim. Raising it grows existing claims up to the new
+                      size (needs allowVolumeExpansion on the StorageClass); lowering it
+                      changes only claims created afterwards and never shrinks one. A claim
+                      larger than this, grown by hand or by an autoresizer, is left alone.
                     pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
                     x-kubernetes-int-or-string: true
                   storageClassName:
@@ -1990,9 +2007,6 @@ spec:
             - message: storage.accessModes is immutable
               rule: '!has(self.storage) || !has(oldSelf.storage) || self.storage.accessModes
                 == oldSelf.storage.accessModes'
-            - message: storage.size must not shrink
-              rule: '!has(self.storage) || !has(oldSelf.storage) || quantity(self.storage.size).compareTo(quantity(oldSelf.storage.size))
-                >= 0'
             - message: spec.playableSlots must be between 1 and spec.maxPlayers
               rule: '!has(self.playableSlots) || (self.playableSlots >= 1 && self.playableSlots
                 <= self.maxPlayers)'

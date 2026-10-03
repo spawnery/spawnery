@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1_test
 
 import (
+	"fmt"
 	"strings"
 	"testing"
 
@@ -26,6 +27,7 @@ import (
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/utils/ptr"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/testenv"
@@ -380,15 +382,72 @@ func TestServerGroupImmutableFields(t *testing.T) {
 		}
 	})
 
-	t.Run("storage size may not shrink", func(t *testing.T) {
+	t.Run("storage size may be lowered", func(t *testing.T) {
 		ns := testenv.Namespace(t, ctx, c)
 		g := persistentGroup(ns, "survival")
 		if err := c.Create(ctx, g); err != nil {
 			t.Fatalf("create: %v", err)
 		}
 		g.Spec.Storage.Size = resource.MustParse("10Gi")
-		if err := c.Update(ctx, g); err == nil {
-			t.Fatal("update shrank storage.size, want rejection")
+		if err := c.Update(ctx, g); err != nil {
+			t.Fatalf("lowering storage.size rejected: %v", err)
+		}
+	})
+
+	t.Run("an on-demand storage size may be lowered", func(t *testing.T) {
+		ns := testenv.Namespace(t, ctx, c)
+		g := onDemandGroup(ns, "private-servers")
+		if err := c.Create(ctx, g); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		g.Spec.Storage.Size = resource.MustParse("1Gi")
+		if err := c.Update(ctx, g); err != nil {
+			t.Fatalf("lowering storage.size rejected: %v", err)
+		}
+	})
+
+	t.Run("storage annotations round-trip", func(t *testing.T) {
+		ns := testenv.Namespace(t, ctx, c)
+		g := persistentGroup(ns, "survival")
+		g.Spec.Storage.Annotations = map[string]string{"resize.topolvm.io/storage_limit": "20Gi"}
+		if err := c.Create(ctx, g); err != nil {
+			t.Fatalf("create: %v", err)
+		}
+		var got spawneryv1alpha1.ServerGroup
+		if err := c.Get(ctx, client.ObjectKeyFromObject(g), &got); err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		if v := got.Spec.Storage.Annotations["resize.topolvm.io/storage_limit"]; v != "20Gi" {
+			t.Fatalf("annotations = %v, want the limit kept", got.Spec.Storage.Annotations)
+		}
+	})
+
+	t.Run("annotation keys must be valid annotation keys", func(t *testing.T) {
+		long := strings.Repeat("a", 64)
+		for name, key := range map[string]string{
+			"space":                "bad key",
+			"empty name":           "example.com/",
+			"name too long":        long,
+			"underscore in prefix": "ex_ample.com/key",
+		} {
+			ns := testenv.Namespace(t, ctx, c)
+			g := persistentGroup(ns, "survival")
+			g.Spec.Storage.Annotations = map[string]string{key: "x"}
+			if err := c.Create(ctx, g); err == nil {
+				t.Errorf("%s: key %q accepted, want rejection", name, key)
+			}
+		}
+	})
+
+	t.Run("annotations are capped", func(t *testing.T) {
+		ns := testenv.Namespace(t, ctx, c)
+		g := persistentGroup(ns, "survival")
+		g.Spec.Storage.Annotations = map[string]string{}
+		for i := range 65 {
+			g.Spec.Storage.Annotations[fmt.Sprintf("key-%d", i)] = "x"
+		}
+		if err := c.Create(ctx, g); err == nil {
+			t.Fatal("65 annotations accepted, want rejection")
 		}
 	})
 

@@ -117,8 +117,9 @@ scale-down already takes: the players on it are moved through the proxies inside
 **A stop never deletes a claim**, and neither does deleting the group. That has
 a price in this type that a persistent group does not pay: a group of `Persistent`
 servers has as many claims as `spec.replicas`, and one of these has as many as
-players who ever asked. Every claim is `spec.storage.size`, whether or not its
-owner comes back. What a claim costs, how to find the ones nobody is using and
+players who ever asked. Every claim starts at `spec.storage.size` (see
+[Claims that grow by themselves](persistent-worlds.md#claims-that-grow-by-themselves)),
+whether or not its owner comes back. What a claim costs, how to find the ones nobody is using and
 why removing one is a human act are in
 [Persistent storage](persistent-worlds.md), and all of it holds here unchanged;
 the claims of this group are named `<group>-<key>-data` and carry the same
