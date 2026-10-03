@@ -259,7 +259,8 @@ type ServerGroupSpec struct {
 
 	// JoinPermission limits who may join this group's servers. A proxy routes
 	// a player around a group they may not join; the server refuses the login.
-	// On an OnDemand group only the proxy checks it.
+	// On an OnDemand group only the proxy checks it. Agents older than 0.18.0
+	// ignore the rule, so the game and proxy images must carry 0.18.0 or later.
 	// +optional
 	JoinPermission *JoinPermission `json:"joinPermission,omitempty"`
 

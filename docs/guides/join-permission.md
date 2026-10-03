@@ -55,13 +55,20 @@ which routes the player around the group.
 - On join, the proxy skips a fallback group the player may not join and tries
   the next group in the list.
 - When no fallback group is open to the player, the proxy disconnects them with
-  Velocity's own "no available server" message instead.
+  Velocity's own message, which says there are no available servers to connect
+  them to.
 - `/server` and other connects to such a group are refused with
   `You may not join <group>.`
 - When the proxy lets a player through and the backend refuses the login, the
-  player is disconnected with the same message. The message is the translatable
-  key `spawnery.join.denied`, so a network with its own translations can set
-  that key.
+  result depends on the connect:
+  - On the initial join, the proxy sends the player to the next fallback group
+    it thinks open, without a message. Only when no such group is left does the
+    player get disconnected with the refusal message.
+  - On a switch from a server, the player stays on their current server. Velocity
+    tells them the connect was refused, with the refusal message.
+
+  The refusal message is the translatable key `spawnery.join.denied`, so a
+  network with its own translations can set that key.
 
 ## Limits
 
@@ -74,6 +81,7 @@ which routes the player around the group.
   API on those servers.
 - The operator does not know permissions. A plugin's `connect()` answers
   `ordered` even when the player is then refused.
+- Agents older than 0.18.0 ignore the rule, so the game images and the proxy
+  image must carry 0.18.0 or later.
 
-Changing the rule restarts nothing. It reaches the agents with the next network
-state.
+Changing the rule restarts nothing. It reaches the agents within 30 seconds.
