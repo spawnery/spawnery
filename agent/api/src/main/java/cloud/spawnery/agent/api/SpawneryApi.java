@@ -77,6 +77,10 @@ public interface SpawneryApi {
      * <p><b>Asynchronous on both platforms</b>, although a proxy could answer
      * locally, so that the same code compiles on either side.
      *
+     * <p>The operator does not know permissions. A player sent to a group
+     * whose join permission refuses them is still answered {@code ordered},
+     * and is then refused by the proxy or the server.
+     *
      * <p>The stage fails rather than returning a result when the operator
      * refuses or cannot answer — including when the stream was renewed while
      * the request was in flight, which is failed rather than retried because
