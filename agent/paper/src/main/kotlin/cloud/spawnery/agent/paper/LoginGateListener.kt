@@ -1,5 +1,6 @@
 package cloud.spawnery.agent.paper
 
+import cloud.spawnery.agent.JoinRules
 import cloud.spawnery.agent.NetworkMirror
 import com.destroystokyo.paper.event.player.PlayerConnectionCloseEvent
 import org.bukkit.Bukkit
@@ -21,10 +22,23 @@ class LoginGateListener(
     private val mirror: NetworkMirror,
     private val state: ServerState,
     private val pending: PendingSeats = PendingSeats(System::currentTimeMillis),
+    private val log: (String) -> Unit = {},
 ) : Listener {
     @EventHandler(priority = EventPriority.HIGH)
     fun onLogin(event: PlayerLoginEvent) {
         if (event.result != PlayerLoginEvent.Result.ALLOWED) return
+        val rule = mirror.joinRule(group)
+        if (rule != null) {
+            val value = LoginGate.permissionValue(
+                has = event.player.hasPermission(rule.node),
+                isSet = event.player.isPermissionSet(rule.node),
+            )
+            if (!JoinRules.mayJoin(rule, value)) {
+                event.disallow(PlayerLoginEvent.Result.KICK_OTHER, LoginGate.denied(groupName()))
+                log("spawnery: refused '${event.player.name}' on group $group: ${rule.node} is $value")
+                return
+            }
+        }
         val admission = mirror.admission(group) ?: return
         if (!admission.enforce) return
         val permission = LoginGate.permission(group)
@@ -32,12 +46,14 @@ class LoginGateListener(
         val playable = LoginGate.effectivePlayable(state.playable, admission.playableSlots, Bukkit.getMaxPlayers())
         val seated = Bukkit.getOnlinePlayers().count { !it.hasPermission(permission) }
         if (!LoginGate.admits(true, bypass, seated, pending.count(), playable)) {
-            val name = mirror.groups().firstOrNull { it.name() == group }?.displayName()?.takeIf { it.isNotBlank() } ?: group
-            event.disallow(PlayerLoginEvent.Result.KICK_FULL, LoginGate.refusal(name))
+            event.disallow(PlayerLoginEvent.Result.KICK_FULL, LoginGate.refusal(groupName()))
             return
         }
         if (!bypass) pending.admit(event.player.uniqueId)
     }
+
+    private fun groupName(): String =
+        LoginGate.displayName(group, mirror.groups().firstOrNull { it.name() == group }?.displayName())
 
     @EventHandler(priority = EventPriority.MONITOR)
     fun onLoginSettled(event: PlayerLoginEvent) {

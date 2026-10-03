@@ -1,5 +1,7 @@
 package cloud.spawnery.agent.paper
 
+import cloud.spawnery.agent.JoinRules
+import cloud.spawnery.agent.PermissionValue
 import net.kyori.adventure.text.Component
 
 object LoginGate {
@@ -32,4 +34,20 @@ object LoginGate {
             .fallback(FALLBACK)
             .arguments(Component.text(groupDisplayName))
             .build()
+
+    fun permissionValue(has: Boolean, isSet: Boolean): PermissionValue = when {
+        has -> PermissionValue.TRUE
+        isSet -> PermissionValue.FALSE
+        else -> PermissionValue.UNDEFINED
+    }
+
+    fun denied(groupDisplayName: String): Component =
+        Component.translatable()
+            .key(JoinRules.DENIED_KEY)
+            .fallback(JoinRules.DENIED_FALLBACK)
+            .arguments(Component.text(groupDisplayName))
+            .build()
+
+    fun displayName(group: String, displayName: String?): String =
+        displayName?.takeIf { it.isNotBlank() } ?: group
 }

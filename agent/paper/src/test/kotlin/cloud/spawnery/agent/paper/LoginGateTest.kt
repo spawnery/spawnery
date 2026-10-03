@@ -1,5 +1,6 @@
 package cloud.spawnery.agent.paper
 
+import cloud.spawnery.agent.PermissionValue
 import net.kyori.adventure.text.Component
 import net.kyori.adventure.text.TranslatableComponent
 import kotlin.test.Test
@@ -50,4 +51,32 @@ class LoginGateTest {
 
     @Test
     fun `the permission names the group`() = assertEquals("spawnery.join.full.duels", LoginGate.permission("duels"))
+
+    @Test
+    fun `a granted node reads as true, whether or not it is set`() {
+        assertEquals(PermissionValue.TRUE, LoginGate.permissionValue(has = true, isSet = true))
+        // An op on a node nobody set: Bukkit's default for ops is true.
+        assertEquals(PermissionValue.TRUE, LoginGate.permissionValue(has = true, isSet = false))
+    }
+
+    @Test
+    fun `an explicit false reads as false and an unset node as undefined`() {
+        assertEquals(PermissionValue.FALSE, LoginGate.permissionValue(has = false, isSet = true))
+        assertEquals(PermissionValue.UNDEFINED, LoginGate.permissionValue(has = false, isSet = false))
+    }
+
+    @Test
+    fun `the refusal is translatable and names the group`() {
+        val refusal = LoginGate.denied("VIP Lobby") as TranslatableComponent
+        assertEquals("spawnery.join.denied", refusal.key())
+        assertEquals("You may not join %s.", refusal.fallback())
+        assertEquals(Component.text("VIP Lobby"), refusal.arguments().single().asComponent())
+    }
+
+    @Test
+    fun `a group without a display name is named by its name`() {
+        assertEquals("vip", LoginGate.displayName("vip", ""))
+        assertEquals("vip", LoginGate.displayName("vip", null))
+        assertEquals("VIP Lobby", LoginGate.displayName("vip", "VIP Lobby"))
+    }
 }

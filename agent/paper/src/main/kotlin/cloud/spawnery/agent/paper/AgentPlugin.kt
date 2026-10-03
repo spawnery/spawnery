@@ -187,11 +187,11 @@ class AgentPlugin : JavaPlugin(), Listener {
     private fun registerLoginGateOnce() {
         if (loginGate != null) return
         val group = System.getenv("SPAWNERY_GROUP") ?: return
-        if (mirror.admission(group)?.enforce != true) return
-        val gate = LoginGateListener(group, mirror, state)
+        if (mirror.admission(group)?.enforce != true && mirror.joinRule(group) == null) return
+        val gate = LoginGateListener(group, mirror, state, log = logger::info)
         server.pluginManager.registerEvents(gate, this)
         loginGate = gate
-        logger.info("group $group enforces its playable slots; login check registered")
+        logger.info("group $group enforces playable slots or a join permission; login check registered")
     }
 
     // MONITOR so every other plugin's ServerLoadEvent handler has run first.
