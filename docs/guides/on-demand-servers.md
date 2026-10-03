@@ -14,7 +14,7 @@ spec:
   networkRef:
     name: production
   type: OnDemand
-  image: ghcr.io/spawnery/purpur:26.3-0.16.1
+  image: ghcr.io/spawnery/purpur:26.3-0.18.0
   maxPlayers: 10
   # A fleet ceiling, not a per-player quota: who may have one is a question
   # about a player, and the system that knows the player answers it.

@@ -61,14 +61,14 @@ which routes the player around the group.
   `You may not join <group>.`
 - When the proxy lets a player through and the backend refuses the login, the
   result depends on the connect:
-  - On the initial join, the proxy sends the player to the next fallback group
-    it thinks open, without a message. Only when no such group is left does the
-    player get disconnected with the refusal message.
-  - On a switch from a server, the player stays on their current server. Velocity
-    tells them the connect was refused, with the refusal message.
+    - On the initial join, the proxy sends the player to the next fallback
+      group it thinks open, without a message. Only when no such group is left
+      does the player get disconnected with the refusal message.
+    - On a switch from a server, the player stays on their current server.
+      Velocity tells them the connect was refused, with the refusal message.
 
-  The refusal message is the translatable key `spawnery.join.denied`, so a
-  network with its own translations can set that key.
+    The refusal message is the translatable key `spawnery.join.denied`, so a
+    network with its own translations can set that key.
 
 ## Limits
 
