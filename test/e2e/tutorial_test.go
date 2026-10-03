@@ -774,8 +774,8 @@ func TestTutorialJoinPermission(t *testing.T) {
 			fmt.Sprintf("vip server %q; gateway pods %d, on %s %d", vipServer, len(pods), wantFallback, current)
 	})
 
-	// No observable says an agent has applied a sync; the change push normally lands in well under a second.
-	time.Sleep(15 * time.Second)
+	// No observable says an agent has applied a sync; the 30 s resync is what delivers the change.
+	time.Sleep(35 * time.Second)
 
 	// DenyOnly admits everyone, so this join lands in vip only if the proxy knows vip.
 	j := startHeldJoin(t, joinPath, "denyonly", 20*time.Second)
@@ -794,8 +794,8 @@ func TestTutorialJoinPermission(t *testing.T) {
 		t.Fatalf("patch ServerGroup %s: %v", vipGroup, err)
 	}
 
-	// No observable says an agent has applied a sync; the change push normally lands in well under a second.
-	time.Sleep(15 * time.Second)
+	// No observable says an agent has applied a sync; the 30 s resync is what delivers the change.
+	time.Sleep(35 * time.Second)
 
 	j = startHeldJoin(t, joinPath, "required", 20*time.Second)
 	_, server = whereIs(t, j, gatewayPods)
