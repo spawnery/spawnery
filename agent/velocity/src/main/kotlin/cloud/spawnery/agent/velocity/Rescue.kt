@@ -24,6 +24,7 @@ import java.util.concurrent.ConcurrentHashMap
 class Rescue(
     private val router: Router,
     private val log: (String, Throwable?) -> Unit,
+    private val access: JoinAccess = JoinAccess.OPEN,
 ) {
     // Velocity delivers these events on one netty event loop per connection.
     private val tried = ConcurrentHashMap<UUID, MutableSet<String>>()
@@ -47,7 +48,9 @@ class Rescue(
         val chain = tried.computeIfAbsent(player) { ConcurrentHashMap.newKeySet() }
         chain += from
 
-        val target = router.choose(toGroups, excluding = chain)
+        val target = router.choose(toGroups, excluding = chain) { server, group ->
+            access.mayJoin(player, server, group)
+        }
         if (target == null) {
             // Logged every time: the player is about to be disconnected.
             log(

@@ -615,3 +615,57 @@ func TestServerGroupStorageKeepRefusesAnEmptyList(t *testing.T) {
 		t.Errorf("err = %v, want it to name spec.storage.keep", err)
 	}
 }
+
+func TestJoinPermissionModeDefaultsToRequired(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	g := ephemeralGroup(ns, "vip")
+	g.Spec.JoinPermission = &spawneryv1alpha1.JoinPermission{}
+	if err := c.Create(ctx, g); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	var got spawneryv1alpha1.ServerGroup
+	if err := c.Get(ctx, client.ObjectKeyFromObject(g), &got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Spec.JoinPermission == nil || got.Spec.JoinPermission.Mode != spawneryv1alpha1.JoinPermissionRequired {
+		t.Errorf("joinPermission = %+v, want mode Required", got.Spec.JoinPermission)
+	}
+}
+
+func TestJoinPermissionRefusesABadNodeOrMode(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	for i, jp := range []spawneryv1alpha1.JoinPermission{
+		{Node: "Network.VIP"},
+		{Node: "network vip"},
+		{Node: strings.Repeat("a", 129)},
+		{Mode: "Sometimes"},
+	} {
+		g := ephemeralGroup(ns, fmt.Sprintf("bad-%d", i))
+		g.Spec.JoinPermission = &jp
+		err := c.Create(ctx, g)
+		if err == nil {
+			t.Errorf("%+v was accepted", jp)
+			continue
+		}
+		if !strings.Contains(err.Error(), "spec.joinPermission") {
+			t.Errorf("err = %v, want it to name spec.joinPermission", err)
+		}
+	}
+}
+
+func TestJoinPermissionIsAllowedOnEveryType(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	p := persistentGroup(ns, "persistent-join")
+	p.Spec.JoinPermission = &spawneryv1alpha1.JoinPermission{Node: "network.build"}
+	if err := c.Create(ctx, p); err != nil {
+		t.Fatalf("persistent: %v", err)
+	}
+	o := onDemandGroup(ns, "ondemand-join")
+	o.Spec.JoinPermission = &spawneryv1alpha1.JoinPermission{Mode: spawneryv1alpha1.JoinPermissionDenyOnly}
+	if err := c.Create(ctx, o); err != nil {
+		t.Fatalf("on-demand: %v", err)
+	}
+}

@@ -3424,8 +3424,13 @@ type GroupState struct {
 	PlayableSlots int32 `protobuf:"varint,9,opt,name=playable_slots,json=playableSlots,proto3" json:"playable_slots,omitempty"`
 	// spec.enforcePlayableSlots.
 	EnforcePlayableSlots bool `protobuf:"varint,10,opt,name=enforce_playable_slots,json=enforcePlayableSlots,proto3" json:"enforce_playable_slots,omitempty"`
-	unknownFields        protoimpl.UnknownFields
-	sizeCache            protoimpl.SizeCache
+	// The permission that decides who may join this group's servers, already
+	// resolved from spec.joinPermission. Empty means the group has no rule.
+	JoinPermission string `protobuf:"bytes,11,opt,name=join_permission,json=joinPermission,proto3" json:"join_permission,omitempty"`
+	// spec.joinPermission.mode is DenyOnly: only an explicit false refuses.
+	JoinPermissionDenyOnly bool `protobuf:"varint,12,opt,name=join_permission_deny_only,json=joinPermissionDenyOnly,proto3" json:"join_permission_deny_only,omitempty"`
+	unknownFields          protoimpl.UnknownFields
+	sizeCache              protoimpl.SizeCache
 }
 
 func (x *GroupState) Reset() {
@@ -3524,6 +3529,20 @@ func (x *GroupState) GetPlayableSlots() int32 {
 func (x *GroupState) GetEnforcePlayableSlots() bool {
 	if x != nil {
 		return x.EnforcePlayableSlots
+	}
+	return false
+}
+
+func (x *GroupState) GetJoinPermission() string {
+	if x != nil {
+		return x.JoinPermission
+	}
+	return ""
+}
+
+func (x *GroupState) GetJoinPermissionDenyOnly() bool {
+	if x != nil {
+		return x.JoinPermissionDenyOnly
 	}
 	return false
 }
@@ -4778,7 +4797,7 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\aplayers\x18\x03 \x03(\v2$.spawnery.agent.v1alpha1.RosterEntryR\aplayers\x12\x1f\n" +
 	"\vfeed_format\x18\x04 \x01(\tR\n" +
 	"feedFormat\x12=\n" +
-	"\aproxies\x18\x05 \x03(\v2#.spawnery.agent.v1alpha1.ProxyStateR\aproxies\"\xd2\x04\n" +
+	"\aproxies\x18\x05 \x03(\v2#.spawnery.agent.v1alpha1.ProxyStateR\aproxies\"\xb6\x05\n" +
 	"\n" +
 	"GroupState\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12<\n" +
@@ -4794,7 +4813,9 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\fdisplay_name\x18\b \x01(\tR\vdisplayName\x12%\n" +
 	"\x0eplayable_slots\x18\t \x01(\x05R\rplayableSlots\x124\n" +
 	"\x16enforce_playable_slots\x18\n" +
-	" \x01(\bR\x14enforcePlayableSlots\x1a=\n" +
+	" \x01(\bR\x14enforcePlayableSlots\x12'\n" +
+	"\x0fjoin_permission\x18\v \x01(\tR\x0ejoinPermission\x129\n" +
+	"\x19join_permission_deny_only\x18\f \x01(\bR\x16joinPermissionDenyOnly\x1a=\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"U\n" +

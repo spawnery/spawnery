@@ -11,7 +11,7 @@ class DrainTest {
     fun `every player on the draining server is moved`() {
         val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
         val players = FakePlayers(listOf(FakePlayer("alice", "hub"), FakePlayer("bob", "hub")))
-        val drain = Drain(players, router) { _, _ -> }
+        val drain = Drain(players, router, { _, _ -> })
 
         drain.run("hub", listOf("lobby"))
 
@@ -22,7 +22,7 @@ class DrainTest {
     fun `players on other servers are not touched`() {
         val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
         val players = FakePlayers(listOf(FakePlayer("alice", "hub"), FakePlayer("carol", "survival")))
-        val drain = Drain(players, router) { _, _ -> }
+        val drain = Drain(players, router, { _, _ -> })
 
         drain.run("hub", listOf("lobby"))
 
@@ -38,7 +38,7 @@ class DrainTest {
             ),
         )
         val players = FakePlayers(listOf(FakePlayer("alice", "hub-1")))
-        val drain = Drain(players, router) { _, _ -> }
+        val drain = Drain(players, router, { _, _ -> })
 
         drain.run("hub-1", listOf("lobby"))
 
@@ -54,7 +54,7 @@ class DrainTest {
             ),
         )
         val players = FakePlayers(listOf(FakePlayer("alice", "hub-1")))
-        val drain = Drain(players, router) { _, _ -> }
+        val drain = Drain(players, router, { _, _ -> })
 
         drain.run("hub-1", listOf("hub"))
 
@@ -66,7 +66,7 @@ class DrainTest {
         val router = Router(directory(Backend("hub-1", "10.0.0.1:25565", "hub")))
         val players = FakePlayers(listOf(FakePlayer("alice", "hub-1"), FakePlayer("bob", "hub-1")))
         val logs = mutableListOf<String>()
-        val drain = Drain(players, router) { message, _ -> logs += message }
+        val drain = Drain(players, router, { message, _ -> logs += message })
 
         // hub-1 is the only member of the only group, and it is being drained.
         drain.run("hub-1", listOf("hub"))
@@ -80,7 +80,7 @@ class DrainTest {
         val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
         val alice = FakePlayer("alice", "hub")
         val players = FakePlayers(listOf(alice))
-        val drain = Drain(players, router) { _, _ -> }
+        val drain = Drain(players, router, { _, _ -> })
 
         drain.run("hub", listOf("lobby"))
         assertEquals(listOf("alice" to "lobby-1"), players.moves)
@@ -96,7 +96,7 @@ class DrainTest {
     fun `a player whose current server is unknown is not touched`() {
         val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
         val players = FakePlayers(listOf(FakePlayer("alice", currentServer = null)))
-        val drain = Drain(players, router) { _, _ -> }
+        val drain = Drain(players, router, { _, _ -> })
 
         drain.run("hub", listOf("lobby"))
 
@@ -111,7 +111,7 @@ class DrainTest {
         val bob = FakePlayer("bob", "hub")
         val players = FakePlayers(listOf(alice, bob))
         val logs = mutableListOf<Pair<String, Throwable?>>()
-        val drain = Drain(players, router) { message, error -> logs += message to error }
+        val drain = Drain(players, router, { message, error -> logs += message to error })
 
         drain.run("hub", listOf("lobby"))
 
@@ -135,7 +135,7 @@ class DrainTest {
         val players = FakePlayers(
             listOf(FakePlayer("alice", "hub"), FakePlayer("bob", "hub"), FakePlayer("carol", "hub")),
         )
-        val drain = Drain(players, router) { _, _ -> }
+        val drain = Drain(players, router, { _, _ -> })
         val before = counting.lookups
 
         drain.run("hub", listOf("lobby"))
@@ -153,7 +153,7 @@ class DrainTest {
         val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
         // Nobody on hub when the drain arrives.
         val players = FakePlayers(emptyList())
-        val drain = Drain(players, router) { _, _ -> }
+        val drain = Drain(players, router, { _, _ -> })
         drain.run("hub", listOf("lobby"))
         assertTrue(players.moves.isEmpty(), "the drain found nobody, which is the premise")
 
@@ -167,7 +167,7 @@ class DrainTest {
     fun `a player who lands on a server that is not draining is left alone`() {
         val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
         val players = FakePlayers(emptyList())
-        val drain = Drain(players, router) { _, _ -> }
+        val drain = Drain(players, router, { _, _ -> })
         drain.run("hub", listOf("lobby"))
 
         drain.landed(players.ref(FakePlayer("alice", "survival")))
@@ -179,7 +179,7 @@ class DrainTest {
     fun `a player with no server at all is left alone`() {
         val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
         val players = FakePlayers(emptyList())
-        val drain = Drain(players, router) { _, _ -> }
+        val drain = Drain(players, router, { _, _ -> })
         drain.run("hub", listOf("lobby"))
 
         drain.landed(players.ref(FakePlayer("alice", null)))
@@ -191,7 +191,7 @@ class DrainTest {
     fun `the remembered server name is matched case-insensitively`() {
         val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
         val players = FakePlayers(emptyList())
-        val drain = Drain(players, router) { _, _ -> }
+        val drain = Drain(players, router, { _, _ -> })
         drain.run("HUB", listOf("lobby"))
 
         drain.landed(players.ref(FakePlayer("alice", "hub")))
@@ -204,7 +204,7 @@ class DrainTest {
         val router = Router(directory())
         val players = FakePlayers(emptyList())
         val logged = mutableListOf<String>()
-        val drain = Drain(players, router) { message, _ -> logged += message }
+        val drain = Drain(players, router, { message, _ -> logged += message })
         drain.run("hub", listOf("lobby"))
 
         drain.landed(players.ref(FakePlayer("alice", "hub")))
@@ -222,7 +222,7 @@ class DrainTest {
     fun `a drain restated after every FullSync keeps catching arrivals`() {
         val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
         val players = FakePlayers(emptyList())
-        val drain = Drain(players, router) { _, _ -> }
+        val drain = Drain(players, router, { _, _ -> })
 
         repeat(3) {
             drain.resynced()
@@ -237,7 +237,7 @@ class DrainTest {
     fun `a drain the operator stops restating is forgotten, one resync later`() {
         val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
         val players = FakePlayers(emptyList())
-        val drain = Drain(players, router) { _, _ -> }
+        val drain = Drain(players, router, { _, _ -> })
         drain.run("hub", listOf("lobby"))
 
         // The first FullSync after the drain stops still carries it; one
@@ -255,7 +255,7 @@ class DrainTest {
     fun `a drain that arrives between FullSyncs catches arrivals at once`() {
         val router = Router(directory(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
         val players = FakePlayers(emptyList())
-        val drain = Drain(players, router) { _, _ -> }
+        val drain = Drain(players, router, { _, _ -> })
 
         // The immediate DrainPlayers when a drain starts takes effect without
         // waiting for a FullSync.
@@ -276,12 +276,28 @@ class DrainTest {
             ),
         )
         val players = FakePlayers(listOf(FakePlayer("alice", "hub")))
-        val drain = Drain(players, router) { _, _ -> }
+        val drain = Drain(players, router, { _, _ -> })
 
         drain.run("lobby-1", listOf("lobby"))
         drain.run("hub", listOf("lobby"))
 
         assertEquals(listOf("alice" to "lobby-2"), players.moves)
+    }
+
+    @Test
+    fun `a drained player is not sent into a group they may not join`() {
+        val router = Router(
+            directory(
+                Backend("vip-1", "10.0.0.1:25565", "vip"),
+                Backend("lobby-1", "10.0.0.2:25565", "lobby"),
+            ),
+        )
+        val players = FakePlayers(listOf(FakePlayer("alice", "hub-1")))
+        val drain = Drain(players, router, { _, _ -> }, JoinAccess { _, _, group -> group != "vip" })
+
+        drain.run("hub-1", listOf("vip", "lobby"))
+
+        assertEquals(listOf("alice" to "lobby-1"), players.moves)
     }
 
     private companion object {

@@ -163,4 +163,36 @@ java.lang.String defaultValue);
    * @return The enforcePlayableSlots.
    */
   boolean getEnforcePlayableSlots();
+
+  /**
+   * <pre>
+   * The permission that decides who may join this group's servers, already
+   * resolved from spec.joinPermission. Empty means the group has no rule.
+   * </pre>
+   *
+   * <code>string join_permission = 11;</code>
+   * @return The joinPermission.
+   */
+  java.lang.String getJoinPermission();
+  /**
+   * <pre>
+   * The permission that decides who may join this group's servers, already
+   * resolved from spec.joinPermission. Empty means the group has no rule.
+   * </pre>
+   *
+   * <code>string join_permission = 11;</code>
+   * @return The bytes for joinPermission.
+   */
+  com.google.protobuf.ByteString
+      getJoinPermissionBytes();
+
+  /**
+   * <pre>
+   * spec.joinPermission.mode is DenyOnly: only an explicit false refuses.
+   * </pre>
+   *
+   * <code>bool join_permission_deny_only = 12;</code>
+   * @return The joinPermissionDenyOnly.
+   */
+  boolean getJoinPermissionDenyOnly();
 }

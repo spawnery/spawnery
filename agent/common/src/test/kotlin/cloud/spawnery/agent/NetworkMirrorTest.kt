@@ -10,6 +10,7 @@ import cloud.spawnery.agent.pb.ServerState
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
 private val someUuid: String = "00000000-0000-4000-8000-00000000000a"
@@ -39,6 +40,25 @@ private fun state(
 }
 
 class NetworkMirrorTest {
+    @Test
+    fun `a group's join rule is mirrored, and a group without one has none`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder()
+                .addGroups(GroupState.newBuilder().setName("vip").setJoinPermission("network.vip"))
+                .addGroups(
+                    GroupState.newBuilder().setName("hub")
+                        .setJoinPermission("network.banned").setJoinPermissionDenyOnly(true),
+                )
+                .addGroups(GroupState.newBuilder().setName("lobby"))
+                .build(),
+        )
+        assertEquals(JoinRule("network.vip", denyOnly = false), mirror.joinRule("vip"))
+        assertEquals(JoinRule("network.banned", denyOnly = true), mirror.joinRule("hub"))
+        assertNull(mirror.joinRule("lobby"))
+        assertNull(mirror.joinRule("nowhere"))
+    }
+
     @Test
     fun `a group's admission comes from its state`() {
         val mirror = NetworkMirror()

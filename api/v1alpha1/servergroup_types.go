@@ -39,6 +39,45 @@ const (
 	ServerGroupOnDemand ServerGroupType = "OnDemand"
 )
 
+// +kubebuilder:validation:Enum=Required;DenyOnly
+type JoinPermissionMode string
+
+const (
+	JoinPermissionRequired JoinPermissionMode = "Required"
+	JoinPermissionDenyOnly JoinPermissionMode = "DenyOnly"
+)
+
+// JoinPermission is the permission that decides who may join a group's
+// servers. It is read at runtime over the agent channel; changing it
+// restarts no server.
+type JoinPermission struct {
+	// Node is the permission node. Empty means spawnery.join.<group name>.
+	// +kubebuilder:validation:MaxLength=128
+	// +kubebuilder:validation:Pattern=`^[a-z0-9_.-]+$`
+	// +optional
+	Node string `json:"node,omitempty"`
+
+	// Mode Required admits only players who hold the node. DenyOnly admits
+	// everyone except players for whom the node is explicitly set to false.
+	// +kubebuilder:default=Required
+	// +optional
+	Mode JoinPermissionMode `json:"mode,omitempty"`
+}
+
+func (j *JoinPermission) ResolvedNode(group string) string {
+	if j == nil {
+		return ""
+	}
+	if j.Node != "" {
+		return j.Node
+	}
+	return "spawnery.join." + group
+}
+
+func (j *JoinPermission) DenyOnly() bool {
+	return j != nil && j.Mode == JoinPermissionDenyOnly
+}
+
 // AnnotationRetry on a ServerGroup resets its failure streak whenever its
 // value changes. It is the way to retry after fixing a cause outside the
 // group, such as a Secret or a registry, which moves nothing the operator
@@ -217,6 +256,13 @@ type ServerGroupSpec struct {
 	// the agent channel; changing it restarts no server.
 	// +optional
 	EnforcePlayableSlots bool `json:"enforcePlayableSlots,omitempty"`
+
+	// JoinPermission limits who may join this group's servers. A proxy routes
+	// a player around a group they may not join; the server refuses the login.
+	// On an OnDemand group only the proxy checks it. Agents older than 0.18.0
+	// ignore the rule, so the game and proxy images must carry 0.18.0 or later.
+	// +optional
+	JoinPermission *JoinPermission `json:"joinPermission,omitempty"`
 
 	// Replicas is the fixed number of persistent servers. Ephemeral groups are
 	// sized by scaling instead.

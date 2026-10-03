@@ -48,7 +48,7 @@ class ProxyRoleTest {
     private val directory = ServerDirectory(registry) { message, error -> logs += message to error }
     private val roster = listOf(FakePlayer("alice"), FakePlayer("bob"))
     private val players = FakePlayers(roster)
-    private val drain = Drain(players, Router(directory)) { message, error -> logs += message to error }
+    private val drain = Drain(players, Router(directory), { message, error -> logs += message to error })
     private val state = ProxyState(slots = 500)
     private val mirror = NetworkMirror()
 

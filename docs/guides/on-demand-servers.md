@@ -33,6 +33,8 @@ for it, and `spec.storage` and `spec.maxInstances` are required. A server exists
 only because a plugin asked for it, and it is one player's own. `Ephemeral`
 groups answer *how many*; this one answers *which*.
 
+A `spec.joinPermission` on an on-demand group is checked by the proxies only: a member's server does not see its own group.
+
 ## Asking for one
 
 The caller is a plugin, on either side of the proxy, over the same channel

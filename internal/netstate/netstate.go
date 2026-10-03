@@ -102,16 +102,18 @@ func (s Source) Build(ctx context.Context, namespace string, audience Audience) 
 			continue
 		}
 		state.Groups = append(state.Groups, &agentpb.GroupState{
-			Name:                 g.Name,
-			Kind:                 serverGroupKind(g),
-			Replicas:             g.Status.Replicas,
-			ReadyReplicas:        g.Status.ReadyReplicas,
-			OnlinePlayers:        g.Status.OnlinePlayers,
-			FreeSlots:            g.Status.FreeSlots,
-			Attributes:           g.Spec.Attributes,
-			DisplayName:          g.Spec.DisplayName,
-			PlayableSlots:        ptr.Deref(g.Spec.PlayableSlots, 0),
-			EnforcePlayableSlots: g.Spec.EnforcePlayableSlots,
+			Name:                   g.Name,
+			Kind:                   serverGroupKind(g),
+			Replicas:               g.Status.Replicas,
+			ReadyReplicas:          g.Status.ReadyReplicas,
+			OnlinePlayers:          g.Status.OnlinePlayers,
+			FreeSlots:              g.Status.FreeSlots,
+			Attributes:             g.Spec.Attributes,
+			DisplayName:            g.Spec.DisplayName,
+			PlayableSlots:          ptr.Deref(g.Spec.PlayableSlots, 0),
+			EnforcePlayableSlots:   g.Spec.EnforcePlayableSlots,
+			JoinPermission:         g.Spec.JoinPermission.ResolvedNode(g.Name),
+			JoinPermissionDenyOnly: g.Spec.JoinPermission.DenyOnly(),
 		})
 	}
 

@@ -267,6 +267,16 @@ class ServerDirectoryTest {
         assertTrue(logs[0].contains("lobby-2"), logs[0])
     }
 
+    @Test
+    fun `groupOf names a registered server's group and nothing for a stranger`() {
+        val directory = ServerDirectory(FakeRegistry()) { _, _ -> }
+        directory.apply(listOf(Backend("vip-1", "10.0.0.1:25565", "vip")))
+
+        assertEquals("vip", directory.groupOf("vip-1"))
+        assertEquals("vip", directory.groupOf("VIP-1"))
+        assertNull(directory.groupOf("from-an-overlay"))
+    }
+
     private companion object {
         fun serverInfo(name: String, host: String, port: Int) =
             ServerInfo(name, InetSocketAddress.createUnresolved(host, port))

@@ -10,6 +10,7 @@ import (
 	"os/exec"
 	"regexp"
 	"strconv"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -18,6 +19,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -672,6 +674,144 @@ func TestTutorialTransferOnDrain(t *testing.T) {
 	})
 }
 
+// TestTutorialJoinPermission puts a vip group ahead of the lobby in the
+// gateway's fallback list. The test images carry no LuckPerms, so nobody
+// holds a node: with Required the player lands in the lobby without the vip
+// server ever refusing them, and with DenyOnly they land in vip.
+func TestTutorialJoinPermission(t *testing.T) {
+	if os.Getenv("SPAWNERY_E2E_TUTORIAL") != "1" {
+		t.Skip("set SPAWNERY_E2E_TUTORIAL=1; hack/e2e-tutorial.sh does this nightly")
+	}
+	joinPath, err := exec.LookPath("spawnery-join")
+	if err != nil {
+		t.Fatalf("spawnery-join not on PATH (%v); the dev shell carries it, run this through nix develop", err)
+	}
+
+	applyManifest(t, tutorialManifest)
+
+	const vipGroup = "vip"
+	gatewayKey := client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialProxyGroup}
+	vipKey := client.ObjectKey{Namespace: tutorialNamespace, Name: vipGroup}
+
+	var lobby spawneryv1alpha1.ServerGroup
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialServerGroup}, &lobby); err != nil {
+		t.Fatalf("get ServerGroup: %v", err)
+	}
+	vip := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: tutorialNamespace, Name: vipGroup},
+		Spec:       *lobby.Spec.DeepCopy(),
+	}
+	vip.Spec.Scaling = &spawneryv1alpha1.ScalingSpec{MinReplicas: 1, MaxReplicas: 1, SpareSlots: 0}
+	// The nightly runner has 4 vCPUs; a second group at the Network's 500m does not fit.
+	vip.Spec.Resources = &corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("2Gi")},
+		Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
+	}
+	vip.Spec.JoinPermission = &spawneryv1alpha1.JoinPermission{Mode: spawneryv1alpha1.JoinPermissionDenyOnly}
+	if err := k8s.Create(ctx, vip); err != nil {
+		t.Fatalf("create ServerGroup %s: %v", vipGroup, err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(ctx, &spawneryv1alpha1.ServerGroup{ObjectMeta: vip.ObjectMeta}) })
+
+	var gateway spawneryv1alpha1.ProxyGroup
+	if err := k8s.Get(ctx, gatewayKey, &gateway); err != nil {
+		t.Fatalf("get ProxyGroup: %v", err)
+	}
+	fallbackBefore := append([]string(nil), gateway.Spec.Routing.FallbackGroups...)
+	gatewayPatch := client.MergeFrom(gateway.DeepCopy())
+	gateway.Spec.Routing.FallbackGroups = []string{vipGroup, tutorialServerGroup}
+	if err := k8s.Patch(ctx, &gateway, gatewayPatch); err != nil {
+		t.Fatalf("patch ProxyGroup: %v", err)
+	}
+	t.Cleanup(func() {
+		var now spawneryv1alpha1.ProxyGroup
+		if err := k8s.Get(ctx, gatewayKey, &now); err != nil {
+			return
+		}
+		back := client.MergeFrom(now.DeepCopy())
+		now.Spec.Routing.FallbackGroups = fallbackBefore
+		_ = k8s.Patch(ctx, &now, back)
+	})
+
+	gatewayPods := func() ([]corev1.Pod, error) {
+		var list corev1.PodList
+		err := k8s.List(ctx, &list, client.InNamespace(tutorialNamespace),
+			client.MatchingLabels{podspec.LabelGroup: tutorialProxyGroup, podspec.LabelRole: podspec.RoleProxy})
+		return list.Items, err
+	}
+	groupOf := func(server string) string {
+		var s spawneryv1alpha1.Server
+		if err := k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: server}, &s); err != nil {
+			return ""
+		}
+		return s.Spec.GroupRef.Name
+	}
+
+	wantFallback := strings.Join(gateway.Spec.Routing.FallbackGroups, ",")
+	var vipServer string
+	eventuallyIn(t, tutorialOperatorNamespace, 5*time.Minute, "a Ready vip server and every gateway pod on "+wantFallback, func() (bool, string) {
+		vipServer = ""
+		var servers spawneryv1alpha1.ServerList
+		if err := k8s.List(ctx, &servers, client.InNamespace(tutorialNamespace)); err != nil {
+			return false, err.Error()
+		}
+		for _, s := range servers.Items {
+			if s.Spec.GroupRef.Name == vipGroup && s.Status.Phase == string(phase.Ready) {
+				vipServer = s.Name
+			}
+		}
+		pods, err := gatewayPods()
+		if err != nil {
+			return false, err.Error()
+		}
+		current := 0
+		for _, p := range pods {
+			if p.DeletionTimestamp == nil && podReady(&p) && envValue(&p, podspec.ProxyContainerName, podspec.EnvFallbackGroups) == wantFallback {
+				current++
+			}
+		}
+		return vipServer != "" && len(pods) > 0 && current == len(pods),
+			fmt.Sprintf("vip server %q; gateway pods %d, on %s %d", vipServer, len(pods), wantFallback, current)
+	})
+
+	// No observable says an agent has applied a sync; the 30 s resync is what delivers the change.
+	time.Sleep(35 * time.Second)
+
+	// DenyOnly admits everyone, so this join lands in vip only if the proxy knows vip.
+	j := startHeldJoin(t, joinPath, "denyonly", 20*time.Second)
+	_, server := whereIs(t, j, gatewayPods)
+	j.stop()
+	if g := groupOf(server); g != vipGroup {
+		t.Errorf("denyonly landed on %s of group %q, want group %q", server, g, vipGroup)
+	}
+
+	if err := k8s.Get(ctx, vipKey, vip); err != nil {
+		t.Fatalf("get ServerGroup %s: %v", vipGroup, err)
+	}
+	vipPatch := client.MergeFrom(vip.DeepCopy())
+	vip.Spec.JoinPermission.Mode = spawneryv1alpha1.JoinPermissionRequired
+	if err := k8s.Patch(ctx, vip, vipPatch); err != nil {
+		t.Fatalf("patch ServerGroup %s: %v", vipGroup, err)
+	}
+
+	// No observable says an agent has applied a sync; the 30 s resync is what delivers the change.
+	time.Sleep(35 * time.Second)
+
+	j = startHeldJoin(t, joinPath, "required", 20*time.Second)
+	_, server = whereIs(t, j, gatewayPods)
+	j.stop()
+	if g := groupOf(server); g != tutorialServerGroup {
+		t.Errorf("required landed on %s of group %q, want group %q", server, g, tutorialServerGroup)
+	}
+	vipLog, err := readPodLog(tutorialNamespace, vipServer, &corev1.PodLogOptions{Container: podspec.ContainerName})
+	if err != nil {
+		t.Fatalf("read %s's log: %v", vipServer, err)
+	}
+	if refused := regexp.MustCompile(`spawnery: refused 'required'[^\n]*`).FindString(vipLog); refused != "" {
+		t.Errorf("the proxy sent required into a refusal instead of around %s: %s", vipGroup, refused)
+	}
+}
+
 type heldJoin struct {
 	username string
 	cmd      *exec.Cmd
@@ -822,4 +962,18 @@ func hasEnv(p *corev1.Pod, container, name string) bool {
 		}
 	}
 	return false
+}
+
+func envValue(p *corev1.Pod, container, name string) string {
+	for _, c := range p.Spec.Containers {
+		if c.Name != container {
+			continue
+		}
+		for _, e := range c.Env {
+			if e.Name == name {
+				return e.Value
+			}
+		}
+	}
+	return ""
 }

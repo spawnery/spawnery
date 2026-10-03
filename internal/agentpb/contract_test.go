@@ -121,3 +121,20 @@ func TestOnDemandFieldNumbersAreFixed(t *testing.T) {
 		t.Errorf("GroupState.ON_DEMAND is %d, want 4: a renumbered value is a silent wire break", got)
 	}
 }
+
+func TestJoinPermissionFieldNumbersAreFixed(t *testing.T) {
+	md := (&agentpb.GroupState{}).ProtoReflect().Descriptor()
+	for name, want := range map[protoreflect.Name]protoreflect.FieldNumber{
+		"join_permission":           11,
+		"join_permission_deny_only": 12,
+	} {
+		fd := md.Fields().ByName(name)
+		if fd == nil {
+			t.Errorf("GroupState has no field %s", name)
+			continue
+		}
+		if fd.Number() != want {
+			t.Errorf("GroupState.%s is field %d, want %d: a renumbered field is a silent wire break", name, fd.Number(), want)
+		}
+	}
+}

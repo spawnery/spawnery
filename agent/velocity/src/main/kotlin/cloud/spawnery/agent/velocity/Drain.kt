@@ -19,6 +19,7 @@ class Drain(
     private val players: Players,
     private val router: Router,
     private val log: (String, Throwable?) -> Unit,
+    private val access: JoinAccess = JoinAccess.OPEN,
 ) {
     /**
      * Keyed by lowercased server name. Two fields so [resynced] can replace one
@@ -94,7 +95,9 @@ class Drain(
      */
     private fun move(player: PlayerRef, fromServer: String, toGroups: List<String>): Boolean {
         val excluded = synchronized(lock) { current.keys + fromServer.lowercase() }
-        val target = router.choose(toGroups, excluding = excluded) ?: return false
+        val target = router.choose(toGroups, excluding = excluded) { server, group ->
+            access.mayJoin(player.uuid, server, group)
+        } ?: return false
         try {
             player.moveTo(target)
         } catch (e: Exception) {
