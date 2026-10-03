@@ -18,18 +18,9 @@ import (
 // theTestManifestIsAccepted applies the run's own manifest and waits for the
 // group to build what it asks for.
 //
-// It also checks that config/samples/network.yaml is accepted, so the example
-// cannot rot unnoticed -- with client.DryRunAll, because the sample names the
-// real Paper and Velocity images. Since milestone 6a publishes those to a
-// public registry, actually creating it would make the kubelet pull 724 MB into
-// this node and start real servers, which is the run's declared non-goal.
-//
-// The order of the two applies is load-bearing and not cosmetic. Every object
-// in the sample collides by name with one in the run's own manifest -- both
-// describe a Network `production`, a ServerGroup `lobby` and a ProxyGroup
-// `gateway` in `minecraft` -- and applyManifest tolerates AlreadyExists. Run
-// the other way round, the sample check would pass without the API server
-// having validated a single one of its objects.
+// It also dry-runs config/samples/network.yaml, which names real images that
+// would pull 724 MB. The sample goes first: its objects collide by name with
+// the run's own, and applyManifest tolerates AlreadyExists.
 func theTestManifestIsAccepted(t *testing.T) {
 	applyManifest(t, "config/samples/network.yaml", client.DryRunAll)
 	applyManifest(t, "test/e2e/manifests/e2e.yaml")
@@ -43,36 +34,18 @@ func theTestManifestIsAccepted(t *testing.T) {
 		return podsCoverLiveServers(t, "lobby")
 	})
 
-	// The pods stay in ErrImagePull, and that is the expected end state:
-	// test/e2e/manifests/e2e.yaml names an unresolvable image on purpose. This
-	// assertion is what keeps that a decision -- if somebody points the manifest
-	// at a real tag, this fails and says why rather than quietly making every
-	// run pull 724 MB.
-	//
-	// It reads the pod's *spec*, not its container statuses, and that is the
-	// whole point. An earlier version looked for a container in state Running,
-	// which cannot fail for the failure it names: it runs one synchronous poll
-	// after the pods were created, and at that instant no container is Running
-	// under any image, resolvable or not -- task-8-report.md timed the whole
-	// subtest at 0.56s. Repointing the manifest at a published tag would have
-	// left it green while every run downloaded 724 MB and started real servers.
-	// The image a pod asks for is settled the moment the pod object exists, so
-	// comparing it is structural: no race, no window, and red on the first run
-	// after the manifest moves.
+	// The pods stay in ErrImagePull on purpose. Reading the pod spec rather
+	// than container states keeps this from passing before any container
+	// could have started.
 	assertPodsUseTheUnresolvableImage(t, "lobby", unresolvableServerImage)
 }
 
-// unresolvableServerImage is what test/e2e/manifests/e2e.yaml names, restated
-// here rather than read back from the manifest or from the ServerGroup.
-// Reading it from either source would compare the manifest against itself and
-// pass whatever it was changed to, which is exactly the change this package
-// has to notice (spec §7.4).
+// unresolvableServerImage restates test/e2e/manifests/e2e.yaml; reading it
+// back would compare the manifest against itself.
 const unresolvableServerImage = "ghcr.io/spawnery/paper:e2e-no-such-tag"
 
 // assertPodsUseTheUnresolvableImage checks that every container of every pod of
-// one group asks for want, and that there was at least one pod to check -- a
-// loop over an empty list passes without asserting anything, and PASS would
-// look identical.
+// one group asks for want, and that there was at least one pod to check.
 func assertPodsUseTheUnresolvableImage(t *testing.T, group, want string) {
 	t.Helper()
 
@@ -99,8 +72,6 @@ func assertPodsUseTheUnresolvableImage(t *testing.T, group, want string) {
 	}
 }
 
-// theGroupScalesUp raises minReplicas and waits for the operator to build the
-// difference.
 func theGroupScalesUp(t *testing.T) {
 	patchMinReplicas(t, "lobby", 3)
 	eventually(t, 2*time.Minute, "a third Server", func() (bool, string) {
@@ -113,67 +84,15 @@ func theGroupScalesUp(t *testing.T) {
 // waits for the surplus to go -- and to stay gone, not merely to have been
 // observed once.
 //
-// This does not lower minReplicas to make its point. DecideSize has two ways
-// to remove a server, and only one of them is reachable from this harness.
-// The minReplicas-driven "demand" removal needs a server that was seen empty
-// -- an "empty since" stamp that internal/agent/registry.go writes only when
-// a connected agent's report crosses into zero players -- held for
-// scaleDownStabilizationSeconds, which defaults to 300s. No agent ever
-// connects to a Server whose image never resolves (e2e.yaml's images are
-// deliberately unresolvable; see its header), so that stamp is never written
-// and that branch is not merely slow here, it is unreachable.
+// Lowering minReplicas cannot show it: demand removal needs an agent to have
+// reported the server empty, and no agent connects to these unresolvable
+// images. The floor comes down in the same patch only to keep the CRD's
+// min <= max rule.
 //
-// A lowered ceiling reaches a different rule, and the path there is worth
-// being precise about: every ServerGroup spec patch, this one included, bumps
-// metadata.generation, whatever field actually changed. The moment it does,
-// decideSize's coldStart sees every existing Server as belonging to a prior
-// generation and insists on building one of the current generation before
-// anything may retire -- an unconditional create -- but this patch also drops
-// maxReplicas to the group's live count, so there is no room left to grant
-// it. A refused cold start with no room is answered the same way an ordinary
-// shortfall the ceiling refuses is: by shedding the surplus in the same pass,
-// through candidates.go's SelectDeletionCandidates, which excludes a server
-// only if it may hold players -- and one that never registered never can.
-//
-// It cannot lower maxReplicas alone. The CRD's own validation
-// (spec.scaling.minReplicas must not exceed spec.scaling.maxReplicas) rejects
-// a patch that would leave the ceiling below the floor scenario 2 raised, so
-// the floor comes down in the same atomic patch, to the same number the
-// ceiling lands on -- purely to keep the object legal. That reopens exactly
-// the question this scenario means to answer: with the floor lowered too,
-// task-5-report.md's Step 4 found that disabling decideSize's ceiling-driven
-// removal does not make this assertion fail -- the group still reaches the
-// same count, because every Server here fails its own --startup-deadline in
-// the end and the lowered floor never asks for a replacement. What changes
-// without the real mechanism is only the time it takes: seconds for an
-// active removal (nothing here ever held a player, so the drain that follows
-// has nothing to wait for) against ~20s, the harness's fixed
-// --startup-deadline, for the fallback. The deadline below is chosen inside
-// that gap on purpose -- generous over the few seconds real removal needs,
-// short of the 20s attrition floor -- so this assertion fails on its own if
-// the fast path ever breaks, rather than passing anyway, slowly, on a
-// mechanism this scenario does not mean to exercise.
-//
-// The deadline alone does not carry that argument, and the comment above used
-// to imply it did. A Server's twenty seconds are counted from
-// status.StartedAt, which server_controller.go:182-184 stamps when the
-// Server's *pod* is created -- back in scenario 2, not here. So the margin
-// between this deadline and the attrition floor is not 15s against 20s; it is
-// 15s against whatever is left of a clock that started two scenarios ago, and
-// under load there may be nothing left of it. Today's runs shed the surplus in
-// well under a second, so the gap is enormous, but the assertion must not
-// depend on that staying true.
-//
-// What the wait therefore checks is not a count but *how* the count fell.
-// Attrition and a scaling decision leave different traces: a Server that runs
-// out its startup deadline turns Failed and its object stays for
-// failedRetentionSeconds (30s here, longer than this whole window), while one
-// the ceiling sheds is deleted and, once its finalizer is released, is gone
-// from the API entirely. Requiring that one of the three Servers that were
-// live when this scenario began has *disappeared* -- not merely dropped out of
-// the non-Failed count -- makes attrition unable to satisfy this assertion at
-// any speed, which is what the paragraph above claims and what a bare count
-// could not deliver.
+// Servers here also fail on --startup-deadline, which would bring the count
+// down too. So the wait requires one of the original Servers to be deleted
+// outright: a Failed one stays for failedRetentionSeconds, longer than this
+// window.
 func theCeilingShedsSurplus(t *testing.T) {
 	before := make(map[string]bool)
 	for _, s := range nonFailedServersInGroup(t, "lobby") {
@@ -209,9 +128,7 @@ func theCeilingShedsSurplus(t *testing.T) {
 }
 
 // serversInGroup lists every Server of one group in the test namespace,
-// whatever its phase -- including Failed corpses still held for diagnosis.
-// Task 6's Failed-then-pruned scenario needs to see those; callers that want
-// the group's live capacity instead should use nonFailedServersInGroup.
+// whatever its phase, Failed ones included.
 func serversInGroup(t *testing.T, group string) []spawneryv1alpha1.Server {
 	t.Helper()
 	var list spawneryv1alpha1.ServerList
@@ -226,16 +143,9 @@ func serversInGroup(t *testing.T, group string) []spawneryv1alpha1.Server {
 // nonFailedServersInGroup lists a group's Servers, excluding any in phase
 // Failed.
 //
-// This harness's own manifest names an unresolvable image on purpose (see
-// e2e.yaml's header), so no Server it ever builds becomes Ready, and every
-// one of them eventually hits --startup-deadline and is marked Failed, then
-// pruned on failedRetentionSeconds' own clock. That makes the group churn for
-// the whole run -- created, Failed at twenty seconds, pruned around thirty,
-// replaced -- for reasons that have nothing to do with any scaling decision
-// this package makes. A Failed corpse held for diagnosis is not capacity the
-// group is providing, so a scenario measuring capacity counts around it:
-// counting it in would let the pruner's own clock masquerade as a scale-down,
-// or a real one hide behind a corpse still waiting out its retention.
+// No Server here ever becomes Ready, so the group churns all run: Failed at
+// the startup deadline, pruned at failedRetentionSeconds, replaced. A Failed
+// Server is not capacity.
 func nonFailedServersInGroup(t *testing.T, group string) []spawneryv1alpha1.Server {
 	t.Helper()
 	all := serversInGroup(t, group)
@@ -252,17 +162,8 @@ func nonFailedServersInGroup(t *testing.T, group string) []spawneryv1alpha1.Serv
 // a pod, checked by name against the live set rather than by counting pod
 // objects.
 //
-// A Server's pod is not deleted the moment the Server reaches Failed: it
-// persists, owned by the corpse, for the whole of failedRetentionSeconds, and
-// a replacement Server and pod appear almost as soon as the failed one drops
-// out of nonFailedServersInGroup's count. A bare `len(pods) == N` comparison
-// therefore oscillates between the group's live count and one more than it
-// for as long as churn continues -- exactly the class of flake
-// nonFailedServersInGroup exists to keep Server counts out of, just one label
-// selector downstream of it. Checking coverage by name instead means a
-// lingering corpse's pod, which nothing here is waiting on, cannot stall the
-// wait, and a genuinely missing pod -- what this check exists to catch --
-// cannot hide behind one.
+// A Failed Server keeps its pod for failedRetentionSeconds, so a pod count
+// would oscillate during churn.
 func podsCoverLiveServers(t *testing.T, group string) (bool, string) {
 	t.Helper()
 	servers := nonFailedServersInGroup(t, group)
@@ -288,11 +189,8 @@ func podsCoverLiveServers(t *testing.T, group string) (bool, string) {
 		missing, len(servers), len(pods.Items))
 }
 
-// patchScaling edits one group's scaling block through a single atomic patch.
-// Shared by patchMinReplicas and patchScalingBounds so neither ever commits a
-// change the CRD's own cross-field validation would reject --
-// spec.scaling.minReplicas must never exceed spec.scaling.maxReplicas, not
-// even transiently between two separate patches.
+// patchScaling edits one group's scaling block through a single atomic patch,
+// so min <= max holds at every step.
 func patchScaling(t *testing.T, group string, mutate func(*spawneryv1alpha1.ScalingSpec)) {
 	t.Helper()
 	var g spawneryv1alpha1.ServerGroup
@@ -310,17 +208,11 @@ func patchScaling(t *testing.T, group string, mutate func(*spawneryv1alpha1.Scal
 	}
 }
 
-// patchMinReplicas raises or lowers one group's floor and nothing else.
 func patchMinReplicas(t *testing.T, group string, n int32) {
 	t.Helper()
 	patchScaling(t, group, func(s *spawneryv1alpha1.ScalingSpec) { s.MinReplicas = n })
 }
 
-// patchScalingBounds sets a group's floor and ceiling together in one patch.
-// theCeilingShedsSurplus is the reason it exists rather than a second call to
-// patchMinReplicas: the CRD rejects any single patch that would leave the
-// ceiling below whatever floor a previous patch left in place, so lowering a
-// ceiling below a floor set earlier must move both fields at once.
 func patchScalingBounds(t *testing.T, group string, min, max int32) {
 	t.Helper()
 	patchScaling(t, group, func(s *spawneryv1alpha1.ScalingSpec) {

@@ -15,33 +15,9 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
-// aPersistentGroupsClaimOutlivesItsServer is milestone 5a's central property,
-// checked in a real cluster for the first time by anything but a person.
-//
-// Two halves, and only one of them needs a real cluster.
-//
-// The first half reads the owner-reference field directly off each claim,
-// which envtest can do too and does: podspec.TestBuildDataClaim needs no
-// cluster at all, and TestAPersistentServerGetsItsClaimBeforeItsPod reads the
-// same field off the object envtest's API server persisted. Both go red the
-// moment BuildDataClaim sets an owner reference, so this half is
-// corroboration rather than a capability unique to a real cluster.
-//
-// The second half is where a real garbage collector is actually the point.
-// TestDeletingAPersistentServerLeavesItsClaim's own doc comment states the
-// limitation precisely: it cannot catch an owner reference either, because
-// envtest runs no garbage collector, so an owned claim there would survive
-// its deleted owner exactly as an unowned one does -- indistinguishable by
-// that test's own assertion. That gap is not about whether the field is set
-// (the first half already covers that); it is about whether, in a system
-// that actually enforces cascading deletion, an owner reference's *presence*
-// would actually destroy the claim. Only a real cluster can show that
-// consequence, and only by giving its garbage collector a real, bounded
-// window to act. Not a single synchronous read taken the instant the Server
-// object disappears: collection is asynchronous with the owner's removal from
-// etcd, so a point-in-time check after survival-1 goes NotFound can run before
-// the collector has processed the deletion event at all. See the
-// eventuallyStable call below.
+// aPersistentGroupsClaimOutlivesItsServer checks that a claim carries no owner
+// reference, and then, which envtest cannot, that a real garbage collector
+// leaves it standing after its Server is deleted.
 func aPersistentGroupsClaimOutlivesItsServer(t *testing.T) {
 	eventually(t, 2*time.Minute, "both ordinals' claims", func() (bool, string) {
 		claims := claimsIn(t)
@@ -57,8 +33,7 @@ func aPersistentGroupsClaimOutlivesItsServer(t *testing.T) {
 		}
 	}
 
-	// The top ordinal goes; its claim stays. This is the route milestone 5a's
-	// own evidence run never drove -- it deleted a pod by hand -- and 5b's did.
+	// The top ordinal goes; its claim stays.
 	var g spawneryv1alpha1.ServerGroup
 	key := client.ObjectKey{Namespace: testNamespace, Name: "survival"}
 	if err := k8s.Get(ctx, key, &g); err != nil {
@@ -84,15 +59,8 @@ func aPersistentGroupsClaimOutlivesItsServer(t *testing.T) {
 		return false, "still there, phase " + s.Status.Phase
 	})
 
-	// eventuallyStable, not a single read: the Server going NotFound only
-	// says the API server has forgotten the owner, not that kube-controller-
-	// manager's garbage collector has finished reacting to it -- that
-	// reaction is asynchronous and unions with nothing this test has already
-	// waited on. Holding the count for a window gives a real garbage
-	// collector time to prove the negative (nothing to reap, because nothing
-	// here is owned) or the positive (something was reaped, under mutation).
-	// A single immediate read cannot tell "GC ran and found nothing" apart
-	// from "GC hasn't run yet"; this can.
+	// Held for a window: garbage collection is asynchronous to the owner's
+	// removal.
 	eventuallyStable(t, time.Minute, 15*time.Second,
 		"survival-1's claim to still be there, unreaped by a collector it should never attract",
 		func() (bool, string) {
@@ -101,8 +69,6 @@ func aPersistentGroupsClaimOutlivesItsServer(t *testing.T) {
 		})
 }
 
-// theProxyGroupGetsItsService checks the one object a ProxyGroup owns that
-// nothing else in this run produces.
 func theProxyGroupGetsItsService(t *testing.T) {
 	eventually(t, 2*time.Minute, "the gateway Service", func() (bool, string) {
 		var svc corev1.Service
@@ -122,12 +88,8 @@ func theProxyGroupGetsItsService(t *testing.T) {
 	})
 }
 
-// theOperatorHoldsItsSecretAndItsLease checks the two things startup alone
-// drives, and the two that run through the markers carrying
-// namespace=spawnery-system as a literal. If that qualifier is ever wrong, the
-// operator fails at certs.Ensure or during leader election -- and RBAC never
-// says where the problem is. See docs/reference/known-issues.md, "spawnery-system is
-// hard-wired into the RBAC markers".
+// theOperatorHoldsItsSecretAndItsLease checks the two objects whose RBAC
+// markers carry namespace=spawnery-system as a literal.
 func theOperatorHoldsItsSecretAndItsLease(t *testing.T) {
 	var secrets corev1.SecretList
 	if err := k8s.List(ctx, &secrets, client.InNamespace(operatorNamespace)); err != nil {

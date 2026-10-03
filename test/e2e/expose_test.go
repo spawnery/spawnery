@@ -21,17 +21,9 @@ import (
 // theLoadBalancerGroupGetsItsService checks the Service, and then checks that
 // an assigned address is NOT published while nothing is serving.
 //
-// The name says Service rather than address on purpose. kind runs no load
-// balancer controller, so the ingress entry below is written by this test.
-// What that proves is the readiness gate on proxyAddress: no image in this
-// run's manifest resolves, so no proxy is ever ready, and status.address must
-// stay empty even with an address assigned. The other half of that branch --
-// the address appearing once both conditions hold -- is proven in envtest, by
-// TestTheLoadBalancerAddressAppearsOnceAProxyIsReady
-// (`internal/controller/expose_test.go`), which drives a live Reconcile with
-// an assigned ingress and a pod it marks Ready itself and watches
-// status.address come out non-empty. Nothing here says a load balancer was
-// involved, because none was, and nothing there does either.
+// kind runs no load balancer controller, so this test writes the ingress
+// entry itself. The address appearing once a proxy is ready is covered by
+// TestTheLoadBalancerAddressAppearsOnceAProxyIsReady in envtest.
 func theLoadBalancerGroupGetsItsService(t *testing.T) {
 	var svc corev1.Service
 	eventually(t, 2*time.Minute, "the gateway-lb Service", func() (bool, string) {
@@ -79,15 +71,8 @@ func theLoadBalancerGroupGetsItsService(t *testing.T) {
 // The ClusterIP group gets a Service with no way out of the cluster of its
 // own: cluster-internal type, no node port, no external traffic policy.
 //
-// The published address is deliberately not asserted here, and the name says
-// only what is checked, because a subtest name is what CI prints when
-// everything passes. The group's pods never become ready with an
-// unresolvable image, so proxyAddress publishes nothing, and asserting an
-// empty string would be asserting the image tag rather than the strategy.
-// The readiness gate is covered by
-// TestProxyAddressPublishesOnlyWhatIsObservablyRealised
-// (`internal/controller/proxyaddress_test.go`), whose "ClusterIP publishes
-// nothing until a proxy is ready" case is this sentence's backing.
+// The published address is not asserted: no pod here becomes ready. See
+// TestProxyAddressPublishesOnlyWhatIsObservablyRealised.
 func theClusterIPGroupGetsAPlainServiceWithNoNodePort(t *testing.T) {
 	var svc corev1.Service
 	eventually(t, 2*time.Minute, "the gateway-clusterip Service", func() (bool, string) {
@@ -118,10 +103,8 @@ func theClusterIPGroupGetsAPlainServiceWithNoNodePort(t *testing.T) {
 // at all: nothing inside the cluster dials a proxy, so there is nothing for
 // one to do.
 //
-// The group asks for two replicas on a one-node cluster. hostPort lets the
-// scheduler place one of them, and the other is the surplus -- which the
-// group has to explain, because a pod that exists, never runs, and never will
-// is otherwise indistinguishable from one that is merely slow.
+// Two replicas on a one-node cluster: the unschedulable one must be explained
+// on the group.
 func theHostPortGroupBindsThePortAndHasNoService(t *testing.T) {
 	eventually(t, 2*time.Minute, "a gateway-host pod carrying the host port", func() (bool, string) {
 		var pods corev1.PodList
@@ -170,8 +153,7 @@ func theHostPortGroupBindsThePortAndHasNoService(t *testing.T) {
 }
 
 // aSwitchToHostPortRemovesTheService is the only place services: delete is
-// exercised under the operator's own ServiceAccount. Everything else about
-// that permission is a table entry and a generated role.
+// exercised under the operator's own ServiceAccount.
 func aSwitchToHostPortRemovesTheService(t *testing.T) {
 	eventually(t, 2*time.Minute, "the gateway-switch Service", func() (bool, string) {
 		var svc corev1.Service
@@ -226,16 +208,9 @@ func aSwitchToHostPortRemovesTheService(t *testing.T) {
 	})
 }
 
-// aForbiddenHostPortIsReportedOnTheGroup is the one refusal this repository
-// has ever observed being enforced.
-//
-// Everything milestone 6b shipped is an object whose effect no run here can
-// see: kindnet enforces no NetworkPolicy, so a correct policy and a wholly
-// broken one produce the same green. This is different in kind. Pod Security
-// baseline disallows host ports, the API server enforces it, and the pod
-// genuinely does not come into existence. It is also the reason
-// theOperatorWasNeverDenied excludes `violates PodSecurity`: this scenario
-// puts an `is forbidden:` line in the operator's log on purpose.
+// aForbiddenHostPortIsReportedOnTheGroup: Pod Security baseline refuses the
+// host port. This puts an `is forbidden:` line in the operator's log on
+// purpose, which denialsIn excludes.
 func aForbiddenHostPortIsReportedOnTheGroup(t *testing.T) {
 	const ns = "minecraft-baseline"
 
@@ -251,10 +226,7 @@ func aForbiddenHostPortIsReportedOnTheGroup(t *testing.T) {
 		if cond.Status != metav1.ConditionTrue || cond.Reason != spawneryv1alpha1.ReasonProxyPodRejected {
 			return false, "Degraded is " + string(cond.Status) + "/" + cond.Reason
 		}
-		// Both substrings, not just the first. If the proxy pod acquired some
-		// unrelated baseline violation and the container host port were
-		// dropped entirely, a PodSecurity-only assertion would stay green
-		// with the strategy under test gone.
+		// Both substrings: an unrelated baseline violation must not pass.
 		for _, want := range []string{"PodSecurity", "hostPort"} {
 			if !strings.Contains(cond.Message, want) {
 				return false, "message does not name " + want + ": " + cond.Message

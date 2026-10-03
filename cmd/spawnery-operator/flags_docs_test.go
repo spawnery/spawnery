@@ -36,26 +36,10 @@ import (
 )
 
 // flagsInMain returns every flag name main.go registers with the standard
-// library's flag package, found by walking the syntax tree rather than
-// matching text against it. A regex tuned for the StringVar/BoolVar/
-// DurationVar calls this file happens to use today would silently miss
-// flag.Var(&drainTaints, "drain-taint", ...), which takes a pointer to a
-// custom type instead of a builtin -- and a parser that quietly skips a flag
-// is worse than no parser, because the page would look checked while being
-// wrong.
-//
-// Every flag.XxxVar(ptr, name, ...) call and flag.Var(value, name, ...) call
-// carries the flag's name as its second argument; every flag.Xxx(name, ...)
-// call that returns a pointer instead of taking one -- unused in main.go
-// today -- carries it as its first. Distinguishing the two by whether the
-// function name ends in "Var" covers both without one branch per flag type.
-//
-// zap.Options.BindFlags(flag.CommandLine) registers controller-runtime's own
-// logging flags (--zap-log-level and the rest) from inside the zap package,
-// not through a flag.XxxVar call written in this file. They never reach this
-// walk, which is correct rather than a gap this test happens to have: they
-// belong to controller-runtime, are documented there, and are out of scope
-// for a page about spawnery's own flags.
+// library's flag package, found by walking the syntax tree; a regex would
+// miss flag.Var. A *Var call carries the name as its second argument, any
+// other as its first. controller-runtime's zap flags are registered elsewhere
+// and are out of scope.
 func flagsInMain(t *testing.T) []string {
 	t.Helper()
 	path := testenv.RepoPath(t, "cmd/spawnery-operator/main.go")
@@ -101,19 +85,12 @@ func flagsInMain(t *testing.T) []string {
 	return names
 }
 
-// flagHeading matches the one heading shape flagsInDocs looks for: a level-3
-// heading whose entire text is the flag in a code span, "### `--name`". Only
-// headings are scanned, and not every code span on the page, so a flag's own
-// prose can mention a sibling flag -- --allow-plugin-volumes' section names
-// --allow-mount-volumes, the switch it used to be part of -- without that
-// mention being misread as a section of its own.
+// flagHeading matches "### `--name`". Only headings count, so a flag's prose
+// may mention a sibling flag.
 var flagHeading = regexp.MustCompile(`(?m)^### ` + "`" + `--([a-z][a-z0-9-]*)` + "`" + `\s*$`)
 
 // flagsInDocs returns every flag documented on the reference page. A missing
-// page reads as documenting nothing rather than failing the test outright, so
-// that the failure this test exists to produce -- the page does not exist yet
-// -- comes back as "every flag is undocumented" instead of a file-not-found
-// error that says nothing about which flags are missing.
+// page documents nothing, so the failure names every missing flag.
 func flagsInDocs(t *testing.T) []string {
 	t.Helper()
 	raw, err := os.ReadFile(testenv.RepoPath(t, "docs/reference/operator-flags.md"))
@@ -132,11 +109,8 @@ func flagsInDocs(t *testing.T) []string {
 	return names
 }
 
-// TestFlagsAreDocumented fails in either direction: a flag main.go defines
-// and the page does not carry a heading for, and a heading on the page
-// naming a flag main.go no longer defines. The second is the same defect as
-// the first wearing the other face -- a reference that still describes a
-// removed flag is as wrong as one that omits a new one.
+// TestFlagsAreDocumented fails in either direction: an undocumented flag, or a
+// documented flag main.go no longer defines.
 func TestFlagsAreDocumented(t *testing.T) {
 	inMain := flagsInMain(t)
 	if len(inMain) == 0 {
@@ -167,22 +141,16 @@ func TestFlagsAreDocumented(t *testing.T) {
 	}
 }
 
-// flagDefault is one flag.*Var call's name, the Go type its value argument
-// implies ("string", "bool" or "duration", from the call's own name --
-// StringVar, BoolVar, DurationVar), and the default-value argument itself,
-// unevaluated.
+// flagDefault is one flag.*Var call's name, its kind ("string", "bool" or
+// "duration", from the call's name), and the unevaluated default argument.
 type flagDefault struct {
 	name string
 	kind string
 	expr ast.Expr
 }
 
-// flagDefaultsInMain walks the same syntax tree flagsInMain does and returns
-// every flag.*Var call's default-value argument alongside its name and kind.
-// flag.Var(value, name, usage) -- drain-taint's, the only one in main.go --
-// carries no default argument at all; its zero value comes from the
-// flag.Value it is given, not from a call argument, so there is nothing here
-// to compare against the page's "Default: none" and this walk skips it.
+// flagDefaultsInMain returns every flag.*Var call's default. A bare flag.Var
+// (drain-taint) has no default argument and is skipped.
 func flagDefaultsInMain(t *testing.T) []flagDefault {
 	t.Helper()
 	path := testenv.RepoPath(t, "cmd/spawnery-operator/main.go")
@@ -275,8 +243,7 @@ func resolveBoolDefault(expr ast.Expr) (bool, bool) {
 	}
 }
 
-// durationUnits covers what main.go's own duration flags actually multiply
-// by; extending it costs one line if a future flag needs time.Hour or finer.
+// durationUnits covers what main.go's duration flags multiply by.
 var durationUnits = map[string]time.Duration{
 	"Second": time.Second,
 	"Minute": time.Minute,
@@ -284,8 +251,7 @@ var durationUnits = map[string]time.Duration{
 }
 
 // resolveDurationDefault reads an `N * time.Unit` default, the shape every
-// duration flag in main.go uses, without needing a full constant evaluator --
-// there is no arithmetic here beyond that one multiplication.
+// duration flag in main.go uses.
 func resolveDurationDefault(expr ast.Expr) (time.Duration, bool) {
 	bin, ok := expr.(*ast.BinaryExpr)
 	if !ok || bin.Op != token.MUL {
@@ -325,17 +291,8 @@ type flagExpectation struct {
 }
 
 // expectedFlagDefaults resolves every flag.*Var default main.go registers
-// into a comparable Go value. Fourteen of main.go's seventeen flags pass a
-// literal (or, for --operator-namespace, an os.Getenv call naming a literal
-// env var) straight to the flag.*Var call, and the AST walk above already
-// has that argument in hand. Three more -- --orphan-interval,
-// --permission-check-interval and --agent-bind-address -- default to an
-// exported constant in another package, which reading main.go's syntax tree
-// alone cannot resolve; this test imports those three packages, the same
-// ones main.go itself imports for the same constants, and reads the real
-// value directly rather than trying to teach the AST walk cross-package
-// lookup. --drain-taint, the seventeenth, never reaches this function: see
-// flagDefaultsInMain.
+// into a comparable Go value. Defaults that are constants of another package
+// are read from that package directly.
 func expectedFlagDefaults(t *testing.T) []flagExpectation {
 	t.Helper()
 
@@ -406,12 +363,8 @@ func docDefaultText(page, name string) (string, bool) {
 	return "", false
 }
 
-// TestFlagDefaultsAreDocumented checks the one thing TestFlagsAreDocumented
-// above does not: that the default stated on the page is the default
-// main.go actually registers, not just that the flag is mentioned at all.
-// Values are compared as parsed Go values rather than as text, because the
-// two sides format the same default differently -- time.Duration prints
-// 5*time.Minute as "5m0s" where the page says "5m".
+// TestFlagDefaultsAreDocumented compares the page's defaults with main.go's as
+// parsed values: time.Duration prints "5m0s" where the page says "5m".
 func TestFlagDefaultsAreDocumented(t *testing.T) {
 	raw, err := os.ReadFile(testenv.RepoPath(t, "docs/reference/operator-flags.md"))
 	if err != nil {

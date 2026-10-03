@@ -2,17 +2,9 @@
 
 // Package e2e drives the operator in a real cluster.
 //
-// It exists for one assertion internal/rbacaudit structurally cannot make.
-// That audit compares the generated ClusterRole against a hand-maintained
-// table in both directions, so it catches drift -- but a permission missing
-// from *both* leaves the suite green while the operator still walks into a
-// Forbidden the first time it runs under its own ServiceAccount. Proving
-// completeness needs a real process under a real authorizer, and that is what
-// this package watches.
-//
-// The build tag keeps it out of `go test ./...` and out of `make test`: it
-// needs a cluster that hack/e2e.sh builds, and the commit loop stays where it
-// is.
+// It runs the operator under its own ServiceAccount against a real
+// authorizer, which catches a permission missing from both the ClusterRole
+// and internal/rbacaudit's table. It needs the cluster hack/e2e.sh builds.
 package e2e
 
 import (
@@ -41,22 +33,13 @@ import (
 )
 
 const (
-	// operatorNamespace is where hack/e2e.sh installs the chart, and it is
-	// deliberately not the chart's own default. What that buys is split, and
-	// the larger half never reaches this package: a spawnery-system literal
-	// left in one of the chart's own-namespace RBAC fields is refused at
-	// admission by Kubernetes, so `helm install` fails and hack/e2e.sh aborts
-	// under set -e before `go test` runs. The half that would reach this
-	// package is a literal in a subject namespace, which applies cleanly and
-	// is caught at runtime by theOperatorWasNeverDenied once the denial lands
-	// on a write verb. See the comment on OPERATOR_NAMESPACE in hack/e2e.sh.
+	// operatorNamespace is deliberately not the chart's default, so a
+	// hard-coded spawnery-system in the chart's RBAC fails; see
+	// OPERATOR_NAMESPACE in hack/e2e.sh.
 	operatorNamespace = "platform-system"
 
-	// testNamespace is where test/e2e/manifests/e2e.yaml puts its objects.
 	testNamespace = "minecraft"
 
-	// repoRoot is relative because `go test` runs each binary with its own
-	// package directory as the working directory.
 	repoRoot = "../.."
 )
 
@@ -98,23 +81,12 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// TestSpawneryUnderItsOwnServiceAccount is the whole run, ordered explicitly.
+// TestSpawneryUnderItsOwnServiceAccount is the whole run. The scenarios depend
+// on one another, so their order is written down here; the denial check is
+// last because it judges everything the run did.
 //
-// Go runs top-level tests in the order they appear and files in alphabetical
-// order, which would make the order between scenarios an accident of file
-// naming. These depend on one another -- the manifest has to exist before
-// anything can scale it -- so the order is written down instead. The denial
-// check is last because it judges everything the run did.
-//
-// Adding a scenario that patches a spec: assume a generation change rides
-// along with it. Any patch to a ServerGroup's spec bumps metadata.generation
-// and so starts a rolling update beside whatever the patch was for. The
-// scaling scenario was written against minReplicas, passed, and passed for
-// the wrong reason -- what it observed was churn from this run's own
-// 20-second startup deadline -- and the rewrite that fixed it walked into the
-// same trap once more, pinning a cold start refused by the ceiling instead of
-// the plain over-ceiling branch. Say in the assertion which branch it is
-// actually pinning.
+// A scenario that patches a ServerGroup's spec also bumps its generation and
+// starts a rolling update; say in the assertion which branch it pins.
 func TestSpawneryUnderItsOwnServiceAccount(t *testing.T) {
 	t.Run("the operator is up and has not restarted", theOperatorIsUp)
 	t.Run("the test manifest is accepted", theTestManifestIsAccepted)
@@ -138,8 +110,6 @@ func TestSpawneryUnderItsOwnServiceAccount(t *testing.T) {
 	t.Run("the operator was never denied", theOperatorWasNeverDenied)
 }
 
-// theOperatorIsUp checks the pod the whole run depends on. A crash loop here
-// reads as every later scenario timing out, which says nothing about the cause.
 func theOperatorIsUp(t *testing.T) {
 	pod := operatorPod(t, operatorNamespace)
 
@@ -161,59 +131,13 @@ func theOperatorIsUp(t *testing.T) {
 	}
 }
 
-// theOperatorWasNeverDenied is the reason this package exists.
+// denialsIn picks the RBAC denials out of an operator log: lines carrying the
+// API server's `is forbidden:`, except Pod Security rejections, which
+// aForbiddenHostPortIsReportedOnTheGroup causes on purpose.
 //
-// It matches the API server's own phrasing -- `is forbidden:` -- rather than
-// the bare word. Spawnery has a condition reason called SecretReadForbidden
-// (milestone 5c), and matching "forbidden" alone would turn a correctly
-// reported missing secret into a false accusation about RBAC.
-//
-// What a pass here establishes is narrower than "this check works", and the
-// difference matters. A revoked WRITE verb fires it: removing `create` on pods
-// produces a quoted `is forbidden: ... cannot create resource "pods"` on the
-// first attempt, with the operator still healthy and this check able to read
-// it. A revoked cache-backed List does not fire it at all -- no log line and
-// no 403 in the operator's own client metrics, however long anything watches.
-// Reads as a class are simply not covered, because no uncached read has ever
-// been revoked and watched here. The explanation that would generalise it --
-// that such a read goes through the manager's cache, whose initial sync is a
-// watch rather than a list, so a revoked read verb never reaches a request the
-// API server could deny -- is a hypothesis nothing has established; do not
-// restate it as fact.
-//
-// There is also at least one uncached read this check would miss for an
-// entirely unrelated reason, and it is the very one the paragraph at the top
-// of this comment is about: readForwardingSecret
-// (internal/controller/forwardingsecret.go) folds a real 403 into a condition
-// message that carries no `is forbidden:` substring, and nothing on that path
-// logs. This check can only see what something logs, so an error the code
-// handles well is invisible to it.
-//
-// Read a green run as evidence about write paths and nothing wider. What
-// covers the rest is theOperatorCheckedItsOwnPermissions, which reads the
-// operator's own verdict on itself: a SelfSubjectAccessReview asks the
-// authorizer rather than waiting to be refused, so it is blind to neither of
-// the cases above. This check is kept beside it because a quoted denial is
-// worth reading when there is one. Do not add a sleep to manufacture traffic.
-//
-// The restart re-check below is not redundant with theOperatorIsUp. That
-// subtest runs first, before any scenario has driven a single call; this one
-// runs a minute and a half later and judges everything in between. A container
-// that was OOM-killed somewhere in the middle -- not hypothetical on a 3.9 GB
-// host with no swap -- would leave this check reading a log that begins after
-// the interesting part, and a replacement making no denied call of its own
-// would report PASS over a run it had covered a fraction of.
-// denialsIn picks the RBAC denials out of an operator log.
-//
-// A Pod Security rejection is not an RBAC denial and it carries the same
-// `is forbidden:` prefix. aForbiddenHostPortIsReportedOnTheGroup causes one on
-// purpose -- it is the only enforced refusal this run can observe -- and
-// without this exclusion the last and most important scenario of the run would
-// fail for a reason another scenario created.
-//
-// The exclusion is one substring on purpose. Everything else the API server
-// phrases with `is forbidden:` still counts, including an RBAC denial on a pod
-// create, which shares nothing with this text.
+// A green run is evidence about write paths only: a revoked cached read logs
+// no denial, and readForwardingSecret folds a 403 into a condition without
+// logging. theOperatorCheckedItsOwnPermissions covers the rest.
 func denialsIn(log string) []string {
 	var offenders []string
 	for _, line := range strings.Split(log, "\n") {
@@ -245,13 +169,8 @@ func theOperatorWasNeverDenied(t *testing.T) {
 	}
 }
 
-// operatorPod returns the single operator pod in namespace, or fails.
-//
-// namespace is a parameter rather than a read of operatorNamespace because
-// this package now watches the operator in two different namespaces: the
-// main suite's platform-system, and the tutorial's spawnery-system (the
-// chart's own default, which is what README.md actually tells a reader to
-// install into). A caller names which one it means.
+// operatorPod returns the single operator pod in namespace, or fails. The
+// tutorial scenario installs into a different namespace than the main suite.
 func operatorPod(t *testing.T, namespace string) *corev1.Pod {
 	t.Helper()
 	var pods corev1.PodList
@@ -270,17 +189,10 @@ func operatorPod(t *testing.T, namespace string) *corev1.Pod {
 	return &pods.Items[0]
 }
 
-// operatorLog reads the operator's log through the API, and reports how many
-// times its container has restarted.
-//
-// An empty PodLogOptions returns the *current* container's log and nothing
-// else, so on a restarted pod it silently begins wherever the last process
-// did. Where the kubelet still holds the previous container's log --
-// terminationMessage aside, one back is all Kubernetes keeps -- this prepends
-// it, so "the operator's whole log", which the README and the handover both
-// claim, is true for the common single-restart case. The restart count comes
-// back with it because beyond one restart it is not true, and the caller has
-// to say so rather than quietly assert over a hole.
+// operatorLog reads the operator's log through the API, prepending the
+// previous container's where there is one, and reports how many times its
+// container has restarted. Kubernetes keeps only one previous log, so beyond
+// one restart the log has a hole the caller must report.
 func operatorLog(t *testing.T, namespace string) (string, int32) {
 	t.Helper()
 	pod := operatorPod(t, namespace)
@@ -292,9 +204,6 @@ func operatorLog(t *testing.T, namespace string) (string, int32) {
 
 	var b strings.Builder
 	if restarts > 0 {
-		// Best effort: the previous container's log is gone if the kubelet has
-		// already rotated it away, and a Fatal here would turn a diagnostic
-		// into the failure.
 		if prev, err := readPodLog(namespace, pod.Name, &corev1.PodLogOptions{Previous: true}); err == nil {
 			b.WriteString(prev)
 			b.WriteString("\n")
@@ -309,10 +218,7 @@ func operatorLog(t *testing.T, namespace string) (string, int32) {
 	case err == nil:
 		b.WriteString(body)
 	case restarts > 0:
-		// A container that has restarted may be between attempts right now,
-		// and GetLogs refuses a container that has not started. Failing here
-		// would replace the caller's report of the restart -- the thing that
-		// actually went wrong -- with a message about a log read.
+		// GetLogs refuses a container between restart attempts.
 		t.Logf("the current container's log is not available (%v); this check has only "+
 			"the previous container's", err)
 	default:
@@ -321,7 +227,6 @@ func operatorLog(t *testing.T, namespace string) (string, int32) {
 	return b.String(), restarts
 }
 
-// readPodLog streams one container log of a pod in namespace.
 func readPodLog(namespace, name string, opts *corev1.PodLogOptions) (string, error) {
 	stream, err := clientset.CoreV1().Pods(namespace).GetLogs(name, opts).Stream(ctx)
 	if err != nil {
@@ -337,24 +242,13 @@ func readPodLog(namespace, name string, opts *corev1.PodLogOptions) (string, err
 }
 
 // eventually polls cond until it holds or the deadline passes, and reports the
-// last thing it saw when it gives up.
-//
-// It is this package's default waiting construct. A run built on fixed sleeps
-// turns flaky under load, and a flaky E2E run is ignored within weeks -- which
-// is §4 of the 2026-08-07 E2E design, kept. eventuallyStable is its sibling,
-// for the one assertion that needs a condition to hold rather than merely to
-// have occurred.
-//
-// It reads the main suite's own operator, in operatorNamespace. A caller
-// whose cluster installs the chart somewhere else -- the tutorial scenario,
-// into spawnery-system -- uses eventuallyIn instead, so a timeout's denial
-// hint looks at the operator that could actually have caused it.
+// last thing it saw when it gives up. A timeout's denial hint reads the
+// operator in operatorNamespace; see eventuallyIn.
 func eventually(t *testing.T, deadline time.Duration, what string, cond func() (bool, string)) {
 	t.Helper()
 	eventuallyIn(t, operatorNamespace, deadline, what, cond)
 }
 
-// eventuallyIn is eventually with the operator's namespace made explicit.
 func eventuallyIn(t *testing.T, operatorNS string, deadline time.Duration, what string, cond func() (bool, string)) {
 	t.Helper()
 	stop := time.Now().Add(deadline)
@@ -370,16 +264,9 @@ func eventuallyIn(t *testing.T, operatorNS string, deadline time.Duration, what 
 	t.Fatalf("timed out after %s waiting for %s; last seen: %s%s", deadline, what, last, denialHint(t, operatorNS))
 }
 
-// denialHint is what a timed-out wait adds to its own failure.
-//
-// theOperatorWasNeverDenied is the last of twenty scenarios, so a missing
-// permission stalls every scenario before it on state that cannot arrive and
-// the package's own budget can expire before the one check that would read the
-// log ever runs. Every wait that gives up therefore looks itself, and puts the
-// cause in the message of the scenario that actually stalled.
-//
-// Best-effort by construction: a log that cannot be read adds nothing rather
-// than replacing a real timeout with a complaint about kubectl.
+// denialHint is what a timed-out wait adds to its own failure: any RBAC
+// denial in the operator log, since a missing permission stalls the scenario
+// long before theOperatorWasNeverDenied runs. Best effort.
 func denialHint(t *testing.T, namespace string) string {
 	t.Helper()
 	log, _ := operatorLog(t, namespace)
@@ -396,14 +283,9 @@ func denialHint(t *testing.T, namespace string) string {
 		len(offenders), strings.Join(shown, "\n"))
 }
 
-// eventuallyStable is eventually's sibling for a condition that must hold,
-// not merely occur once. eventually returns on the first poll that satisfies
-// cond, which a transient state can also satisfy without the thing under test
-// having actually happened -- this package's own lifecycle scenarios churn
-// Servers continuously (see nonFailedServersInGroup), so a count can pass
-// through the right value on its way to a different one. eventuallyStable
-// instead requires cond to stay true for the whole of hold before it
-// succeeds, and resets its clock the moment cond goes false again.
+// eventuallyStable is eventually for a condition that must stay true for the
+// whole of hold, since a churning count can pass through the right value on
+// its way elsewhere. Its clock resets whenever cond goes false.
 func eventuallyStable(t *testing.T, deadline, hold time.Duration, what string, cond func() (bool, string)) {
 	t.Helper()
 	stop := time.Now().Add(deadline)

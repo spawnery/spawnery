@@ -14,16 +14,8 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// theNetworkGetsItsPolicy asserts the object, and only the object.
-//
-// It cannot assert that anything is blocked, and saying so here rather than in
-// a document is deliberate. Two reasons compound. No image in this harness
-// resolves, by decision, so no process listens on 25565 and there is nothing to
-// connect from or to. And enforcement is a property of the CNI rather than of
-// the object: hack/e2e.sh runs a bare `kind create cluster` with the default
-// kindnet, and if that CNI drops nothing then "the connection was blocked" and
-// "the policy was never applied" produce the same green. The enforcement claim
-// belongs to the RKE2 rollout at the end of milestone 6.
+// theNetworkGetsItsPolicy asserts the object, and only the object: nothing
+// here listens, and kindnet enforces no NetworkPolicy.
 func theNetworkGetsItsPolicy(t *testing.T) {
 	eventually(t, 2*time.Minute, "the production network's policy", func() (bool, string) {
 		var policy networkingv1.NetworkPolicy
@@ -40,13 +32,7 @@ func theNetworkGetsItsPolicy(t *testing.T) {
 		if len(policy.OwnerReferences) != 1 {
 			return false, fmt.Sprintf("%d owner references", len(policy.OwnerReferences))
 		}
-		// The reference itself and not merely its count. What the owner
-		// reference is *for* is that deleting the Network takes its policy
-		// with it, and a reference to the wrong object -- or to the right name
-		// with a stale UID, which a delete-and-recreate leaves behind -- is a
-		// count of one that garbage-collects the policy at the wrong moment or
-		// not at all. The unit test asserts all three fields; this is the only
-		// place a real API server's own owner reference is read.
+		// The UID too: a delete-and-recreate leaves the name but not the UID.
 		owner := policy.OwnerReferences[0]
 		var network spawneryv1alpha1.Network
 		if err := k8s.Get(ctx, client.ObjectKey{Namespace: testNamespace, Name: "production"}, &network); err != nil {
@@ -64,26 +50,9 @@ func theNetworkGetsItsPolicy(t *testing.T) {
 	})
 }
 
-// theOperatorStaysReadyBehindItsOwnPolicy is acceptance criterion 6, and it is
-// the one place milestone 6b touches probe traffic at all.
-//
-// config/deploy/networkpolicy.yaml selects the operator pod, which makes it
-// default-deny for ingress -- including the kubelet's probe on the health
-// port. If the peerless rule admitting it were wrong, the pod would go
-// NotReady and the Deployment would stop being Available.
-//
-// What this cannot claim: kindnet -- the CNI hack/e2e.sh's bare
-// `kind create cluster` gets by default -- does not enforce NetworkPolicy
-// ingress at all. A policy that denies the kubelet's probe outright leaves the
-// rollout green on its usual timeline.
-//
-// So on this harness the operator stays Ready behind a correct policy and
-// would stay Ready behind a wrong one too -- nothing this scenario observes
-// tells the two apart, and it cannot fail for the reason its name suggests.
-// It is kept anyway, as a regression guard for the day the harness gains an
-// enforcing CNI: on that day, and only on that day, a wrong peerless rule
-// would turn this red. The enforcement claim itself belongs to the RKE2
-// rollout at the end of milestone 6, same as theNetworkGetsItsPolicy above.
+// theOperatorStaysReadyBehindItsOwnPolicy: the operator's NetworkPolicy must
+// still admit the kubelet's probe. kindnet enforces nothing, so this can only
+// fail once the harness has an enforcing CNI.
 func theOperatorStaysReadyBehindItsOwnPolicy(t *testing.T) {
 	var policy networkingv1.NetworkPolicy
 	key := client.ObjectKey{Namespace: operatorNamespace, Name: "spawnery-operator-agent"}
@@ -91,9 +60,7 @@ func theOperatorStaysReadyBehindItsOwnPolicy(t *testing.T) {
 		t.Fatalf("the operator's own policy was never applied: %v", err)
 	}
 
-	// Held rather than sampled: a probe failure takes three periods to move
-	// the pod out of Ready, and hack/e2e.sh's rollout wait returned before
-	// that could have happened.
+	// Held: a probe failure takes three periods to move the pod out of Ready.
 	eventuallyStable(t, time.Minute, 20*time.Second,
 		"the operator ready behind its own policy", func() (bool, string) {
 			pod := operatorPod(t, operatorNamespace)
