@@ -644,8 +644,13 @@ func TestJoinPermissionRefusesABadNodeOrMode(t *testing.T) {
 	} {
 		g := ephemeralGroup(ns, fmt.Sprintf("bad-%d", i))
 		g.Spec.JoinPermission = &jp
-		if err := c.Create(ctx, g); err == nil {
+		err := c.Create(ctx, g)
+		if err == nil {
 			t.Errorf("%+v was accepted", jp)
+			continue
+		}
+		if !strings.Contains(err.Error(), "spec.joinPermission") {
+			t.Errorf("err = %v, want it to name spec.joinPermission", err)
 		}
 	}
 }
