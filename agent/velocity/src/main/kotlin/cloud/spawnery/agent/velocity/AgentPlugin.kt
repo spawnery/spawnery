@@ -396,16 +396,35 @@ class AgentPlugin @Inject constructor(
         val target = event.result.server.orElse(event.originalServer)
         val name = target.serverInfo.name
         val group = directory?.groupOf(name) ?: return
-        if (joinAccess.mayJoin(event.player.uniqueId, name, group)) return
-        event.result = ServerPreConnectEvent.ServerResult.denied()
+        val player = event.player.uniqueId
+        val mayJoin = { server: String, g: String -> joinAccess.mayJoin(player, server, g) }
+        when (
+            val decision = decidePreConnect(
+                allowed = mayJoin(name, group),
+                onServer = event.player.currentServer.isPresent,
+                alternative = { router?.choose(fallbackGroups, excluding = setOf(name), mayJoin = mayJoin) },
+            )
+        ) {
+            PreConnectDecision.Keep -> return
+            PreConnectDecision.Deny -> {
+                event.result = ServerPreConnectEvent.ServerResult.denied()
+                event.player.sendMessage(joinDenied(group))
+            }
+            is PreConnectDecision.Redirect -> {
+                event.result = ServerPreConnectEvent.ServerResult.allowed(decision.server)
+                event.player.sendMessage(joinDenied(group))
+            }
+            PreConnectDecision.Disconnect -> event.player.disconnect(joinDenied(group))
+        }
+    }
+
+    private fun joinDenied(group: String): Component {
         val shown = mirror.groups().firstOrNull { it.name() == group }?.displayName()?.takeIf { it.isNotBlank() } ?: group
-        event.player.sendMessage(
-            Component.translatable()
-                .key(JoinRules.DENIED_KEY)
-                .fallback(JoinRules.DENIED_FALLBACK)
-                .arguments(Component.text(shown))
-                .build(),
-        )
+        return Component.translatable()
+            .key(JoinRules.DENIED_KEY)
+            .fallback(JoinRules.DENIED_FALLBACK)
+            .arguments(Component.text(shown))
+            .build()
     }
 
     @Subscribe(priority = Short.MIN_VALUE)
