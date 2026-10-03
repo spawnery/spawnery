@@ -80,10 +80,7 @@ class LuckPermsContextsTest {
 
     @Test
     fun `a pod without LuckPerms is silence and not a crash`() {
-        // The precondition is asserted rather than assumed: this test proves
-        // the absent path only while LuckPerms is off the test classpath, and
-        // adding it as a test dependency would otherwise turn this green for
-        // the opposite reason.
+        // Proves the absent path only while LuckPerms is off the test classpath.
         assertFailsWith<ClassNotFoundException> {
             Class.forName("net.luckperms.api.LuckPermsProvider")
         }

@@ -27,10 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
-	// Test-only: main.go itself stays free of the Kubernetes dependency tree
-	// (see the package doc comment), but the test needs the real values
-	// internal/podspec builds the readiness probe from, not a restatement of
-	// them.
+	// Test-only: main.go stays free of the Kubernetes dependency tree.
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
@@ -106,16 +103,9 @@ func TestRunRejectsAnUnknownFlag(t *testing.T) {
 	}
 }
 
-// The probe in internal/podspec passes only --host and --port and gives the
-// tool five seconds. Anything the probe does not pass has to have a usable
-// default, and the tool's own deadline has to fire first so it exits with a
-// message instead of being killed by the kubelet.
-//
-// The assertions read the port and the probe's TimeoutSeconds off a pod
-// BuildServerPod actually produces, rather than restating the numbers as
-// literals: a literal here would stay green even if internal/podspec's
-// probe changed underneath it, which is exactly the regression this test
-// exists to catch.
+// The probe in internal/podspec passes only --host and --port, so every other
+// flag needs a usable default, and the tool's deadline must fire before the
+// probe's TimeoutSeconds. Both are read off a pod BuildServerPod produces.
 func TestDefaultsMatchTheReadinessProbe(t *testing.T) {
 	net := &spawneryv1alpha1.Network{
 		ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: "minecraft"},

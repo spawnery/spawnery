@@ -36,9 +36,7 @@ func TestVarIntRoundTrip(t *testing.T) {
 }
 
 func TestReadVarIntRejectsAnOverlongEncoding(t *testing.T) {
-	// Five bytes, each with the continuation bit set: a well-behaved encoder
-	// never emits this, since 0 fits in one byte. A loop that does not cap
-	// the byte count would happily keep reading and decode it.
+	// Overlong: 0 fits in one byte, and an uncapped loop would decode this.
 	overlong := []byte{0x80, 0x80, 0x80, 0x80, 0x80, 0x00}
 
 	_, err := ReadVarInt(bytes.NewReader(overlong))
@@ -70,8 +68,8 @@ func TestPacketRoundTrip(t *testing.T) {
 
 func TestReadPacketRejectsAnAbsurdLength(t *testing.T) {
 	var buf bytes.Buffer
-	// Announce a length just over the 2 MiB cap. No body follows: a correct
-	// implementation must reject the length before trying to read one.
+	// Just over the cap with no body: the length must be refused before any
+	// read.
 	buf.Write(AppendVarInt(nil, maxPacketLen+1))
 
 	_, _, err := ReadPacket(&buf)
@@ -85,7 +83,6 @@ func TestReadPacketRejectsAnAbsurdLength(t *testing.T) {
 
 func TestReadPacketFailsOnATruncatedBody(t *testing.T) {
 	var buf bytes.Buffer
-	// Announce a length of 10 but supply only 2 bytes.
 	buf.Write(AppendVarInt(nil, 10))
 	buf.Write([]byte{0x00, 0x01})
 

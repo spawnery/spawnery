@@ -45,47 +45,21 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 
 /**
- * The only class in this plugin that touches the Velocity API.
+ * The only class in this plugin that touches the Velocity API, so every other
+ * unit can be tested with JUnit and no proxy. The decisions live in
+ * [ProxyEnvironment], [ReadyGate], [ServerDirectory], [Router], [Drain],
+ * [ProxyRole] and `SessionLoop`; this class only wires them to Velocity's
+ * events and scheduler.
  *
- * That is not tidiness for its own sake: it is what lets every other unit be
- * tested with JUnit and no proxy. Nothing here decides anything — the
- * decisions live in [ProxyEnvironment], [ReadyGate], [ServerDirectory],
- * [Router], [Drain], [ProxyRole] and `SessionLoop`. This class only wires them
- * to Velocity's events and to its scheduler, which is also why it has no test
- * of its own: what would be under test is Velocity's behaviour.
- *
- * Velocity reads this plugin's identity entirely out of
- * `velocity-plugin.json`; its `main` field is what names this class, and Guice
- * constructs it from there. Nothing at runtime reads the annotation below —
- * measured 2026-08-11 by scanning every class in the proxy jar for a reference
- * to `com/velocitypowered/api/plugin/Plugin`, which found exactly three, all
- * compile-time machinery: the annotation itself, `PluginAnnotationProcessor`
- * and `SerializedPluginDescription`. It has `RUNTIME` retention and no reader.
- *
- * It is kept anyway, for two reasons that are not "Velocity requires it": it
- * puts the plugin's identity in the source rather than only in a resource
- * file, and it is the input the annotation processor would consume if anyone
- * ever took the kapt route this project declined. See [version].
+ * Velocity reads this plugin's identity out of `velocity-plugin.json`; nothing
+ * at runtime reads the annotation below.
  */
 @Plugin(
     id = "spawnery",
     name = "Spawnery Agent",
-    // Never read by anything. The descriptor in velocity-plugin.json carries
-    // the real version, expanded from -PagentVersion by processResources, and
-    // that is the one Velocity reports and the agent sends as Hello.version.
-    // A literal here rather than a build-time constant, because an annotation
-    // argument must be a compile-time constant.
-    //
-    // The trap, for whoever adds kapt: Velocity's annotation processor
-    // generates velocity-plugin.json to this same path from these same
-    // arguments. Adding kapt *alongside* the hand-written resource would ship
-    // a descriptor carrying this literal 0.0.0, no description and no authors
-    // -- and it would not fail anything. Both descriptor guards in
-    // hack/agent-jar-check.sh still pass: a "version": key is present, and no
-    // ${ placeholder remains to be caught. The operator would simply record
-    // every proxy in the fleet as running version 0.0.0. Taking that route
-    // means deleting src/main/resources/velocity-plugin.json and making this
-    // argument the real version, never doing one without the other.
+    // Never read. The real version is in velocity-plugin.json. Adding kapt
+    // would generate that file from these arguments and silently ship 0.0.0;
+    // that route means deleting the resource and making this the real version.
     version = "0.0.0",
 )
 class AgentPlugin @Inject constructor(
@@ -94,13 +68,8 @@ class AgentPlugin @Inject constructor(
 ) {
     private var gate: ReadyGate? = null
 
-    /** What the plugin API reads from. See [MirrorApi]. */
     private val mirror = NetworkMirror()
 
-    /**
-     * How a plugin's connect call reaches the operator. The one lambda is the
-     * whole platform seam -- see the Paper plugin's own for the counterpart.
-     */
     private val connector = CloudConnector(
         Requests(timeoutMillis = CloudConnector.TIMEOUT_MILLIS, clock = System::currentTimeMillis),
     ) { request ->
@@ -110,26 +79,10 @@ class AgentPlugin @Inject constructor(
     }
 
     /**
-     * Everything below is null while the agent is dormant, and that is what
-     * makes the player events inert in that state rather than merely
-     * harmless.
-     *
-     * The brief for this task said to register those events with
-     * `proxy.eventManager.register(this, this)`. That call throws:
-     * `VelocityEventManager.register` compares its two arguments and answers
-     * `IllegalArgumentException("The plugin main instance is automatically
-     * registered.")` when they are the same object. Measured 2026-08-11
-     * against velocity 3.5.1 build 615, and on 2026-09-29 against 4.2.0 build
-     * 30, by disassembling
-     * `com.velocitypowered.proxy.event.VelocityEventManager.register` and
-     * `com.velocitypowered.proxy.VelocityServer`, which calls
-     * `registerInternally` for every loaded plugin's own instance -- the same
-     * mechanism that already delivers [onInitialize] here with no registration
-     * anywhere. So a `@Subscribe` method on this class is registered from
-     * plugin load, before [onInitialize] runs and whatever it decides, and a
-     * dormant agent cannot decline to receive these events. It can only
-     * decline to do anything with them, which is what the null checks below
-     * are.
+     * Null while the agent is dormant. Velocity registers this instance's
+     * `@Subscribe` methods at plugin load (and `register(this, this)` throws),
+     * so a dormant agent still receives the player events and can only ignore
+     * them.
      */
     private var loop: SessionLoop<ProxyMessage, OperatorToProxy>? = null
     private var router: Router? = null
@@ -138,11 +91,7 @@ class AgentPlugin @Inject constructor(
     private var transfers: Transfers? = null
     private var transferPass: ScheduledTask? = null
 
-    /**
-     * Who has turned the feed off. Built here rather than in start(), because
-     * it outlives a reconnect and a player who typed the command should not
-     * find it undone by one.
-     */
+    /** Built here rather than in start(), because it outlives a reconnect. */
     private val feedState = FeedState()
     private var feed: Feed? = null
 
@@ -154,21 +103,11 @@ class AgentPlugin @Inject constructor(
 
     /**
      * The last EventInterest this agent sent, or null on a stream it has not
-     * reported on.
-     *
-     * Null and not false: the operator's answer for a session it has never
-     * seen is "no" and it remembers nothing across a renewal, so a new stream
-     * has to be told even when the answer has not moved.
+     * reported on: the operator forgets interest across a renewal.
      */
     private var lastInterest: Boolean? = null
 
-    /**
-     * Tells the operator whether anybody is here to read events.
-     *
-     * Sent only when the answer changes. EventInterest is a state, and one
-     * resent every second would be a report the operator has to read in order
-     * to learn nothing.
-     */
+    /** Sent only when the answer changes. */
     private fun reportInterest(wanted: Boolean) {
         if (lastInterest == wanted) return
         val loop = this.loop ?: return
@@ -195,36 +134,13 @@ class AgentPlugin @Inject constructor(
         }
     }
 
-    /**
-     * Builds the agent and connects it. Split out of [onInitialize] only
-     * because the `when` above reads better without twenty lines inside one of
-     * its branches; nothing here is conditional.
-     */
     private fun start(env: ProxyEnvironment.Configured) {
-        // Constructed, not opened: a proxy is not ready until it has a server
-        // list, and the gate is what makes this pod ready.
+        // Not ready until it has a server list. ProxyRole opens the gate on the
+        // first FullSync and holds back a SetReady(true) that arrives before it,
+        // so neither callback can open it with an empty routing table.
         //
-        // Two of the callbacks below open it, not one. ProxyRole opens it on
-        // the first FullSync it applies without throwing, and a SetReady(true)
-        // opens it directly -- which is how a cancelled drain puts a proxy
-        // back into the Service's endpoints without waiting for the next sync.
-        // Both are conditional on there being a server list: ProxyRole holds
-        // back a SetReady(true) that arrives before its first successful sync,
-        // records it, and lets that sync open the gate instead. So neither of
-        // these two lambdas can be reached with an empty routing table, and
-        // the rule sits in ProxyRole rather than here because it needs the
-        // latch to state it. Anyone adding a third caller owns that argument.
-        //
-        // A dormant agent never gets here at all, which is the claim
-        // hack/velocity-image-test.sh makes by probing 8081 and requiring a
-        // refusal.
-        // onHopeless is Velocity's own shutdown, and it fires only on a first
-        // bind that fails -- see ReadyGate.open. Such a pod has never been an
-        // endpoint of its group's Service, so nobody is on it and nobody can
-        // be; what stopping buys is a restart and then a CrashLoopBackOff,
-        // which the operator reports on the group. Carrying on buys a pod
-        // stuck in Pending with the reason in a container log and nothing
-        // anywhere else.
+        // onHopeless fires only on a first bind that fails (see ReadyGate.open):
+        // stopping turns a never-ready pod into a visible CrashLoopBackOff.
         val gate = ReadyGate(
             READY_PORT,
             onHopeless = {
@@ -246,14 +162,8 @@ class AgentPlugin @Inject constructor(
         this.fallbackGroups = env.fallbackGroups
         val state = ProxyState(env.playerLimit)
 
-        // Installed before the loop starts, and after the mirror exists, for
-        // the reason the Paper plugin gives at the same point: a plugin
-        // enabling between those two would hold an API whose mirror is empty
-        // with no way to know it is about to fill.
-        //
-        // Every value comes from what the operator already puts on the pod --
-        // no second reader of the same variables, and nothing guessed.
-        // Hoisted for the reason the Paper plugin gives at the same point.
+        // Installed before the loop starts and after the mirror exists, so no
+        // plugin holds an API whose mirror is empty with no way to know it fills.
         val self = object : ProxySelf {
             override fun name(): String = System.getenv("SPAWNERY_PROXY") ?: ""
             override fun group(): String = System.getenv("SPAWNERY_GROUP") ?: ""
@@ -261,18 +171,12 @@ class AgentPlugin @Inject constructor(
         }
         val feed = Feed(VelocityAudience(proxy), feedState, System::currentTimeMillis, format = mirror::feedFormat)
         this.feed = feed
-        // No ReadinessGate: a proxy has no readiness flag to hold, and
-        // holdReadiness refuses here rather than pretending. See ProxyState.
+        // No ReadinessGate: a proxy has no readiness flag to hold. See ProxyState.
         val api = MirrorApi(mirror, self, connector, events)
         Spawnery.install(api)
         LuckPermsContexts.registerIfPresent(self, logger::info)
-        // Velocity takes the node whenever, so this sits next to the install
-        // rather than in an event handler -- the one shape difference from the
-        // Paper agent, and it is Velocity's, not ours. The meta is built the
-        // long way because the one-argument register() is deprecated: it files
-        // the command under no plugin, and `/velocity dump` then reports an
-        // orphan whose owner nobody can name.
-        // feedState and not a second one: see the Paper plugin's own note.
+        // Not the deprecated one-argument register(), which files the command
+        // under no plugin.
         val command = BrigadierCommand(cloudCommand(api, VelocitySource, feedState, mirror::feedFormat).build())
         proxy.commandManager.register(
             proxy.commandManager.metaBuilder(command).plugin(this).build(),
@@ -291,11 +195,7 @@ class AgentPlugin @Inject constructor(
             directory = directory,
             drain = drain,
             players = players,
-            // The effective value, not the file's: getConfiguration() is what
-            // Velocity parsed, after the image's own velocity.toml, after any
-            // configOverlay the user mounted, after Velocity's defaults. That
-            // is the whole reason this is read here rather than by the
-            // operator, which can see none of those.
+            // The effective value Velocity parsed, which the operator cannot see.
             readTimeoutMillis = proxy.configuration.readTimeout,
             onFirstSync = gate::open,
             onSetReady = { ready -> if (ready) gate.open() else gate.close() },
@@ -311,26 +211,13 @@ class AgentPlugin @Inject constructor(
         }
         this.scheduler = scheduler
 
-        // Sampled on Velocity's own scheduler, and read from the reporting
-        // timer as nothing but an atomic. Velocity's API is widely held to be
-        // thread-safe where Bukkit's is not, so calling proxy.playerCount
-        // straight from the gRPC side would very probably be fine -- and
-        // "probably fine, by reputation" is precisely the kind of claim this
-        // milestone has already been caught out by twice. The hop costs
-        // nothing and removes the question.
-        //
-        // Through the Players seam rather than proxy.playerCount directly, so
-        // the sampling path is the one Router and Drain are tested against.
+        // Sampled on Velocity's scheduler and read from the reporting timer as
+        // an atomic, so the gRPC side never calls the Velocity API.
         sampling = proxy.scheduler
             .buildTask(
                 this,
                 Runnable {
                     state.sample(players.count())
-                    // The feed's window closes here, and the interest is
-                    // recomputed on the same tick: a player joining, leaving
-                    // or gaining a permission all change the answer, and
-                    // watching for each separately is three subscriptions to
-                    // get wrong.
                     this.feed?.let {
                         it.tick()
                         reportInterest(it.wanted(events.size()))
@@ -340,20 +227,12 @@ class AgentPlugin @Inject constructor(
             .repeat(SAMPLE_SECONDS, TimeUnit.SECONDS)
             .schedule()
 
-        // Once here, before the first stream exists, because the timer above
-        // does not fire until the scheduler picks it up and this method has to
-        // return first. The operator's ReportInterval schedules its first
-        // report at delay zero, so without this the first PlayerCount of the
-        // process carries the zero the counter was constructed with. Paper's
-        // AgentPlugin carries the same call for the same reason.
+        // Once here, before the first stream: the operator's first report comes
+        // at delay zero, before the timer above has fired.
         state.sample(players.count())
 
         val session = SessionLoop(
-            // The bundle is read here, per attempt, rather than once at
-            // startup: see Environment.Configured. The kubelet replaces both
-            // files in place, and a channel is built per attempt anyway, so
-            // this costs one file read on a path that is already opening a TCP
-            // connection.
+            // Read per attempt: the kubelet replaces the bundle in place.
             channels = {
                 OperatorChannel.build(env.base.endpoint, Files.readAllBytes(env.base.caBundlePath))
             },
@@ -361,23 +240,12 @@ class AgentPlugin @Inject constructor(
             role = role,
             scheduler = scheduler,
             version = version(),
-            // SessionLoop never gives up and never escalates a broken stream
-            // on its own -- this callback is the only place that decides how
-            // loud a permanently unreachable operator gets to be. See Paper's
-            // AgentPlugin for the argument; it applies here with one addition.
-            // A proxy that never reaches the operator never receives a
-            // FullSync, so its gate never opens and its pod never turns ready:
-            // the failure is already visible in `kubectl get pods`, and these
-            // lines are what say why.
+            // The only place that decides how loud an unreachable operator gets.
+            // A proxy that never syncs never turns ready, so these lines say why.
             log = ::warn,
-            // A renewal is a thing that happened, not a thing that went wrong:
-            // the operator retires the displaced stream on a schedule, and it
-            // used to arrive here as a warning with a stack trace every few
-            // minutes.
+            // The operator retires displaced streams on a schedule; not a warning.
             note = logger::info,
-            // See Paper's AgentPlugin: the connector fails what is in flight
-            // rather than resending it, and the interest is forgotten because
-            // the operator's answer for a session it has never seen is "no".
+            // The connector fails what is in flight rather than resending it.
             onStreamChanged = {
                 connector.onStreamChanged()
                 lastInterest = null
@@ -411,8 +279,7 @@ class AgentPlugin @Inject constructor(
 
     @Subscribe
     fun onShutdown(event: ProxyShutdownEvent) {
-        // First: install refuses a second implementation, so a proxy that
-        // enabled twice without this would throw on the second.
+        // First: install refuses a second implementation.
         Spawnery.uninstall()
         loop?.stop()
         gate?.close()
@@ -425,13 +292,9 @@ class AgentPlugin @Inject constructor(
     }
 
     /**
-     * Picks the server a joining player lands on.
-     *
-     * A null choice sets nothing, so Velocity disconnects the player with its
-     * own "no available server" message rather than this plugin inventing one.
-     * That is the honest outcome: there is genuinely nowhere to send them, and
-     * the log line here is what names the groups that were searched -- without
-     * it the only evidence would be Velocity's message, which names nothing.
+     * Picks the server a joining player lands on. A null choice sets nothing,
+     * so Velocity disconnects the player with its own "no available server"
+     * message; the log line names the groups that were searched.
      */
     @Subscribe
     fun onChooseInitialServer(event: PlayerChooseInitialServerEvent) {
@@ -451,14 +314,7 @@ class AgentPlugin @Inject constructor(
 
     /**
      * Moves a player whose server dropped them, rather than letting the proxy
-     * disconnect them.
-     *
-     * The decision is [Rescue]'s -- including when *not* to decide, which is
-     * what a null means here: Velocity's own result stands, and that is
-     * deliberately the outcome both when the player still has a working
-     * server and when there is genuinely nowhere left to send them. See
-     * [Rescue] for which backend failures reach this at all; one of them does
-     * not.
+     * disconnect them. A null from [Rescue] leaves Velocity's own result.
      */
     @Subscribe
     fun onKickedFromServer(event: KickedFromServerEvent) {
@@ -471,13 +327,6 @@ class AgentPlugin @Inject constructor(
         event.result = KickedFromServerEvent.RedirectPlayer.create(target)
     }
 
-    /**
-     * Ends a player's rescue chain when they leave.
-     *
-     * Without this the map in [Rescue] would be the one structure in this
-     * plugin that only ever grows: a proxy that has rescued somebody keeps
-     * their entry for as long as the process lives.
-     */
     @Subscribe
     fun onDisconnect(event: DisconnectEvent) {
         rescue?.forget(event.player.uniqueId)
@@ -531,42 +380,18 @@ class AgentPlugin @Inject constructor(
     }
 
     /**
-     * Tells the operator where a player ended up, and ends their rescue chain.
+     * Moves a player who has just landed on a server the operator is draining:
+     * the drain's late half, see [Drain].
      *
-     * The report is accepted and ignored by the operator today -- player
-     * counts come from the servers themselves -- and on the wire for
-     * project 4's dashboard. [SessionLoop.send] drops it silently when there
-     * is no stream, which is right: this is a notification about a moment, and
-     * a moment that has passed by the time a reconnect completes is not worth
-     * replaying.
-     *
-     * The [Rescue.forget] is not a detail of the report. Arriving anywhere is
-     * what makes an earlier bounce history rather than an ongoing incident,
-     * and this is the only event that says a player arrived.
-     */
-    /**
-     * Moves a player who has just landed on a server the operator is draining.
-     *
-     * This is the drain's late half, and [Drain] carries the measurement it
-     * rests on. The short version: a player whose connection was already in
-     * flight when the drain began is counted by neither the backend nor the
-     * proxy, so `DrainPlayers` arrives and moves everyone except them, and the
-     * operator then reads an empty server and deletes the pod under them.
-     *
-     * `ServerPostConnectEvent` and not `ServerConnectedEvent`, although the
-     * agent already subscribes to the latter and it fires sooner. Velocity
-     * fires both from `TransitionSessionHandler`, but the connected one is
-     * fired mid-transition -- there is a second `setConnectedServer` after it
-     * -- and issuing a fresh connection request into that is a race against
-     * the switch still under way. The post event is on the far side of it,
-     * and the few milliseconds bought by the earlier one are not worth
-     * racing Velocity for.
+     * `ServerPostConnectEvent` and not `ServerConnectedEvent`: the latter fires
+     * mid-transition, and a fresh connection request then races the switch.
      */
     @Subscribe
     fun onServerPostConnect(event: ServerPostConnectEvent) {
         drain?.landed(VelocityPlayer(event.player))
     }
 
+    /** The operator accepts and ignores this report today. */
     @Subscribe
     fun onServerConnected(event: ServerConnectedEvent) {
         rescue?.forget(event.player.uniqueId)
@@ -582,26 +407,16 @@ class AgentPlugin @Inject constructor(
     }
 
     /**
-     * The one log sink handed to every unit that takes one. They all take a
-     * callback rather than a logger because the only logger this plugin has is
-     * the one Velocity injects here, and taking it directly would make each of
-     * them untestable without a proxy.
+     * The log sink handed to every unit, as a callback so none of them needs
+     * Velocity's injected logger.
      */
     private fun warn(message: String, error: Throwable?) {
         logger.warn(message, error)
     }
 
     /**
-     * What the agent reports as `Hello.version`: the version Velocity read out
-     * of `velocity-plugin.json`, which `processResources` expanded from
-     * `-PagentVersion`. Not the `@Plugin` annotation's literal, which is never
-     * read by anything -- see [version] on that annotation for why reading it
-     * would be worse than useless.
-     *
-     * `fromInstance` cannot fail here: Velocity only calls into a plugin
-     * through a container it already holds. The fallback is a string rather
-     * than a throw because a version this agent cannot name is not a reason to
-     * leave the proxy unmanaged -- the operator only logs it.
+     * The version Velocity read out of `velocity-plugin.json`, not the
+     * `@Plugin` literal.
      */
     private fun version(): String =
         proxy.pluginManager.fromInstance(this)
@@ -609,18 +424,13 @@ class AgentPlugin @Inject constructor(
             .orElse("unknown")
 
     private companion object {
-        // internal/podspec.AgentMountPath. Hard-coded rather than configurable:
-        // the operator creates these pods and mounts exactly here, and a second
-        // place to spell it would be a second place to get it wrong.
+        // internal/podspec.AgentMountPath.
         const val AGENT_DIR = "/var/run/spawnery"
 
-        // internal/podspec.ProxyReadyPort, for the same reason.
+        // internal/podspec.ProxyReadyPort.
         const val READY_PORT = 8081
 
-        // Matching Paper's 20-tick sampling period. Fast enough that the
-        // reported count is never stale by more than the report interval's own
-        // resolution, cheap enough to be invisible next to anything else the
-        // scheduler runs.
+        // Matching Paper's 20-tick sampling period.
         const val SAMPLE_SECONDS = 1L
 
         const val TRANSFER_PASS_SECONDS = 1L

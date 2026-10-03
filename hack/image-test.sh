@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# Smoke test for the Paper base image.
-#
-# It runs the image under exactly the constraints internal/podspec imposes,
-# rather than more comfortable ones, and with no network at all. The offline
-# part is the point: the day somebody unpins the pre-patched repo, this test
-# fails instead of a pod quietly downloading from Mojang in production.
+# Smoke test for the Paper base image, under internal/podspec's constraints and
+# with no network, so a runtime download from Mojang fails here.
 set -euo pipefail
 
 CONTAINER="${CONTAINER:-docker}"
@@ -25,39 +21,18 @@ cleanup() {
 }
 trap cleanup EXIT
 
-# The renderer refuses to start without both files - a server that came up
-# with online-mode=false and no forwarding secret would trust anyone claiming
-# to be a proxy. Built on the host and mounted read-only, so the container
-# never needs to write to /etc/spawnery at all. See
-# hack/velocity-image-test.sh, which builds the identical fixture shape for
-# the same reason.
-#
-# mktemp -d makes the directory 0700, readable only by the host user; the
-# container reads it as uid 10001, a different identity with no --user
-# override to bridge the two. World-readable permissions are what make the
-# bind mount legible from inside, the same way a projected ConfigMap volume
-# would be in the cluster.
+# The renderer refuses to start without both files. World-readable because the
+# container reads them as uid 10001.
 printf 'maxPlayers: 100\n' >"$CONFDIR/config.yaml"
 printf 'test-forwarding-secret\n' >"$CONFDIR/forwarding.secret"
 chmod 755 "$CONFDIR"
 chmod 644 "$CONFDIR/config.yaml" "$CONFDIR/forwarding.secret"
 
-# A named volume rather than a host directory: the container writes as uid
-# 10001, and cleaning those files up from the host afterwards is a fight that
-# has nothing to do with what is being tested.
+# A named volume: files written as uid 10001 are hard to clean up from the host.
 "$CONTAINER" volume create "$VOLUME" >/dev/null
 
-# No --user: internal/podspec sets RunAsNonRoot with no RunAsUser, so the
-# kubelet (and, here, the container runtime) resolves the identity entirely
-# from the image's own config.User. Passing --user would override the one
-# field this test exists to validate; the assertion below checks it instead.
-#
-# No --security-opt seccomp=... either: the podspec's PodSecurityContext sets
-# SeccompProfile: RuntimeDefault, which is exactly what a container runtime
-# applies when no seccomp option is given at all. Passing
-# --security-opt seccomp=unconfined here would be the one thing that broke
-# that parity, so the absence of the flag is the replication, not an
-# oversight.
+# No --user: podspec sets RunAsNonRoot without RunAsUser, so the image's User decides.
+# No seccomp option: the runtime default is what the podspec's RuntimeDefault means.
 "$CONTAINER" run -d --name "$NAME" \
 	--network none \
 	--read-only --tmpfs /tmp:rw,exec,size=256m \
@@ -92,26 +67,9 @@ until "$CONTAINER" exec "$NAME" /usr/local/bin/spawnery-slp --host 127.0.0.1 --p
 done
 echo "the server answered after $((SECONDS - start))s"
 
-# The promise being guarded is that the Paper/Mojang artifact is provisioned
-# at build time, not fetched at runtime - not that the JVM never opens a
-# socket for any reason. Paper itself makes a couple of unrelated outbound
-# calls on every startup regardless of provisioning (an online-mode
-# Yggdrasil key fetch, its own update checker); those fail harmlessly under
-# --network none and are not what this check is for. So the pattern matches
-# only signs of an artifact fetch, not any network attempt: piston-data is
-# Mojang's asset CDN, "Downloading mojang_" is the bundler's own log line for
-# fetching the server jar, and "Failed to download" is what it logs when
-# that fetch fails.
-#
-# The logs are captured to a variable before grepping rather than piped
-# straight into grep. Piping matters here: under `set -o pipefail`, `grep -q`
-# exits as soon as it finds a match and can close its end of the pipe while
-# `logs` is still writing, which sends `logs` a SIGPIPE. `grep` itself still
-# reports the match (exit 0), but pipefail then reports the *pipeline's*
-# status as the `logs` process's non-zero SIGPIPE exit instead - so `if
-# logs | grep -q pattern` can silently fail to flag a real match on a log
-# long enough to trigger the race. Capturing to a variable first removes the
-# pipe (and the race) entirely.
+# Matches only an artifact fetch: Paper's other outbound calls (Yggdrasil key,
+# update checker) fail harmlessly offline. Here-string rather than a pipe into
+# grep -q, whose early exit SIGPIPEs the writer and pipefail turns into a miss.
 check_no_download() {
 	if grep -qiE 'piston-data|Downloading mojang_|Failed to download' <<<"$1"; then
 		echo "the image tried to download the Paper/Mojang artifact at runtime:" >&2
@@ -124,47 +82,13 @@ container_logs="$("$CONTAINER" logs "$NAME" 2>&1)"
 check_no_download "$container_logs"
 echo "no download attempted"
 
-# What Paper made of the file the renderer wrote.
-#
-# /data/config/paper-global.yml is Paper's own writable file: spawnery-config
-# renders it before the JVM starts, and Paper rewrites it on load, filling in
-# every default and keeping whatever it recognised. Reading it back after the
-# server is up is therefore Paper answering the one question no unit test in
-# internal/render can - not "did the renderer write this string" but "did the
-# receiving program consume it". That reading only holds because the check
-# first establishes the file is Paper's rewrite; see the marker loop below,
-# without which the whole thing is satisfied by the renderer's own bytes.
-#
-# It has to be asked, because Paper does not refuse a key it does not know. It
-# ignores the key, keeps its default for the field the author meant, and writes
-# the stray key back out here so the file still looks like the override took.
-# internal/render wrote the forwarding secret under secret-key rather than
-# secret from milestone 3b until 3c's first end-to-end join, and every test in
-# the repository passed the whole time: the backend came up, answered this
-# script's ping, and rejected every forwarded join.
-#
-# Asserted as a presence check on the value, not as the absence of an error in
-# the log. Paper does log "Velocity is enabled, but no secret key was
-# specified" in the broken case, but a grep for a message that must not appear
-# passes just as happily when the message is reworded upstream.
+# Paper rewrites paper-global.yml on load and ignores, but keeps, keys it does
+# not know, so reading it back is the only proof Paper consumed the override.
+# A presence check on the value; an absent-error grep survives upstream rewording.
 effective_global="$("$CONTAINER" exec "$NAME" cat /data/config/paper-global.yml)"
 
-# First, proof that this file is Paper's rewrite and not the renderer's own
-# output still sitting on the path untouched.
-#
-# The two greps below cannot tell those apart on their own. In the healthy case
-# internal/render.paperGlobal writes the same three keys with the same three
-# values Paper writes back, so its own output satisfies them - which means a
-# Paper bump that moved the config path, or stopped rewriting the file, would
-# leave this check green while forwarding was off. That is precisely the
-# regression class this assertion exists to catch without a fixture to refresh,
-# so it has to be closed here rather than argued about in the comment.
-#
-# _version is Paper's config schema version and bungee-cord is its sibling
-# proxy backend; the renderer has no notion of either and writes neither.
-# bungee-cord is checked as well as _version because it sits inside the very
-# node being read below - it says Paper rewrote proxies, not merely that some
-# Paper-authored file exists somewhere in this path.
+# The renderer writes the same velocity keys Paper writes back; it writes
+# neither _version nor bungee-cord, so their presence proves Paper rewrote proxies.
 for want in '_version:' '  bungee-cord:'; do
 	if ! grep -qF "$want" <<<"$effective_global"; then
 		echo "/data/config/paper-global.yml carries no \"$want\", so Paper never rewrote it; what follows is the renderer's own output and proves nothing about what Paper read:" >&2
@@ -173,11 +97,7 @@ for want in '_version:' '  bungee-cord:'; do
 	fi
 done
 
-# Then narrowed to the proxies.velocity block before anything is matched. A
-# bare grep for "enabled: true" over the whole file would pass on Paper's own
-# spark and update-checker sections no matter what the velocity block said -
-# which is exactly the shape of assertion this milestone has already found
-# seven of.
+# Narrowed first: Paper's spark and update-checker sections also say "enabled: true".
 velocity_block="$(awk '
 	/^  velocity:/ { inblock = 1; next }
 	inblock && /^    / { print; next }
@@ -197,12 +117,7 @@ for want in 'enabled: true' 'secret: test-forwarding-secret'; do
 done
 echo "Paper read the forwarding secret and enabled Velocity forwarding"
 
-# The plugin is in the image but has no operator to reach here. Two things have
-# to be true, and neither is visible from a green ping alone.
-#
-# That it loaded at all: a paper-plugin.yml naming a class that is not there,
-# or an api-version Paper rejects, produces a server that starts perfectly and
-# silently has no agent.
+# A bad paper-plugin.yml starts a healthy server with no agent.
 if ! grep -q 'spawnery agent dormant' <<<"$container_logs"; then
 	echo "the agent plugin did not load, or did not report why it stayed dormant:" >&2
 	grep -iE 'spawnery|plugin' <<<"$container_logs" >&2 || true
@@ -210,12 +125,8 @@ if ! grep -q 'spawnery agent dormant' <<<"$container_logs"; then
 fi
 echo "the agent plugin loaded and stayed dormant without an operator"
 
-# And that nothing broke at class load. Note what this does NOT prove: with no
-# operator endpoint the plugin goes dormant before SessionLoop, OperatorChannel
-# or BearerCredentials are ever constructed, and those are the classes that
-# import io.grpc. Class loading is lazy, so the shaded gRPC tree is never
-# touched in this run. A shading regression confined to the operator-connection
-# path would pass here. That proof is make agent-test's, in the next task.
+# Without an operator the gRPC classes are never loaded, so this misses a shading
+# regression on the connection path; make agent-test covers that.
 if grep -qE 'NoSuchMethodError|NoClassDefFoundError|LinkageError' <<<"$container_logs"; then
 	echo "a linkage error appeared while loading the plugin:" >&2
 	grep -B2 -A10 -E 'NoSuchMethodError|NoClassDefFoundError|LinkageError' <<<"$container_logs" >&2
@@ -223,16 +134,10 @@ if grep -qE 'NoSuchMethodError|NoClassDefFoundError|LinkageError' <<<"$container
 fi
 echo "the plugin's own classes load without a linkage error"
 
-# SIGTERM reaches PID 1 and saves the world. Without exec in the entrypoint the
-# grace period would run out empty and every stop would lose world state.
 "$CONTAINER" stop -t 60 "$NAME" >/dev/null
 container_logs="$("$CONTAINER" logs "$NAME" 2>&1)"
-# A download attempted only during shutdown would go unseen by the check
-# above, which only ever saw the pre-shutdown log; re-run it against the log
-# that already exists here for the SIGTERM assertion below.
 check_no_download "$container_logs"
-# Paper logs this after the worlds are saved. Vanilla's "All dimensions are
-# saved" would be the obvious line, but 26.3 no longer prints it.
+# Vanilla's "All dimensions are saved" is no longer printed by 26.3.
 if ! grep -q 'All RegionFile I/O tasks to complete' <<<"$container_logs"; then
 	echo "SIGTERM did not produce a clean shutdown:" >&2
 	tail -30 <<<"$container_logs" >&2
@@ -240,11 +145,8 @@ if ! grep -q 'All RegionFile I/O tasks to complete' <<<"$container_logs"; then
 fi
 echo "clean shutdown on SIGTERM"
 
-# spec.substitution, end to end in the real image: a mounted plugin source
-# with a placeholder, the prefix and the value in the environment. The copy
-# and the substitution run before the JVM, so the filled content is there
-# within seconds of the start. The loop waits for the content, not the file:
-# the file exists from the copy on, a moment before it is filled.
+# spec.substitution end to end. Waits for the content, not the file: the copy
+# lands a moment before the substitution fills it.
 SUBDIR="$(mktemp -d)"
 mkdir -p "$SUBDIR/Demo"
 printf 'password: {{ SECRET_DEMO }}\n' >"$SUBDIR/Demo/config.yml"

@@ -24,13 +24,8 @@ import (
 )
 
 // expectationTTL bounds how long an unobserved create, delete or retire is
-// believed. Without it, a lost watch event would leave a reservation standing
-// forever and the group could never size itself again; with it, the group
-// decides on what the cache shows, which by then is correct.
-//
-// The retire kind is the one to hold in mind here, because it is the only one
-// whose reservation bounds a budget rather than a count: an unobserved
-// retirement holds a slot of spec.update.maxUnavailable until this TTL expires.
+// believed, so a lost watch event cannot block sizing forever. An unobserved
+// retire holds a slot of spec.update.maxUnavailable until it expires.
 const expectationTTL = 30 * time.Second
 
 type expectationKind int
@@ -44,38 +39,18 @@ const (
 type expectation struct {
 	kind    expectationKind
 	expires time.Time
-	// number is the server number this create reserved, or 0 for a
-	// reservation that reserved no number: a proxy pod, or a persistent
-	// server, whose number is its ordinal and comes from the sizing rule
-	// rather than from the free-number search.
+	// number is 0 where no number was searched for: a proxy pod, or a
+	// persistent server whose number is its ordinal.
 	number int32
 }
 
 // expectations reserves the creates, deletes and retirements a reconcile has
-// issued and the cache has not caught up with yet.
+// issued and the cache has not caught up with yet, so a reconcile reading a
+// stale cache neither creates a second server nor exceeds maxUnavailable.
 //
-// The three are the same mechanism, but the retire kind is the one worth
-// signposting: it is what enforces spec.update.maxUnavailable across the window
-// in which the group has patched spec.retire onto a server and the cache still
-// shows it untouched. Without it a second server is nominated while the first
-// has not appeared, and the budget is exceeded by one.
-//
-// collectViews lists Servers through the manager's cached client. A reconcile
-// triggered by its own create event can therefore read a cache that has not
-// caught up, see the group still short, create a second server, and have the
-// next pass delete the surplus again. Holding a floor hits that rarely; a
-// scaler that creates servers in response to player counts hits it as a matter
-// of course.
-//
-// This is the ReplicaSet controller's mechanism, keyed by name rather than by
-// count, which makes observing one a set membership test that needs no
-// ordering. It is deliberately not folded into the ServerView list:
-// SelectDeletionCandidates sorts servers that never took players first and
-// would nominate a placeholder immediately, and AggregateGroup and the
-// PodDisruptionBudget read that same slice.
-//
-// Safe for concurrent use: one instance is shared by every reconcile of every
-// group.
+// Kept apart from the ServerView list on purpose: SelectDeletionCandidates
+// sorts never-played servers first and would nominate a placeholder at once,
+// and AggregateGroup and the PodDisruptionBudget read that same slice.
 type expectations struct {
 	mu      sync.Mutex
 	now     func() time.Time
@@ -86,19 +61,15 @@ func newExpectations(now func() time.Time) *expectations {
 	return &expectations{now: now, byGroup: make(map[string]map[string]expectation)}
 }
 
-// expectCreated records a Server this reconciler has just created, and the
-// number it was given. Pass 0 where no number was assigned.
+// Pass 0 for number where none was assigned.
 func (e *expectations) expectCreated(group, name string, number int32) {
 	e.record(group, name, expectationCreate, number)
 }
 
-// expectDeleted records a Server whose removal this reconciler has just asked
-// for.
 func (e *expectations) expectDeleted(group, name string) {
 	e.record(group, name, expectationDelete, 0)
 }
 
-// expectRetired records a Server this reconciler has just asked to retire.
 func (e *expectations) expectRetired(group, name string) {
 	e.record(group, name, expectationRetire, 0)
 }
@@ -115,8 +86,6 @@ func (e *expectations) record(group, name string, kind expectationKind, number i
 	m[name] = expectation{kind: kind, expires: e.now().Add(expectationTTL), number: number}
 }
 
-// observe drops every reservation the cache has caught up with, and every one
-// that has waited longer than expectationTTL.
 func (e *expectations) observe(group string, views []ServerView) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -143,28 +112,13 @@ func (e *expectations) observe(group string, views []ServerView) {
 				delete(m, name)
 			}
 		case expectationDelete:
-			// Gone, or showing the phase that removal reaches: either way the
-			// cache has caught up with the removal this reservation was made
-			// for, and the group may size itself on what it shows.
-			//
-			// leavingByPhase(), not leaving(): a reservation is satisfied by
-			// evidence of the removal it reserved, and Condemned is not that
-			// evidence. It is an independent node-level signal that can turn
-			// true on a server this reconciler has already reserved an
-			// ordinary delete for, before the cache shows any consequence of
-			// that delete — and clearing the reservation on that signal alone
-			// would drop the guard that keeps condemned() from re-listing the
-			// same server the next pass. A condemned server that is really
-			// being removed still reaches Draining on its way out, so the
-			// phase test still satisfies this case for it; it just does not
-			// satisfy it early, on the signal alone.
+			// leavingByPhase(), not leaving(): Condemned is a node-level signal that
+			// can turn true before the cache shows this delete, and clearing on it
+			// would let condemned() re-list the same server next pass.
 			if !present || v.leavingByPhase() {
 				delete(m, name)
 			}
 		case expectationRetire:
-			// Satisfied when the cache shows the patch, and also when the
-			// server is gone: a retirement that completed between the patch
-			// and this list has nothing left to reserve.
 			if !present || v.Retire {
 				delete(m, name)
 			}
@@ -175,10 +129,6 @@ func (e *expectations) observe(group string, views []ServerView) {
 	}
 }
 
-// observePods is observe for pods. A proxy has no retire reservation -- only
-// the ServerGroup controller retires anything -- so this handles create and
-// delete and nothing else, rather than sharing a generic method that would
-// have to explain an absent third case to half its callers.
 func (e *expectations) observePods(group string, pods []corev1.Pod) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -214,17 +164,8 @@ func (e *expectations) observePods(group string, pods []corev1.Pod) {
 	}
 }
 
-// pending is what the group has outstanding: which creates are reserved,
-// which names are already on their way out, and which have been asked to
-// retire -- all keyed by name.
-//
-// Creates come back named, not counted, because two callers want different
-// things from the same reservations. The slot rule only needs how many are in
-// flight, and takes len() at its call site. The persistent rule needs to know
-// which ordinals they are for, so it does not recreate one whose create the
-// cache has not shown yet. One accessor keeps both reading the same
-// reservations, rather than adding a second view of the map for the count the
-// first one already answers.
+// pending returns the reserved creates, deletes and retires, keyed by name;
+// creates are named because the persistent rule needs their ordinals.
 func (e *expectations) pending(group string) (map[string]bool, map[string]bool, map[string]bool) {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -245,11 +186,6 @@ func (e *expectations) pending(group string) (map[string]bool, map[string]bool, 
 	return creates, deletes, retires
 }
 
-// pendingNumbers is the set of server numbers reserved by creates this
-// reconciler has issued and the cache has not shown yet.
-//
-// Beside pending rather than a fourth return value from it: one caller wants
-// this and every other caller would have to name and discard it.
 func (e *expectations) pendingNumbers(group string) map[int32]bool {
 	e.mu.Lock()
 	defer e.mu.Unlock()
@@ -263,8 +199,6 @@ func (e *expectations) pendingNumbers(group string) map[int32]bool {
 	return numbers
 }
 
-// forget drops a group entirely, so the map does not grow with every group
-// that ever existed.
 func (e *expectations) forget(group string) {
 	e.mu.Lock()
 	defer e.mu.Unlock()

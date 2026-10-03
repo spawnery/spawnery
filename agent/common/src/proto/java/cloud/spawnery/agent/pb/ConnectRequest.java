@@ -7,13 +7,11 @@ package cloud.spawnery.agent.pb;
 
 /**
  * <pre>
- * ConnectRequest asks that a player be moved.
+ * ConnectRequest asks that a player be moved, to a named server or to
+ * wherever a group has room, which the operator chooses.
  *
- * The target is a oneof rather than a string the operator parses, so the
- * difference between "this server" and "wherever that group has room" is on
- * the wire instead of in a convention two sides have to agree about. Naming a
- * group hands the choice to the operator, which is the only side that knows
- * what every backend's occupancy is.
+ * Requests carry no namespace: names are resolved inside the namespace the
+ * pod's own token authenticated.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.ConnectRequest}
@@ -435,13 +433,11 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * ConnectRequest asks that a player be moved.
+   * ConnectRequest asks that a player be moved, to a named server or to
+   * wherever a group has room, which the operator chooses.
    *
-   * The target is a oneof rather than a string the operator parses, so the
-   * difference between "this server" and "wherever that group has room" is on
-   * the wire instead of in a convention two sides have to agree about. Naming a
-   * group hands the choice to the operator, which is the only side that knows
-   * what every backend's occupancy is.
+   * Requests carry no namespace: names are resolved inside the namespace the
+   * pod's own token authenticated.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.ConnectRequest}

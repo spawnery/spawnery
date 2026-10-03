@@ -15,8 +15,7 @@ class PendingSeatsTest {
         assertEquals(1, seats.count())
     }
 
-    // A connection can close during the configuration phase, before any
-    // join or quit event: the close is what gives the seat back.
+    // A connection can close in the configuration phase, before any join or quit.
     @Test
     fun `a released player holds none`() {
         seats.admit(player)

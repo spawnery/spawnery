@@ -18,9 +18,7 @@ import (
 // time, whether the operator's ServiceAccount may do what the table says it
 // needs.
 //
-// SubjectAccessReview and not SelfSubjectAccessReview: the question is about a
-// third party's permissions, which lets this test keep its own admin rights and
-// still read logs and events.
+// SubjectAccessReview, so the test keeps its own admin rights.
 func theTableHoldsAgainstTheRealAuthorizer(t *testing.T) {
 	subject := operatorSubject(t)
 
@@ -65,44 +63,21 @@ func theTableHoldsAgainstTheRealAuthorizer(t *testing.T) {
 	for _, p := range rbacaudit.RequiredNamespaced {
 		check(p, operatorNamespace)
 	}
-	// Swapping testNamespace here for the operator's own namespace leaves this
-	// green, because `secrets: get` is granted there too for certs.Store.Ensure.
-	// The loop is correct as written; that particular mutation is simply not
-	// one it can catch, and a reader who tries it should not conclude the loop
-	// is inert.
+	// Swapping in the operator's own namespace stays green: `secrets: get` is
+	// granted there too, for certs.Store.Ensure.
 	for _, p := range rbacaudit.RequiredNetworkNamespace {
 		check(p, testNamespace)
 	}
 
-	// Printed, not merely counted: a loop over an empty slice passes without
-	// asking the cluster anything, and PASS would look identical. The Fatalf
-	// above turns that specific failure mode into a hard failure rather than
-	// relying on a human to notice a zero in a log line nobody reads.
 	t.Logf("checked %d cluster, %d namespaced and %d per-network permissions",
 		len(rbacaudit.RequiredCluster), len(rbacaudit.RequiredNamespaced),
 		len(rbacaudit.RequiredNetworkNamespace))
 }
 
 // operatorSubject derives the user name every SubjectAccessReview above asks
-// about, from the objects that actually decide it in the cluster: the
-// ClusterRoleBinding says which ServiceAccount the operator's ClusterRole is
-// bound to, and the Deployment says which ServiceAccount the operator's pod
-// runs as.
-//
-// Design §7.3 asks for it derived rather than restated, and the reason is a
-// mutation in §8: point the ClusterRoleBinding at the wrong ServiceAccount. A
-// restated literal survives that untouched -- the account it names is still
-// allowed everything, so every review comes back allowed and the run stays
-// green while the operator in the pod is bound to nothing. Reading the subject
-// out of the binding instead makes the reviews ask about whatever the binding
-// actually grants, and the cross-check below makes the Deployment agree that
-// this is the account the process runs as. Both halves have to be right for
-// this subtest to mean what its name says.
-//
-// This reads the live objects rather than the files under config/. Level A
-// (internal/rbacaudit/deploy_envtest_test.go) already checks the manifests
-// against one another; what only a cluster can add is that the objects that
-// were actually installed say the same thing.
+// about from the live ClusterRoleBinding, and checks that the Deployment runs
+// as that ServiceAccount. A restated literal would stay green with the binding
+// pointing elsewhere.
 func operatorSubject(t *testing.T) string {
 	t.Helper()
 
@@ -114,9 +89,7 @@ func operatorSubject(t *testing.T) string {
 		t.Fatalf("the binding's roleRef is a %s, not a ClusterRole", binding.RoleRef.Kind)
 	}
 
-	// The role it names has to exist. A RoleRef pointing at nothing is legal to
-	// create and grants nothing at all, and every review below would come back
-	// denied without saying why.
+	// A RoleRef pointing at nothing is legal and grants nothing.
 	var role rbacv1.ClusterRole
 	if err := k8s.Get(ctx, client.ObjectKey{Name: binding.RoleRef.Name}, &role); err != nil {
 		t.Fatalf("the binding names ClusterRole %q, which this cluster does not have: %v",
@@ -148,20 +121,9 @@ func operatorSubject(t *testing.T) string {
 	return "system:serviceaccount:" + subj.Namespace + ":" + subj.Name
 }
 
-// theOperatorCheckedItsOwnPermissions reads the operator's verdict on itself.
-//
-// theTableHoldsAgainstTheRealAuthorizer above asks the same questions, but it
-// asks them as the test, about a third party, from an admin identity. This
-// asks whether the operator asked -- whether rbacaudit.Checker is wired in,
-// runs, and says what it found. Those are different failures: a chart that
-// grants everything correctly and an operator that never checks would pass
-// that test and this one is the only thing that would notice.
-//
-// It is also the answer to what theOperatorWasNeverDenied cannot see. That
-// check greps for the API server's own `is forbidden:` phrasing, so it is
-// blind to a cache-backed verb, which is claimed by a watch that retries
-// silently, and to an error the code handles well enough to phrase itself.
-// A SelfSubjectAccessReview is blind to neither.
+// theOperatorCheckedItsOwnPermissions reads the operator's verdict on itself:
+// that rbacaudit.Checker is wired in, runs, and reports. Unlike
+// theOperatorWasNeverDenied it also covers cached reads.
 func theOperatorCheckedItsOwnPermissions(t *testing.T) {
 	log, _ := operatorLog(t, operatorNamespace)
 
@@ -179,7 +141,6 @@ func theOperatorCheckedItsOwnPermissions(t *testing.T) {
 	}
 }
 
-// linesContaining is denialsIn's shape for an arbitrary substring.
 func linesContaining(log, want string) []string {
 	var found []string
 	for _, line := range strings.Split(log, "\n") {

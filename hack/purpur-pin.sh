@@ -1,24 +1,10 @@
 #!/usr/bin/env bash
 # Computes what nix/purpur.nix has to be told about a Purpur build, and writes
-# it in. The sibling of hack/paper-pin.sh, and shorter, because nix/purpur.nix
-# pins one artifact rather than two: Mojang's jar arrives from nix/paper.nix,
-# both forks being the same Minecraft version.
+# it in. Mojang's jar comes from nix/paper.nix, so only one artifact is pinned.
 #
-# **It differs from paper-pin.sh in one way that matters, and pretending
-# otherwise would be the whole problem.** PaperMC's API publishes a SHA-256 for
-# its launcher, so that script can state a hash it never had to compute.
-# Purpur's API publishes an MD5. So this script downloads the jar, checks the
-# MD5 the API stated, and then computes the SHA-256 itself from the bytes it
-# received. MD5 is not collision-resistant, and an attacker who could serve
-# this script a chosen jar could serve one with a matching MD5.
-#
-# What that is worth in practice: the value written below is a nix
-# fixed-output hash, so once it is in the file the input is frozen and a
-# changed upstream breaks the build. The MD5 check bounds the *first* fetch
-# only, and the honest description of that bound is "it catches corruption and
-# a mistyped build number, not an adversary". Reviewing the diff this writes is
-# therefore doing real work rather than rubber-stamping, which is the same
-# thing paper-pin.sh's own header says about leaving the decision to a person.
+# Purpur's API publishes only an MD5, so the SHA-256 is computed from the
+# downloaded bytes. The MD5 check catches corruption and a mistyped build
+# number, not an adversary; review the diff this writes.
 #
 # Usage:
 #   hack/purpur-pin.sh                # the latest build of the pinned version
@@ -42,9 +28,7 @@ for tool in curl jq nix md5sum sha256sum; do
 done
 [ -r "$NIX_FILE" ] || fail "cannot read $NIX_FILE (run from the repository root)"
 
-# The version currently pinned, so the no-argument form means "the newest build
-# of the version we are already on" rather than "whatever is newest", which
-# would be a Minecraft upgrade wearing the clothes of a patch bump.
+# Without an argument, stay on the pinned Minecraft version.
 current_version="$(sed -n 's/^  purpurVersion = "\(.*\)";$/\1/p' "$NIX_FILE")"
 current_build="$(sed -n 's/^  purpurBuild = "\(.*\)";$/\1/p' "$NIX_FILE")"
 [ -n "$current_version" ] && [ -n "$current_build" ] ||
@@ -73,17 +57,12 @@ got_md5="$(md5sum "$work/purpur.jar" | cut -d' ' -f1)"
 [ "$got_md5" = "$want_md5" ] ||
 	fail "the downloaded jar has md5 $got_md5, but the API said $want_md5"
 
-# Computed here rather than stated by the API, which is the difference this
-# file's header is about.
 got_sha="$(sha256sum "$work/purpur.jar" | cut -d' ' -f1)"
 jar_hash="$(nix --extra-experimental-features 'nix-command flakes' \
 	hash convert --hash-algo sha256 --to sri "$got_sha")"
 
-# The Minecraft version the launcher will patch against, read out of the jar
-# rather than assumed. nix/purpur.nix takes Mojang's jar from nix/paper.nix, so
-# a Purpur build that wants a different one is a pin the two files cannot both
-# satisfy -- and it is much better to say so here than to let paperclip say it
-# from inside a nix sandbox.
+# Mojang's jar comes from nix/paper.nix, so a Purpur build wanting another
+# Minecraft version is refused here rather than by paperclip in the sandbox.
 if command -v jar >/dev/null; then
 	(cd "$work" && jar xf purpur.jar META-INF/download-context) ||
 		fail "no META-INF/download-context in the launcher; Purpur's packaging has changed"
@@ -104,9 +83,7 @@ Purpur $version build $build
   purpurJar hash  $jar_hash   (computed here from the bytes received)
 REPORT
 
-# Line-oriented and anchored, so a file whose shape has drifted is a refusal
-# rather than a silent partial edit. The URL itself is not rewritten: it is
-# templated over the two values above, so moving them moves it.
+# The URL is not rewritten: it is templated over the two values above.
 rewrite() {
 	local file="$1"
 	local before after

@@ -9,15 +9,9 @@ package cloud.spawnery.agent.pb;
  * <pre>
  * CloudEvent is something that happened, on its way to somebody's chat.
  *
- * **A feed and not a ledger.** An agent that was disconnected missed what
- * happened while it was gone, and nothing here resends it: the NetworkState it
- * re-syncs on reconnect is the correction, and a better one than a replay
- * would be -- it says what is true now rather than what was true in an order
- * nobody was watching.
- *
- * It is derived from the event the operator records to Kubernetes rather than
- * computed beside it. Two independent derivations of the same fact eventually
- * disagree, and the one in the chat is the one nobody can audit.
+ * A feed and not a ledger: nothing is resent to an agent that was
+ * disconnected. It is derived from the event the operator records to
+ * Kubernetes.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.CloudEvent}
@@ -72,10 +66,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * The operator's own reason, in UpperCamelCase -- ReadyGatePassed,
-   * PodRejected. A string and not an enum, for the reason NetworkState.phase
-   * is a string: the operator's vocabulary gains values, and an agent older
-   * than a value must show it rather than fail to parse the message it
-   * arrived in.
+   * PodRejected. A string, not an enum, because the vocabulary grows.
    * </pre>
    *
    * <code>string kind = 1;</code>
@@ -97,10 +88,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * The operator's own reason, in UpperCamelCase -- ReadyGatePassed,
-   * PodRejected. A string and not an enum, for the reason NetworkState.phase
-   * is a string: the operator's vocabulary gains values, and an agent older
-   * than a value must show it rather than fail to parse the message it
-   * arrived in.
+   * PodRejected. A string, not an enum, because the vocabulary grows.
    * </pre>
    *
    * <code>string kind = 1;</code>
@@ -176,8 +164,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * The group the subject belongs to, and the subject itself when the subject
-   * is a group. Never empty, so that collapsing by group needs no special
-   * case for the events that are about one.
+   * is a group. Never empty.
    * </pre>
    *
    * <code>string group = 3;</code>
@@ -199,8 +186,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * The group the subject belongs to, and the subject itself when the subject
-   * is a group. Never empty, so that collapsing by group needs no special
-   * case for the events that are about one.
+   * is a group. Never empty.
    * </pre>
    *
    * <code>string group = 3;</code>
@@ -226,9 +212,7 @@ private static final long serialVersionUID = 0L;
   private volatile java.lang.Object message_ = "";
   /**
    * <pre>
-   * One sentence for a person. The operator's own words, carried verbatim, so
-   * that rewording them in an agent cannot make the chat disagree with
-   * kubectl about the same fact.
+   * One sentence for a person, the operator's own words, verbatim.
    * </pre>
    *
    * <code>string message = 4;</code>
@@ -249,9 +233,7 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * One sentence for a person. The operator's own words, carried verbatim, so
-   * that rewording them in an agent cannot make the chat disagree with
-   * kubectl about the same fact.
+   * One sentence for a person, the operator's own words, verbatim.
    * </pre>
    *
    * <code>string message = 4;</code>
@@ -493,15 +475,9 @@ private static final long serialVersionUID = 0L;
    * <pre>
    * CloudEvent is something that happened, on its way to somebody's chat.
    *
-   * **A feed and not a ledger.** An agent that was disconnected missed what
-   * happened while it was gone, and nothing here resends it: the NetworkState it
-   * re-syncs on reconnect is the correction, and a better one than a replay
-   * would be -- it says what is true now rather than what was true in an order
-   * nobody was watching.
-   *
-   * It is derived from the event the operator records to Kubernetes rather than
-   * computed beside it. Two independent derivations of the same fact eventually
-   * disagree, and the one in the chat is the one nobody can audit.
+   * A feed and not a ledger: nothing is resent to an agent that was
+   * disconnected. It is derived from the event the operator records to
+   * Kubernetes.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.CloudEvent}
@@ -699,10 +675,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The operator's own reason, in UpperCamelCase -- ReadyGatePassed,
-     * PodRejected. A string and not an enum, for the reason NetworkState.phase
-     * is a string: the operator's vocabulary gains values, and an agent older
-     * than a value must show it rather than fail to parse the message it
-     * arrived in.
+     * PodRejected. A string, not an enum, because the vocabulary grows.
      * </pre>
      *
      * <code>string kind = 1;</code>
@@ -723,10 +696,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The operator's own reason, in UpperCamelCase -- ReadyGatePassed,
-     * PodRejected. A string and not an enum, for the reason NetworkState.phase
-     * is a string: the operator's vocabulary gains values, and an agent older
-     * than a value must show it rather than fail to parse the message it
-     * arrived in.
+     * PodRejected. A string, not an enum, because the vocabulary grows.
      * </pre>
      *
      * <code>string kind = 1;</code>
@@ -748,10 +718,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The operator's own reason, in UpperCamelCase -- ReadyGatePassed,
-     * PodRejected. A string and not an enum, for the reason NetworkState.phase
-     * is a string: the operator's vocabulary gains values, and an agent older
-     * than a value must show it rather than fail to parse the message it
-     * arrived in.
+     * PodRejected. A string, not an enum, because the vocabulary grows.
      * </pre>
      *
      * <code>string kind = 1;</code>
@@ -769,10 +736,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The operator's own reason, in UpperCamelCase -- ReadyGatePassed,
-     * PodRejected. A string and not an enum, for the reason NetworkState.phase
-     * is a string: the operator's vocabulary gains values, and an agent older
-     * than a value must show it rather than fail to parse the message it
-     * arrived in.
+     * PodRejected. A string, not an enum, because the vocabulary grows.
      * </pre>
      *
      * <code>string kind = 1;</code>
@@ -787,10 +751,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The operator's own reason, in UpperCamelCase -- ReadyGatePassed,
-     * PodRejected. A string and not an enum, for the reason NetworkState.phase
-     * is a string: the operator's vocabulary gains values, and an agent older
-     * than a value must show it rather than fail to parse the message it
-     * arrived in.
+     * PodRejected. A string, not an enum, because the vocabulary grows.
      * </pre>
      *
      * <code>string kind = 1;</code>
@@ -908,8 +869,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The group the subject belongs to, and the subject itself when the subject
-     * is a group. Never empty, so that collapsing by group needs no special
-     * case for the events that are about one.
+     * is a group. Never empty.
      * </pre>
      *
      * <code>string group = 3;</code>
@@ -930,8 +890,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The group the subject belongs to, and the subject itself when the subject
-     * is a group. Never empty, so that collapsing by group needs no special
-     * case for the events that are about one.
+     * is a group. Never empty.
      * </pre>
      *
      * <code>string group = 3;</code>
@@ -953,8 +912,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The group the subject belongs to, and the subject itself when the subject
-     * is a group. Never empty, so that collapsing by group needs no special
-     * case for the events that are about one.
+     * is a group. Never empty.
      * </pre>
      *
      * <code>string group = 3;</code>
@@ -972,8 +930,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The group the subject belongs to, and the subject itself when the subject
-     * is a group. Never empty, so that collapsing by group needs no special
-     * case for the events that are about one.
+     * is a group. Never empty.
      * </pre>
      *
      * <code>string group = 3;</code>
@@ -988,8 +945,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * The group the subject belongs to, and the subject itself when the subject
-     * is a group. Never empty, so that collapsing by group needs no special
-     * case for the events that are about one.
+     * is a group. Never empty.
      * </pre>
      *
      * <code>string group = 3;</code>
@@ -1009,9 +965,7 @@ private static final long serialVersionUID = 0L;
     private java.lang.Object message_ = "";
     /**
      * <pre>
-     * One sentence for a person. The operator's own words, carried verbatim, so
-     * that rewording them in an agent cannot make the chat disagree with
-     * kubectl about the same fact.
+     * One sentence for a person, the operator's own words, verbatim.
      * </pre>
      *
      * <code>string message = 4;</code>
@@ -1031,9 +985,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * One sentence for a person. The operator's own words, carried verbatim, so
-     * that rewording them in an agent cannot make the chat disagree with
-     * kubectl about the same fact.
+     * One sentence for a person, the operator's own words, verbatim.
      * </pre>
      *
      * <code>string message = 4;</code>
@@ -1054,9 +1006,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * One sentence for a person. The operator's own words, carried verbatim, so
-     * that rewording them in an agent cannot make the chat disagree with
-     * kubectl about the same fact.
+     * One sentence for a person, the operator's own words, verbatim.
      * </pre>
      *
      * <code>string message = 4;</code>
@@ -1073,9 +1023,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * One sentence for a person. The operator's own words, carried verbatim, so
-     * that rewording them in an agent cannot make the chat disagree with
-     * kubectl about the same fact.
+     * One sentence for a person, the operator's own words, verbatim.
      * </pre>
      *
      * <code>string message = 4;</code>
@@ -1089,9 +1037,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * One sentence for a person. The operator's own words, carried verbatim, so
-     * that rewording them in an agent cannot make the chat disagree with
-     * kubectl about the same fact.
+     * One sentence for a person, the operator's own words, verbatim.
      * </pre>
      *
      * <code>string message = 4;</code>

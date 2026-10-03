@@ -27,9 +27,7 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// The bound on a group's display name is the API server's, like the bounds on
-// its attributes, so it holds against every writer rather than against the one
-// path a reconciler happens to read it through.
+// The bound is the API server's, so it holds against every writer.
 
 func displayNamedGroup(ns, displayName string) *spawneryv1alpha1.ServerGroup {
 	return &spawneryv1alpha1.ServerGroup{
@@ -49,8 +47,7 @@ func TestTheAPIServerAdmitsAGroupsDisplayName(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
 
-	// Mixed case and a hyphen: exactly what a metadata.name may not carry,
-	// which is the whole reason a display name exists next to it.
+	// Mixed case and a hyphen, which a metadata.name may not carry.
 	group := displayNamedGroup(ns, "Bingo-Team")
 	if err := c.Create(ctx, group); err != nil {
 		t.Fatalf("an ordinary display name was refused: %v", err)
@@ -73,8 +70,6 @@ func TestTheAPIServerRefusesAnOversizedDisplayName(t *testing.T) {
 	if err == nil {
 		t.Fatal("a 65-character display name was admitted; this reaches every agent on every resync")
 	}
-	// The message has to name the bound, because the person who meets it is
-	// editing a file and has nothing else to go on.
 	if !strings.Contains(err.Error(), "64") {
 		t.Errorf("refusal did not name the bound: %v", err)
 	}

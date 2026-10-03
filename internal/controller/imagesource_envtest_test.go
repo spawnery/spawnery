@@ -29,19 +29,6 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// The reserved-prefix rule is a CEL expression on the CRD, so the only thing
-// that can prove it works is an API server holding the generated CRD and
-// refusing the object. internal/podspec/env_test.go checks that the rule still
-// spells the prefix the Go constant does; this checks that the rule the API
-// server compiles actually denies anything.
-//
-// Both halves are needed. A rule with a typo in the CEL -- an unbalanced
-// paren, `startWith` for `startsWith` -- fails to compile, and a CRD whose
-// validation does not compile is accepted with the rule inert on some
-// versions. Then every group is admitted, a group shadowing
-// SPAWNERY_OPERATOR_ENDPOINT points its agents at an address of its choosing,
-// and the marker test goes on passing because the literal in the rule is
-// still right.
 func imageSourceGroup(ns string, mutate func(*spawneryv1alpha1.ServerGroup)) *spawneryv1alpha1.ServerGroup {
 	g := &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "lobby", Namespace: ns},
@@ -101,9 +88,8 @@ func TestTheAPIServerRefusesABadSubstitutionPrefix(t *testing.T) {
 func TestTheAPIServerRefusesAnEmptyImage(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
-	// Unstructured, because the typed client drops image: "" (omitempty) and
-	// would test "no source" instead: a templated manifest sends the empty
-	// string itself.
+	// Unstructured, because the typed client drops image: "" (omitempty); a
+	// templated manifest sends the empty string itself.
 	for i, field := range []string{"extraPlugins", "extraFiles"} {
 		u := &unstructured.Unstructured{Object: map[string]any{
 			"apiVersion": "spawnery.cloud/v1alpha1",

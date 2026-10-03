@@ -21,15 +21,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
-// ChangeoversInFlight is the groups of a network AdmitChangeovers currently
-// holds a place for: Begun, not failing and not persistent, the same holder
-// rule it uses. ChangeoversWaiting is the groups it is making wait for one or
-// for an earlier stage.
-//
-// NetworkReconciler.countGroups sets both on every pass, over the same
-// server and proxy groups it already lists to sum OnlinePlayers -- so a
-// budget that never frees up, or a network that is permanently short of
-// slots, is a query rather than something somebody happens to notice.
+// ChangeoversInFlight counts the groups AdmitChangeovers holds a place for;
+// ChangeoversWaiting those it makes wait. NetworkReconciler.countGroups sets both.
 var (
 	ChangeoversInFlight = prometheus.NewGaugeVec(prometheus.GaugeOpts{
 		Name: "spawnery_network_changeovers_in_flight",

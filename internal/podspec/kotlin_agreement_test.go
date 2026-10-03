@@ -25,23 +25,8 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// TestTheReadyPortAgreesWithTheVelocityAgent closes the entry in
-// docs/reference/known-issues.md: "the ready port is spelled in two languages —
-// internal/podspec.ProxyReadyPort and a Kotlin constant in AgentPlugin.kt —
-// with no test that can compare them. Only the level-2 harness catches a
-// divergence, and only when it runs."
-//
-// A Go test cannot import Kotlin, but it can read it. The same technique this
-// repository already uses on cmd/spawnery-operator/main.go, where an AST pin
-// asserts a wiring that no compiler checks either.
-//
-// What a divergence costs is why this is worth a source-reading test rather
-// than a comment asking people to be careful: podspec puts the port on the pod
-// as the kubelet's readiness probe target, and the agent binds it. Move one and
-// the probe dials a port nothing is listening on, so the pod never goes Ready,
-// so the proxy never joins the Service — and nothing anywhere says the two
-// numbers disagree. The only thing that catches it today is hack/agent-test.sh
-// phase four, which is not on the commit loop.
+// A divergence makes the readiness probe dial a port nothing listens on, so
+// the proxy never goes Ready, and only hack/agent-test.sh would notice.
 func TestTheReadyPortAgreesWithTheVelocityAgent(t *testing.T) {
 	const source = "agent/velocity/src/main/kotlin/cloud/spawnery/agent/velocity/AgentPlugin.kt"
 	raw, err := os.ReadFile(testenv.RepoPath(t, source))
@@ -49,10 +34,8 @@ func TestTheReadyPortAgreesWithTheVelocityAgent(t *testing.T) {
 		t.Fatalf("read the Velocity agent's source: %v", err)
 	}
 
-	// Anchored on the declaration rather than searching for the number, because
-	// finding the number would make the test pass for the wrong reason: the
-	// same digits appear in a comment about hack/velocity-image-test.sh a
-	// hundred lines above.
+	// Anchored on the declaration: the same digits appear in a comment in the
+	// Kotlin file.
 	re := regexp.MustCompile(`(?m)^\s*const val READY_PORT\s*=\s*(\d+)\s*$`)
 	m := re.FindSubmatch(raw)
 	if m == nil {

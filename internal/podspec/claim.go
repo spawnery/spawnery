@@ -25,26 +25,11 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
-// BuildDataClaim renders the PersistentVolumeClaim a persistent server's or an
-// on-demand member's world lives on.
-//
-// It carries no owner reference, and that is the load-bearing property rather
-// than an omission. The claim outlives its server -- which is the whole point,
-// since a recreated ordinal is meant to find its old world -- and it outlives
-// its group, and the operator who deletes the wrong object. A StatefulSet
-// retains its claims on both scale-down and deletion for the same reason. The
-// cost is that claims accumulate and must be found and removed by hand;
-// docs/guides/persistent-worlds.md is where that is written
-// down, with the selector for finding them and the warning that removing one
-// destroys a world.
-//
-// LabelManagedBy is not decoration: cmd/spawnery-operator.main restricts the
-// manager's cache to that label for several kinds, claims among them. It is
-// the only one of the four labels here that does -- the other three are for
-// whoever is reading claims with kubectl. server_controller.go's growClaim is
-// the first read this operator makes of a claim, and it reads through that
-// same restricted cache: a claim missing this label is invisible to it and
-// never grows.
+// BuildDataClaim deliberately carries no owner reference: the claim outlives
+// its server and its group, like a StatefulSet's (cleanup is manual, see
+// docs/guides/persistent-worlds.md). LabelManagedBy is required because the
+// manager's cache for claims is restricted to it; without it growClaim never
+// sees the claim.
 func BuildDataClaim(
 	group *spawneryv1alpha1.ServerGroup,
 	srv *spawneryv1alpha1.Server,

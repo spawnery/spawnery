@@ -11,13 +11,9 @@ import org.bukkit.event.player.PlayerLoginEvent
 import org.bukkit.event.player.PlayerQuitEvent
 
 /**
- * The login check of a group that enforces its playable slots.
- *
- * Registered only once the group turns enforcement on: a PlayerLoginEvent
- * listener makes Paper refuse its reconfiguration API on the whole server,
- * which a server that never enforces must not pay for. PlayerLoginEvent is
- * deprecated for removal but is the only login event that has the player's
- * permissions (docs/superpowers/specs/2026-09-30-enforce-playable-slots-design.md).
+ * Registered only once the group enforces: a PlayerLoginEvent listener makes
+ * Paper refuse its reconfiguration API server-wide. PlayerLoginEvent is
+ * deprecated, but the only login event that has the player's permissions.
  */
 @Suppress("DEPRECATION")
 class LoginGateListener(

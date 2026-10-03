@@ -1,35 +1,20 @@
 #!/usr/bin/env bash
 # Refuses a toolchain whose generator and runtime versions disagree.
 #
-# Two versions are pinned twice each. protoc and protoc-gen-grpc-java come from
-# nixpkgs through flake.nix; protobuf-java and the io.grpc:grpc-* artifacts come
-# from agent/common/build.gradle.kts, resolved through agent/deps.json. A `nix
-# flake update` moves the first half of each pair and nothing moves the second,
-# so `make proto` can then regenerate stubs that demand a runtime the build does
-# not resolve. The failure is loud -- compileProtoJava: "cannot find symbol", or
-# a ProtobufRuntimeVersionException at class init -- but it appears nowhere near
-# the pin that caused it, and only after a Gradle build that takes minutes.
-# flake.nix has named the coupling at both edit sites since milestone 2c; this
-# is the standing check that entry asked for.
+# protoc and protoc-gen-grpc-java come from nixpkgs through flake.nix;
+# protobuf-java and io.grpc:grpc-* from agent/common/build.gradle.kts and
+# agent/deps.json. A `nix flake update` moves only the first half of each pair.
 #
-# protoc and protobuf-java are the same release under two numbering schemes --
-# protoc 35.1 is protobuf-java 4.35.1 -- so the expected artifact version is
-# built from the measured one rather than compared to it as a string.
-# protoc-gen-grpc-java and the grpc-java artifacts share one version outright.
+# protoc 35.1 is protobuf-java 4.35.1: same release, two numbering schemes.
 #
-# Every uncertainty is a refusal, which is the opposite of
-# hack/image-derivations-changed.sh and deliberate: there, not knowing means
-# building an image nobody needed, and here it would mean reporting an
-# agreement nothing measured. The whole point is to fail at the pin rather than
-# in the compiler, and a check that passes when it could not look does neither.
+# Every uncertainty is a refusal: a check that passes when it could not look
+# would report an agreement nothing measured.
 #
 # Usage:
 #   hack/toolchain-pins-agree.sh [--gradle FILE] [--deps FILE]
 #                                [--protoc VERSION] [--grpc VERSION]
 #
-# The four overrides exist for hack/toolchain-pins-agree-test.sh, which has to
-# drive disagreements this tree does not contain. With none of them the script
-# measures the toolchain on PATH and reads the repository's own files.
+# With no overrides it measures the toolchain on PATH and reads the repo's files.
 #
 # Exit status: 0 they agree, 1 they do not or something could not be read.
 set -euo pipefail
@@ -52,7 +37,6 @@ done
 
 fail() { echo "toolchain-pins-agree: $*" >&2; exit 1; }
 
-# protoc answers for itself.
 if [ -z "$protoc_version" ]; then
   raw="$(protoc --version 2>/dev/null)" ||
     fail "protoc is not on PATH; run this through \`nix develop\`"
@@ -61,8 +45,7 @@ if [ -z "$protoc_version" ]; then
     fail "protoc --version said '$raw', which is not 'libprotoc <version>'"
 fi
 
-# The generator plugin takes no version option at all, so it is read off the
-# store path nixpkgs put it at -- which is where its version is recorded.
+# The generator plugin has no version option; read it off its store path.
 if [ -z "$grpc_version" ]; then
   bin="$(command -v protoc-gen-grpc-java 2>/dev/null)" ||
     fail "protoc-gen-grpc-java is not on PATH; run this through \`nix develop\`"
@@ -78,11 +61,8 @@ fi
 want_protobuf_java="4.$protoc_version"
 bad=0
 
-# The gradle file is the pin a person edits; deps.json is the resolved lock the
-# build actually downloads. Both are checked, because they can disagree with
-# each other as well as with the toolchain -- `make agent-deps` regenerates the
-# second from the first, and a tree where that has not been run is a tree where
-# the build resolves the old version.
+# deps.json is checked too: without `make agent-deps` it still resolves the old
+# version after the gradle file moved.
 check_absent() {
   local file="$1" pattern="$2" what="$3"
   if ! grep -qF -- "$pattern" "$file"; then
@@ -97,9 +77,6 @@ check_absent "$gradle" "com.google.protobuf:protobuf-java:$want_protobuf_java" \
 check_absent "$deps" "protobuf-java/$want_protobuf_java" \
   "protoc is $protoc_version, so deps.json must resolve protobuf-java $want_protobuf_java"
 
-# Every io.grpc:grpc-* coordinate in the gradle file, whichever configuration
-# it sits in: api, implementation and testImplementation all end up on a
-# classpath the generated stubs run against.
 mismatched="$(grep -o 'io\.grpc:grpc-[a-z-]*:[0-9][0-9.]*' "$gradle" |
   grep -v ":$grpc_version\$" || true)"
 if [ -n "$mismatched" ]; then
@@ -109,8 +86,6 @@ if [ -n "$mismatched" ]; then
   bad=1
 fi
 
-# A gradle file naming no grpc artifact at all would pass the loop above by
-# having nothing to disagree with.
 grep -q 'io\.grpc:grpc-' "$gradle" ||
   fail "$gradle names no io.grpc:grpc-* artifact; this check would pass vacuously"
 

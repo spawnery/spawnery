@@ -24,28 +24,14 @@ import (
 	"github.com/spawnery/spawnery/internal/phase"
 )
 
-// PersistentServerName is the name of the server holding one ordinal of a
-// persistent group.
-//
-// The ordinal is the identity of a persistent server, and this name is how it
-// is carried: podspec.DataClaimName derives the claim from the server's name,
-// so this string is also what makes a world addressable across every deletion
-// and recreation of the Server object. An ephemeral server is named by
-// NewServerName instead, with a random suffix, because it has no identity to
-// preserve.
+// PersistentServerName is also the claim's identity: podspec.DataClaimName
+// derives the claim from the server's name.
 func PersistentServerName(group string, ordinal int32) string {
 	return group + "-" + strconv.Itoa(int(ordinal))
 }
 
-// OrdinalOf reads the ordinal back out of a server name, and reports whether
-// the name is one PersistentServerName could have produced for this group.
-//
-// The prefix must equal the group exactly, and everything after it is the
-// ordinal, which is what keeps a group whose own name ends in a number from
-// reading its own name as an ordinal. The digits are parsed strictly:
-// "survival-01" is refused rather than read as 1, because no name this package
-// writes looks like that and accepting it would let two strings claim one
-// identity.
+// OrdinalOf inverts PersistentServerName. "survival-01" is refused rather than
+// read as 1, so two strings cannot claim one identity.
 func OrdinalOf(group, server string) (int32, bool) {
 	prefix := group + "-"
 	if !strings.HasPrefix(server, prefix) {
@@ -62,85 +48,33 @@ func OrdinalOf(group, server string) (int32, bool) {
 	return int32(n), true
 }
 
-// PersistentInputs is everything the persistent sizing rule may look at. It
-// carries none of what ScalingInputs holds about slots, capacity, player
-// counts or generations, because a persistent group is sized by a number a
-// user wrote down and by nothing else.
 type PersistentInputs struct {
-	// Group is the group's name, which is the prefix every one of its ordinal
-	// names is built from.
-	Group string
-	// Replicas is spec.replicas: how many ordinals this group should have.
+	Group    string
 	Replicas int32
-	// Views are the group's servers.
-	Views []ServerView
-	// PendingCreates are the servers this reconciler has asked to create and
-	// the cache has not shown yet, by name. Without them a create in flight is
-	// issued a second time under the same name.
+	Views    []ServerView
+	// Created but not yet in the cache, by name.
 	PendingCreates map[string]bool
-	// PendingDeletes are the removals it has asked for and not yet seen.
 	PendingDeletes map[string]bool
-	// PodHash is podspec.DesiredServerHash for the group as it stands now. A
-	// view whose PodHash differs is stale; a view whose PodHash is empty is
-	// adopted rather than replaced, so an upgrade that introduces the field
-	// does not restart every world in the installation.
-	//
-	// Empty is also what a caller that has not yet computed the hash passes,
-	// and that case is handled the same way as a view's empty hash: adopted,
-	// not compared. See the empty check in DecidePersistentSize's stale loop.
+	// PodHash is podspec.DesiredServerHash. Empty here, or on a view, means
+	// adopt rather than compare (see staleSpec).
 	PodHash string
-	// ChangeoverRefused withholds the stale nomination: an earlier stage of
-	// the network is still changing over.
+	// ChangeoverRefused withholds the stale nomination while an earlier stage
+	// of the network is still changing over.
 	ChangeoverRefused bool
 }
 
-// DecidePersistentSize decides which ordinals a persistent group is missing,
-// and, when it has too many, which one goes first: a surplus ordinal outranks
-// a stale spec, which outranks -- lowest, and gated the same two ways stale
-// is -- a claim still waiting on a filesystem resize.
+// DecidePersistentSize nominates at most one delete: surplus outranks stale,
+// which outranks a claim waiting on a filesystem resize.
 //
-// It stands beside DecideSize rather than inside it: the two share a decision
-// type and nothing else. The slot rule asks what capacity the players need;
-// this one asks what number the user wrote in spec.replicas. The CRD forbids
-// spec.scaling on a persistent group for exactly that reason.
+// An ordinal stays taken while its server drains: a replacement now would put
+// two pods on one ReadWriteOnce volume, which hangs rather than fails. A view
+// with a nil Ordinal fills no ordinal and is never deleted.
 //
-// An ordinal counts as taken while any server carrying it exists, whatever
-// phase that server is in. A draining server has not released its claim, and
-// building its replacement now would mean two pods mounting one ReadWriteOnce
-// volume -- which does not fail cleanly, it hangs on the volume. So the
-// replacement waits for the drain, bounded by spec.drain.timeoutSeconds.
-//
-// A view's Ordinal, read from spec.ordinal by way of ServerView.Ordinal --
-// never re-derived by parsing the name -- decides which ordinal a server
-// holds. A view whose Ordinal is nil is ignored in both directions: it fills
-// no ordinal, and it is not deleted as surplus. This rule removes what it can
-// name, and something it cannot name is not its to remove.
-//
-// # An ordinal two servers carry
-//
-// held is a map, so without this a second server claiming an ordinal would
-// overwrite the first and the loser would vanish from this rule entirely:
-// never surplus, because the surplus loop walks held and the loser is not in
-// it; never recreated, because the ordinal is taken; and still running its pod
-// against the claim named after its own name -- with which of the two survived
-// decided by the order of in.Views, so the answer could change between passes.
-//
-// Such an ordinal is collected into Conflicts and excluded from all three
-// nominations below. Excluding it is the point rather than a side effect. The
-// deletes all read held[ordinal], so acting on a duplicated ordinal means
-// deleting whichever of the two the map happened to keep -- an arbitrary
-// choice between two worlds, and an irreversible one. Refusing leaves the
-// group oversized or stale until a person resolves it, which is the safe half
-// of that trade and the one this repository takes everywhere else.
-//
-// Creation is deliberately not excluded, because it is not affected: the
-// create loop asks only whether an ordinal is taken, and a duplicated one is
-// taken twice over.
+// An ordinal two servers carry goes into Conflicts and is excluded from every
+// delete, since held keeps one of them arbitrarily and deleting it would be an
+// irreversible coin toss between two worlds.
 func DecidePersistentSize(in PersistentInputs) SizeDecision {
 	held := make(map[int32]string, len(in.Views))
-	// carrying is only built for the ordinals that turn out to be duplicated,
-	// which is why it is filled from held rather than in place of it: the
-	// ordinary case allocates nothing beyond the map header.
 	carrying := map[int32][]string{}
 	for _, v := range in.Views {
 		if v.Ordinal == nil {
@@ -181,36 +115,18 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 	}
 	sort.Slice(surplus, func(i, j int) bool { return surplus[i] > surplus[j] })
 
-	// Gate A subsumes the PendingDeletes and leaving() checks the surplus
-	// loop used to make per-candidate: any outstanding delete or any server
-	// already on its way out means an ordinal is already down, and this rule
-	// nominates at most one at a time. So the check moves in front of both the
-	// surplus and the stale nomination below, rather than filtering each one's
-	// candidate list.
 	if takedownInFlight(in) {
 		return decision
 	}
 
 	if len(surplus) > 0 {
-		// surplus is already sorted highest-first.
 		decision.Delete = append(decision.Delete, held[surplus[0]])
 		decision.DeleteReason = "SurplusOrdinal"
 		return decision
 	}
 
-	// Gate B: a stale ordinal is nominated only once every ordinal the group
-	// is supposed to have is confirmed Ready.
-	//
-	// An ordinal that can never become Ready therefore holds the whole group
-	// at its current spec, forever: nothing times this wait out. That is
-	// inherited from StatefulSet's shape knowingly rather than overlooked, and
-	// it is tolerable only because the stall is reported -- ConditionDegraded
-	// publishes for a persistent group, and CountFailures' requiredOrdinals
-	// rule is what makes it actually arrive rather than being reset by a
-	// healthy sibling. An operator who sees Degraded on a persistent group and
-	// an update that has not moved is looking at this.
-	// Surplus removal above never
-	// reaches here, and that is deliberate -- see groupRecovered's comment.
+	// An ordinal that never becomes Ready holds the update forever, as in a
+	// StatefulSet; the stall surfaces as ConditionDegraded.
 	if !groupRecovered(in) {
 		return decision
 	}
@@ -221,11 +137,6 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 			continue
 		}
 		v := viewByName(in.Views, name)
-		// An empty view hash is adopted rather than compared -- see
-		// ServerView.PodHash. An empty in.PodHash is the same adoption from
-		// the other side: see PersistentInputs.PodHash. Both live in
-		// staleSpec, which the ephemeral rule calls too, so the two group
-		// kinds cannot drift apart on what stale means.
 		if !staleSpec(v, in.PodHash) {
 			continue
 		}
@@ -238,10 +149,7 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 		return decision
 	}
 
-	// The lowest-priority class: a claim the CSI driver has grown but whose
-	// filesystem needs the pod restarted to follow. Reached only when nothing
-	// missing, surplus or stale outranked it -- most drivers expand online and
-	// never ask for this at all.
+	// A claim the CSI driver has grown whose filesystem needs a pod restart.
 	resizing := make([]int32, 0, len(held))
 	for ordinal, name := range held {
 		if ordinal >= in.Replicas || carrying[ordinal] != nil {
@@ -259,11 +167,8 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 	return decision
 }
 
-// ordinalConflicts turns the duplicate map into the sorted list a caller can
-// put in a message. Sorted by ordinal, and each ordinal's names sorted too, so
-// the condition a group publishes does not change its wording between passes
-// over a state that has not changed -- a condition whose message churns is one
-// whose LastTransitionTime stops meaning anything.
+// ordinalConflicts sorts so the condition message does not churn between
+// passes over an unchanged state.
 func ordinalConflicts(carrying map[int32][]string) []OrdinalConflict {
 	out := make([]OrdinalConflict, 0, len(carrying))
 	for ordinal, names := range carrying {
@@ -275,33 +180,10 @@ func ordinalConflicts(carrying map[int32][]string) []OrdinalConflict {
 	return out
 }
 
-// takedownInFlight is Gate A: does any ordinal-bearing view of the group
-// already count as leaving(), or have an outstanding PendingDeletes entry.
-// DecidePersistentSize nominates at most one name and returns, so a single
-// call was never the risk; this gate is what makes the *next* call wait while
-// an ordinal is on its way out.
-//
-// On its way out for any reason, not only this rule's own prior nomination:
-// leaving() is equally true of a server condemned off a draining node, one
-// escalated out of Retiring, and one an operator deleted by hand. This gate
-// holds for all of them, so the rule adds nothing to a takedown it did not
-// order. What it cannot do is bound one: condemn() names every server on a
-// departing node and removes them all in a single pass, ungated by anything
-// here, so a node holding two ordinals takes two down -- and an ordinal this
-// rule nominated on an earlier pass can still be draining while that happens.
-// Deliberate and unthrottled since 4c-3: the players on a departing node are
-// evicted off it whatever this rule decides, and moving them to a fallback
-// beats holding them on a node that is going away. So the one-at-a-time
-// budget is a statement about what this rule nominates, not about every way
-// an ordinal can go down.
-//
-// A view with a nil Ordinal is skipped, the same as every other pass over
-// in.Views in this file: DecidePersistentSize's own doc comment says a
-// nil-ordinal view "fills no ordinal, and it is not deleted as surplus" --
-// this rule removes what it can name, and something it cannot name is not
-// its to remove. Such an object -- adopted, or made by hand without
-// spec.ordinal -- stalls the ordinal it sits on; without this skip it would
-// stall every ordinal's takedown instead of just its own.
+// takedownInFlight holds the next nomination while any ordinal is leaving, for
+// whatever reason. It does not bound condemn(), which takes down every server
+// on a departing node in one pass, deliberately: those players are evicted
+// regardless.
 func takedownInFlight(in PersistentInputs) bool {
 	for _, v := range in.Views {
 		if v.Ordinal == nil {
@@ -314,16 +196,8 @@ func takedownInFlight(in PersistentInputs) bool {
 	return false
 }
 
-// groupRecovered is Gate B: does every ordinal the group is supposed to have
-// currently have a Ready server.
-//
-// It deliberately does not gate surplus removal. A surplus ordinal sits above
-// Replicas and is invisible to this test, so relying on it there would
-// release the next nomination while the previous one was still draining --
-// Gate A is what holds the invariant for surplus. Beyond the mechanics:
-// scaling down is an instruction an operator gave explicitly, often because
-// something is wrong, and withholding it until an unrelated ordinal recovers
-// withholds the remedy.
+// groupRecovered deliberately does not gate surplus removal: scaling down is
+// often the remedy for the ordinal that is not recovering.
 func groupRecovered(in PersistentInputs) bool {
 	readyOrdinals := make(map[int32]bool, len(in.Views))
 	for _, v := range in.Views {

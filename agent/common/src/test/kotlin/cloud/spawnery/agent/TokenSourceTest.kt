@@ -15,10 +15,7 @@ class TokenSourceTest {
 
         assertEquals("first", tokens.read())
 
-        // The kubelet replaces this file roughly every eight minutes. A token
-        // cached at startup carries the first session and no later one, and
-        // the failure would read as an authentication problem rather than a
-        // caching bug.
+        // The kubelet rotates the projected token while the pod runs.
         Files.writeString(path, "second")
         assertEquals("second", tokens.read())
     }

@@ -25,15 +25,9 @@ class AcceptedStream(val authorization: String?) {
     lateinit var toAgent: StreamObserver<OperatorToServer>
 
     /**
-     * How the agent ended its half of the stream, as the operator saw it:
      * `half-closed` when the agent called `onCompleted`, `cancelled` when it
-     * cancelled the call. gRPC surfaces the two differently on purpose — a
-     * half-close is `onHalfClose` and leaves the call open for the operator to
-     * finish, a cancellation is `onCancel` and ends it — and [closed] alone
-     * cannot tell them apart, because it fires on either.
-     *
-     * The difference is the whole of the give-up path: an operator that is not
-     * answering is by definition one that will not finish a half-closed call.
+     * cancelled the call; [closed] fires on either. A silent operator never
+     * finishes a half-closed call, so giving up has to cancel.
      */
     val terminal = AtomicReference<String?>(null)
 
@@ -47,23 +41,12 @@ class AcceptedStream(val authorization: String?) {
     }
 }
 
-/**
- * An in-process operator. It is not a mock of the real one — it only has to
- * accept a stream and record it, because what is under test is the agent's half
- * of the conversation.
- */
+/** An in-process operator that accepts streams and records them. */
 class FakeOperator(name: String) : AutoCloseable {
     val streams = ConcurrentLinkedQueue<AcceptedStream>()
     private val header = Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER)
 
-    // A gRPC Context key, not a ThreadLocal: for a bidi-streaming call the
-    // handler method (serverSession, below) runs synchronously inside
-    // ServerCallHandler.startCall to obtain the request StreamObserver, which
-    // is itself invoked from inside interceptCall's next.startCall(). Routing
-    // the header through Contexts.interceptCall attaches it to the Context for
-    // exactly that scope, so the read is correct regardless of which executor
-    // or thread actually runs the call — unlike a ThreadLocal, which is only
-    // correct if interception and dispatch happen to share a thread.
+    // A Context key, not a ThreadLocal: interception and dispatch need not share a thread.
     private val authorizationKey = Context.key<String?>("authorization")
 
     private val service = object : AgentServiceGrpc.AgentServiceImplBase() {

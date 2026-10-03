@@ -31,7 +31,6 @@ import (
 
 type identityKey struct{}
 
-// IdentityFrom reads the identity a stream was authenticated with.
 func IdentityFrom(ctx context.Context) (Identity, bool) {
 	id, ok := ctx.Value(identityKey{}).(Identity)
 	return id, ok
@@ -48,7 +47,6 @@ func RoleForMethod(fullMethod string) (agent.Role, bool) {
 	return "", false
 }
 
-// wrappedStream carries the authenticated context into the handler.
 type wrappedStream struct {
 	grpc.ServerStream
 	ctx context.Context
@@ -76,9 +74,8 @@ func (a *Authenticator) StreamInterceptor() grpc.StreamServerInterceptor {
 			log.FromContext(ctx).V(1).Info("rejected an agent stream",
 				"method", info.FullMethod, "reason", err.Error())
 			AuthFailures.WithLabelValues(string(role)).Inc()
-			// An API server outage must look different from a refused
-			// token: Unavailable tells the agent to back off and retry
-			// rather than conclude its credentials are wrong.
+			// Unavailable tells the agent to back off and retry rather than conclude its
+			// credentials are wrong.
 			code := codes.Unauthenticated
 			switch {
 			case isUnavailable(err):

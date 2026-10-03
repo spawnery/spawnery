@@ -8,10 +8,6 @@ package cloud.spawnery.agent.pb;
 /**
  * <pre>
  * BoostResult is the boost that now exists.
- *
- * It repeats the replica count back rather than assuming the caller's, because
- * the request may have been for zero seconds and this says what the default
- * resolved to.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.BoostResult}
@@ -72,9 +68,7 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * When it stops counting, as seconds since the epoch on the operator's
-   * clock. An instant here and a duration on the way in, and the asymmetry is
-   * the point: the operator is the side with the authoritative clock, so it
-   * states the answer and the agent states the ask.
+   * clock.
    * </pre>
    *
    * <code>int64 expires_at_unix = 2;</code>
@@ -261,10 +255,6 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * BoostResult is the boost that now exists.
-   *
-   * It repeats the replica count back rather than assuming the caller's, because
-   * the request may have been for zero seconds and this says what the default
-   * resolved to.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.BoostResult}
@@ -450,9 +440,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * When it stops counting, as seconds since the epoch on the operator's
-     * clock. An instant here and a duration on the way in, and the asymmetry is
-     * the point: the operator is the side with the authoritative clock, so it
-     * states the answer and the agent states the ask.
+     * clock.
      * </pre>
      *
      * <code>int64 expires_at_unix = 2;</code>
@@ -465,9 +453,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * When it stops counting, as seconds since the epoch on the operator's
-     * clock. An instant here and a duration on the way in, and the asymmetry is
-     * the point: the operator is the side with the authoritative clock, so it
-     * states the answer and the agent states the ask.
+     * clock.
      * </pre>
      *
      * <code>int64 expires_at_unix = 2;</code>
@@ -484,9 +470,7 @@ private static final long serialVersionUID = 0L;
     /**
      * <pre>
      * When it stops counting, as seconds since the epoch on the operator's
-     * clock. An instant here and a duration on the way in, and the asymmetry is
-     * the point: the operator is the side with the authoritative clock, so it
-     * states the answer and the agent states the ask.
+     * clock.
      * </pre>
      *
      * <code>int64 expires_at_unix = 2;</code>

@@ -48,8 +48,6 @@ func pluginReader(t *testing.T, objects ...client.Object) client.Reader {
 }
 
 func TestNoExtraPluginsIsAccepted(t *testing.T) {
-	// The overwhelmingly common case, and the one a regression here would
-	// break for every installation that never asked for this.
 	if _, _, ok := checkExtraPlugins(context.Background(), pluginReader(t), "minecraft", nil, false); !ok {
 		t.Error("a group with no extraPlugins was refused")
 	}
@@ -65,8 +63,8 @@ func TestAReadWriteManyClaimIsAccepted(t *testing.T) {
 }
 
 func TestAReadWriteOnceClaimIsRefusedAndSaysWhy(t *testing.T) {
-	// The failure this replaces: the second server sits Pending with a
-	// scheduling error about volume affinity, and nothing names the claim.
+	// Otherwise the second server sits Pending on volume affinity, and
+	// nothing names the claim.
 	c := pluginReader(t, pluginClaim("plugins", corev1.ReadWriteOnce))
 
 	reason, message, ok := checkExtraPlugins(context.Background(), c, "minecraft",
@@ -78,17 +76,13 @@ func TestAReadWriteOnceClaimIsRefusedAndSaysWhy(t *testing.T) {
 	if reason != spawneryv1alpha1.ReasonPluginVolumeUnusable {
 		t.Errorf("reason = %q, want ReasonPluginVolumeUnusable", reason)
 	}
-	// The claim and the mode, because an administrator reading this has to be
-	// able to fix it without guessing which of the two is wrong.
 	if !strings.Contains(message, "plugins") || !strings.Contains(message, "ReadWriteMany") {
 		t.Errorf("message = %q, want it to name the claim and the mode it needs", message)
 	}
 }
 
 func TestAMissingClaimIsRefusedRatherThanMounted(t *testing.T) {
-	// Kubernetes would leave the pod Pending forever on a claim that does not
-	// exist. Refusing here puts the answer on the group, where somebody is
-	// looking.
+	// Kubernetes would leave the pod Pending forever on a missing claim.
 	c := pluginReader(t)
 
 	reason, message, ok := checkExtraPlugins(context.Background(), c, "minecraft",
@@ -105,13 +99,7 @@ func TestAMissingClaimIsRefusedRatherThanMounted(t *testing.T) {
 	}
 }
 
-// countingReader records how many Gets reach it.
-//
-// It exists because "refuses before the claim is read" is a claim about a call
-// that did not happen, and a test that only checks the returned reason cannot
-// see one. Moving the switch below the Get leaves the reason correct and the
-// read wasted, and the first version of the test below passed against exactly
-// that.
+// countingReader counts Gets, so a test can assert a read that did not happen.
 type countingReader struct {
 	client.Reader
 	gets int
@@ -125,8 +113,6 @@ func (c *countingReader) Get(
 }
 
 func TestTheSwitchOffRefusesAndNamesTheFlagRatherThanTheClaim(t *testing.T) {
-	// An administrator whose claim is perfectly good has to be sent to the
-	// operator's arguments and nowhere else.
 	c := pluginReader(t)
 
 	reason, message, ok := checkExtraPlugins(context.Background(), c, "minecraft",
@@ -144,9 +130,8 @@ func TestTheSwitchOffRefusesAndNamesTheFlagRatherThanTheClaim(t *testing.T) {
 }
 
 func TestTheSwitchOffReadsNoClaimAtAll(t *testing.T) {
-	// The other half, and it needs its own test because it is a claim about a
-	// call that does not happen. An installation with the feature off must not
-	// spend an API read per group per resync on a field it will refuse anyway.
+	// With the feature off, no API read per group per resync on a field it
+	// refuses anyway.
 	c := &countingReader{Reader: pluginReader(t, pluginClaim("plugins", corev1.ReadWriteMany))}
 
 	checkExtraPlugins(context.Background(), c, "minecraft",
@@ -158,8 +143,7 @@ func TestTheSwitchOffReadsNoClaimAtAll(t *testing.T) {
 }
 
 func TestAClaimWithSeveralModesIsAcceptedIfOneIsReadWriteMany(t *testing.T) {
-	// accessModes is a list. A claim that is both RWO and RWX is mountable by
-	// every node, and reading only the first entry would refuse it.
+	// A claim that is both RWO and RWX is mountable by every node.
 	c := pluginReader(t, pluginClaim("plugins", corev1.ReadWriteOnce, corev1.ReadWriteMany))
 
 	if _, _, ok := checkExtraPlugins(context.Background(), c, "minecraft",
@@ -168,8 +152,7 @@ func TestAClaimWithSeveralModesIsAcceptedIfOneIsReadWriteMany(t *testing.T) {
 	}
 }
 
-// failingReader answers every Get with the error it was given; a fake client
-// cannot be told to fail, and the case is an API server that did not answer.
+// failingReader exists because a fake client cannot be told to fail.
 type failingReader struct {
 	client.Reader
 	err error
@@ -180,9 +163,8 @@ func (r failingReader) Get(context.Context, client.ObjectKey, client.Object, ...
 }
 
 func TestAClaimTheAPIServerDidNotAnswerAboutIsNoVerdict(t *testing.T) {
-	// The reader is uncached, one round trip per group per pass. Before
-	// this, any error read as "unusable": a blip during a node drain made
-	// the group condemn its servers and build no replacements.
+	// The reader is uncached; an API blip must not read as "unusable" and
+	// condemn the group's servers.
 	reader := failingReader{pluginReader(t), errors.New("the server is currently unable to handle the request")}
 	reason, _, ok := checkGroupVolumes(context.Background(), reader, "minecraft",
 		&spawneryv1alpha1.ExtraPlugins{ClaimName: "plugins"}, nil, nil, true, true, true)
@@ -201,7 +183,6 @@ func TestAClaimTheAPIServerDidNotAnswerAboutIsNoVerdict(t *testing.T) {
 	if ok || r2 != spawneryv1alpha1.ReasonPluginVolumeUnusable || m2 == "x" {
 		t.Errorf("a refused group's decision was not kept: %q %q %v", r2, m2, ok)
 	}
-	// A real verdict passes through untouched.
 	if r3, _, ok := keepLastVolumeDecision(accepted, spawneryv1alpha1.ReasonMountVolumeUnusable, "m", false); ok || r3 != spawneryv1alpha1.ReasonMountVolumeUnusable {
 		t.Error("a real refusal was rewritten")
 	}

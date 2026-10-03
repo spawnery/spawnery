@@ -77,22 +77,14 @@ type HostPortSpec struct {
 //
 // +kubebuilder:validation:XValidation:rule="!self.address.contains(' ') && !self.address.contains('://')",message="expose.clusterIP.address is what a player types, not a URL: no scheme and no spaces"
 type ClusterIPSpec struct {
-	// Address is what a player types.
+	// Address is what a player types. Required, because the operator cannot
+	// learn it from whatever routes to the Service.
 	//
-	// Required, because the operator cannot learn it: it lives in an
-	// IngressRouteTCP, an HTTPRoute, a tunnel's configuration or a DNS
-	// record — objects under APIs this operator does not read and cannot
-	// know are installed. Optional would make "empty" and "forgotten" the
-	// same state, which is the gap this strategy exists to close.
-	//
-	// No port is required and none should usually be given: Minecraft
-	// clients default to 25565, so "mc.paul.wtf" is the whole of what a
-	// player types. Give "host:port" only when the entry point really is on
-	// another port.
+	// Give "host:port" only when the entry point is not on 25565, the
+	// client's default.
 	//
 	// Nothing checks that it resolves, that anything listens, or that it
-	// leads to this group's Service. It is a sign on a door, not a test of
-	// the door.
+	// leads to this group's Service.
 	// +kubebuilder:validation:MinLength=1
 	Address string `json:"address"`
 }
@@ -119,25 +111,10 @@ type ExposeSpec struct {
 
 	// HostPort configures type HostPort.
 	//
-	// It cannot coexist with Pod Security `baseline` or `restricted` in the
-	// same namespace: both disallow a container hostPort outright, so the API
-	// server refuses every pod of such a group and this operator reports the
-	// refusal on Degraded rather than ever admitting one. Against
-	// `restricted` the refusal reads:
-	//
-	//	violates PodSecurity "restricted:latest": hostPort
-	//	(container "velocity" uses hostPort 25577)
-	//
-	// The remedy is a namespace of its own for the HostPort group, with a
-	// relaxed Pod Security label, separate from the restricted namespaces the
-	// rest of the network runs in.
-	//
-	// That namespace is necessary and not sufficient. A hostPort that is
-	// admitted, ready and published in status.address can still be
-	// unreachable, because whether the port is open to the world is a
-	// host-firewall question rather than a Kubernetes one: a cluster-wide
-	// policy admitting a fixed list of ports from `world` drops this one while
-	// the pod serves perfectly. See docs/explanation/network-boundaries.md.
+	// Pod Security `baseline` and `restricted` both refuse a hostPort, so the
+	// group needs a namespace of its own with a relaxed label; the refusal is
+	// reported on Degraded. Whether the port is reachable from outside is
+	// still up to the host firewall or cluster network policy.
 	// +optional
 	HostPort *HostPortSpec `json:"hostPort,omitempty"`
 
@@ -160,36 +137,17 @@ type ProxyConfigSpec struct {
 	// +optional
 	PlayerLimit int32 `json:"playerLimit,omitempty"`
 
-	// Motd is shown in the server list.
-	//
-	// Editing it rolls the group's proxies: the rendered config values are
-	// part of the pod digest, so the change reaches every proxy through a
-	// replacement at the group's maxUnavailable pace rather than through a
-	// ConfigMap a running pod never re-reads.
+	// Motd is shown in the server list. Editing it rolls the group's proxies.
 	// +optional
 	Motd string `json:"motd,omitempty"`
 
 	// OnlineMode is whether the proxy authenticates players with Mojang.
 	//
-	// Turning it off means the proxy stops authenticating anyone: any client
-	// may connect under any name, including the name of a player who has
-	// paid for the game and owns things on this network, and the network is
-	// only as protected as whatever sits in front of it. There is nothing
-	// further down that catches it — the backends run online-mode=false by
-	// design, because the proxy is the layer that was supposed to do this.
+	// Turning it off lets any client connect under any name; the backends
+	// run online-mode=false and do not catch it. It is not the backends'
+	// proxies.velocity.online-mode, which stays true either way.
 	//
-	// It is a field on the custom resource rather than something reachable
-	// through configOverlay so that turning it off is a visible edit to the
-	// object an operator reviews, not a line in a ConfigMap nobody reads.
-	//
-	// This is the proxy's own online-mode, not the backends'
-	// proxies.velocity.online-mode in paper-global.yml, which means "trust
-	// what the proxy forwards" and stays true either way: modern forwarding
-	// works the same whether the proxy authenticated the player or not.
-	//
-	// Editing it rolls the group's proxies, like Motd and PlayerLimit: the
-	// config values are part of the pod digest, so no proxy runs the old
-	// setting once the roll is through, and the roll starts on the edit.
+	// Editing it rolls the group's proxies.
 	// +kubebuilder:default=true
 	// +optional
 	OnlineMode *bool `json:"onlineMode,omitempty"`
@@ -253,18 +211,9 @@ type ProxyGroupSpec struct {
 
 	// Drain bounds how long existing sessions may run out on proxy replacement.
 	//
-	// Editing it rolls the whole group, and that is worth knowing before an
-	// incident rather than during one. The value reaches the pod as
-	// terminationGracePeriodSeconds, so it is part of the rendered pod the
-	// group's hash covers -- which means raising a drain timeout, the thing an
-	// operator does in the middle of an incident, rolls the group blue/green
-	// on top of whatever prompted it: a replacement for every proxy, not just
-	// one.
-	//
-	// Raising it while a drain is already in flight otherwise behaves: the
-	// marked pod keeps its mark, being now stale as well as draining, and the
-	// deadline is read from the current spec on every pass. So the edit is
-	// safe, just not free.
+	// It reaches the pod as terminationGracePeriodSeconds, so editing it
+	// replaces every proxy of the group. A drain already in flight picks up
+	// the new deadline.
 	// +kubebuilder:default={timeoutSeconds:300}
 	// +optional
 	Drain *DrainSpec `json:"drain,omitempty"`
@@ -289,52 +238,30 @@ type ProxyGroupSpec struct {
 	// "paper-global.yml", "paper-world-defaults.yml" or "velocity.toml", in
 	// the target's own dialect.
 	//
-	// paper-world-defaults.yml is the one of those the operator writes only
-	// when an overlay names it. Nothing in it is operationally critical, so
-	// there is nothing to assert into it, and a file written empty on every
-	// start would overwrite whatever the server had filled in for itself. It
-	// is also the only route that file has: a mount cannot deliver it, because
-	// a mount anywhere under /data/config stops the server writing its own
-	// configuration and it never starts. See internal/podspec.ServerConfigDirPath.
+	// It outranks the rendered defaults and is outranked by the operationally
+	// critical fields.
 	//
-	// It is a field of its own rather than a reserved name inside mounts,
-	// because mounts is documented as raw files for plugins and worlds and a
-	// name-based convention is invisible until someone picks that name by
-	// accident. It outranks the rendered defaults and is outranked by the
-	// operationally critical fields, which nothing can reach.
-	//
-	// A key the receiving program does not declare is refused rather than
-	// written. Paper and Velocity both keep their own default for a key they
-	// do not read and write the stray one straight back out, so the rendered
-	// file goes on looking like the override took while the setting never
-	// applies -- which is the failure this refusal exists to prevent. The
-	// declared keys are taken from each program's own default configuration,
-	// so a Paper or Velocity bump can refuse a legitimately new key until that
-	// file is captured again. server.properties is the exception: it has no
-	// such capture, so a mistyped key there is still only an unused one.
+	// A key the receiving program does not declare is refused, since Paper and
+	// Velocity silently ignore it. The declared keys come from each program's
+	// captured default configuration, so a Paper or Velocity bump can refuse a
+	// new key until that capture is updated. server.properties keys are not
+	// checked.
 	// +optional
 	ConfigOverlay *ObjectRef `json:"configOverlay,omitempty"`
 
 	// Mounts are extra ConfigMap, Secret and PersistentVolumeClaim mounts.
-	//
-	// It is ServerGroupSpec.Mounts for a proxy, and it is here because a
-	// network's proxies may read the same shared asset directory its backends
-	// do, out of a template that targets both.
 	// +optional
 	// +listType=map
 	// +listMapKey=name
 	Mounts []Mount `json:"mounts,omitempty"`
 
 	// Env are extra environment variables for the proxy container, appended
-	// to the ones the operator sets. A name may not begin with
-	// ReservedEnvPrefix.
+	// to the ones the operator sets. A name may not begin with SPAWNERY_.
+	// JVM options go in JAVA_TOOL_OPTIONS.
 	//
-	// It is ServerGroupSpec.Env for a proxy, rule and reasoning unchanged,
-	// and JAVA_TOOL_OPTIONS is the same seam: the Velocity entrypoint execs
-	// java with its own flag list too. It is in podspec.DesiredProxyHash for
-	// the same reason -- editing it rolls the group through the ordinary
-	// blue/green path, and with the same limit: a valueFrom reference is
-	// digested, the value behind it is not.
+	// Editing it replaces every proxy of the group. A valueFrom reference is
+	// digested, not its value: rotating the Secret or ConfigMap reaches only
+	// new pods.
 	// +optional
 	// +listType=map
 	// +listMapKey=name
@@ -342,27 +269,16 @@ type ProxyGroupSpec struct {
 	Env []corev1.EnvVar `json:"env,omitempty"`
 
 	// DisplayName is what this group is called where a person reads it:
-	// a scoreboard, a chat message, a playtime key. A metadata.name is a DNS
-	// label -- lowercase, no spaces -- and a name people say out loud rarely
-	// is, so a plugin that shows "Bingo-Team" reads it from here and not from
-	// the object's name.
+	// a scoreboard, a chat message, a playtime key.
 	//
-	// The operator carries it and reads none of it, like Attributes below.
-	// Empty is not an error: a plugin then shows the group's own name, and it
-	// is the plugin that makes that substitution rather than the operator,
-	// so that a picture with the field unset and a picture whose operator
-	// predates the field read the same.
+	// The operator carries it and reads none of it. Empty, a plugin shows the
+	// group's own name.
 	// +optional
 	// +kubebuilder:validation:MaxLength=64
 	DisplayName string `json:"displayName,omitempty"`
 
 	// Attributes is what plugins are told about this group. See
-	// GroupAttributes: the operator carries it and acts on none of it.
-	//
-	// It shapes no pod and is therefore not in the spec hash a server is
-	// replaced on -- the opposite of Env above. Editing it replaces nothing
-	// and restarts nothing; the next network picture simply carries the new
-	// value, which is what a description of a group should cost.
+	// GroupAttributes. Editing it replaces and restarts nothing.
 	// +optional
 	Attributes GroupAttributes `json:"attributes,omitempty"`
 
@@ -372,17 +288,8 @@ type ProxyGroupSpec struct {
 	ExtraPlugins *ExtraPlugins `json:"extraPlugins,omitempty"`
 
 	// ExtraFiles names a volume whose tree is copied into this group's
-	// servers on every start. See ExtraFiles.
-	//
-	// The claim's contents are the truth on every start: a file the server
-	// rewrote at runtime is replaced by the claim's version the next time the
-	// pod starts. A world placed in this claim is therefore overwritten on
-	// every start and does not belong here -- spec.storage and spec.mounts
-	// are what carry one.
-	//
-	// Nothing about the contents reaches the pod hash, because the spec names
-	// a claim rather than describing what is in it. Changing a file replaces
-	// no running server; it reaches one on that server's next start.
+	// servers on every start, replacing what the server wrote there. See
+	// ExtraFiles.
 	// +optional
 	ExtraFiles *ExtraFiles `json:"extraFiles,omitempty"`
 
@@ -411,19 +318,7 @@ type ProxyGroupStatus struct {
 	ConnectedPlayers int32 `json:"connectedPlayers"`
 
 	// ObservedGeneration is the spec generation this status was computed from.
-	//
-	// Literally that, and not the looser convention it is often read as. It
-	// advances on a pass that failed as well as one that succeeded, because
-	// setStatus writes it on every path that observed the pods and the
-	// Service, and refuse() on every path that refused the group before
-	// looking (a missing or unaccepted Network, a volume, scheduling or host
-	// port the Network does not allow, a foreign ConfigMap) -- so a group
-	// permanently refused by Pod Security or by its Network reports
-	// observedGeneration == generation for as long as the refusal stands. A
-	// reader taking that to mean "the controller has caught up and all is
-	// well" is misled; Degraded=True beside the same generation is the
-	// correction, and the two together say the controller did catch up and
-	// what it found was a refusal.
+	// It advances on a refused pass too; check Degraded beside it.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`
 
@@ -471,27 +366,11 @@ func init() {
 	SchemeBuilder.Register(&ProxyGroup{}, &ProxyGroupList{})
 }
 
-// defaultProxyDrainTimeout is how long a proxy may take to empty before it is
-// removed anyway.
-//
-// Five minutes rather than the sixty seconds a ServerGroup uses, because the
-// two waits are not the same wait. A server drain moves its players to another
-// backend, which is quick; a proxy drain has nowhere to move them — the
-// client's connection terminates at the proxy being removed — so this waits
-// for people to leave on their own. There is no honest default: a play session
-// runs to tens of minutes, so every number short of that disconnects somebody.
-// Five minutes lets a scale-down in a quiet period finish without kicks while
-// still bounding a deploy. An operator who cares about this should set
-// spec.drain.timeoutSeconds.
-//
-// This only fires for an in-memory zero value: ProxyGroupSpec.Drain's
-// +kubebuilder:default={timeoutSeconds:300} marker means a ProxyGroup that
-// came from the API server already carries 300 in Drain.TimeoutSeconds. The
-// two 300s are independent and must be kept in step by hand.
+// defaultProxyDrainTimeout is longer than a ServerGroup's 60 s because a proxy
+// drain cannot move its players; it waits for them to leave. Keep it in step
+// with ProxyGroupSpec.Drain's +kubebuilder:default by hand.
 const defaultProxyDrainTimeout = 300 * time.Second
 
-// DrainTimeout is how long existing sessions may run out before a proxy being
-// removed is deleted anyway.
 func (g *ProxyGroup) DrainTimeout() time.Duration {
 	if g.Spec.Drain == nil || g.Spec.Drain.TimeoutSeconds < 1 {
 		return defaultProxyDrainTimeout
@@ -507,10 +386,8 @@ func (g *ProxyGroup) MaxStale() time.Duration {
 	return time.Duration(g.Spec.Update.MaxStaleSeconds) * time.Second
 }
 
-// defaultTransferForceAfter is spec.update.transfer.forceAfterSeconds when
-// transfer is set but the field itself is not. Well below the default drain
-// timeout of 300 s, because the agent learns it is leaving up to one resync
-// after the drain clock starts.
+// defaultTransferForceAfter stays well below the 300 s drain default because
+// the agent learns it is leaving up to one resync after the drain clock starts.
 const defaultTransferForceAfter = 120 * time.Second
 
 // TransferForceAfter is spec.update.transfer.forceAfterSeconds and whether

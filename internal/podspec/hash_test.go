@@ -81,11 +81,7 @@ func TestPodHashIgnoresReplicas(t *testing.T) {
 	}
 }
 
-// TestPodHashMatchesWhatTheOperatorStamped is the property Task 4's rollout
-// decision depends on: recomputing the desired hash for a group has to equal
-// the hash BuildProxyPod already stamped on a pod it built for the identical
-// inputs, or every comparison the rollout makes would read a fresh pod as
-// stale against itself.
+// Otherwise the rollout would read a fresh pod as stale against itself.
 func TestPodHashMatchesWhatTheOperatorStamped(t *testing.T) {
 	net, group := testNetwork(), testProxyGroup()
 	pod, err := BuildProxyPod(net, group, "gateway-aaaa", testEndpoint, nil)
@@ -101,13 +97,8 @@ func TestPodHashMatchesWhatTheOperatorStamped(t *testing.T) {
 	}
 }
 
-// motd reaches only the ConfigMap, never the rendered pod, so a pod-only digest
-// left it invisible: the ConfigMap updated, no proxy went stale, DecideRollout
-// ordered nothing, and there is no reload path. Shipped since 4c-2.
-//
-// playerLimit is here beside it precisely because it is *not* broken -- it
-// rides in the pod as SPAWNERY_PLAYER_LIMIT -- so that a later refactor moving
-// that env var out of the pod cannot break it in silence.
+// motd reaches only the ConfigMap; playerLimit is checked too so that moving
+// SPAWNERY_PLAYER_LIMIT out of the pod cannot break it silently.
 func TestDesiredProxyHashSeesTheConfigValues(t *testing.T) {
 	cases := []struct {
 		name   string
@@ -157,9 +148,7 @@ func proxyHashFixtures(t *testing.T) (*spawneryv1alpha1.Network, *spawneryv1alph
 
 func proxyValuesBytes(t *testing.T, group *spawneryv1alpha1.ProxyGroup) []byte {
 	t.Helper()
-	// The production path marshals controller.proxyConfigValues(group); this
-	// mirrors only the two fields under test, which is enough to prove the
-	// bytes reach the digest.
+	// Mirrors only the two fields of controller.proxyConfigValues under test.
 	limit := group.Spec.Config.PlayerLimit
 	motd := group.Spec.Config.Motd
 	data, err := yaml.Marshal(render.Values{PlayerLimit: &limit, Motd: &motd})
@@ -191,9 +180,8 @@ func serverHashFixtures(t *testing.T) (*spawneryv1alpha1.Network, *spawneryv1alp
 	return net, group
 }
 
-// The hash must not flap between passes: a PodSpec carries maps, and Go's map
-// iteration order is unspecified. An unstable digest would restart every world
-// on every operator restart, which is worse than the problem 5b solves.
+// A PodSpec carries maps; an unstable digest would restart every world on
+// every operator restart.
 func TestDesiredServerHashIsStableAcrossRuns(t *testing.T) {
 	net, group := serverHashFixtures(t)
 	values := []byte("maxPlayers: 20\n")
@@ -213,8 +201,7 @@ func TestDesiredServerHashIsStableAcrossRuns(t *testing.T) {
 	}
 }
 
-// The discrimination table is the whole point of the hash: it says, as a list a
-// person can read, which edits restart a world and which do not.
+// The table lists which edits restart a world and which do not.
 func TestDesiredServerHashDiscriminates(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -233,21 +220,14 @@ func TestDesiredServerHashDiscriminates(t *testing.T) {
 			changed: true,
 		},
 		{
-			// BuildServerPod never reads Replicas, so this row cannot fail
-			// today on that account. What it guards against is
-			// DesiredServerHash's own marshalled struct (hash.go) growing a
-			// Replicas field directly — the mutation this row exists to
-			// catch, not any path already reachable through the pod.
+			// BuildServerPod never reads Replicas; this guards DesiredServerHash's own
+			// marshalled struct growing the field.
 			name:    "replicas does not change it",
 			mutate:  func(g *spawneryv1alpha1.ServerGroup) { g.Spec.Replicas = ptr.To(int32(5)) },
 			changed: false,
 		},
 		{
-			// Same guard as above, for Drain.TimeoutSeconds: BuildServerPod
-			// does not read it either, so this row watches for
-			// DesiredServerHash's marshalled struct being widened to
-			// include it directly, not for a path through the pod that
-			// exists today.
+			// Same guard, for Drain.TimeoutSeconds.
 			name: "drain.timeoutSeconds does not change it",
 			mutate: func(g *spawneryv1alpha1.ServerGroup) {
 				g.Spec.Drain = &spawneryv1alpha1.DrainSpec{TimeoutSeconds: 999}
@@ -297,20 +277,8 @@ func TestDesiredServerHashDiscriminates(t *testing.T) {
 	}
 }
 
-// TestDesiredServerHashHasNoPerServerInput does not call DesiredServerHash
-// twice to compare outputs: its signature — DesiredServerHash(net, group,
-// configValues) — admits no *Server at all, so there is no per-server value
-// (name, ordinal, claim) that could reach the digest, and the compiler
-// enforces that, not this test.
-//
-// What this test actually guards is the fixture's premise: that two ordinals
-// of this group really would render two different pods if DesiredServerHash
-// were, hypothetically, called per-server. BuildServerPod is exercised
-// directly here for that reason — proving pod0.Spec != pod1.Spec is what
-// makes "the digest can't distinguish them" a meaningful property of the API
-// shape rather than a coincidence of a fixture where they'd have been
-// identical anyway. The non-empty digest check is a basic sanity check on
-// top, not a proof of the identity-independence claim.
+// The signature already admits no *Server; this checks the fixture's premise
+// that two ordinals would render different pods.
 func TestDesiredServerHashHasNoPerServerInput(t *testing.T) {
 	net, group := serverHashFixtures(t)
 	values := []byte("maxPlayers: 20\n")
@@ -341,10 +309,6 @@ func TestDesiredServerHashHasNoPerServerInput(t *testing.T) {
 	}
 }
 
-// ForwardingHash is what tells a rotation from a steady state, and it becomes
-// a pod label, so five separate properties have to hold at once. They are one
-// test because each is a single comparison and splitting them would repeat the
-// fixture five times.
 func TestForwardingHashIsStableSaltedAndUntrimmed(t *testing.T) {
 	const uidA = types.UID("11111111-2222-3333-4444-555555555555")
 	const uidB = types.UID("99999999-8888-7777-6666-555555555555")
@@ -369,21 +333,15 @@ func TestForwardingHashIsStableSaltedAndUntrimmed(t *testing.T) {
 	}
 }
 
-// Without a separator between the salt and the value, ("ab", "c") and
-// ("a", "bc") are the same byte sequence and hash alike. Real UIDs are all the
-// same length so this could never bite in production -- which is exactly why it
-// needs a test rather than a reader noticing it.
+// Real UIDs share a length, so only a test can catch a missing separator.
 func TestForwardingHashSeparatesTheSaltFromTheValue(t *testing.T) {
 	if ForwardingHash("ab", []byte("c")) == ForwardingHash("a", []byte("bc")) {
 		t.Error("the UID and the value run together in the digest; the separator byte is missing")
 	}
 }
 
-// The whole of milestone 5c rests on this: if the forwarding stamp reached the
-// pod hash, rotating the secret would make every pod of the network stale at
-// once and the operator would recreate all of them, proxies and backends
-// interleaved. The master design defers that rollout deliberately; this test is
-// what keeps it deferred.
+// If the forwarding stamp reached the pod hash, rotating the secret would
+// recreate every pod of the network at once.
 func TestRotatingTheForwardingSecretDoesNotMoveTheServerPodHash(t *testing.T) {
 	net, group := serverHashFixtures(t)
 	values := []byte("maxPlayers: 20\n")
@@ -429,9 +387,8 @@ func TestRotatingTheForwardingSecretDoesNotMoveTheProxyPodHash(t *testing.T) {
 	}
 }
 
-// The stamp has to be on the pod for the Network controller to read it back,
-// and absent while the operator does not know the digest -- an absent label is
-// "unknown", and a wrong one would be a lie about what the process loaded.
+// An absent label means "unknown"; a wrong one would misstate what the
+// process loaded.
 func TestServerPodCarriesTheForwardingStampOnlyWhenItIsKnown(t *testing.T) {
 	net, group := serverHashFixtures(t)
 	srv := &spawneryv1alpha1.Server{

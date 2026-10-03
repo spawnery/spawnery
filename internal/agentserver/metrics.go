@@ -21,9 +21,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
-// OpenStreams is how many agent streams are live right now. Compared against
-// the number of running pods it is the fastest way to see agents that cannot
-// reach the operator.
 var OpenStreams = prometheus.NewGaugeVec(
 	prometheus.GaugeOpts{
 		Name: "spawnery_agent_open_streams",
@@ -32,9 +29,6 @@ var OpenStreams = prometheus.NewGaugeVec(
 	[]string{"role"},
 )
 
-// RejectedReports counts reports the registry refused. They are discarded
-// without dropping the stream, so without this counter a lying agent would be
-// invisible outside the log.
 var RejectedReports = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "spawnery_agent_rejected_reports_total",
@@ -43,18 +37,8 @@ var RejectedReports = prometheus.NewCounterVec(
 	[]string{"role"},
 )
 
-// RequestsRefused counts CloudRequests the operator declined, by reason.
-//
-// **By reason and by nothing else.** A label carrying a pod, a namespace or a
-// player would be a cardinality bomb -- and for the player it would also put a
-// person's name into whatever the monitoring stack's retention is, which is
-// the rule docs/explanation/network-boundaries.md already states about the roster.
-//
-// Each reason is a different operational question. RATE_LIMITED rising is a
-// pod asking too often, which is a misbehaving plugin or a compromised one;
-// NOT_FOUND rising is ordinary, because a player logging out between a call
-// and its request lands there; REFUSED is a bound doing its job. An alert that
-// treated them alike would page for the second.
+// No pod, namespace or player label: cardinality, and a player's name does not
+// belong in the monitoring stack's retention.
 var RequestsRefused = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "spawnery_agent_requests_refused_total",
@@ -63,15 +47,6 @@ var RequestsRefused = prometheus.NewCounterVec(
 	[]string{"reason"},
 )
 
-// OpenConnections is how many connections the agent listener holds right now,
-// across every peer. An agent opens one per session and a renewal overlaps two
-// for the length of a handover, so a fleet's steady state is its pod count and
-// anything durably above that is a channel somebody is not closing.
-//
-// This is also the count milestone 2c's blind spot was about: OpenStreams
-// above counts what the operator was asked to serve, so an agent leaking a
-// gRPC channel per reconnect moved this number and nothing else. Until this
-// existed, nothing measured it.
 var OpenConnections = prometheus.NewGauge(
 	prometheus.GaugeOpts{
 		Name: "spawnery_agent_open_connections",
@@ -79,23 +54,8 @@ var OpenConnections = prometheus.NewGauge(
 	},
 )
 
-// ExpectedAgents is how many agent connections the fleet ought to be holding:
-// the count of managed pods, from the operator's own caches. It is the first
-// number in this channel that says anything about the fleet rather than about
-// one peer, and it exists because the comparison it enables cannot be done
-// anywhere else -- OpenConnections above is a fact about the operator, the pod
-// count is a fact about the cluster, and only their ratio says whether the
-// connections open are the ones that ought to be.
-//
-// Read it as a ceiling on what ought to connect, not as a target. A pod that
-// is Pending, or one whose agent has not started, is counted here and holds
-// nothing; the count is deliberately the loose direction, because it bounds a
-// refusal (see FleetConnectionsPerAgent) and a count that ran low would refuse
-// an agent that had done nothing wrong.
-//
-// Absent, rather than zero, until the first count succeeds. Zero is a real
-// answer -- a cluster with no groups -- and the two must not be confused by
-// anything alerting on this.
+// ExpectedAgents is a ceiling, not a target: Pending pods count. It is absent,
+// not zero, until the first count succeeds.
 var ExpectedAgents = prometheus.NewGauge(
 	prometheus.GaugeOpts{
 		Name: "spawnery_agents_expected",
@@ -103,25 +63,8 @@ var ExpectedAgents = prometheus.NewGauge(
 	},
 )
 
-// ConnectionsRefused counts connections turned away for being over a bound
-// (see PeerLimiter). A healthy fleet never moves it, so any increase is either
-// a compromised pod or a bound set too low -- and the two are told apart by
-// whether the pods that own the addresses are behaving, which is why the log
-// line beside it names the peer.
-//
-// The bound label is "peer" or "fleet" and separates the two readings the
-// refusal has. A peer refusal is one pod over MaxConnectionsPerPeer and says
-// nothing about anybody else. A fleet refusal is the slack in that bound being
-// withheld from every peer at once, because the connections open across the
-// fleet had passed what its pod count can account for -- so it is a statement
-// about the fleet, and a peer named in one may be entirely innocent.
-//
-// No peer label. The label values would be pod IPs, which is one new time
-// series per address the cluster ever assigns, driven by whoever is attacking:
-// a cardinality bomb the attacker aims. The bound label above is safe for the
-// opposite reason -- it has two values and the code, not the peer, chooses
-// them. The peer belongs in the log, where it is bounded by retention rather
-// than by memory.
+// No peer label: its values would be pod IPs, a cardinality the attacker
+// chooses. The peer is in the log line instead.
 var ConnectionsRefused = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "spawnery_agent_connections_refused_total",
@@ -130,7 +73,6 @@ var ConnectionsRefused = prometheus.NewCounterVec(
 	[]string{"bound"},
 )
 
-// BoundPeer and BoundFleet are the values of ConnectionsRefused's bound label.
 const (
 	BoundPeer  = "peer"
 	BoundFleet = "fleet"
@@ -141,10 +83,7 @@ func init() {
 		RequestsRefused,
 		OpenStreams, RejectedReports, OpenConnections, ExpectedAgents, ConnectionsRefused,
 	)
-	// Both series at zero from the start. A labelled counter does not exist
-	// until something increments it, and a refusal counter that appears only
-	// once there is trouble is the wrong shape twice over: a dashboard reads
-	// the absence as a gap rather than as a healthy zero, and increase() over
+	// A labelled counter does not exist until incremented, and increase() over
 	// a series born mid-window has nothing to subtract from.
 	ConnectionsRefused.WithLabelValues(BoundPeer)
 	ConnectionsRefused.WithLabelValues(BoundFleet)

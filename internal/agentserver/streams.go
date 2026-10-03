@@ -27,25 +27,10 @@ import (
 type sessions struct {
 	mu      sync.Mutex
 	current map[string]context.CancelFunc
-	// generation names the stream currently registered for a pod, so a
-	// superseded one can tell it is no longer the current one.
-	//
-	// The numbers come from nextGeneration below: ONE counter for the whole
-	// process, not one per pod. Do not "simplify" it back to a counter per pod.
-	// A generation identifies a stream globally and for all time, and that is
-	// what makes an entry safe to delete — which leave does. The zero value
-	// carries that weight and is load-bearing on purpose: nextGeneration is
-	// incremented before it is read, so the first generation ever handed out is
-	// 1, a pod with no entry reads as 0, and 0 therefore matches nothing that
-	// was ever issued. A missing entry and a stale generation can never be
-	// confused.
-	//
-	// Per pod the two would be in tension by construction: deleting an entry
-	// would restart that pod's count at 1, and a slow zombie still holding
-	// generation 1 would pass every guard here and tear down the live stream
-	// that reused the number. Globally there is no number to reuse.
-	generation map[string]uint64
-	// nextGeneration is the counter. Guarded by mu, never decremented.
+	// generation comes from one process-wide counter, not one per pod: leave
+	// deletes entries, and a per-pod count restarting at 1 would let a zombie
+	// still holding generation 1 tear down the live stream that reused it.
+	generation     map[string]uint64
 	nextGeneration uint64
 }
 
@@ -56,13 +41,8 @@ func newSessions() *sessions {
 	}
 }
 
-// enter registers a new stream and cancels the one it replaces. The returned
-// context ends when this stream is superseded or the server shuts down.
-//
-// The third return value reports whether a still-live stream was displaced.
-// The caller needs it to tell a make-before-break renewal, where the agent
-// process kept running and its readiness still holds, from a genuine reconnect
-// after a disconnect, where only the new Hello may say the agent is ready.
+// enter reports whether a still-live stream was displaced: a make-before-break
+// renewal keeps the agent's readiness, a reconnect after a disconnect does not.
 func (s *sessions) enter(parent context.Context, podUID string) (context.Context, uint64, bool) {
 	ctx, cancel := context.WithCancel(parent)
 
@@ -81,12 +61,6 @@ func (s *sessions) enter(parent context.Context, podUID string) (context.Context
 
 // leave reports whether this stream was still the current one. Only then may
 // the caller mark the pod disconnected.
-//
-// It is also where both maps are pruned. A pod whose current stream has ended
-// leaves nothing behind: the entry is gone, and because generations are never
-// reused, its absence cannot be confused with a fresh one. Without this the
-// generation map would grow by one entry for every pod the operator ever saw
-// and only end with the process.
 func (s *sessions) leave(podUID string, gen uint64) bool {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -98,9 +72,6 @@ func (s *sessions) leave(podUID string, gen uint64) bool {
 	return true
 }
 
-// cancel ends a stream from the outside — the hard deadline uses it. It is a
-// no-op once the generation has moved on, so a deadline that fires just after
-// a renewal cannot cut the fresh stream short.
 func (s *sessions) cancel(podUID string, gen uint64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()

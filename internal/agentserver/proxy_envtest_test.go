@@ -36,12 +36,7 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// dialProxy opens a ProxySession the way a real Velocity agent would.
-// It is dialAgent with a handful of lines changed — the stream types and the
-// RPC name — and the two are kept apart rather than generified: the
-// duplication is about twenty-five lines, but the alternative is a helper
-// generic over both message-pair types for a dial function that never grows a
-// third caller.
+// dialProxy is dialAgent for ProxySession, kept apart rather than generified for two callers.
 func dialProxy(t *testing.T, ctx context.Context, addr string, ca []byte, token string) (
 	grpc.BidiStreamingClient[agentpb.ProxyMessage, agentpb.OperatorToProxy], func()) {
 	t.Helper()
@@ -68,8 +63,6 @@ func dialProxy(t *testing.T, ctx context.Context, addr string, ca []byte, token 
 	return stream, func() { _ = conn.Close() }
 }
 
-// A proxy agent connects and is told everything it needs before it is asked
-// for anything. Every assertion is on what the client received.
 func TestAProxyReceivesItsIntervalDeadlineAndFullSync(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.proxyPod("gateway-aaaa")
@@ -100,15 +93,8 @@ func TestAProxyReceivesItsIntervalDeadlineAndFullSync(t *testing.T) {
 	}
 }
 
-// A registration made after the session is up reaches it.
-// recvRegister reads past anything that is not a RegisterServer and returns
-// the first one, or fails.
-//
-// It exists because the snapshot a proxy is sent on join grew a NetworkState
-// in 7b-3, and three tests here read "the next message" and meant "the
-// registration". What they assert is that a registration reaches a connected
-// proxy, never that it arrives in a particular position -- the position is
-// proxyreg's own business and its own test asserts it there.
+// recvRegister skips anything before the first RegisterServer: a registration's position
+// in the stream is proxyreg's business, asserted there.
 func recvRegister(t *testing.T, stream interface {
 	Recv() (*agentpb.OperatorToProxy, error)
 }) *agentpb.RegisterServer {
@@ -155,8 +141,6 @@ func TestARegistrationReachesAConnectedProxy(t *testing.T) {
 	}
 }
 
-// The rule the proto comment now states. A proxy reporting a real player count
-// against its own limit must not be discarded.
 func TestAProxyPlayerCountAgainstItsLimitIsAccepted(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.proxyPod("gateway-cccc")
@@ -177,17 +161,13 @@ func TestAProxyPlayerCountAgainstItsLimitIsAccepted(t *testing.T) {
 		t.Fatalf("Send: %v", err)
 	}
 
-	// The registry is the operator's side, so poll it rather than assert once.
 	waitFor(t, func() bool {
 		snap := f.agents.Lookup(string(pod.UID))
 		return snap.Players == 7 && snap.Slots == 500
 	})
 
-	// The wire-side complement: an accepted report must not tear the stream
-	// down, the same guarantee TestPlayerCountAboveSlotsIsDiscardedButKeepsTheStream
-	// proves for ServerSession. A registration landing on this stream after
-	// the report is what proves the handler loop is still running rather than
-	// having returned — the registry check above cannot tell the two apart.
+	// A registration arriving after the report proves the handler loop is still running;
+	// the registry check above cannot tell that from a returned handler.
 	srv := &spawneryv1alpha1.Server{
 		ObjectMeta: metav1.ObjectMeta{Name: "lobby-bbbb", Namespace: f.ns},
 		Spec: spawneryv1alpha1.ServerSpec{
@@ -198,30 +178,14 @@ func TestAProxyPlayerCountAgainstItsLimitIsAccepted(t *testing.T) {
 	if err := f.proxies.Register(f.ctx, srv); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	// The registration surviving is what says the stream did: a session cut
-	// for a rejected report would have ended before it arrived.
 	if got := recvRegister(t, stream).GetServer().GetName(); got != "lobby-bbbb" {
 		t.Errorf("received a RegisterServer for %q, want lobby-bbbb", got)
 	}
 }
 
-// The contract the whole backpressure design in proxyreg rests on: a session
-// that falls behind is cut loose rather than left to grow without bound.
-// proxyreg's own tests prove the fan-out closes the outbox; this proves the
-// closed outbox actually ends the gRPC stream a real proxy is holding.
-//
-// A small OutboxSize is what makes this deterministic, but not because it
-// starves the stream's flow control — forty small RegisterServer messages
-// are a few KB against a default window of 64KB, nowhere near enough to make
-// the forwarding Send block. What actually overflows the queue is the gap
-// between the two sides of it: f.proxies.Register is a pure in-memory
-// broadcast under one mutex, so forty back-to-back calls enqueue about as
-// fast as a Go channel send allows, while the only consumer draining the
-// other end has to marshal and write each message to the wire before it can
-// take the next one. Against a three-slot queue (OutboxSize 2 plus the
-// initial FullSync), that consumer cannot keep up, and the client stalling
-// its own receive after the setup messages just removes the one thing that
-// would otherwise eventually slow the producer down to match.
+// proxyreg's tests prove the fan-out closes the outbox; this proves the closed outbox
+// ends the gRPC stream. The overflow is not flow control (forty small messages fit the
+// 64KB window) but Register enqueuing faster than the consumer can marshal and send.
 func TestAProxyThatFallsBehindIsDisconnected(t *testing.T) {
 	f := newServerFixtureWithProxyOutbox(t, 2)
 	pod := f.proxyPod("gateway-dddd")
@@ -235,8 +199,7 @@ func TestAProxyThatFallsBehindIsDisconnected(t *testing.T) {
 		}
 	}
 
-	// The stall: no more Recv calls from here on. Comfortably more
-	// registrations than the queue could ever hold even generously drained.
+	// The stall: no more Recv calls from here on.
 	for i := 0; i < 40; i++ {
 		srv := &spawneryv1alpha1.Server{
 			ObjectMeta: metav1.ObjectMeta{Name: fmt.Sprintf("flood-%02d", i), Namespace: f.ns},
@@ -267,16 +230,8 @@ func TestAProxyThatFallsBehindIsDisconnected(t *testing.T) {
 	}
 }
 
-// The proxy twin of TestTheHardDeadlineClosesTheStream: the net under an
-// agent that ignores renewAfter is the same one under a server or a proxy,
-// because both sessions share the one hard-deadline timer sessionPrologue
-// starts.
-//
-// Asserting the code, not just that the stream ended, is what makes this
-// discriminating rather than a liveness check: ProxySession has two teardown
-// codes now, and a deadline that fired but was misreported as
-// ResourceExhausted — "fell behind" — would still pass a test that only
-// checked Recv returned an error.
+// Asserts the code, not just the end: a deadline misreported as ResourceExhausted
+// would still end the stream.
 func TestTheHardDeadlineClosesAProxyStream(t *testing.T) {
 	f := newServerFixtureWithDeadline(t, 300*time.Millisecond, 600*time.Millisecond)
 	pod := f.proxyPod("gateway-eeee")
@@ -284,8 +239,7 @@ func TestTheHardDeadlineClosesAProxyStream(t *testing.T) {
 		f.token(podspec.ProxyServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	defer done()
 
-	// The three setup messages are what prove the session runs, and they
-	// arrive before the deadline can have started counting.
+	// The setup messages arrive before the deadline starts counting.
 	for i := 0; i < 3; i++ {
 		if _, err := stream.Recv(); err != nil {
 			t.Fatalf("Recv %d: %v", i, err)
@@ -311,21 +265,9 @@ func TestTheHardDeadlineClosesAProxyStream(t *testing.T) {
 	}
 }
 
-// A renewal is not a proxy falling behind. sessions.enter cancels the
-// displaced stream's context, and Fleet.Join closes its outbox a few lines
-// later in the same call — both select cases in the displaced ProxySession
-// can be ready by the time it gets back to the select, and without checking
-// ctx.Err() first it could report ResourceExhausted ("fell behind") for a
-// stream that was actually just superseded.
-//
-// This asserts the invariant the fix guarantees, not a reproduction of the
-// race itself: ctx.Done() wins that race on essentially every run in
-// practice (confirmed by reverting the ctx.Err() check locally and running
-// this test dozens of times without a single failure), so the test cannot be
-// relied on to catch a regression here on its own. It is still worth having —
-// it is the documented contract, it is one of the three exit paths this round
-// asked for coverage on, and a future change that made the race wider (for
-// instance, real work between the two select cases) would start failing it.
+// A superseded stream must not report ResourceExhausted: both select cases can be ready,
+// so ProxySession checks ctx.Err() first. ctx.Done() wins that race almost always, so this
+// pins the contract rather than reproducing the race.
 func TestASecondProxyStreamSupersedesTheFirstWithoutMisreportingWhy(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.proxyPod("gateway-ffff")
@@ -348,8 +290,6 @@ func TestASecondProxyStreamSupersedesTheFirstWithoutMisreportingWhy(t *testing.T
 		}
 	}
 
-	// The first stream is now superseded; it must end, and the code the
-	// client sees must say so, not claim it fell behind.
 	done := make(chan error, 1)
 	go func() {
 		for {
@@ -368,9 +308,7 @@ func TestASecondProxyStreamSupersedesTheFirstWithoutMisreportingWhy(t *testing.T
 		t.Fatal("the superseded proxy stream never ended")
 	}
 
-	// The live stream must not have been torn down by the superseded one
-	// leaving: a registration reaching it proves the handler loop is still
-	// running.
+	// A registration reaching the live stream proves the superseded one did not take it down.
 	srv := &spawneryv1alpha1.Server{
 		ObjectMeta: metav1.ObjectMeta{Name: "lobby-gggg", Namespace: f.ns},
 		Spec:       spawneryv1alpha1.ServerSpec{GroupRef: spawneryv1alpha1.ObjectRef{Name: "lobby"}},
@@ -379,23 +317,13 @@ func TestASecondProxyStreamSupersedesTheFirstWithoutMisreportingWhy(t *testing.T
 	if err := f.proxies.Register(f.ctx, srv); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
-	// Reaching the live stream is what says the superseded one leaving did
-	// not take it down with it.
 	if got := recvRegister(t, second).GetServer().GetName(); got != "lobby-gggg" {
 		t.Errorf("received a RegisterServer for %q, want lobby-gggg", got)
 	}
 }
 
-// TestABackendReportReachesTheRegistryUnderTheAuthenticatedNamespace is the
-// end-to-end of the drain gap's operator half: a proxy says which backends its
-// players are attached to, and the Server controller's own registry can answer
-// for one of them.
-//
-// The namespace is the assertion worth making here rather than in a unit test.
-// It comes from the authenticated identity and never from the message, which
-// is the rule every other fact on this channel follows -- an agent may lie
-// about itself and is believed about nothing else -- and only a real token
-// against a real API server proves the operator takes it from the right place.
+// The namespace comes from the authenticated token, never the message; only a real token
+// against a real API server proves the operator takes it from there.
 func TestABackendReportReachesTheRegistryUnderTheAuthenticatedNamespace(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.proxyPod("gateway-aaaa")
@@ -416,8 +344,6 @@ func TestABackendReportReachesTheRegistryUnderTheAuthenticatedNamespace(t *testi
 		t.Fatalf("send the backend report: %v", err)
 	}
 
-	// The registry is written from the receive loop, so poll rather than
-	// assume the send has been applied by the time Send returned.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		n, stale := f.agents.AttachedTo(f.ns, "lobby-0", time.Time{})
@@ -430,8 +356,6 @@ func TestABackendReportReachesTheRegistryUnderTheAuthenticatedNamespace(t *testi
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// And it did not land under some other namespace's name, which is what a
-	// report trusted about its own scope would have allowed.
 	if n, _ := f.agents.AttachedTo("somewhere-else", "lobby-0", time.Time{}); n != 0 {
 		t.Errorf("lobby-0 in another namespace = %d, want 0", n)
 	}
@@ -440,10 +364,6 @@ func TestABackendReportReachesTheRegistryUnderTheAuthenticatedNamespace(t *testi
 	}
 }
 
-// A roster sent on the stream reaches the registry, keyed by the namespace the
-// token authenticated rather than anything the message said. Modelled on
-// TestABackendReportReachesTheRegistryUnderTheAuthenticatedNamespace, which is
-// the same shape for the same reason.
 func TestAProxyRosterReachesTheRegistryUnderTheAuthenticatedNamespace(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.proxyPod("gateway-aaaa")
@@ -466,8 +386,6 @@ func TestAProxyRosterReachesTheRegistryUnderTheAuthenticatedNamespace(t *testing
 		t.Fatalf("send the roster: %v", err)
 	}
 
-	// The registry is written from the receive loop, so poll rather than
-	// assume the send has been applied by the time Send returned.
 	deadline := time.Now().Add(10 * time.Second)
 	for {
 		got, stale := f.agents.Roster(f.ns)
@@ -480,20 +398,13 @@ func TestAProxyRosterReachesTheRegistryUnderTheAuthenticatedNamespace(t *testing
 		time.Sleep(50 * time.Millisecond)
 	}
 
-	// And it did not land under some other namespace's name, which is what a
-	// report trusted about its own scope would have allowed.
 	if got, _ := f.agents.Roster("somewhere-else"); len(got) != 0 {
 		t.Errorf("roster in another namespace = %+v, want none", got)
 	}
 }
 
-// A connect request over a real stream, answered on the same stream.
-//
-// This is the wire, not the jar: nothing in either agent calls connect until a
-// plugin does, and the first caller is the /cloud command a later milestone
-// builds. What it proves is that a CloudRequest survives the channel and comes
-// back correlated -- which no unit test on either side can see, because both
-// are built from the same generated code and neither crosses a socket.
+// Proves a CloudRequest crosses the socket and comes back correlated, which no unit
+// test on either side can see: both are built from the same generated code.
 func TestAConnectRequestIsAnsweredOnTheStreamThatAsked(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.proxyPod("gateway-aaaa")
@@ -527,14 +438,11 @@ func TestAConnectRequestIsAnsweredOnTheStreamThatAsked(t *testing.T) {
 			t.Fatalf("Recv: %v", err)
 		}
 		if resp := msg.GetCloudResponse(); resp != nil {
-			// The id it minted, echoed. Without that a plugin's future would
-			// never complete, and the failure would look like a timeout.
+			// Without the echoed id a plugin's future never completes and looks like a timeout.
 			if resp.GetId() != 7 {
 				t.Fatalf("answered id %d, want the 7 the agent asked with", resp.GetId())
 			}
-			// NOT_FOUND, because no proxy has reported a roster: the player
-			// does not exist on this network. That it is a refusal and not a
-			// silence is the point.
+			// No proxy has reported a roster, so the player is not on this network.
 			if resp.GetError().GetReason() != agentpb.RequestError_NOT_FOUND {
 				t.Fatalf("reason = %v, want NOT_FOUND for a player nobody reported",
 					resp.GetError().GetReason())

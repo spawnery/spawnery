@@ -19,11 +19,8 @@ package cloud.spawnery.agent.api;
 /**
  * Thrown by {@link Spawnery#api()} when no agent has installed one.
  *
- * <p>An exception and not a null return, because the two ways to get here have
- * different remedies and a null could tell them apart for nobody: either the
- * agent plugin is not installed at all, which is a server owner's problem, or
- * it has not finished enabling, which is a plugin load-order problem. The
- * message names both.
+ * <p>Either the agent plugin is not installed, or it has not finished enabling
+ * yet. The message names both.
  */
 public class SpawneryUnavailableException extends IllegalStateException {
     private static final long serialVersionUID = 1L;

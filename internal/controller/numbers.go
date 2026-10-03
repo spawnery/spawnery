@@ -16,15 +16,8 @@ limitations under the License.
 
 package controller
 
-// NextNumber is the lowest number from 1 upwards that taken does not hold.
-//
-// Lowest free rather than highest plus one, so a group that scales up and down
-// all day keeps its numbers short instead of counting into three digits. The
-// cost is that a number is handed out again once its server is gone, which
-// ServerInfo.incarnation is what tells apart.
-//
-// The loop is bounded by len(taken)+1: each iteration that continues needs a
-// distinct member of a finite set.
+// NextNumber picks the lowest free number so numbers stay short; a reused
+// number is told apart by ServerInfo.incarnation.
 func NextNumber(taken map[int32]bool) int32 {
 	for n := int32(1); ; n++ {
 		if !taken[n] {
@@ -33,9 +26,7 @@ func NextNumber(taken map[int32]bool) int32 {
 	}
 }
 
-// takenNumbers is the set NextNumber searches: every number a live server of
-// the group holds, and every number a create this reconciler issued reserved
-// before the cache showed it.
+// takenNumbers includes numbers reserved by creates the cache has not shown.
 func takenNumbers(views []ServerView, pending map[int32]bool) map[int32]bool {
 	taken := make(map[int32]bool, len(views)+len(pending))
 	for _, v := range views {

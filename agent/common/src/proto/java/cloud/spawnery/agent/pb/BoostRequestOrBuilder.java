@@ -30,8 +30,7 @@ public interface BoostRequestOrBuilder extends
 
   /**
    * <pre>
-   * Zero means the operator's default. The operator also bounds the maximum;
-   * see its own answer for what it refuses and why.
+   * Zero means the operator's default. The operator also bounds the maximum.
    * </pre>
    *
    * <code>int64 duration_seconds = 3;</code>

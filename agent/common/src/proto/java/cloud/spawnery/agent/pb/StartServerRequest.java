@@ -10,21 +10,13 @@ package cloud.spawnery.agent.pb;
  * StartServerRequest asks for the member of an OnDemand group that carries
  * this key.
  *
- * It carries no namespace, for the reason RetireRequest carries none: the
- * group is resolved inside the namespace the pod's own token authenticated.
+ * The key is the caller's name for a world: the operator composes
+ * "&lt;group&gt;-&lt;key&gt;", and that server is where this key's world is, every time.
+ * Asking twice while it runs is answered, not refused (see already_running).
  *
- * The key is the caller's name for a world, not a name for a server: the
- * operator composes "&lt;group&gt;-&lt;key&gt;" and that server is where this key's world
- * is, this time and every later time. Asking twice while it runs is answered
- * rather than refused -- see already_running -- because a caller that has to
- * take a lock to ask a question is a caller that will forget to.
- *
- * **The key is a DNS label, and the name built from it has to be one too.**
- * "&lt;group&gt;-&lt;key&gt;" becomes a server and a pod name, so it is at most 63
- * characters: a key that is a UUID takes 36 of them and the joining hyphen one
- * more, which leaves a group name of at most 26. The operator refuses a key or
- * a group that does not fit, with REFUSED, rather than shortening either --
- * a name trimmed to fit is a name two different keys can end up sharing.
+ * "&lt;group&gt;-&lt;key&gt;" becomes a server and pod name, so it must be a DNS label of
+ * at most 63 characters: a UUID key leaves 26 for the group name. A key or
+ * group that does not fit is REFUSED, never shortened.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.StartServerRequest}
@@ -324,21 +316,13 @@ private static final long serialVersionUID = 0L;
    * StartServerRequest asks for the member of an OnDemand group that carries
    * this key.
    *
-   * It carries no namespace, for the reason RetireRequest carries none: the
-   * group is resolved inside the namespace the pod's own token authenticated.
+   * The key is the caller's name for a world: the operator composes
+   * "&lt;group&gt;-&lt;key&gt;", and that server is where this key's world is, every time.
+   * Asking twice while it runs is answered, not refused (see already_running).
    *
-   * The key is the caller's name for a world, not a name for a server: the
-   * operator composes "&lt;group&gt;-&lt;key&gt;" and that server is where this key's world
-   * is, this time and every later time. Asking twice while it runs is answered
-   * rather than refused -- see already_running -- because a caller that has to
-   * take a lock to ask a question is a caller that will forget to.
-   *
-   * **The key is a DNS label, and the name built from it has to be one too.**
-   * "&lt;group&gt;-&lt;key&gt;" becomes a server and a pod name, so it is at most 63
-   * characters: a key that is a UUID takes 36 of them and the joining hyphen one
-   * more, which leaves a group name of at most 26. The operator refuses a key or
-   * a group that does not fit, with REFUSED, rather than shortening either --
-   * a name trimmed to fit is a name two different keys can end up sharing.
+   * "&lt;group&gt;-&lt;key&gt;" becomes a server and pod name, so it must be a DNS label of
+   * at most 63 characters: a UUID key leaves 26 for the group name. A key or
+   * group that does not fit is REFUSED, never shortened.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.StartServerRequest}

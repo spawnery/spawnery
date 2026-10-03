@@ -27,8 +27,7 @@ import (
 )
 
 // writeConfigDir builds a config directory that both Load and the two
-// flavours accept, so every test below can start from something valid and
-// then break exactly the one thing it is testing.
+// flavours accept.
 func writeConfigDir(t *testing.T, dir, secret string) {
 	t.Helper()
 	if err := os.WriteFile(filepath.Join(dir, render.ValuesFile),
@@ -95,13 +94,8 @@ func TestRunRendersPaperToOut(t *testing.T) {
 	}
 }
 
-// The asymmetry the brief warns about: Load returns the secret's content,
-// which Paper needs and Velocity must never receive. Both parameters are
-// string, so a swapped call at this wiring layer compiles cleanly and would
-// only be caught by inspecting what actually landed in velocity.toml — which
-// is what this test does, rather than trusting that Velocity's own tests
-// (which only prove Velocity honours whatever path it is given) say anything
-// about what main.go actually gives it.
+// Load returns the secret's content, which Paper needs and Velocity must never
+// receive. Both are strings, so a swapped call compiles.
 func TestRunWiresTheSecretPathNotItsContentIntoVelocity(t *testing.T) {
 	configDir := t.TempDir()
 	writeConfigDir(t, configDir, "s3cret-content-must-not-leak")
@@ -173,7 +167,6 @@ func TestSubstituteFailsWithoutLeakingAValue(t *testing.T) {
 	}
 }
 
-// emptyMountinfo writes a mount table with no mounts.
 func emptyMountinfo(t *testing.T) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "mountinfo")

@@ -49,22 +49,18 @@ func networkReconciler(f *fixture) *NetworkReconciler {
 	return r
 }
 
-// networkReconcilerWithEvents hands back the recorder too, which the forwarding
-// secret tests need: the events are emitted on entering a state, so proving
-// "exactly once" means reading the channel rather than the object.
+// Returns the recorder too: these events fire on entering a state, so "exactly once"
+// is read from the channel, not the object.
 func networkReconcilerWithEvents(f *fixture) (*NetworkReconciler, *nonBlockingRecorder) {
 	rec := newRecorder()
 	return &NetworkReconciler{
 		Client:   f.rc,
 		Scheme:   f.reconc.Scheme,
 		Recorder: rec,
-		// Matches what config/deploy/ installs; the NetworkPolicy tests need
-		// this non-empty, and no other test cares what it is.
+		// Matches config/deploy/; only the NetworkPolicy tests care what it is.
 		OperatorNamespace: "spawnery-system",
 		SecretReader:      f.c,
-		// Every test that reconciles a Network now bootstraps its namespace.
-		// A test that cares about the bundle replaces this; the rest need it
-		// only to be non-nil and to return something.
+		// Tests that care about the bundle replace this.
 		Bootstrap: &Bootstrapper{Client: f.c, Reader: f.c, CA: func() []byte { return []byte("PEM-FIXTURE") }},
 	}, rec
 }
@@ -78,9 +74,7 @@ func (f *fixture) reconcileNetwork(t *testing.T, r *NetworkReconciler, name stri
 	}
 }
 
-// getNetwork re-reads a Network. Named getNetwork, not network, because the
-// fixture already carries a field of that name (its own bootstrap Network) —
-// a field and a method cannot share an identifier on the same type.
+// Not network: the fixture already has a field of that name.
 func (f *fixture) getNetwork(t *testing.T, name string) *spawneryv1alpha1.Network {
 	t.Helper()
 	net := &spawneryv1alpha1.Network{}
@@ -90,21 +84,8 @@ func (f *fixture) getNetwork(t *testing.T, name string) *spawneryv1alpha1.Networ
 	return net
 }
 
-// rejectNetwork sets a Network's own Accepted condition to False/
-// DuplicateNetwork directly through the status client, standing in for
-// whatever the Network controller's real one-per-namespace verdict would
-// have produced. Reproducing that verdict for real needs a competitor whose
-// creationTimestamp beats this Network's, which the name tie-break can only
-// guarantee when the two are created back to back — exactly what
-// TestSecondNetworkInTheSameNamespaceIsRejected and
-// TestGroupPointingAtARejectedNetworkCreatesNoServers do. A test that first
-// does real work (bringing a server up, several reconciles) before creating
-// the competitor can no longer rely on that tie: by then the two
-// creationTimestamps typically fall in different seconds, and the Network
-// created first wins on real elapsed time regardless of name — the failure
-// mode this helper sidesteps. Tests using it are exercising
-// ServerGroupReconciler's reaction to a rejected Network, not the Network
-// controller's own tie-break, which is covered elsewhere.
+// rejectNetwork stands in for the one-per-namespace verdict. A competitor created after
+// real work lands in a later second and loses on age whatever its name.
 func rejectNetwork(t *testing.T, f *fixture, name string) {
 	t.Helper()
 	net := f.getNetwork(t, name)
@@ -162,12 +143,8 @@ func TestSecondNetworkInTheSameNamespaceIsRejected(t *testing.T) {
 	}
 }
 
-// networkAt builds a Network with an explicit creation timestamp, which is the
-// only way to test the age rule at all. A real API server stamps
-// creationTimestamp itself, at one-second resolution, and the fixture's clock
-// does not reach it — two Networks created back to back land in the same second
-// and the name tiebreak alone decides, which gives the same verdict whichever
-// way the age comparison points.
+// The API server stamps creationTimestamp itself at one-second resolution, so
+// back-to-back Networks tie and only an explicit timestamp exercises the age rule.
 func networkAt(name string, offsetSeconds int, deleting bool) spawneryv1alpha1.Network {
 	base := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	n := spawneryv1alpha1.Network{
@@ -185,13 +162,7 @@ func networkAt(name string, offsetSeconds int, deleting bool) spawneryv1alpha1.N
 	return n
 }
 
-// TestPickNamespaceOwnerLetsAgeDecide is the test the one-network-per-namespace
-// rule did not have. Every name below is chosen so that a rule going by the
-// name alone, or by the newest timestamp, picks a different winner than the
-// right one — otherwise flipping the comparison in pickNamespaceOwner would
-// leave the suite green, and one stray kubectl apply of a Network would then
-// reject the running one and stop every ServerGroup in the namespace from
-// sizing.
+// Names are chosen so going by name alone, or by the newest, picks a different winner.
 func TestPickNamespaceOwnerLetsAgeDecide(t *testing.T) {
 	cases := []struct {
 		name     string
@@ -208,8 +179,7 @@ func TestPickNamespaceOwnerLetsAgeDecide(t *testing.T) {
 			want: "zulu",
 		},
 		{
-			// Same list, the other way round: the answer must not depend on the
-			// order the API server happened to return them in.
+			// The answer must not depend on the order the API server returns them in.
 			name: "the oldest network wins whatever order it is listed in",
 			networks: []spawneryv1alpha1.Network{
 				networkAt("alpha", 600, false),
@@ -218,8 +188,7 @@ func TestPickNamespaceOwnerLetsAgeDecide(t *testing.T) {
 			want: "zulu",
 		},
 		{
-			// Only now, with nothing to choose on age, does the name decide —
-			// and it has to, or the winner would flip between reconciles.
+			// With equal age the name decides, or the winner would flip between reconciles.
 			name: "equal timestamps fall through to the name",
 			networks: []spawneryv1alpha1.Network{
 				networkAt("zulu", 300, false),
@@ -228,8 +197,7 @@ func TestPickNamespaceOwnerLetsAgeDecide(t *testing.T) {
 			want: "alpha",
 		},
 		{
-			// The owner is being deleted. The namespace goes to the next oldest,
-			// not to the smallest name — "alpha" is younger and must lose.
+			// The owner is being deleted: the next oldest wins, not the smallest name.
 			name: "deleting the owner hands over to the next oldest, not the smallest name",
 			networks: []spawneryv1alpha1.Network{
 				networkAt("zulu", 0, true),
@@ -261,11 +229,8 @@ func TestPickNamespaceOwnerLetsAgeDecide(t *testing.T) {
 	}
 }
 
-// TestPickNamespaceOwnerNeverFlips is the property the tiebreak exists for. The
-// verdict is recomputed from scratch on every reconcile of every Network in the
-// namespace, and the API server gives no order guarantee across those calls. A
-// winner that depends on the order would hand the namespace back and forth,
-// and every ServerGroup in it would be accepted and rejected in turn.
+// The API server guarantees no list order, so an order-dependent winner would hand
+// the namespace back and forth.
 func TestPickNamespaceOwnerNeverFlips(t *testing.T) {
 	// Two of these share a timestamp, so both halves of the rule are in play.
 	networks := []spawneryv1alpha1.Network{
@@ -289,7 +254,6 @@ func TestPickNamespaceOwnerNeverFlips(t *testing.T) {
 	}
 }
 
-// permutations returns every ordering of the indices 0..n-1.
 func permutations(n int) [][]int {
 	if n == 0 {
 		return [][]int{{}}
@@ -385,9 +349,6 @@ func putForwardingSecret(t *testing.T, f *fixture, value string) {
 	}
 }
 
-// countEvents counts the events carrying a given reason. It matched the reason
-// as a substring of the whole rendered line until milestone 6e's final review;
-// eventHasReason says why that was wrong.
 func countEvents(events []string, reason string) int {
 	n := 0
 	for _, e := range events {
@@ -398,9 +359,7 @@ func countEvents(events []string, reason string) int {
 	return n
 }
 
-// The first sight of a secret is adoption, not rotation. Emitting an event
-// there would mean every operator start announces a rotation that never
-// happened, on every network at once.
+// Otherwise every operator start would announce a rotation on every network.
 func TestFirstSightOfTheForwardingSecretIsAdoption(t *testing.T) {
 	f := newFixture(t)
 	r, events := networkReconcilerWithEvents(f)
@@ -419,9 +378,6 @@ func TestFirstSightOfTheForwardingSecretIsAdoption(t *testing.T) {
 	}
 }
 
-// The event fires on the transition and not once per resync: at a five-second
-// requeue, an event per pass would be seven hundred an hour for one unremedied
-// rotation.
 func TestARotationIsAnnouncedExactlyOnce(t *testing.T) {
 	f := newFixture(t)
 	r, events := networkReconcilerWithEvents(f)
@@ -443,9 +399,7 @@ func TestARotationIsAnnouncedExactlyOnce(t *testing.T) {
 	}
 }
 
-// A stale pod is the whole signal. It is created by hand here rather than by a
-// group controller, because what is under test is the comparison and not how
-// pods come to exist.
+// Created by hand: the comparison is under test, not how pods come to exist.
 func TestAStalePodRaisesRotationPending(t *testing.T) {
 	f := newFixture(t)
 	r, _ := networkReconcilerWithEvents(f)
@@ -479,18 +433,13 @@ func TestAStalePodRaisesRotationPending(t *testing.T) {
 	}
 }
 
-// Accepted is what servergroup_controller.go derives networkUsable from, and
-// since 5b mayResize equals networkUsable. A missing secret must not reach it,
-// or a typo in one field stops the network from sizing at all.
+// Groups derive networkUsable from Accepted, so a missing secret must not stop sizing.
 func TestAMissingSecretLeavesAcceptedAlone(t *testing.T) {
 	f := newFixture(t)
 	r, events := networkReconcilerWithEvents(f)
 
-	// newFixture's own bootstrap reconcile already read this (nonexistent)
-	// secret once, to its own throwaway recorder, so
-	// ForwardingSecretResolved already carries SecretNotFound by this point.
-	// Clear it so the reconcile below is a genuine entry into that state —
-	// which is what "exactly one event" below is actually testing.
+	// newFixture's own reconcile already entered SecretNotFound; clear it so this one is
+	// a genuine entry.
 	net := f.getNetwork(t, "production")
 	meta.RemoveStatusCondition(&net.Status.Conditions, spawneryv1alpha1.ConditionForwardingSecretResolved)
 	if err := f.c.Status().Update(f.ctx, net); err != nil {
@@ -516,16 +465,13 @@ func TestAMissingSecretLeavesAcceptedAlone(t *testing.T) {
 		t.Errorf("the missing secret emitted %d events, want exactly 1", n)
 	}
 
-	// The next reconcile is still in SecretNotFound, not entering it — the
-	// hasConditionReason guard must suppress this one, or an unremedied
-	// missing secret announces itself roughly seven hundred times an hour.
+	// Still in SecretNotFound rather than entering it, so no second event.
 	f.reconcileNetwork(t, r, "production")
 	if n := countEvents(drainEvents(events), spawneryv1alpha1.EventForwardingSecretNotFound); n != 0 {
 		t.Errorf("the next reconcile emitted %d more events, want 0", n)
 	}
 }
 
-// policyKey is where a network's policy lives, so no test has to restate it.
 func policyKey(f *fixture, network string) types.NamespacedName {
 	return types.NamespacedName{
 		Namespace: f.ns,
@@ -533,7 +479,6 @@ func policyKey(f *fixture, network string) types.NamespacedName {
 	}
 }
 
-// TestAnAcceptedNetworkGetsItsPolicy is the milestone's central object claim.
 func TestAnAcceptedNetworkGetsItsPolicy(t *testing.T) {
 	f := newFixture(t)
 	r := networkReconciler(f)
@@ -554,16 +499,12 @@ func TestAnAcceptedNetworkGetsItsPolicy(t *testing.T) {
 	}
 }
 
-// TestARejectedNetworkWritesNoPolicy: pickNamespaceOwner already decides which
-// Network owns a namespace when several exist. If the loser wrote one too, two
-// Network objects would overwrite each other's policy on every pass, and which
-// object survived would depend on reconcile ordering.
+// If the loser wrote one too, two Networks would overwrite each other's policy.
 func TestARejectedNetworkWritesNoPolicy(t *testing.T) {
 	f := newFixture(t)
 	r := networkReconciler(f)
 
-	// The fixture's "production" already exists; a younger one loses, because
-	// age decides before the name does.
+	// A younger Network loses: age decides before the name.
 	f.clock.Advance(time.Minute)
 	loser := &spawneryv1alpha1.Network{
 		ObjectMeta: metav1.ObjectMeta{Name: "staging", Namespace: f.ns},
@@ -585,8 +526,6 @@ func TestARejectedNetworkWritesNoPolicy(t *testing.T) {
 	}
 }
 
-// TestADeletedPolicyComesBack: the policy is a security control, so removing it
-// by hand must not be a durable way to switch it off.
 func TestADeletedPolicyComesBack(t *testing.T) {
 	f := newFixture(t)
 	r := networkReconciler(f)
@@ -606,24 +545,14 @@ func TestADeletedPolicyComesBack(t *testing.T) {
 	if err := f.c.Get(f.ctx, policyKey(f, "production"), &policy); err != nil {
 		t.Fatalf("the policy did not come back: %v", err)
 	}
-	// The UID and not merely the presence. envtest's delete is synchronous and
-	// this fixture records the mutation, so the object here cannot be the one
-	// that was deleted -- but nothing in this test said so, and "it is still
-	// there" is exactly what a delete that silently did not happen looks like.
-	// A different identity is the only thing that distinguishes recreated from
-	// never removed.
+	// A different UID is the only thing that tells recreated from never removed.
 	if policy.UID == before {
 		t.Errorf("the policy carries its original UID %s, so it was never actually deleted "+
 			"and this test proves nothing about recreation", before)
 	}
 }
 
-// TestThePolicyCarriesTheLabelsAHumanReadsIt guards metadata nothing selects
-// on, which is why nothing else would catch a wrong value. Both labels exist
-// for somebody reading kubectl output in a namespace with more than one
-// Network in its history, and a policy carrying the wrong network name there
-// is worse than one carrying none: it answers the question wrongly instead of
-// not answering it.
+// Nothing selects on these labels, so nothing else would catch a wrong value.
 func TestThePolicyCarriesTheLabelsAHumanReadsIt(t *testing.T) {
 	f := newFixture(t)
 	r := networkReconciler(f)
@@ -643,11 +572,7 @@ func TestThePolicyCarriesTheLabelsAHumanReadsIt(t *testing.T) {
 	}
 }
 
-// TestTheOperatorNamespaceReachesTheEgressRule guards the one value the policy
-// cannot derive from the Network it protects. The agent endpoint is assembled
-// from the operator's own namespace, which is a flag (--operator-namespace), so
-// a policy hard-coding "spawnery-system" would be correct only by coincidence
-// in any installation that moved it.
+// The operator namespace is a flag, so the policy must not hard-code spawnery-system.
 func TestTheOperatorNamespaceReachesTheEgressRule(t *testing.T) {
 	f := newFixture(t)
 	r := networkReconciler(f)
@@ -669,15 +594,8 @@ func TestTheOperatorNamespaceReachesTheEgressRule(t *testing.T) {
 	}
 }
 
-// A namespace where nothing starts still tracks the operator's CA.
-//
-// An Ensure that ran only from the pod-creating path would leave a namespace
-// whose pods are all already running -- or which has none at all -- on
-// whatever ca.crt it was given the last time a pod happened to be created
-// there. That makes a rotation's overlap window impossible to close, because
-// the operator cannot tell whether a quiet namespace has the new bundle.
-//
-// No pod is created anywhere in this test. That is the whole point of it.
+// Ensure runs from the Network, not only on pod creation, or a quiet namespace could
+// never close a CA rotation's overlap window.
 func TestAQuietNamespaceFollowsTheCABundle(t *testing.T) {
 	f := newFixture(t)
 	r, _ := networkReconcilerWithEvents(f)
@@ -711,13 +629,6 @@ func TestAQuietNamespaceFollowsTheCABundle(t *testing.T) {
 	}
 }
 
-// The Network that does not own its namespace bootstraps nothing.
-//
-// pickNamespaceOwner gives the namespace to the oldest Network, and the
-// loser's reconcile returns before it writes anything. That already governed
-// the NetworkPolicy; it governs the CA ConfigMap for the same reason, and
-// this test exists because the new call sits close enough to the acceptance
-// branch that moving it above one line would silently change that.
 func TestALosingNetworkDoesNotBootstrapTheNamespace(t *testing.T) {
 	f := newFixture(t)
 	r, _ := networkReconcilerWithEvents(f)
@@ -748,25 +659,15 @@ func TestALosingNetworkDoesNotBootstrapTheNamespace(t *testing.T) {
 	}
 }
 
-// The objects Ensure writes carry no OwnerReference, and that is deliberate:
-// they are meant to outlive the operator so a pod restarting during an
-// outage still finds a CA to trust and a ServiceAccount to authenticate
-// with. Making the Network own them is the tidy-looking change this design
-// refused, and it would delete a running fleet's trust anchor and its
-// identity the moment somebody deleted a Network. Asserted here because
-// "tidy up the ownership" is exactly the kind of edit that arrives later
-// with a green suite.
-//
-// All three objects, not just the ConfigMap: a pod that keeps its CA but
-// loses its ServiceAccount cannot mint a token, and its projected volume
-// never fills.
+// No OwnerReference on purpose: deleting a Network must not take a running fleet's
+// CA and ServiceAccount with it. All three objects, since a pod keeping its CA but
+// losing its ServiceAccount cannot mint a token.
 func TestTheCAConfigMapIsOwnedByNothing(t *testing.T) {
 	f := newFixture(t)
 	r, _ := networkReconcilerWithEvents(f)
 	r.Bootstrap = &Bootstrapper{Client: f.c, Reader: f.c, CA: func() []byte { return []byte("PEM-A") }}
 
-	// Cleared first so the objects read back below are the ones this
-	// reconcile creates, not the ones newFixture's own reconcile left here.
+	// Cleared so the objects read back are this reconcile's, not newFixture's.
 	key := client.ObjectKey{Namespace: f.ns, Name: podspec.CAConfigMapName}
 	if err := f.c.Delete(f.ctx, &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: podspec.CAConfigMapName, Namespace: f.ns},
@@ -807,18 +708,13 @@ func TestTheCAConfigMapIsOwnedByNothing(t *testing.T) {
 	}
 }
 
-// A reconcile that runs before certs.Provider has published fails and
-// requeues rather than passing quietly. Swallowing it would leave the
-// silently stale ConfigMap this whole change exists to prevent, and
-// ServerReconciler already treats the same call the same way.
+// Swallowing it would leave the stale ConfigMap Ensure exists to prevent.
 func TestAReconcileWithoutACABundleFails(t *testing.T) {
 	f := newFixture(t)
 	r, _ := networkReconcilerWithEvents(f)
 	r.Bootstrap = &Bootstrapper{Client: f.c, Reader: f.c, CA: func() []byte { return nil }}
 
-	// newFixture already accepted this Network once, with a real CA, so the
-	// ConfigMap exists before this test's own reconcile runs. Clear it first
-	// so "no ConfigMap after" below tests this reconcile, not the fixture's.
+	// Cleared so "no ConfigMap after" tests this reconcile, not newFixture's.
 	key := client.ObjectKey{Namespace: f.ns, Name: podspec.CAConfigMapName}
 	var existing corev1.ConfigMap
 	if err := f.c.Get(f.ctx, key, &existing); err == nil {
@@ -833,10 +729,7 @@ func TestAReconcileWithoutACABundleFails(t *testing.T) {
 	if err == nil {
 		t.Fatal("the reconcile succeeded with no CA bundle available")
 	}
-	// The whole wrapper, not the word "bootstrap": Ensure's own message
-	// already starts "bootstrap namespace ...", so a substring match on that
-	// word would pass with the reconcile's wrapper removed and would say
-	// nothing about which step failed.
+	// The whole wrapper: Ensure's own message already starts "bootstrap namespace".
 	const wrapper = "bootstrap the namespace: "
 	if !strings.HasPrefix(err.Error(), wrapper) {
 		t.Errorf("error = %v, want it to start with %q so the failing step is named "+
@@ -849,28 +742,15 @@ func TestAReconcileWithoutACABundleFails(t *testing.T) {
 	}
 }
 
-// A namespace whose CA cannot be written must still get a current status and
-// an event saying why.
-//
-// Bootstrap.Ensure runs last, after r.Status().Update, because the state it
-// reports on is not always the transient one. An empty bundle clears itself
-// within seconds of process start; a ConfigMap write refused by an admission
-// webhook, a ResourceQuota or a namespace policy stands until somebody removes
-// it. With the call ahead of the status update, a reconcile in such a
-// namespace records nothing at all for as long as the refusal lasts: a new
-// Network never persists Accepted, and servergroup_controller.go and
-// proxygroup_controller.go both gate on that condition, so every group in the
-// namespace stops; an existing one keeps a stale Accepted=True while its
-// player counts, its group counts and its rotation condition freeze. The
-// error is still returned, so the reconcile still fails and requeues.
+// Ensure runs after the status update: a ConfigMap write refused by a webhook or quota
+// can stand indefinitely, and both group controllers gate on Accepted.
 func TestABootstrapFailureStillWritesTheStatus(t *testing.T) {
 	f := newFixture(t)
 	r, rec := networkReconcilerWithEvents(f)
 	r.Bootstrap = &Bootstrapper{Client: f.c, Reader: f.c, CA: func() []byte { return nil }}
 
-	// newFixture creates its ServerGroup after the reconcile that accepted the
-	// Network, so the stored status still counts none. A non-zero count below
-	// can only have come from this reconcile's own status update.
+	// newFixture's ServerGroup postdates the stored status, so a non-zero count below can
+	// only come from this reconcile.
 	if got := f.getNetwork(t, f.network.Name).Status.ServerGroups; got != 0 {
 		t.Fatalf("serverGroups = %d before the reconcile, want 0", got)
 	}
@@ -898,11 +778,6 @@ func TestABootstrapFailureStillWritesTheStatus(t *testing.T) {
 	}
 }
 
-// TestARefusedNetworkSaysSoAsAnEventToo closes the "a rejected Network
-// produces no Kubernetes event, only a condition" item in
-// docs/reference/known-issues.md. A duplicate is the refusal a user is most likely to
-// cause by hand — two Networks in one namespace — and it was the only one this
-// reconciler made silently.
 func TestARefusedNetworkSaysSoAsAnEventToo(t *testing.T) {
 	f := newFixture(t)
 	r, rec := networkReconcilerWithEvents(f)
@@ -929,24 +804,14 @@ func TestARefusedNetworkSaysSoAsAnEventToo(t *testing.T) {
 		t.Errorf("events = %v, want it recorded as a Warning", ev)
 	}
 
-	// Once per transition, not once per pass. This branch runs for as long as
-	// the duplicate stands, and a Warning every minute forever buries the one
-	// that mattered instead of reporting it.
+	// Once per transition: this branch runs for as long as the duplicate stands.
 	f.reconcileNetwork(t, r, "staging")
 	if ev := drainEvents(rec); len(ev) != 0 {
 		t.Errorf("events = %v on a second pass with nothing changed, want none", ev)
 	}
 }
 
-// TestSiblingNetworksWakesTheLosersAndNotTheWinner covers the mapper behind the
-// second watch on Network. docs/reference/known-issues.md measures recovery after
-// deleting the winning Network at roughly ninety seconds and names the cause:
-// two requeues stacked, the loser's minute and the group's thirty seconds.
-// This mapper removes the first.
-//
-// For() already enqueues the object an event is about, so the mapper must
-// return the *others* — returning the subject too would be a second, pointless
-// pass on every Network event in the cluster.
+// For() already enqueues the subject, so the mapper must return only the others.
 func TestSiblingNetworksWakesTheLosersAndNotTheWinner(t *testing.T) {
 	f := newFixture(t)
 	r := networkReconciler(f)
@@ -979,13 +844,8 @@ func TestSiblingNetworksWakesTheLosersAndNotTheWinner(t *testing.T) {
 	}
 }
 
-// TestARefusedNetworkStillCountsWhatPointsAtIt closes "the status of a rejected
-// Network freezes and keeps reporting old numbers" in docs/reference/known-issues.md.
-//
-// The ordinary case is worse than freezing. A Network created second is refused
-// on its very first pass, before it has counted anything, so it reported zero
-// however many groups were later pointed at it — and the count is precisely how
-// somebody sees what is stranded behind the refusal.
+// A Network refused on its first pass must still count what points at it; the count
+// shows what is stranded behind the refusal.
 func TestARefusedNetworkStillCountsWhatPointsAtIt(t *testing.T) {
 	f := newFixture(t)
 	r := networkReconciler(f)
@@ -999,9 +859,7 @@ func TestARefusedNetworkStillCountsWhatPointsAtIt(t *testing.T) {
 	if err := f.c.Create(f.ctx, loser); err != nil {
 		t.Fatalf("create the second Network: %v", err)
 	}
-	// Two groups behind the loser, and one behind the winner that must not be
-	// credited to it: a namespace holding two Networks is what the duplicate
-	// rule refuses, not what it prevents.
+	// Two groups behind the loser, and one behind the winner that must not be credited to it.
 	f.createProxyGroup("stranded-proxy", func(g *spawneryv1alpha1.ProxyGroup) {
 		g.Spec.NetworkRef = spawneryv1alpha1.ObjectRef{Name: "staging"}
 	})
@@ -1020,9 +878,7 @@ func TestARefusedNetworkStillCountsWhatPointsAtIt(t *testing.T) {
 	}
 }
 
-// failingStatusWriter is a client whose status writes always fail. It exists
-// for one property that cannot be observed any other way: an event must not be
-// emitted when the write recording what it announces did not land.
+// An event must not be emitted when the status write recording it did not land.
 type failingStatusWriter struct {
 	client.Client
 	err error
@@ -1041,32 +897,19 @@ func (f failingSubResource) Update(context.Context, client.Object, ...client.Sub
 	return f.err
 }
 
-// TestARotationIsAnnouncedOnlyOnceTheStatusWriteLands closes the entry in
-// docs/reference/known-issues.md: `"exactly one event per transition" holds only if the
-// status write lands`.
-//
-// Both forwarding-secret events fire on *entering* a state, and whether a pass
-// is an entry is decided by the condition still in etcd. Emitting before the
-// write meant anything failing in between — the pod List that returns on error,
-// a conflict, a refused write — left the old status behind, so the retry found
-// the same transition and announced it again. A rotation could be reported
-// twice, or without end under a persistently failing update, while three places
-// stated the property unconditionally: the runbook's §5 step 3, the event-reason
-// comments, and design §4.4.
+// Whether a pass is an entry is decided by the condition in etcd, so an event emitted
+// before a failed write would be announced again on the retry.
 func TestARotationIsAnnouncedOnlyOnceTheStatusWriteLands(t *testing.T) {
 	f := newFixture(t)
 	r, rec := networkReconcilerWithEvents(f)
 
-	// A rotation to announce: a hash on the status that the secret no longer
-	// matches.
+	// A rotation to announce: a status hash the secret no longer matches.
 	putForwardingSecret(t, f, "first-value")
 	f.reconcileNetwork(t, r, f.network.Name)
 	drainEvents(rec)
 	putForwardingSecret(t, f, "second-value")
 
-	// The write cannot land. The reconcile fails, and nothing may be announced:
-	// the state the event describes was not recorded, so the retry will find
-	// the same transition and is entitled to announce it then.
+	// The write cannot land: nothing is announced, and the retry may announce it then.
 	broken := *r
 	broken.Client = failingStatusWriter{Client: f.c, err: errors.New("no status writes today")}
 	if _, err := broken.Reconcile(f.ctx, ctrlreconcile.Request{
@@ -1095,11 +938,7 @@ func TestARotationIsAnnouncedOnlyOnceTheStatusWriteLands(t *testing.T) {
 	}
 }
 
-// failingPodList is a client whose pod List always fails and whose every other
-// List is served normally. The Network controller lists three kinds — Networks,
-// to find the namespace owner; the two group kinds, to count them; and pods, to
-// compare forwarding-secret stamps — and only the last is the concern under
-// test here.
+// Only the pod List fails; the Network controller's other Lists are served.
 type failingPodList struct {
 	client.Client
 	err error
@@ -1112,28 +951,13 @@ func (f failingPodList) List(ctx context.Context, list client.ObjectList, opts .
 	return f.Client.List(ctx, list, opts...)
 }
 
-// TestAPodListFailureStillRecordsAcceptance closes the entry in
-// docs/reference/known-issues.md: `a pod List failure blocks the Accepted=True status
-// write`.
-//
-// The List that gathers forwarding-secret stamps sat between the Accepted
-// condition being set and the status update that would have persisted it, so
-// its failure discarded everything the pass had decided. Design §4.3 keeps
-// Accepted deliberately clear of secret problems because both group
-// controllers derive networkUsable from it — and this put a secret-detection
-// concern on the path that publishes it.
-//
-// The entry recorded a rejected alternative: carrying on with an empty stamp
-// set, which makes rotationCondition report ForwardingSecretInSync with no pod
-// examined. The second assertion below is what distinguishes the fix from that
-// alternative — the rotation condition is left alone, not computed from
-// nothing.
+// Groups derive networkUsable from Accepted, so a pod List failure must not block it.
+// The rotation condition is left alone rather than reported InSync with no pod examined.
 func TestAPodListFailureStillRecordsAcceptance(t *testing.T) {
 	f := newFixture(t)
 	r, _ := networkReconcilerWithEvents(f)
 
-	// Its own Network in its own namespace, so that "Accepted has never been
-	// written" is the real starting state rather than one arranged by hand.
+	// Its own Network in its own namespace, so Accepted has really never been written.
 	ns := testenv.Namespace(t, f.ctx, f.c)
 	if err := f.c.Create(f.ctx, &corev1.Secret{
 		ObjectMeta: metav1.ObjectMeta{Name: "velocity-forwarding-secret", Namespace: ns},
@@ -1178,7 +1002,6 @@ func TestAPodListFailureStillRecordsAcceptance(t *testing.T) {
 	}
 }
 
-// refusingSecretReader answers every Get with the API server's own 403.
 type refusingSecretReader struct {
 	client.Reader
 	err error
@@ -1188,16 +1011,8 @@ func (r refusingSecretReader) Get(context.Context, client.ObjectKey, client.Obje
 	return r.err
 }
 
-// A forwarding-secret read the API server refuses has to reach the operator's
-// log carrying the API server's own words, and has to say so on the Network.
-//
-// The condition's message is written for a person — "the operator may not read
-// secret X; grant it with kubectl apply …" — so it deliberately does not quote
-// the API server, and therefore carries no `is forbidden:` substring. That is
-// the exact string test/e2e's theOperatorWasNeverDenied greps the operator's
-// log for, and network_controller.go made no logger call at all, so a broken
-// config/rbac/forwarding-secret-reader.yaml grant was invisible to the one
-// check in this repository written to catch a denial the RBAC audit cannot.
+// The condition's message is written for a person and does not quote the API server;
+// test/e2e greps the operator's log for "is forbidden:", so the log must carry it.
 func TestARefusedSecretReadIsSaidOutLoud(t *testing.T) {
 	f := newFixture(t)
 	r, rec := networkReconcilerWithEvents(f)
@@ -1206,8 +1021,6 @@ func TestARefusedSecretReadIsSaidOutLoud(t *testing.T) {
 		errors.New(`User "system:serviceaccount:spawnery-system:spawnery-operator" cannot get resource "secrets"`))
 	r.SecretReader = refusingSecretReader{Reader: f.c, err: forbidden}
 
-	// The error the read carries out is what the log line is built from, and
-	// it is the half the condition cannot carry.
 	read := readForwardingSecret(f.ctx, r.SecretReader, f.network)
 	if read.Err == nil {
 		t.Fatal("a refused read carried no error out; the log line has nothing to say")
@@ -1228,16 +1041,13 @@ func TestARefusedSecretReadIsSaidOutLoud(t *testing.T) {
 			ev, spawneryv1alpha1.ReasonSecretReadForbidden)
 	}
 
-	// And not again on the next pass: at ResyncInterval an ungated report is
-	// twelve a minute per Network, forever.
+	// Not again on the next pass.
 	f.reconcileNetwork(t, r, f.network.Name)
 	if n := countEvents(drainEvents(rec), spawneryv1alpha1.ReasonSecretReadForbidden); n != 0 {
 		t.Errorf("the refusal was announced again on an unchanged pass, %d time(s)", n)
 	}
 
-	// Accepted is untouched by any of it, which is the property design §4.3
-	// keeps deliberately: both group controllers derive networkUsable from it,
-	// and a namespace whose grant is missing must keep scheduling.
+	// Accepted untouched: a namespace whose grant is missing must keep scheduling.
 	got := f.getNetwork(t, f.network.Name)
 	if !meta.IsStatusConditionTrue(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted) {
 		t.Errorf("Accepted = %+v with the secret read refused, want True",
@@ -1245,12 +1055,8 @@ func TestARefusedSecretReadIsSaidOutLoud(t *testing.T) {
 	}
 }
 
-// refusingPolicyWrites is a client that answers Forbidden for any write of a
-// NetworkPolicy and behaves normally for everything else. It stands in for the
-// RBAC misconfiguration this is about -- the operator holding every other verb
-// and not networkpolicies:create -- without having to take a grant away from
-// the fixture's real ServiceAccount, which would fail the reads this test needs
-// as well.
+// Refuses only NetworkPolicy writes; taking the grant from the real ServiceAccount
+// would also fail the reads this test needs.
 type refusingPolicyWrites struct {
 	client.Client
 }
@@ -1287,14 +1093,8 @@ func (c refusingPolicyWrites) Patch(ctx context.Context, obj client.Object,
 	return c.Client.Patch(ctx, obj, patch, opts...)
 }
 
-// TestAPolicyThatCannotBeWrittenIsNamedOnTheNetwork pins that the cause
-// reaches the object.
-//
-// Returning before any status write leaves the condition unpersisted, so a
-// fresh Network stays at nothing and every group in the namespace refuses with
-// "network ... has not been accepted yet" -- true and misleading in the same
-// breath, because the network *was* accepted and only the acceptance could not
-// be written down, with nothing but the operator's log saying which.
+// Without a status write a fresh Network shows nothing, and every group misleadingly
+// reports it as not accepted yet.
 func TestAPolicyThatCannotBeWrittenIsNamedOnTheNetwork(t *testing.T) {
 	f := newFixture(t)
 	r := networkReconciler(f)
@@ -1317,9 +1117,8 @@ func TestAPolicyThatCannotBeWrittenIsNamedOnTheNetwork(t *testing.T) {
 		t.Fatal("Accepted was never persisted, so every group in the namespace reports " +
 			"\"has not been accepted yet\" and nothing says why")
 	}
-	// False, not True. Fail-closed is the whole point: recording True beside a
-	// policy that did not land would release every group in the namespace to
-	// create the pods that policy was meant to fence.
+	// Fail-closed: True beside a missing policy would release every group to create the
+	// pods it was meant to fence.
 	if accepted.Status != metav1.ConditionFalse {
 		t.Errorf("Accepted = %s, want False: the namespace must stay closed", accepted.Status)
 	}
@@ -1334,10 +1133,6 @@ func TestAPolicyThatCannotBeWrittenIsNamedOnTheNetwork(t *testing.T) {
 	}
 }
 
-// TestAWritablePolicyStillAcceptsTheNetwork keeps the branch above from being
-// the only outcome. The condition it writes is on the same field the ordinary
-// acceptance uses, so an error in the new branch would show up as a network
-// that is never accepted at all.
 func TestAWritablePolicyStillAcceptsTheNetwork(t *testing.T) {
 	f := newFixture(t)
 	r := networkReconciler(f)
@@ -1354,11 +1149,8 @@ func TestAWritablePolicyStillAcceptsTheNetwork(t *testing.T) {
 	}
 }
 
-// TestTheRescueWindowConditionReportsWhatTheProxiesSaid is the operator half of
-// the field the proxies now send. The window is Velocity's read timeout less
-// twice the report interval, and until a proxy reported the timeout the
-// operator could only assume the value this repository ships — which a
-// velocity.toml overlay is free to lower without anything noticing.
+// A velocity.toml overlay may lower Velocity's read timeout, so the window comes from
+// what the proxies report, not the shipped value.
 func TestTheRescueWindowConditionReportsWhatTheProxiesSaid(t *testing.T) {
 	for _, tc := range []struct {
 		what       string

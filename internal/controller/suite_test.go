@@ -50,21 +50,15 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// containsString is the test-side spelling of the finalizer check.
 func containsString(haystack []string, needle string) bool {
 	return slices.Contains(haystack, needle)
 }
 
-// ctrlclientInNamespace is a shorthand for the list option.
 func ctrlclientInNamespace(ns string) client.ListOption { return client.InNamespace(ns) }
 
-// createOrderRecorder wraps a client.Client and remembers, in the order they
-// actually committed to the API server, the kind and name of every object it
-// created. A test that only reads back the final state after a Reconciler
-// call cannot tell "the ConfigMap was written before the pod" apart from "the
-// ConfigMap happened to already exist" — both leave the same two objects
-// sitting there afterwards. Recording the Create calls themselves is what
-// lets a test assert the actual order, not just the end state.
+// createOrderRecorder records, in commit order, the kind and name of every
+// object it created, so a test can assert creation order and not only the
+// end state.
 type createOrderRecorder struct {
 	client.Client
 	mu    sync.Mutex
@@ -81,8 +75,6 @@ func (r *createOrderRecorder) Create(ctx context.Context, obj client.Object, opt
 	return nil
 }
 
-// indexOf returns the position of the first recorded entry with the given
-// prefix, or -1 if none was recorded.
 func (r *createOrderRecorder) indexOf(prefix string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -97,10 +89,8 @@ func (r *createOrderRecorder) indexOf(prefix string) int {
 // agentRoleServer avoids importing the agent package into every test file.
 func agentRoleServer() agent.Role { return agent.RoleServer }
 
-// intstrInt is the IntOrString kind an absolute PDB value must have.
 var intstrInt = intstr.Int
 
-// hasCondition reports whether the list carries the given condition.
 func hasCondition(conds []metav1.Condition, condType string, status metav1.ConditionStatus, reason string) bool {
 	for _, c := range conds {
 		if c.Type == condType && c.Status == status && c.Reason == reason {
@@ -110,11 +100,9 @@ func hasCondition(conds []metav1.Condition, condType string, status metav1.Condi
 	return false
 }
 
-// bringUpNamed walks an already-created server into Ready and returns the pod
-// UID the agent registry is keyed on. Reaching Ready takes three passes: the
-// first creates the pod, the second sees it running and moves to Starting, and
-// only the third can pass the ready gate, which needs both the probe and the
-// agent.
+// bringUpNamed walks a created server into Ready and returns its pod UID. It
+// takes three passes: create the pod, move to Starting, then pass the ready
+// gate, which needs both the probe and the agent.
 func bringUpNamed(t *testing.T, f *fixture, name string) string {
 	t.Helper()
 	f.reconcile(name)
@@ -142,21 +130,18 @@ func bringUpNamed(t *testing.T, f *fixture, name string) string {
 	return uid
 }
 
-// testClock is a hand-cranked clock shared by the controller tests.
 type testClock struct{ now time.Time }
 
 func (c *testClock) Now() time.Time          { return c.now }
 func (c *testClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
 
-// recordingRegistrar remembers the calls the controller made.
 type recordingRegistrar struct {
 	registered   []string
 	deregistered []string
 	drained      []string
 
-	// onRegister runs inside Register, before it returns. It is how a test
-	// observes what was already durable at the moment the proxies were told —
-	// the ordering that matters here cannot be seen from outside the call.
+	// onRegister runs inside Register, so a test can observe what was already
+	// durable at the moment the proxies were told.
 	onRegister func(*spawneryv1alpha1.Server) error
 }
 
@@ -178,29 +163,11 @@ func (r *recordingRegistrar) Drain(_ context.Context, s *spawneryv1alpha1.Server
 	return nil
 }
 
-// fixture is one isolated namespace with a network, a group and the wired
-// Server reconciler.
 // fixture holds one test's envtest namespace and the two clients that reach
-// it.
-//
-// The two are not interchangeable, and picking the wrong one is silent.
-//
-//   - c is admin. It is the test *harness*: creating the Network and the
-//     ServerGroup a scenario needs, planting a stray pod, reading back what a
-//     reconcile decided. A harness legitimately does things the operator may
-//     not -- nothing grants the operator `create` on servergroups, and it
-//     never needs it.
-//   - rc acts as the operator does in a cluster, holding exactly the
-//     ClusterRole config/rbac/role.yaml generates from the markers. Every
-//     reconciler and every Bootstrapper under test gets this one.
-//
-// The split is what makes a missing verb fail here rather than on a cluster.
-// It was added after one escaped: `servers` was granted
-// get;list;watch;create;update;delete and the group's rolling update patches
-// spec.retire, so retireServer was refused in production while four tests
-// that drive it passed against an admin client. Removing `patch` from the
-// servers rule now turns those same four red; removing it from `pods` turns
-// 93 red. Anyone adding a reconciler here hands it rc.
+// it. c is admin and serves only the test harness. rc holds exactly the
+// ClusterRole generated into config/rbac/role.yaml; every reconciler and
+// Bootstrapper under test gets rc, so a missing verb fails here rather than
+// on a cluster.
 type fixture struct {
 	t         *testing.T
 	ctx       context.Context
@@ -228,10 +195,8 @@ func newFixture(t *testing.T) *fixture {
 	registrar := &recordingRegistrar{}
 	proxies := &recordingFleet{}
 
-	// A stand-in CA is enough for every test that only cares about the state
-	// machine; agentchannel_envtest_test.go replaces this with the bundle its
-	// gRPC service actually serves. Shared between the two reconcilers below
-	// so the fixture cannot drift on what the test CA is.
+	// A stand-in CA; agentchannel_envtest_test.go replaces it with the bundle
+	// its gRPC service actually serves.
 	bootstrap := &Bootstrapper{
 		Client: rc, Reader: rc,
 		CA: func() []byte { return []byte("test-ca") },
@@ -268,11 +233,8 @@ func newFixture(t *testing.T) *fixture {
 	if err := c.Create(ctx, f.network); err != nil {
 		t.Fatalf("create Network: %v", err)
 	}
-	// The fixture's Network is the only one in this namespace at this point,
-	// so it is trivially the namespace owner; accept it once here so every
-	// test gets a usable Network without having to drive the Network
-	// controller itself. Tests that specifically exercise rejection or
-	// recovery construct their own NetworkReconciler and reconcile again.
+	// The fixture's Network is trivially the namespace owner; accept it once
+	// so tests need not drive the Network controller themselves.
 	netReconciler := &NetworkReconciler{
 		Client:       rc,
 		Scheme:       testenv.Scheme(t),
@@ -286,16 +248,8 @@ func newFixture(t *testing.T) *fixture {
 		t.Fatalf("accept fixture network: %v", err)
 	}
 
-	// envtest runs no namespace controller, so a Service created by this test
-	// would otherwise hold its NodePort allocated for the rest of the binary —
-	// a NodePort is cluster-scoped even though the Service holding it is not,
-	// so per-test namespace isolation alone does not free one for the next
-	// test to reuse. Deleting it here releases the port synchronously, the
-	// same way a real cluster would on deletion.
-	//
-	// It is not the only cluster-scoped thing in play: ensureNode creates
-	// Nodes, which are cluster-scoped objects outright and carry their own
-	// per-test cleanup and unique names for the same reason.
+	// envtest runs no namespace controller, and a NodePort is cluster-scoped:
+	// delete the Service so the next test can reuse its port.
 	t.Cleanup(func() {
 		svcs := &corev1.ServiceList{}
 		if err := c.List(ctx, svcs, client.InNamespace(ns)); err != nil {
@@ -328,7 +282,6 @@ func newFixture(t *testing.T) *fixture {
 	return f
 }
 
-// createServer adds one Server owned by the fixture's group.
 func (f *fixture) createServer(name string) *spawneryv1alpha1.Server {
 	f.t.Helper()
 	srv := &spawneryv1alpha1.Server{
@@ -354,15 +307,9 @@ func (f *fixture) createServer(name string) *spawneryv1alpha1.Server {
 	return srv
 }
 
-// desiredPodHash is what the reconciler would stamp on a server it created for
-// this group right now, computed the same way createServer computes it.
-//
-// It is here because since 7a the sizing rules read spec.podHash and not
-// metadata.generation, and a fixture that stamped only the generation would
-// build servers that no spec change can ever make stale: staleSpec adopts an
-// empty hash rather than comparing it. Every rolling-update test in this
-// package creates its starting servers through this helper and then edits the
-// group, so an unstamped fixture would leave them all asserting nothing.
+// desiredPodHash is what the reconciler would stamp on a server it created
+// for this group right now. staleSpec adopts an empty hash, so a fixture
+// server without it could never be made stale by a spec change.
 func (f *fixture) desiredPodHash() string {
 	f.t.Helper()
 	configValues, err := serverConfigValues(f.group)
@@ -376,7 +323,6 @@ func (f *fixture) desiredPodHash() string {
 	return hash
 }
 
-// reconcile runs the Server reconciler once.
 func (f *fixture) reconcile(name string) {
 	f.t.Helper()
 	_, err := f.reconc.Reconcile(f.ctx, ctrlreconcile.Request{
@@ -387,7 +333,6 @@ func (f *fixture) reconcile(name string) {
 	}
 }
 
-// server re-reads a Server.
 func (f *fixture) server(name string) *spawneryv1alpha1.Server {
 	f.t.Helper()
 	srv := &spawneryv1alpha1.Server{}
@@ -397,9 +342,8 @@ func (f *fixture) server(name string) *spawneryv1alpha1.Server {
 	return srv
 }
 
-// pod re-reads the pod of a server. found is false once it is gone — which
-// includes a pod that only carries a deletion timestamp, because envtest runs
-// no kubelet to finish the job.
+// pod re-reads the pod of a server. found is false once it is gone, including
+// a pod that only carries a deletion timestamp: envtest runs no kubelet.
 func (f *fixture) pod(name string) (*corev1.Pod, bool) {
 	f.t.Helper()
 	pod := &corev1.Pod{}
@@ -435,9 +379,8 @@ func (f *fixture) setPodRunning(name string, ready bool) {
 	}
 }
 
-// bindPodToNode does what a scheduler would. envtest runs none, and
-// pod.spec.nodeName cannot be set by Update -- the API server rejects it --
-// so the binding subresource is the only way a test can place a pod.
+// bindPodToNode does what a scheduler would. pod.spec.nodeName cannot be set
+// by Update, so the binding subresource is the only way to place a pod.
 func (f *fixture) bindPodToNode(t *testing.T, pod *corev1.Pod, nodeName string) {
 	t.Helper()
 	binding := &corev1.Binding{
@@ -449,9 +392,8 @@ func (f *fixture) bindPodToNode(t *testing.T, pod *corev1.Pod, nodeName string) 
 	}
 }
 
-// ensureNode creates a Node, cordoned or not, and cleans it up. Nodes are
-// cluster-scoped, so unlike everything else these tests create they are not
-// isolated by the per-test namespace and must carry a unique name.
+// ensureNode creates a Node, cordoned or not. Nodes are cluster-scoped, so
+// they need a unique name and their own cleanup.
 func (f *fixture) ensureNode(t *testing.T, name string, unschedulable bool) *corev1.Node {
 	t.Helper()
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: name}}
@@ -466,19 +408,9 @@ func (f *fixture) ensureNode(t *testing.T, name string, unschedulable bool) *cor
 	return node
 }
 
-// nonBlockingRecorder is events.FakeRecorder with the channel taken out.
-//
-// FakeRecorder's buffer is per call site rather than a package constant, and a
-// reconciler that emits one event more than the buffer holds does not drop it
-// or error -- it *blocks inside Eventf*. The test then does not fail, it hangs,
-// and the only symptom is the package's ten-minute go test timeout with
-// nothing in the output naming the recorder or the channel: a mutant that
-// should take a second to disprove looks like a wedge instead. A slice under a
-// mutex has no buffer to overrun, so no test here has to budget against one.
-//
-// The format string is copied from events.FakeRecorder deliberately, dropping
-// `action` exactly as it does, so every existing assertion about an event's
-// text keeps meaning what it meant.
+// nonBlockingRecorder replaces events.FakeRecorder, which blocks inside
+// Eventf once its per-call-site buffer is full, so a test hangs instead of
+// failing. The format string is FakeRecorder's, dropping `action` as it does.
 type nonBlockingRecorder struct {
 	mu     sync.Mutex
 	events []string

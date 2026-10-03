@@ -25,15 +25,9 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
-// checkExtraFiles decides whether the claim a group's spec.extraFiles names
-// can be served, exactly as checkExtraPlugins does for its own field.
-//
-// A second flag rather than a wider one: --allow-plugin-volumes exists so an
-// operator can say "this installation runs no third-party plugins" and have it
-// be a fact, and making it also govern files would leave its name covering
-// something that is not a plugin. Like that one, this switch is an operational
-// statement and not a security boundary -- a PersistentVolumeClaim is a
-// namespaced object in the same trust domain as the group naming it.
+// checkExtraFiles has its own flag so --allow-plugin-volumes keeps meaning
+// "no third-party plugins". Neither is a security boundary: a claim is in the
+// same trust domain as the group naming it.
 func checkExtraFiles(
 	ctx context.Context,
 	reader client.Reader,
@@ -45,8 +39,6 @@ func checkExtraFiles(
 		return "", "", true
 	}
 	if ef.Image != "" {
-		// An image is pulled, not mounted from a claim, so neither the volume
-		// switch nor the claim check applies.
 		return "", "", true
 	}
 	if !allowed {

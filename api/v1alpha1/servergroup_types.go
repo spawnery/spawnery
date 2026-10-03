@@ -221,32 +221,19 @@ type ServerGroupSpec struct {
 	// Replicas is the fixed number of persistent servers. Ephemeral groups are
 	// sized by scaling instead.
 	//
-	// Lowering it takes the top ordinal whoever is on it. A persistent server
-	// is an identity and no other server can take its place, so unlike an
-	// ephemeral group -- which shrinks around its players by picking an empty
-	// server instead -- this one has no alternative to offer. The players on
-	// that ordinal are protected by the ordinary drain and by nothing else:
-	// they are moved through the proxies, and anyone still connected when
-	// spec.drain.timeoutSeconds passes is disconnected with the pod.
-	//
-	// So if they must not be: empty the ordinal first, or raise
-	// spec.drain.timeoutSeconds beforehand so the drain has room to finish.
-	// docs/guides/persistent-worlds.md carries why refusing to shrink while anyone
-	// is online would not be the better rule.
+	// Lowering it takes the top ordinal whoever is on it. Its players are
+	// moved by the ordinary drain, and anyone still connected when
+	// spec.drain.timeoutSeconds passes is disconnected with the pod. Empty the
+	// ordinal first or raise spec.drain.timeoutSeconds beforehand.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	Replicas *int32 `json:"replicas,omitempty"`
 
 	// MaxInstances is how many members this group may have at once.
 	//
-	// A fleet ceiling and not a per-player quota: who may have how many
-	// private servers is a question about a player, a purchase and a ban,
-	// and the system that knows those three is the one that answers it.
-	//
-	// Zero is legal and means the group is closed -- new starts are refused
-	// and every world stays where it is, which is the state an incident wants
-	// and a deletion would not give. Required rather than defaulted: a
-	// ceiling nobody chose is a ceiling nobody thought about.
+	// A fleet ceiling, not a per-player quota. Zero closes the group: new
+	// starts are refused and every world stays where it is. Required, with no
+	// default.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	MaxInstances *int32 `json:"maxInstances,omitempty"`
@@ -266,32 +253,15 @@ type ServerGroupSpec struct {
 	Mounts []Mount `json:"mounts,omitempty"`
 
 	// Env are extra environment variables for the server container, appended
-	// to the ones the operator sets. A name may not begin with
-	// ReservedEnvPrefix; see that constant for why the whole prefix is taken
-	// rather than the individual names.
+	// to the ones the operator sets. A name may not begin with SPAWNERY_.
 	//
-	// This is also the only way to reach the JVM. The entrypoint execs java
-	// with a fixed flag list and takes no arguments from any spec, so a
-	// process-level setting travels in JAVA_TOOL_OPTIONS, which is the seam
-	// the JVM itself offers. An option on the command line beats the same
-	// option in that variable, for -D and for -Xmx alike, so a group can add
-	// the system property its plugins read without being able to displace the
-	// heap and GC flags the entrypoint sets. The case this exists for is a network whose game variants differ
-	// by nothing else -- the same jars and the same configuration, one group
-	// running them solo and another in teams, told apart by a single -D.
+	// JVM options go in JAVA_TOOL_OPTIONS. The entrypoint's own command-line
+	// flags win over the same option there, so a group can add a -D but not
+	// displace the heap and GC flags.
 	//
-	// It shapes the pod, so it is in podspec.DesiredServerHash: editing it
-	// makes every server of the group stale and replaces them exactly the way
-	// an image bump does, through maxUnavailable and the cold start. That is
-	// the opposite of ExtraPlugins, whose contents deliberately reach no
-	// hash, and the difference is that a filesystem the operator only names
-	// cannot be digested while an env list it renders can.
-	//
-	// What the hash digests is the reference, not the value: an entry with
-	// valueFrom.secretKeyRef or configMapKeyRef reads any Secret or
-	// ConfigMap in the namespace, the same reach a spec.mounts entry has,
-	// and rotating that object changes what a new pod gets while the
-	// running fleet keeps the old value until something else rolls it.
+	// Editing it replaces every server of the group, like an image bump. A
+	// valueFrom reference is digested, not its value: rotating the Secret or
+	// ConfigMap reaches only new pods.
 	// +optional
 	// +listType=map
 	// +listMapKey=name
@@ -299,27 +269,16 @@ type ServerGroupSpec struct {
 	Env []corev1.EnvVar `json:"env,omitempty"`
 
 	// DisplayName is what this group is called where a person reads it:
-	// a scoreboard, a chat message, a playtime key. A metadata.name is a DNS
-	// label -- lowercase, no spaces -- and a name people say out loud rarely
-	// is, so a plugin that shows "Bingo-Team" reads it from here and not from
-	// the object's name.
+	// a scoreboard, a chat message, a playtime key.
 	//
-	// The operator carries it and reads none of it, like Attributes below.
-	// Empty is not an error: a plugin then shows the group's own name, and it
-	// is the plugin that makes that substitution rather than the operator,
-	// so that a picture with the field unset and a picture whose operator
-	// predates the field read the same.
+	// The operator carries it and reads none of it. Empty, a plugin shows the
+	// group's own name.
 	// +optional
 	// +kubebuilder:validation:MaxLength=64
 	DisplayName string `json:"displayName,omitempty"`
 
 	// Attributes is what plugins are told about this group. See
-	// GroupAttributes: the operator carries it and acts on none of it.
-	//
-	// It shapes no pod and is therefore not in the spec hash a server is
-	// replaced on -- the opposite of Env above. Editing it replaces nothing
-	// and restarts nothing; the next network picture simply carries the new
-	// value, which is what a description of a group should cost.
+	// GroupAttributes. Editing it replaces and restarts nothing.
 	// +optional
 	Attributes GroupAttributes `json:"attributes,omitempty"`
 
@@ -329,17 +288,8 @@ type ServerGroupSpec struct {
 	ExtraPlugins *ExtraPlugins `json:"extraPlugins,omitempty"`
 
 	// ExtraFiles names a volume whose tree is copied into this group's
-	// servers on every start. See ExtraFiles.
-	//
-	// The claim's contents are the truth on every start: a file the server
-	// rewrote at runtime is replaced by the claim's version the next time the
-	// pod starts. A world placed in this claim is therefore overwritten on
-	// every start and does not belong here -- spec.storage and spec.mounts
-	// are what carry one.
-	//
-	// Nothing about the contents reaches the pod hash, because the spec names
-	// a claim rather than describing what is in it. Changing a file replaces
-	// no running server; it reaches one on that server's next start.
+	// servers on every start, replacing what the server wrote there. A world
+	// does not belong in it. See ExtraFiles.
 	// +optional
 	ExtraFiles *ExtraFiles `json:"extraFiles,omitempty"`
 
@@ -353,37 +303,23 @@ type ServerGroupSpec struct {
 	// "paper-global.yml", "paper-world-defaults.yml" or "velocity.toml", in
 	// the target's own dialect.
 	//
-	// paper-world-defaults.yml is the one of those the operator writes only
-	// when an overlay names it. Nothing in it is operationally critical, so
-	// there is nothing to assert into it, and a file written empty on every
-	// start would overwrite whatever the server had filled in for itself. It
-	// is also the only route that file has: a mount cannot deliver it, because
-	// a mount anywhere under /data/config stops the server writing its own
-	// configuration and it never starts. See internal/podspec.ServerConfigDirPath.
+	// paper-world-defaults.yml is written only when an overlay names it, and
+	// this is its only route: a mount under /data/config keeps the server
+	// from starting.
 	//
-	// It is a field of its own rather than a reserved name inside mounts,
-	// because mounts is documented as raw files for plugins and worlds and a
-	// name-based convention is invisible until someone picks that name by
-	// accident. It outranks the rendered defaults and is outranked by the
-	// operationally critical fields, which nothing can reach.
+	// It outranks the rendered defaults and is outranked by the operationally
+	// critical fields.
 	//
-	// A key the receiving program does not declare is refused rather than
-	// written. Paper and Velocity both keep their own default for a key they
-	// do not read and write the stray one straight back out, so the rendered
-	// file goes on looking like the override took while the setting never
-	// applies -- which is the failure this refusal exists to prevent. The
-	// declared keys are taken from each program's own default configuration,
-	// so a Paper or Velocity bump can refuse a legitimately new key until that
-	// file is captured again. server.properties is the exception: it has no
-	// such capture, so a mistyped key there is still only an unused one.
+	// A key the receiving program does not declare is refused, since Paper and
+	// Velocity silently ignore it. The declared keys come from each program's
+	// captured default configuration, so a Paper or Velocity bump can refuse a
+	// new key until that capture is updated. server.properties keys are not
+	// checked.
 	// +optional
 	ConfigOverlay *ObjectRef `json:"configOverlay,omitempty"`
 
-	// Scaling configures slot-based scaling. Ephemeral only.
-	//
-	// Editing it replaces no server: staleness is a digest over the rendered
-	// pod, and nothing here shapes one, so a scaling knob can be tuned during
-	// a player spike without a changeover.
+	// Scaling configures slot-based scaling. Ephemeral only. Editing it
+	// replaces no server.
 	// +optional
 	Scaling *ScalingSpec `json:"scaling,omitempty"`
 
@@ -422,11 +358,6 @@ type ServerGroupSpec struct {
 	FailedRetentionSeconds int32 `json:"failedRetentionSeconds,omitempty"`
 
 	// FinishedRetentionSeconds is how long a Finished server is kept.
-	//
-	// Shorter than the failed retention on purpose: that one buys somebody
-	// time to look at a fault, and a round that ended as it should is not one.
-	// What it buys instead is a window in which the last round is still
-	// visible to anybody asking what just happened.
 	// +kubebuilder:default=300
 	// +kubebuilder:validation:Minimum=0
 	// +optional
@@ -435,21 +366,11 @@ type ServerGroupSpec struct {
 
 // ServerGroupStatus is the observed state of a ServerGroup.
 type ServerGroupStatus struct {
-	// Phase says whether players can join, and that is narrower than it
-	// sounds: Ready means the group's *floor* is met -- spec.replicas for a
-	// persistent group, spec.scaling.minReplicas for an ephemeral one -- not
-	// that every server the scaler decided to run is up.
-	//
-	// An ephemeral group scaled above its floor to cover spareSlots reports
-	// Ready as soon as the floor is covered, with the rest still starting.
-	// Compare readyReplicas against replicas to see that; both are printed
-	// columns for exactly this reason.
-	//
-	// It is deliberately not "every decided server is up". A group scaling up
-	// under load would then flip to Pending while thousands of players were
-	// connected, and a group whose cluster has no capacity left for its
-	// scaled target would sit at Pending forever while serving perfectly.
-	// Ready answering "can somebody join" is the more useful of the two.
+	// Phase says whether players can join: Ready means the group's *floor* is
+	// met -- spec.replicas for a persistent group, spec.scaling.minReplicas
+	// for an ephemeral one -- not that every server the scaler decided to run
+	// is up. Compare readyReplicas against replicas for that, or see the
+	// Progressing condition.
 	// +optional
 	Phase string `json:"phase,omitempty"`
 
@@ -468,25 +389,12 @@ type ServerGroupStatus struct {
 	// FreeSlots is the number of seats a proxy can send a player to right
 	// now: the free playable seats of servers that are Ready, in the proxies'
 	// routing tables, accepting joins, and rendered under the group's current
-	// spec.
-	// It is the scaler's input, published. A server that has closed its door
-	// for a running round contributes nothing here even while its own
-	// maxPlayers minus onlinePlayers is not zero.
+	// spec. It is the scaler's input.
 	// +optional
 	FreeSlots int32 `json:"freeSlots"`
 
 	// BoostedReplicas is how much of this group's current floor comes from
 	// ScaleBoost objects rather than from spec.scaling.minReplicas.
-	//
-	// It exists because the likeliest failure of a boost is not a wrong number
-	// but an unexplained one: a group running four servers with a declared
-	// floor of one and nothing anywhere saying why. A person meeting that will
-	// edit the spec, which is the single thing that would not help -- the
-	// boost is a separate object and the spec is not where it lives.
-	//
-	// Zero and present rather than absent, so that comparing two groups does
-	// not mean telling "no boost" apart from "this operator is too old to
-	// say".
 	// +optional
 	BoostedReplicas int32 `json:"boostedReplicas"`
 
@@ -496,12 +404,7 @@ type ServerGroupStatus struct {
 
 	// ConsecutiveFailures counts *rounds* in which at least one server failed
 	// to start, with no success since. One pass adds one however many servers
-	// it saw fail: counting servers would let a group with a floor of six
-	// spend its whole budget in a single round, because the scaler creates the
-	// shortfall in one pass. It lives on the CR rather than in the operator's
-	// memory because a restart must not reset it, which would restart the
-	// create loop it exists to bound -- the opposite of the empty-since clock,
-	// where a reset delays a scale-down and so errs safely.
+	// it saw fail.
 	// +optional
 	ConsecutiveFailures int32 `json:"consecutiveFailures,omitempty"`
 
@@ -538,9 +441,6 @@ type ServerGroupStatus struct {
 // +kubebuilder:printcolumn:name="Type",type=string,JSONPath=`.spec.type`
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
-// Replicas beside Ready, so the printed row carries a denominator. Without it
-// `kubectl get servergroup` showed "Phase Ready, Ready 1" for a group running
-// five, and nothing in the row said the other four were still starting.
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.status.replicas`
 // +kubebuilder:printcolumn:name="Players",type=integer,JSONPath=`.status.onlinePlayers`
 // +kubebuilder:printcolumn:name="Free Slots",type=integer,JSONPath=`.status.freeSlots`
@@ -565,7 +465,6 @@ type ServerGroupList struct {
 	Items           []ServerGroup `json:"items"`
 }
 
-// IsEphemeral reports whether this group is ephemeral.
 func (g *ServerGroup) IsEphemeral() bool {
 	return g.Spec.Type == ServerGroupEphemeral
 }
@@ -576,8 +475,7 @@ func (g *ServerGroup) IsOnDemand() bool {
 }
 
 // DesiredReplicas is the number of servers the group must have at minimum. For
-// an ephemeral group it is the floor only: the size it actually runs at is
-// DecideSize's, which reads this as one input among several.
+// an ephemeral group it is the floor only; DecideSize decides the actual size.
 func (g *ServerGroup) DesiredReplicas() int32 {
 	if g.IsEphemeral() {
 		if g.Spec.Scaling == nil {
@@ -585,10 +483,6 @@ func (g *ServerGroup) DesiredReplicas() int32 {
 		}
 		return g.Spec.Scaling.MinReplicas
 	}
-	// Nothing is desired: an on-demand group's members exist because somebody
-	// asked for them. The fallthrough below would reach the same 0 through
-	// spec.replicas being nil, and an answer that correct by accident is one
-	// a later edit can break without a test noticing.
 	if g.IsOnDemand() {
 		return 0
 	}
@@ -598,7 +492,6 @@ func (g *ServerGroup) DesiredReplicas() int32 {
 	return *g.Spec.Replicas
 }
 
-// DrainTimeout is the configured drain timeout.
 func (g *ServerGroup) DrainTimeout() time.Duration {
 	if g.Spec.Drain == nil {
 		return 60 * time.Second
@@ -606,37 +499,18 @@ func (g *ServerGroup) DrainTimeout() time.Duration {
 	return time.Duration(g.Spec.Drain.TimeoutSeconds) * time.Second
 }
 
-// FailedRetention is how long a Failed server is kept.
 func (g *ServerGroup) FailedRetention() time.Duration {
 	return time.Duration(g.Spec.FailedRetentionSeconds) * time.Second
 }
 
-// FinishedRetention is how long a Finished server is kept.
 func (g *ServerGroup) FinishedRetention() time.Duration {
 	return time.Duration(g.Spec.FinishedRetentionSeconds) * time.Second
 }
 
 // UpdateMaxUnavailable is how many servers a rolling update may have
-// unavailable at once. A group with no spec.update gets the CRD's own default,
-// so the rule is the same whether the field was written out or left off.
-//
-// spec.update is +optional with no CEL rule requiring it, so Spec.Update is
-// nil for any Ephemeral group whose operator never wrote an update policy —
-// and a nil parent means the field's own +kubebuilder:default=1 never
-// applies. The CRD forbids 0 whenever spec.update is present (minimum 1), so
-// a 0 reaching this method can only be that unset case, never a real operator
-// choice. Floor it at 1 here: selectRetirement (internal/controller/scaling.go)
-// treats unavailable >= budget as "no room to retire", and an unfloored 0
-// would make that comparison true forever, so the group would silently never
-// roll — no error, no condition, no event, just stale servers standing
-// forever.
-//
-// selectRetirement floors the same value a second time, on its own copy in
-// ScalingInputs.MaxUnavailable. That is deliberate, not redundant, and
-// neither floor should be removed: this accessor is where a reader learns
-// what an unset policy means, and selectRetirement's floor is what protects
-// the pure rule from a future call site that builds ScalingInputs without
-// going through this accessor.
+// unavailable at once. With spec.update unset its +kubebuilder:default=1 never
+// applies, so the 0 is floored here; a 0 would block every roll.
+// selectRetirement floors its own copy again, for callers that bypass this.
 func (g *ServerGroup) UpdateMaxUnavailable() int32 {
 	if g.Spec.Update == nil || g.Spec.Update.MaxUnavailable < 1 {
 		return 1
@@ -653,7 +527,6 @@ func (g *ServerGroup) UpdateMaxStale() time.Duration {
 	return time.Duration(g.Spec.Update.MaxStaleSeconds) * time.Second
 }
 
-// UpdateWhenEmpty reports whether spec.update.strategy is WhenEmpty.
 func (g *ServerGroup) UpdateWhenEmpty() bool {
 	return g.Spec.Update != nil && g.Spec.Update.Strategy == UpdateWhenEmpty
 }

@@ -7,9 +7,7 @@ import kotlin.test.assertTrue
 class StyleTest {
     @Test
     fun `a value carrying a tag cannot inject one`() {
-        // The operator's own refusal messages reach chat verbatim, and one
-        // containing a `<` would otherwise be eaten by the parser or make it
-        // throw inside a network callback.
+        // The operator's refusal messages reach chat verbatim.
         val hostile = "that group has room for <red>0</red>, not 9"
 
         val styled = Style.bad(hostile)
@@ -21,8 +19,7 @@ class StyleTest {
 
     @Test
     fun `a backslash survives rather than eating the next character`() {
-        // Escaping `<` before `\` would turn a value's own backslash into an
-        // escape for the tag marker, and print the backslash.
+        // Escaping `<` before `\` would turn a value's backslash into an escape.
         assertEquals("<gray>a\\\\b</gray>", Style.quiet("a\\b"))
     }
 

@@ -21,9 +21,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
-// SessionsCut counts proxy sessions ended because their queue filled up. It is
-// the only outward sign of a proxy that cannot keep up: the stream simply ends
-// and the agent reconnects, which on its own looks like an ordinary reconnect.
+// SessionsCut counts proxy sessions ended because their queue filled up.
+// Without it the cut looks like an ordinary reconnect.
 var SessionsCut = prometheus.NewCounter(
 	prometheus.CounterOpts{
 		Name: "spawnery_proxy_sessions_cut_total",

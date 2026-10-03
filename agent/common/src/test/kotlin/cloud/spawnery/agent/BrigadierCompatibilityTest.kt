@@ -6,22 +6,9 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * The shared module compiles against Paper's Brigadier and runs against
- * Velocity's, and this is what makes that safe rather than lucky.
- *
- * Measured 2026-08-28 against the pinned artifacts: Paper ships
- * brigadier-1.3.10 with 54 classes, Velocity bundles 52, and the difference is
- * exactly `ContextChain` and `ContextChain$Stage` -- both present in Paper and
- * absent from Velocity. Nothing is in Velocity's copy and missing from
- * Paper's.
- *
- * So a class this module compiles cleanly can still fail to load on a proxy,
- * and the only way it can is by referencing one of those two. The build cannot
- * see that; this can.
- *
- * If a Paper bump widens the gap, this test does not grow on its own -- the
- * list below is the measurement and has to be remeasured. That is stated here
- * rather than left as a surprise for whoever bumps Paper.
+ * The module compiles against Paper's Brigadier and runs against Velocity's,
+ * which lacks `ContextChain` and `ContextChain$Stage`. The list below is the
+ * difference between the pinned copies; a Paper bump has to recompute it.
  */
 class BrigadierCompatibilityTest {
     private val absentFromVelocity = listOf(

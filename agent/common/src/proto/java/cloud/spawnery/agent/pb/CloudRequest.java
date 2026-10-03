@@ -9,17 +9,10 @@ package cloud.spawnery.agent.pb;
  * <pre>
  * CloudRequest is an agent asking the operator for something.
  *
- * **The first message on this channel that is a question.** Until 7b-5 an
- * agent reported upward and the operator instructed downward; nothing asked,
- * and the three things that follow from asking are all new here.
- *
- * The id is the *agent's*, minted per stream and monotonic. The operator
- * echoes it on the answer and never remembers one across a reconnect, so a
- * renewal leaves nothing to reconcile on either side -- which matters because
- * SessionLoop renews make-before-break and two streams are briefly live at
- * once. An in-flight request does not survive that changeover: the agent fails
- * it rather than resending on the new stream, because only the caller knows
- * whether their request is safe to repeat and none of these is.
+ * The id is the agent's, minted per stream and monotonic. The operator echoes
+ * it on the answer and never remembers one across a reconnect. A request in
+ * flight during a stream renewal is failed by the agent, not resent: none of
+ * these is safe to repeat.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.CloudRequest}
@@ -816,17 +809,10 @@ private static final long serialVersionUID = 0L;
    * <pre>
    * CloudRequest is an agent asking the operator for something.
    *
-   * **The first message on this channel that is a question.** Until 7b-5 an
-   * agent reported upward and the operator instructed downward; nothing asked,
-   * and the three things that follow from asking are all new here.
-   *
-   * The id is the *agent's*, minted per stream and monotonic. The operator
-   * echoes it on the answer and never remembers one across a reconnect, so a
-   * renewal leaves nothing to reconcile on either side -- which matters because
-   * SessionLoop renews make-before-break and two streams are briefly live at
-   * once. An in-flight request does not survive that changeover: the agent fails
-   * it rather than resending on the new stream, because only the caller knows
-   * whether their request is safe to repeat and none of these is.
+   * The id is the agent's, minted per stream and monotonic. The operator echoes
+   * it on the answer and never remembers one across a reconnect. A request in
+   * flight during a stream renewal is failed by the agent, not resent: none of
+   * these is safe to repeat.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.CloudRequest}

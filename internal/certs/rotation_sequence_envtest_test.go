@@ -14,14 +14,6 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// The sequence AdvanceRotation drives, one step per call.
-//
-// package certs_test, not the white-box package certs that
-// rotation_envtest_test.go had to be: every name these tests touch is
-// exported, and they share newStore/testClock with store_envtest_test.go,
-// which is where the fixture already lives. Reaching for the white-box
-// package would mean a second copy of that fixture in this directory for no
-// access it does not already have.
 package certs_test
 
 import (
@@ -87,9 +79,7 @@ func TestStartPublishesTheIncomingCAWithoutSigningWithIt(t *testing.T) {
 		t.Error("PublishedCA does not carry both CAs during the distributing phase")
 	}
 
-	// "Signs nothing with it" is the assertion that a bundle-shaped check
-	// would miss: a switch performed early leaves NextCACertPEM populated
-	// too, and only the serving certificate's issuer tells the difference.
+	// Only the serving certificate's issuer tells an early switch apart.
 	serving := parseCert(t, b.ServingCertPEM)
 	if err := serving.CheckSignatureFrom(parseCert(t, before.CACertPEM)); err != nil {
 		t.Errorf("the serving certificate no longer chains to the outgoing CA: %v", err)
@@ -374,12 +364,9 @@ func TestRollbackAbandonsTheRotationFromEitherPhase(t *testing.T) {
 	})
 }
 
-// A Network created during the window does not postpone the switch.
-//
-// Its namespace's ConfigMap receives the current bundle -- already two PEMs --
-// on its first reconcile, and its pods have never held anything else.
-// Re-checking the gate is the obvious implementation and would let a cluster
-// where networks are created regularly push the switch out forever.
+// A Network created during the window does not postpone the switch: its
+// ConfigMap gets the two-PEM bundle on first reconcile, and re-checking the
+// gate would let new networks push the switch out forever.
 func TestANetworkCreatedDuringTheWindowDoesNotPostponeTheSwitch(t *testing.T) {
 	s, clock, ctx, ns := newStore(t)
 	s.AgentSessionDeadline = 10 * time.Minute
@@ -411,18 +398,12 @@ func TestANetworkCreatedDuringTheWindowDoesNotPostponeTheSwitch(t *testing.T) {
 	}
 }
 
-// A request the operator does not recognise is left alone and reported -- but
-// not obeyed and not halted on; one it does recognise is removed once acted
-// on.
-//
-// Clearing an annotation you did not understand hides the typo that produced
-// it, and leaving one you did act on would freeze the sequence: the phase is
-// only ever driven on a tick with no request pending.
+// An unrecognised request is left alone and reported, but neither obeyed nor
+// halted on; a recognised one is removed once acted on, or it would fire again.
 func TestAnUnknownRequestIsLeftInPlaceAndAKnownOneIsConsumed(t *testing.T) {
 	s, clock, ctx, ns := newStore(t)
 	s.AgentSessionDeadline = 10 * time.Minute
 
-	// "Reported" is half the claim, so it is captured rather than assumed.
 	var logged []string
 	ctx = log.IntoContext(ctx, funcr.New(func(prefix, args string) {
 		logged = append(logged, args)
@@ -460,9 +441,7 @@ func TestAnUnknownRequestIsLeftInPlaceAndAKnownOneIsConsumed(t *testing.T) {
 		t.Errorf("rotate-ca = %q after being acted on, want it removed", got)
 	}
 
-	// The next tick. A request still sitting there fires again: at best it
-	// mints a second incoming CA over the one agents are already picking up,
-	// at worst it is refused and the rotation makes no progress at all.
+	// The next tick: a request left in place would fire again.
 	writeCA(t, ctx, s.Client, ns, b.PublishedCA())
 	b, _, err = s.AdvanceRotation(ctx, b)
 	if err != nil {
@@ -472,12 +451,8 @@ func TestAnUnknownRequestIsLeftInPlaceAndAKnownOneIsConsumed(t *testing.T) {
 		t.Error("the incoming CA changed on the next tick; start was acted on twice")
 	}
 
-	// The same typo, now while a rotation is mid-window. Reporting it must not
-	// halt the sequence. Continuing costs at most one unwanted automatic step
-	// -- the switch -- and that step is fully reversible: rollback re-signs
-	// with ca-previous.*, which every agent has trusted throughout. Halting
-	// costs an indefinite freeze with nothing on the object saying so, since
-	// the phase still reads `distributing` and `since` is still stamped.
+	// The same typo mid-window must not halt the sequence: the worst that
+	// continuing costs is the switch, and rollback reverses that.
 	requestRotation(t, ctx, s, "dropp-old")
 	clock.Advance(12*time.Minute + time.Second)
 	b, _, err = s.AdvanceRotation(ctx, b)
@@ -496,24 +471,12 @@ func TestAnUnknownRequestIsLeftInPlaceAndAKnownOneIsConsumed(t *testing.T) {
 
 // A human's instruction survives a conflict on the operator's own write.
 //
-// applyStep wraps its update in retry.RetryOnConflict with the Get inside the
-// retried function, which is the whole concurrency story for a secret two
-// parties write. The part worth protecting is the consume closure: it deletes
-// rotate-ca only when the value is still the one this call decided on, so a
-// request nobody has acted on yet cannot be swallowed by somebody else's
-// retry.
-//
-// The scenario: the operator decides to act on start; between its read and its
-// write a human replaces the annotation with rollback; the update conflicts;
-// the retry re-reads, finds rollback, and must leave it alone -- while start's
-// own work still lands, because it succeeded.
+// The operator acts on start; a human replaces it with rollback before the
+// write lands; the update conflicts; the retry must leave rollback alone while
+// start's own work still lands.
 func TestAConflictDoesNotSwallowAnInstructionNobodyActedOn(t *testing.T) {
-	// interceptor.NewClient needs a client.WithWatch, and newStore's client
-	// (testenv.Client's plain client.Client) is not one: client.New's
-	// concrete type carries no Watch method, only client.NewWithWatch's does.
-	// Built against the same shared control plane testenv.Config/Scheme
-	// memoize, so this reaches the identical apiserver every other test in
-	// this package talks to.
+	// interceptor.NewClient needs a client.WithWatch, which newStore's client is
+	// not.
 	plain, err := client.NewWithWatch(testenv.Config(t), client.Options{Scheme: testenv.Scheme(t)})
 	if err != nil {
 		t.Fatalf("new watch client: %v", err)
@@ -534,13 +497,10 @@ func TestAConflictDoesNotSwallowAnInstructionNobodyActedOn(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
-	// Written through the plain client, before the interceptor goes on: this
-	// is the request applyStep's retry has to protect, not the write under test.
+	// Written before the interceptor goes on: the request the retry must protect.
 	requestRotation(t, ctx, s, certs.RequestStart)
 
-	// From here on, s.Client intercepts Update: the first call is applyStep's
-	// own write losing a race to a human's kubectl edit, and it conflicts;
-	// the second is the retry's own write and goes through untouched.
+	// From here on the first Update conflicts and the retry's goes through.
 	conflicted := false
 	s.Client = interceptor.NewClient(plain, interceptor.Funcs{
 		Update: func(ctx context.Context, inner client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
@@ -548,9 +508,8 @@ func TestAConflictDoesNotSwallowAnInstructionNobodyActedOn(t *testing.T) {
 				return inner.Update(ctx, obj, opts...)
 			}
 			conflicted = true
-			// The competing write, through the underlying client so it is not
-			// itself intercepted: a human's kubectl edit landing between
-			// applyStep's Get and its Update.
+			// A human's kubectl edit between applyStep's Get and Update, through the
+			// underlying client so it is not intercepted.
 			secret := &corev1.Secret{}
 			key := types.NamespacedName{Name: obj.GetName(), Namespace: obj.GetNamespace()}
 			if err := inner.Get(ctx, key, secret); err != nil {
@@ -563,10 +522,7 @@ func TestAConflictDoesNotSwallowAnInstructionNobodyActedOn(t *testing.T) {
 			if err := inner.Update(ctx, secret); err != nil {
 				return err
 			}
-			// A real Conflict, not a stand-in: retry.RetryOnConflict gates on
-			// apierrors.IsConflict, which only a StatusReasonConflict --
-			// exactly what NewConflict produces -- satisfies. Anything else
-			// would exercise applyStep's plain error return, not the retry.
+			// retry.RetryOnConflict retries only on apierrors.IsConflict.
 			return apierrors.NewConflict(corev1.Resource("secrets"), obj.GetName(),
 				errors.New("a human edited rotate-ca first"))
 		},
@@ -584,9 +540,7 @@ func TestAConflictDoesNotSwallowAnInstructionNobodyActedOn(t *testing.T) {
 	}
 
 	secret := secretOf(t, ctx, s, ns)
-	// Both halves, not just one: an implementation that gave up on the
-	// conflict entirely -- consuming nothing and minting no incoming CA --
-	// would also leave rollback sitting on the secret.
+	// Both halves: giving up on the conflict would also leave rollback in place.
 	if got := secret.Annotations[certs.AnnotationRotateRequest]; got != certs.RequestRollback {
 		t.Errorf("rotate-ca = %q, want %q: the retry must not swallow an instruction "+
 			"nobody had acted on when it fired", got, certs.RequestRollback)
@@ -604,8 +558,7 @@ func TestAConflictDoesNotSwallowAnInstructionNobodyActedOn(t *testing.T) {
 // performed against a window that is short by ten minutes.
 func TestAMissingSessionDeadlineRefusesTheSwitch(t *testing.T) {
 	s, clock, ctx, ns := newStore(t)
-	// Deliberately not set: this is the operator whose --agent-session-deadline
-	// never reached the store.
+	// Deliberately not set.
 	b := startedAndDistributed(t, s, clock, ctx, ns)
 
 	clock.Advance(24 * time.Hour)
@@ -629,25 +582,19 @@ func TestAMissingSessionDeadlineRefusesTheSwitch(t *testing.T) {
 	}
 }
 
-// An incoming CA no agent could parse abandons the rotation.
-//
-// It never distributed anything usable, so the end state is the one a
-// rollback out of `distributing` already produces: no slot, no phase, the
-// signing CA published alone -- and every agent trusted that one throughout.
+// An incoming CA no agent could parse abandons the rotation, ending where a
+// rollback out of `distributing` does.
 func TestAnUnparseableIncomingCAAbandonsTheRotation(t *testing.T) {
 	s, clock, ctx, ns := newStore(t)
 	s.AgentSessionDeadline = 10 * time.Minute
 
 	b := startedAndDistributed(t, s, clock, ctx, ns)
 	signing := b.CACertPEM
-	// Wired in after the fixture, so the only event on the channel is the one
-	// the call under test records -- the fixture's own start is not evidence
-	// about anything here.
+	// Wired in after the fixture, so only this call's event is on the channel.
 	rec := events.NewFakeRecorder(8)
 	s.Recorder = rec
-	// The bundle handed to AdvanceRotation deliberately still carries the
-	// good bytes: the hand-edit lands after Ensure read the secret, which is
-	// the ordering AdvanceRotation's own fresh Get exists for.
+	// The bundle still carries the good bytes: AdvanceRotation must re-read the
+	// secret.
 	breakSlot(t, ctx, s, ns, "ca-next.crt", unparseableSlot)
 
 	after, inFlight, err := s.AdvanceRotation(ctx, b)
@@ -684,10 +631,7 @@ func TestAnUnparseableIncomingCAAbandonsTheRotation(t *testing.T) {
 		t.Errorf("the discarded record = %q, want it to carry the parse error: the bytes "+
 			"are gone, so this is the whole of what a diagnosis has left", got)
 	}
-	// The exact stamp, not merely some stamp: it comes from the store's clock,
-	// which is what makes "when did this happen" answerable against the rest
-	// of the rotation's timeline rather than against wall-clock time in a
-	// process that may have been restarted since.
+	// The exact stamp, from the store's clock.
 	if want := clock.Now().UTC().Format(time.RFC3339); !strings.Contains(got, want) {
 		t.Errorf("the discarded record = %q, want it to carry the time %s: a record with no "+
 			"time cannot be told apart from one left by a rotation two months ago", got, want)
@@ -699,22 +643,15 @@ func TestAnUnparseableIncomingCAAbandonsTheRotation(t *testing.T) {
 	}
 }
 
-// A broken ca-previous while switched completes the drop.
-//
-// This looks like the operator performing drop-old unasked, and it is not.
-// The hold at `switched` exists so a rollback stays possible; a rollback signs
-// with the previous CA, through RestorePrevious -> Reissue -> parseCA, on
-// exactly these bytes. They stopped parsing, so the rollback was already
-// impossible. Clearing the slot takes away no ability -- it records that the
-// ability is gone. Nobody is stranded: the serving certificate chains to the
-// new CA, which every agent trusts.
+// A broken ca-previous while switched completes the drop: a rollback signs
+// with exactly these bytes, so it was already impossible, and every agent
+// trusts the new CA.
 func TestAnUnparseableOutgoingCACompletesTheDrop(t *testing.T) {
 	s, clock, ctx, ns := newStore(t)
 	s.AgentSessionDeadline = 10 * time.Minute
 
 	b := switchedAndHolding(t, s, clock, ctx, ns)
-	// After the fixture: the start and the switch it performed are not
-	// evidence about this call.
+	// After the fixture, so only this call's events are on the channel.
 	rec := events.NewFakeRecorder(8)
 	s.Recorder = rec
 
@@ -745,11 +682,7 @@ func TestAnUnparseableOutgoingCACompletesTheDrop(t *testing.T) {
 			t.Errorf("%s survived the cleanup", k)
 		}
 	}
-	// The drop is complete, not merely the slot emptied: the hold at
-	// `switched` exists so a rollback stays possible, and a rollback signs
-	// with these very bytes through RestorePrevious -> Reissue -> parseCA.
-	// They stopped parsing, so it was already impossible; leaving the phase
-	// at `switched` would advertise a choice nobody can make.
+	// The drop is complete, not merely the slot emptied.
 	if got := secret.Annotations[certs.AnnotationRotationPhase]; got != "" {
 		t.Errorf("phase = %q after the outgoing CA was discarded, want it cleared — "+
 			"the hold's only purpose is a rollback, and the bytes it would sign with are gone", got)
@@ -757,9 +690,7 @@ func TestAnUnparseableOutgoingCACompletesTheDrop(t *testing.T) {
 	if got := secret.Annotations[certs.AnnotationRotationDiscarded]; !strings.Contains(got, "ca-previous.crt") {
 		t.Errorf("the discarded record = %q, want it to name the slot", got)
 	}
-	// Nobody is stranded by the narrowing: the serving certificate chains to
-	// the CA that is still published, which is the one every agent came to
-	// trust during the overlap.
+	// Nobody is stranded: the serving certificate chains to the published CA.
 	serving := parseCert(t, after.ServingCertPEM)
 	if err := serving.CheckSignatureFrom(parseCert(t, after.CACertPEM)); err != nil {
 		t.Errorf("the serving certificate no longer chains to the published CA: %v", err)
@@ -777,9 +708,6 @@ func TestAnUnparseableOutgoingCACompletesTheDrop(t *testing.T) {
 }
 
 // A broken slot with no phase set is cleared, and nothing else changes.
-//
-// There is nothing to abandon and nothing to complete; the slot simply must
-// not be published, and the record is what tells whoever left it there.
 func TestAnUnparseableSlotWithNoRotationIsJustCleared(t *testing.T) {
 	s, _, ctx, ns := newStore(t)
 	rec := events.NewFakeRecorder(8)
@@ -789,9 +717,7 @@ func TestAnUnparseableSlotWithNoRotationIsJustCleared(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Ensure: %v", err)
 	}
-	// A PEM envelope around something that is not a certificate: pem.Decode
-	// is happy with it and the agent's CertificateFactory is not, so it is
-	// the corruption a check built on pem.Decode alone would wave through.
+	// pem.Decode accepts this envelope; the agent's CertificateFactory does not.
 	breakSlot(t, ctx, s, ns, "ca-previous.crt",
 		pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: []byte("not a certificate")}))
 
@@ -817,8 +743,7 @@ func TestAnUnparseableSlotWithNoRotationIsJustCleared(t *testing.T) {
 	if !strings.Contains(got, "parse certificate") {
 		t.Errorf("the discarded record = %q, want it to carry the parse error", got)
 	}
-	// "Nothing else changes" is the other half of the claim: the certificate
-	// the operator is serving right now has nothing to do with the slot.
+	// The serving certificate is untouched.
 	if !bytes.Equal(secret.Data["ca.crt"], b.CACertPEM) || !bytes.Equal(secret.Data["tls.crt"], b.ServingCertPEM) {
 		t.Error("the cleanup rewrote the signing CA or the serving certificate")
 	}
@@ -845,9 +770,7 @@ func TestAStartClearsTheDiscardedRecord(t *testing.T) {
 	breakSlot(t, ctx, s, ns, "ca-next.crt", unparseableSlot)
 	requestRotation(t, ctx, s, certs.RequestStart)
 
-	// The cleanup is this call's one step. The request is not acted on in the
-	// same call and is not consumed either: it is picked up on the next tick,
-	// against the state the cleanup left.
+	// The cleanup is this call's one step; the request is picked up next tick.
 	b, _, err = s.AdvanceRotation(ctx, b)
 	if err != nil {
 		t.Fatalf("AdvanceRotation over a broken slot with a start pending: %v", err)
@@ -879,13 +802,8 @@ func TestAStartClearsTheDiscardedRecord(t *testing.T) {
 }
 
 // Ensure does not fail because of a corrupt slot, and the operator starts.
-//
-// This is the guard on the obvious implementation. Provider.Start returns
-// Ensure's error from a Runnable, so an error here is fatal at startup:
-// validating in Ensure would mean a hand-edited annotation takes the operator
-// down, which is a worse outage than the one it describes. Asserted directly
-// because "just validate it where you read it" is what a later reader will
-// reach for.
+// Provider.Start treats Ensure's error as fatal, so validating there would let
+// a hand-edit take the operator down.
 func TestACorruptSlotDoesNotFailEnsure(t *testing.T) {
 	s, _, ctx, ns := newStore(t)
 
@@ -907,24 +825,15 @@ func TestACorruptSlotDoesNotFailEnsure(t *testing.T) {
 	if _, err := again.TLSCertificate(); err != nil {
 		t.Errorf("the bundle Ensure returned cannot serve TLS: %v", err)
 	}
-	// And what reaches the agents omits it, which is the safety net the
-	// report above complements rather than replaces.
+	// And the published bundle omits it.
 	if bytes.Contains(again.PublishedCA(), unparseableMarker) {
 		t.Error("the corrupt slot is in what PublishedCA returns")
 	}
 }
 
-// An outgoing CA with a second PEM block after it is repaired, not discarded
-// -- and the rollback it was holding for still works.
-//
-// This is the case the "a rollback was already impossible" argument does not
-// cover. parseCA decodes the first block and ignores whatever follows, so
-// RestorePrevious -> Reissue -> parseCA succeeds on these bytes: the rollback
-// is alive, and clearing the slot would have killed it while the warning said
-// it was already dead. What trustManager does with the extra block is not to
-// throw but to load it as a CA -- a stream of valid blocks trusts every one
-// of them -- so the damage is a silent widening of the fleet's trust store,
-// and the repair is to publish exactly what the operator already signs with.
+// An outgoing CA with a second PEM block after it is repaired, not discarded.
+// parseCA ignores trailing blocks, so the rollback still works, while the
+// agent's trustManager would load the extra block as one more trusted CA.
 func TestAMultiBlockOutgoingCAIsTruncatedAndTheRollbackStillWorks(t *testing.T) {
 	s, clock, ctx, ns := newStore(t)
 	s.AgentSessionDeadline = 10 * time.Minute
@@ -935,8 +844,7 @@ func TestAMultiBlockOutgoingCAIsTruncatedAndTheRollbackStillWorks(t *testing.T) 
 	rec := events.NewFakeRecorder(8)
 	s.Recorder = rec
 
-	// A chain pasted in: the CA, then a second certificate after it. Exactly
-	// what a restore that carried an intermediate along produces.
+	// A chain pasted in: the CA, then a second certificate after it.
 	extra, _, err := certs.IssueCA(clock.Now())
 	if err != nil {
 		t.Fatalf("IssueCA for the second block: %v", err)
@@ -964,9 +872,8 @@ func TestAMultiBlockOutgoingCAIsTruncatedAndTheRollbackStillWorks(t *testing.T) 
 		t.Errorf("phase = %q, want %q left alone: the rollback this hold exists for is "+
 			"still possible, and completing the drop here would destroy it", got, certs.PhaseSwitched)
 	}
-	// The other half of "only ca-next, and only while distributing": there is
-	// no window at `switched`, and this stamp says how long the outgoing CA
-	// has been waiting for a human. Clearing it would erase that.
+	// No window at `switched`: this stamp says how long the outgoing CA has
+	// waited for a human.
 	if got := secret.Annotations[certs.AnnotationRotationSince]; got == "" {
 		t.Error("a ca-previous repair cleared ca-rotation-since; at `switched` that stamp " +
 			"is not a window to re-open but the age of the hold")
@@ -1041,14 +948,8 @@ func TestAMultiBlockIncomingCAIsTruncatedAndTheRotationCarriesOn(t *testing.T) {
 }
 
 // Repairing ca-next while distributing tears the window up, so the gate runs
-// again against the bytes that were kept.
-//
-// The gate is evaluated only while ca-rotation-since is empty. Without this,
-// a ca-next hand-edited in after the window was stamped is repaired and the
-// rotation carries on -- and if the block the repair keeps is a different CA
-// from the one that was distributed, the switch promotes a CA no namespace
-// ever received and every agent fails its next handshake. The cost of the
-// remedy is that a benign repair restarts a quarter of an hour of waiting.
+// again against the bytes that were kept; otherwise the switch could promote
+// a CA no namespace ever received.
 func TestARepairedIncomingCARunsTheGateAgain(t *testing.T) {
 	s, clock, ctx, ns := newStore(t)
 	s.AgentSessionDeadline = 10 * time.Minute
@@ -1066,9 +967,8 @@ func TestARepairedIncomingCARunsTheGateAgain(t *testing.T) {
 		t.Fatal("the fixture did not stamp the window, so there is nothing for the repair to tear up")
 	}
 
-	// A wholly different CA pasted in front of the one being distributed,
-	// both halves, so that the pair still signs and the gate is the only
-	// thing standing between the operator and promoting it.
+	// A different CA pasted in front of the distributed one, both halves, so the
+	// pair still signs and only the gate stops the switch.
 	pastedCert, pastedKey, err := certs.IssueCA(clock.Now())
 	if err != nil {
 		t.Fatalf("IssueCA for the pasted-in CA: %v", err)
@@ -1097,9 +997,7 @@ func TestARepairedIncomingCARunsTheGateAgain(t *testing.T) {
 			certs.AnnotationRotationSince, got)
 	}
 
-	// The whole point, and not merely that an annotation is gone: the switch
-	// does not happen, however long one waits, until the namespace has the
-	// certificate the repair kept.
+	// The switch waits until the namespace has the certificate the repair kept.
 	clock.Advance(projectionMarginPlus(s.AgentSessionDeadline) + time.Hour)
 	held, _, err := s.AdvanceRotation(ctx, after)
 	if err != nil {
@@ -1122,16 +1020,8 @@ func TestARepairedIncomingCARunsTheGateAgain(t *testing.T) {
 }
 
 // A repair takes both halves of the slot from the secret, so the certificate
-// it keeps and the key it keeps are still a pair.
-//
-// The hand-edit this covers replaces ca-next.crt *and* ca-next.key -- a whole
-// incoming CA pasted in, with a chain trailing the certificate -- in the gap
-// between Ensure's read and AdvanceRotation's re-read. Pairing the secret's
-// new certificate with the bundle's old key would look harmless here and be
-// permanent: applyStep rewrites the whole of Data from the bundle, so the new
-// key is overwritten by the old one and never comes back, and every later
-// tick fails inside SwitchToNext -> Reissue -> parseCA with nothing but a log
-// line to show for it.
+// it keeps and the key it keeps are still a pair. applyStep rewrites Data
+// from the bundle, so a mismatched pair would be permanent.
 func TestARepairKeepsTheSecretsOwnKeyWithItsCertificate(t *testing.T) {
 	s, clock, ctx, ns := newStore(t)
 	s.AgentSessionDeadline = 10 * time.Minute
@@ -1185,9 +1075,7 @@ func TestARepairKeepsTheSecretsOwnKeyWithItsCertificate(t *testing.T) {
 // Two broken slots in one call are two records and two events, and neither
 // record borrows the other's outcome.
 func TestTwoBrokenSlotsAreOneStepAndTwoRecords(t *testing.T) {
-	// A ca-next occupying a `switched` secret is a state no transition
-	// produces, which is the point: both of these arrive by hand, and the
-	// rule has to hold for a combination the sequence never builds.
+	// No transition produces ca-next at `switched`; both arrive by hand.
 	t.Run("one cleared and one truncated", func(t *testing.T) {
 		s, clock, ctx, ns := newStore(t)
 		s.AgentSessionDeadline = 10 * time.Minute
@@ -1207,10 +1095,7 @@ func TestTwoBrokenSlotsAreOneStepAndTwoRecords(t *testing.T) {
 			t.Fatalf("AdvanceRotation over two broken slots: %v", err)
 		}
 
-		// One read-back, after one call: both changes and both records are
-		// there. (One applyStep carries them; a second update would satisfy
-		// this assertion too, so it shows the record is not forgotten rather
-		// than that the write is atomic.)
+		// One read-back after one call: both changes and both records are there.
 		secret := secretOf(t, ctx, s, ns)
 		if len(secret.Data["ca-previous.crt"]) != 0 {
 			t.Error("the unparseable outgoing CA survived")
@@ -1241,9 +1126,8 @@ func TestTwoBrokenSlotsAreOneStepAndTwoRecords(t *testing.T) {
 		}
 	})
 
-	// The oddity a test would have caught: with both slots cleared at
-	// `switched`, an outcome clause written per call would put "the drop was
-	// completed" on the ca-next event too, where it describes nothing.
+	// With both slots cleared at `switched`, "the drop was completed" must not
+	// appear on the ca-next event.
 	t.Run("both cleared, and only one names the drop", func(t *testing.T) {
 		s, clock, ctx, ns := newStore(t)
 		s.AgentSessionDeadline = 10 * time.Minute
@@ -1289,17 +1173,9 @@ func TestTwoBrokenSlotsAreOneStepAndTwoRecords(t *testing.T) {
 
 // --- fixture plumbing ---------------------------------------------------
 
-// unparseableSlot is a slot shape both parsers genuinely reject. Go's
-// pem.Decode returns no block, because the body is not base64; the agent's
-// CertificateFactory.generateCertificates throws for the whole stream,
-// because the five-hyphen run opens a block it cannot finish -- and it takes
-// the signing CA down with it, which is the outage these tests are about.
-//
-// Deliberately not "-- not a certificate --": that shape has two hyphens, and
-// OpenJDK's block scanner steps straight over anything that is not a line
-// beginning with five, so the agent keeps its trust store and the fixture
-// demonstrates nothing. The shapes it does reject are in section 2 of
-// docs/superpowers/specs/2026-08-21-rotation-followups-design.md.
+// unparseableSlot is a slot shape both parsers reject: not base64 for
+// pem.Decode, an unfinished five-hyphen block for the agent's
+// CertificateFactory. A two-hyphen line would not do; the agent skips it.
 var unparseableSlot = []byte("-----BEGIN CERTIFICATE-----\n!!! not base64 !!!\n-----END CERTIFICATE-----\n")
 
 // unparseableMarker is the part of unparseableSlot that could not appear in a
@@ -1308,9 +1184,7 @@ var unparseableMarker = []byte("!!! not base64 !!!")
 
 // startedAndDistributed leaves the rotation one call short of the gate
 // passing: started, with the incoming CA already in the only namespace that
-// holds a Network. The clock is not advanced here -- every caller needs the
-// gate to pass on a call it makes itself, since that call is what stamps the
-// window -- but it is taken so the call sites read like the others.
+// holds a Network.
 func startedAndDistributed(t *testing.T, s *certs.Store, clock *testClock, ctx context.Context, ns string) *certs.Bundle {
 	t.Helper()
 	b, err := s.Ensure(ctx)
@@ -1352,10 +1226,8 @@ func switchNow(t *testing.T, ctx context.Context, s *certs.Store, clock *testClo
 	return b
 }
 
-// projectionMarginPlus is the window as an operator would compute it from
-// outside the package. Spelled out rather than reaching for the unexported
-// projectionMargin, so a change to that constant shows up here as a failure
-// to explain rather than as a silently adjusted test.
+// projectionMarginPlus spells the window out instead of using the unexported
+// projectionMargin, so a change to that constant fails here.
 func projectionMarginPlus(deadline time.Duration) time.Duration {
 	return 2*time.Minute + deadline
 }
@@ -1409,18 +1281,8 @@ func phaseOf(t *testing.T, s *certs.Store, ctx context.Context, ns string) strin
 	return secretOf(t, ctx, s, ns).Annotations[certs.AnnotationRotationPhase]
 }
 
-// createNetwork makes the namespace one the gate looks at, and deletes the
-// Network again afterwards.
-//
-// The deletion is not tidiness. testenv runs one apiserver per test binary
-// with no kube-controller-manager, so a Namespace never goes away and neither
-// do the objects in it, while namespacesMissingCA lists Networks
-// cluster-wide: a Network left behind would block every later test's gate on
-// a namespace that will never receive that test's freshly minted CA. Deleting
-// the object works against a bare apiserver and Network carries no finalizer,
-// so it completes at once. Registered after testenv.Client's own
-// t.Cleanup(cancel), which runs cleanups LIFO, so this one fires while ctx is
-// still live.
+// createNetwork makes the namespace one the gate looks at. namespacesMissingCA
+// lists Networks cluster-wide, so the Network is deleted again in t.Cleanup.
 func createNetwork(t *testing.T, ctx context.Context, c client.Client, ns, name string) {
 	t.Helper()
 	n := &spawneryv1alpha1.Network{
@@ -1479,10 +1341,7 @@ func parseCert(t *testing.T, certPEM []byte) *x509.Certificate {
 }
 
 // switchedAndHolding leaves the rotation where it stops on its own: switched,
-// with the outgoing CA still in ca-previous.* and nothing that will advance
-// until a human asks. startedAndDistributed followed by switchNow, named for
-// the state rather than the path because that state is what its callers are
-// about.
+// with the outgoing CA still in ca-previous.*.
 func switchedAndHolding(t *testing.T, s *certs.Store, clock *testClock, ctx context.Context, ns string) *certs.Bundle {
 	t.Helper()
 	b := switchNow(t, ctx, s, clock, startedAndDistributed(t, s, clock, ctx, ns))
@@ -1495,10 +1354,8 @@ func switchedAndHolding(t *testing.T, s *certs.Store, clock *testClock, ctx cont
 	return b
 }
 
-// breakSlot puts bytes into one of the secret's rotation slots, the way a
-// person with kubectl and a paste buffer would. The bundle the caller is
-// holding is deliberately not updated: AdvanceRotation re-reads the secret,
-// and this is the edit it re-reads for.
+// breakSlot puts bytes into one of the secret's rotation slots, as a hand-edit
+// would. The caller's bundle is left stale on purpose: AdvanceRotation re-reads.
 func breakSlot(t *testing.T, ctx context.Context, s *certs.Store, ns, key string, certPEM []byte) {
 	t.Helper()
 	secret := secretOf(t, ctx, s, ns)
@@ -1511,13 +1368,9 @@ func breakSlot(t *testing.T, ctx context.Context, s *certs.Store, ns, key string
 	}
 }
 
-// expectEvent takes the one event the call under test recorded and checks its
-// type and reason, failing rather than hanging when nothing was recorded --
-// a missing event being the whole failure these assertions exist to catch.
-//
-// The package certs counterpart in rotation_envtest_test.go is the original;
-// this copy exists because an external test package cannot call an unexported
-// helper, not because the two differ.
+// expectEvent takes the one recorded event and checks its type and reason,
+// failing rather than hanging when nothing was recorded. A copy of the package
+// certs one, which an external test package cannot call.
 func expectEvent(t *testing.T, rec *events.FakeRecorder, eventtype, reason string) string {
 	t.Helper()
 	select {
@@ -1533,9 +1386,7 @@ func expectEvent(t *testing.T, rec *events.FakeRecorder, eventtype, reason strin
 }
 
 // drainEvents takes exactly n events off the recorder, failing if fewer were
-// recorded or if an n+1th is waiting. Order is not asserted: it is the order
-// of a slice inside the function under test, which is not a property worth
-// pinning, so the caller picks its event out with noteNaming.
+// recorded or an n+1th is waiting. Order is not asserted.
 func drainEvents(t *testing.T, rec *events.FakeRecorder, n int) []string {
 	t.Helper()
 	var got []string

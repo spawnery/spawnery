@@ -32,9 +32,8 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// The operator may delete claims cluster-wide, which RBAC cannot narrow to
-// the claims it minted at runtime. The chart's admission policy is what does:
-// as the operator, only an on-demand member's world may be deleted.
+// RBAC cannot narrow claim deletion to the claims the operator minted; the
+// chart's admission policy limits it to on-demand worlds.
 func TestTheOperatorMayDeleteOnlyAnOnDemandWorld(t *testing.T) {
 	subject := applyDeploymentAndDeriveSubject(t)
 	var policy admissionregistrationv1.ValidatingAdmissionPolicy
@@ -90,8 +89,8 @@ func TestTheOperatorMayDeleteOnlyAnOnDemandWorld(t *testing.T) {
 		time.Sleep(200 * time.Millisecond)
 	}
 
-	// The labels the rule reads cannot be forged by the operator itself: with
-	// patch on claims it could otherwise label any claim into reach first.
+	// With patch on claims the operator could otherwise label any claim into
+	// reach.
 	forge := func(pvc *corev1.PersistentVolumeClaim, label, value string) error {
 		var live corev1.PersistentVolumeClaim
 		if err := c.Get(ctx, client.ObjectKeyFromObject(pvc), &live); err != nil {

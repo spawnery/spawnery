@@ -1,10 +1,6 @@
 #!/usr/bin/env bash
-# Drives hack/crd-docs.sh against the CRDs actually checked into this tree.
-#
-# There is no synthetic fixture: the interesting failure mode (Step 6 of the
-# task this generator came out of) is a field renamed under the CRDs'
-# noses, and the only way to catch that is to run the real generator against
-# the real schema and let its own stop-list validation speak.
+# Drives hack/crd-docs.sh against the CRDs checked into this tree; only the
+# real schema shows a stop-list field renamed underneath it.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -36,18 +32,9 @@ has() {
   fi
 }
 
-# The page is removed before the run, not just read afterward: without this,
-# a generator that exited before writing anything would leave the committed
-# copy in place, and the next two cases would pass against that stale file
-# instead of against this run's output.
+# Otherwise a generator that wrote nothing leaves the committed copy to pass.
 rm -f "$page"
 
-# The generator succeeds, and every stop-list entry in hack/crd-docs.sh
-# resolved against the CRDs actually checked in here -- the case that
-# matters most. A field renamed or moved out from under a stop-list path
-# turns this red instead of silently expanding two hundred rows into the
-# page; Step 6 of the task proves it by mutating a CRD in a throwaway
-# worktree and watching this line fail by name.
 run "the generator runs and every stop-list entry resolves" 0 "$gen"
 
 if [ -f "$page" ]; then
@@ -70,21 +57,13 @@ for kind in Network ServerGroup ProxyGroup Server ScaleBoost; do
   has "the page names $kind" "## $kind"
 done
 
-# The gap docs/superpowers/specs/2026-09-14-documentation-site-design.md
-# names: these six fields appear in no page before this generator existed.
-# Matched by their rendered <code> tag rather than the bare word: several of
-# them ("type", "config") also appear in ordinary prose throughout the page.
+# Matched by <code> tag: "type" and "config" also appear in prose.
 for field in expose routing resources maxPlayers type config; do
   has "the page carries spec.$field" ">$field<"
 done
 
-# A description longer than one paragraph collapses everything after the
-# first behind <details>, so a table of eight-word rows isn't broken up by
-# the rare 300-word one. Network.spec.forwardingSecretRef is known
-# multi-paragraph; Network.spec.defaults.minecraftVersion is known to be a
-# single sentence, and must render with no <details> at all -- an empty
-# "more" on every ordinary row would be worse than the wall of text it
-# replaces.
+# forwardingSecretRef is multi-paragraph; defaults.minecraftVersion is one
+# sentence and must render without <details>.
 row="$(grep -F '<code>forwardingSecretRef</code>' "$page" || true)"
 case "$row" in
   *"<details>"*) echo "ok   a multi-paragraph description collapses behind <details>" ;;

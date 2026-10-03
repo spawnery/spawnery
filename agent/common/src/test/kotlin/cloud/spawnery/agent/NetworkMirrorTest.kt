@@ -143,8 +143,7 @@ class NetworkMirrorTest {
 
     @Test
     fun `a server says which run of it this is`() {
-        // The name cannot say it: a persistent server keeps its name across
-        // every restart, because that name is the identity of its world.
+        // A persistent server keeps its name across restarts.
         val mirror = NetworkMirror()
         mirror.apply(
             NetworkState.newBuilder().addServers(
@@ -170,10 +169,7 @@ class NetworkMirrorTest {
 
     @Test
     fun `a server that said nothing carries an empty description rather than null`() {
-        // Which is also every server on a network whose operator predates the
-        // verb. A plugin asking what a server is doing should not have to
-        // write a null check to be told that it is doing nothing in
-        // particular.
+        // Also every server under an operator that predates the verb.
         val mirror = NetworkMirror()
         mirror.apply(
             NetworkState.newBuilder().addServers(
@@ -228,10 +224,7 @@ class NetworkMirrorTest {
 
     @Test
     fun `a player entry with an unparseable uuid is dropped rather than failing the apply`() {
-        // The operator sends what a proxy reported. One malformed entry must
-        // not cost this agent its whole mirror -- ProxyRole's own guard makes
-        // the same trade, and it is why a FullSync skips a bad address rather
-        // than discarding the sync.
+        // The operator relays what a proxy reported; ProxyRole makes the same trade.
         val mirror = NetworkMirror()
         mirror.apply(state(players = listOf("not-a-uuid" to "mallory", someUuid to "alice")))
 
@@ -249,10 +242,7 @@ class NetworkMirrorTest {
 
     @Test
     fun `a server's number, players and slots each land in their own place`() {
-        // Three distinct values so a positional swap in the ServerInfo
-        // constructor -- it.number landing where players or slots is
-        // expected -- compiles cleanly but fails this rather than passing
-        // by coincidence.
+        // Distinct values, so a positional swap in the ServerInfo constructor fails.
         val mirror = NetworkMirror()
         mirror.apply(
             NetworkState.newBuilder().addServers(

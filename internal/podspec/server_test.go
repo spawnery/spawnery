@@ -33,8 +33,6 @@ import (
 	"github.com/spawnery/spawnery/internal/render"
 )
 
-// testEndpoint is what the operator would pass in; the tests below assert it
-// arrives in the container unchanged.
 const testEndpoint = "spawnery-operator.spawnery-system.svc:9443"
 
 func testNetwork() *spawneryv1alpha1.Network {
@@ -168,16 +166,8 @@ func TestPodIsRestrictedCompliant(t *testing.T) {
 	}
 }
 
-// assertFSGroup checks that the pod asks the kubelet to chown
-// DataVolumeName to FSGroupID before the container starts, with a change
-// policy that skips the walk once the volume's top-level directory already
-// matches. envtest runs no kubelet, so this — like the rest of this file —
-// can only observe what the pod spec asks for, never that the chown
-// actually happened. That needs a real cluster on a storage class that does
-// not already hand back a world-writable directory — not
-// docs/archive/runbooks/runbook-milestone-5a-evidence.md's kind cluster, whose local-path
-// provisioner does exactly that regardless of fsGroup, so even a manual run
-// against it would not exercise this either.
+// assertFSGroup can only observe what the pod spec asks for; envtest runs no
+// kubelet, so the chown itself is not tested.
 func assertFSGroup(t *testing.T, pod *corev1.Pod) {
 	t.Helper()
 	sc := pod.Spec.SecurityContext
@@ -270,12 +260,6 @@ func TestGroupOverridesNetworkDefaults(t *testing.T) {
 }
 
 func TestUserMounts(t *testing.T) {
-	// /data/resources and not /data/config, which this test used until
-	// 2026-08-31: a mount there is refused now, because it stops the server
-	// writing its own configuration. See ServerConfigDirPath. The path is
-	// incidental to what this test is about -- that a ConfigMap mount reaches
-	// the pod as a read-only volume and mount -- so it moved rather than the
-	// test being split.
 	pod := build(t, func(_ *spawneryv1alpha1.Network, g *spawneryv1alpha1.ServerGroup) {
 		g.Spec.Mounts = []spawneryv1alpha1.Mount{{
 			Name:      "lobby-config",
@@ -322,9 +306,6 @@ func TestEnvironment(t *testing.T) {
 	}
 }
 
-// SPAWNERY_MAX_PLAYERS travels through the group's rendered ConfigMap now
-// (internal/render.Values, mounted at ConfigMountPath), not through the pod's
-// own environment; Task 8 deleted the last thing on the pod that read it.
 func TestServerPodNoLongerCarriesMaxPlayersAsAnEnvVar(t *testing.T) {
 	pod := build(t, nil)
 	for _, e := range pod.Spec.Containers[0].Env {
@@ -334,8 +315,6 @@ func TestServerPodNoLongerCarriesMaxPlayersAsAnEnvVar(t *testing.T) {
 	}
 }
 
-// findVolume returns the named volume, or nil if the pod has none by that
-// name.
 func findVolume(pod *corev1.Pod, name string) *corev1.Volume {
 	for i := range pod.Spec.Volumes {
 		if pod.Spec.Volumes[i].Name == name {
@@ -345,10 +324,8 @@ func findVolume(pod *corev1.Pod, name string) *corev1.Volume {
 	return nil
 }
 
-// findConfigMapSource returns the ConfigMapProjection among sources that
-// names configMap, or nil. Sources are found by content, not by index, so
-// the test does not depend on the order BuildServerPod happens to emit them
-// in.
+// findConfigMapSource matches by content so the test does not depend on
+// source order.
 func findConfigMapSource(sources []corev1.VolumeProjection, configMap string) *corev1.ConfigMapProjection {
 	for _, s := range sources {
 		if s.ConfigMap != nil && s.ConfigMap.Name == configMap {
@@ -367,12 +344,6 @@ func findSecretSource(sources []corev1.VolumeProjection, secret string) *corev1.
 	return nil
 }
 
-// TestConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret is the base
-// case with no overlay declared: the config volume exists, is read-only at
-// ConfigMountPath, and its two sources are the group's own ConfigMap — named
-// GroupConfigMapName(group, RoleServer), the name the ServerGroup controller writes — and the
-// Network's forwarding secret, each landing under the bare file name
-// internal/render.Load reads by default.
 func TestConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret(t *testing.T) {
 	pod := build(t, nil)
 
@@ -417,18 +388,9 @@ func TestConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret(t *testing.T) {
 	}
 }
 
-// TestConfigOverlayIsAnUnfilteredVolumeNestedUnderTheConfigMount guards
-// against the tempting shape: mounting the overlay as a third *projected*
-// source, with Items enumerating a closed set of known target names, makes an
-// unrecognised key in the user's overlay ConfigMap vanish at the kubelet --
-// never reaching internal/render's checkOverlayFiles, never refused, never
-// even logged. Not a misdirected file, but total silence.
-//
-// So this asserts the opposite of what an Items-based mount would produce:
-// a *separate*, *plain* ConfigMap volume — not folded into ConfigVolumeName's
-// Projected sources at all — with Items left nil, so every key the user's
-// ConfigMap actually has, recognised or not, becomes a file for
-// internal/render to see and rule on.
+// An Items-based projected source would drop unrecognised overlay keys at the
+// kubelet, so the overlay must be a separate plain ConfigMap volume with nil
+// Items.
 func TestConfigOverlayIsAnUnfilteredVolumeNestedUnderTheConfigMount(t *testing.T) {
 	pod := build(t, func(_ *spawneryv1alpha1.Network, g *spawneryv1alpha1.ServerGroup) {
 		g.Spec.ConfigOverlay = &spawneryv1alpha1.ObjectRef{Name: "lobby-overlay"}
@@ -471,12 +433,6 @@ func TestConfigOverlayIsAnUnfilteredVolumeNestedUnderTheConfigMount(t *testing.T
 	}
 }
 
-// TestConfigOverlayVolumeIsAbsentWhenNoneIsDeclared guards the other side of
-// the same behaviour: a nil spec.configOverlay must add neither the volume
-// nor its mount. Without this test,
-// TestConfigOverlayIsAnUnfilteredVolumeNestedUnderTheConfigMount alone could
-// pass even if the overlay volume were unconditionally present naming an
-// empty ConfigMap.
 func TestConfigOverlayVolumeIsAbsentWhenNoneIsDeclared(t *testing.T) {
 	pod := build(t, nil)
 	if v := findVolume(pod, ConfigOverlayVolumeName); v != nil {
@@ -489,15 +445,8 @@ func TestConfigOverlayVolumeIsAbsentWhenNoneIsDeclared(t *testing.T) {
 	}
 }
 
-// TestConfigOverlayReachesTheRendererEvenWithAnUnrecognisedKey is the proof
-// the coordinator asked for directly: build the on-disk shape the mount
-// above produces — a plain directory holding every key of the overlay
-// ConfigMap, unfiltered, which is exactly what a plain ConfigMap volume with
-// no Items lays down — put a key in it that no flavour writes, and confirm
-// internal/render refuses it by name instead of silently ignoring it. This
-// is the difference an Items-based mount could not offer: that package has
-// no visibility into which keys existed until this test starts one from a
-// key its own checkOverlayFiles does not recognise.
+// Builds the on-disk shape an unfiltered overlay mount produces and checks
+// that internal/render refuses an unknown key by name.
 func TestConfigOverlayReachesTheRendererEvenWithAnUnrecognisedKey(t *testing.T) {
 	dir := t.TempDir()
 	if err := os.WriteFile(filepath.Join(dir, render.ValuesFile), []byte("maxPlayers: 100\n"), 0o644); err != nil {
@@ -510,10 +459,7 @@ func TestConfigOverlayReachesTheRendererEvenWithAnUnrecognisedKey(t *testing.T) 
 	if err := os.Mkdir(overlayDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
-	// "paper-world-defaults.yml" is a real Paper file, and precisely the
-	// kind of plausible-looking typo a user could make reaching for
-	// "paper-global.yml" — internal/render.Paper does not write it, so an
-	// overlay ConfigMap naming it must be refused, not silently dropped.
+	// A real Paper file that internal/render.Paper does not write.
 	const badKey = "paper-world-defaults.yml"
 	if err := os.WriteFile(filepath.Join(overlayDir, badKey), []byte("x: 1\n"), 0o644); err != nil {
 		t.Fatal(err)
@@ -536,16 +482,8 @@ func TestConfigOverlayReachesTheRendererEvenWithAnUnrecognisedKey(t *testing.T) 
 	}
 }
 
-// TestConfigPathsAgreeWithRender guards the four places podspec and
-// internal/render each name the same path or file independently — by design,
-// per the comments on configSecretFile and configOverlayDir: podspec must
-// stay free of a dependency on internal/render so that building a pod spec
-// never touches the filesystem. That independence only stays safe as long as
-// the two literals actually agree; nothing but this assertion enforces it.
-// A divergence on configOverlayDir in particular is silent at runtime: the
-// overlay mounts at a path loadOverlay never reads, os.ReadDir returns
-// IsNotExist, the overlay is treated as absent, and the pod starts up
-// looking healthy with the user's override silently dropped.
+// podspec names these paths independently of internal/render (it must not
+// import it). A diverged overlay dir would drop the user's override silently.
 func TestConfigPathsAgreeWithRender(t *testing.T) {
 	if configOverlayDir != render.OverlayDir {
 		t.Errorf("podspec.configOverlayDir = %q, render.OverlayDir = %q, want them equal", configOverlayDir, render.OverlayDir)
@@ -556,12 +494,6 @@ func TestConfigPathsAgreeWithRender(t *testing.T) {
 	if ConfigMountPath != render.ConfigDir {
 		t.Errorf("podspec.ConfigMountPath = %q, render.ConfigDir = %q, want them equal", ConfigMountPath, render.ConfigDir)
 	}
-	// The fourth pair, which this test's own doc comment used to say did not
-	// exist by calling itself "the three places". Its divergence is the loud
-	// kind rather than the silent one -- spawnery-config refuses to start with
-	// `config.yaml: not found` instead of quietly dropping an override, which
-	// is why it went unnoticed -- but a pair that agrees only by construction
-	// is a pair this test exists to hold, whichever way it would fail.
 	if ConfigValuesKey != render.ValuesFile {
 		t.Errorf("podspec.ConfigValuesKey = %q, render.ValuesFile = %q, want them equal", ConfigValuesKey, render.ValuesFile)
 	}
@@ -594,11 +526,7 @@ func TestPersistentGroupMountsItsPVC(t *testing.T) {
 	if err != nil {
 		t.Fatalf("BuildServerPod: %v", err)
 	}
-	// The gap this closes is specific to a PVC: an emptyDir already arrives
-	// world-writable, but a claim arrives owned by root. Checking it here,
-	// on the pod BuildServerPod actually gives a persistent group, is what
-	// TestPodIsRestrictedCompliant's ephemeral-group check cannot stand in
-	// for.
+	// A PVC arrives owned by root, unlike an emptyDir.
 	assertFSGroup(t, pod)
 
 	for _, v := range pod.Spec.Volumes {
@@ -637,17 +565,14 @@ func TestOnDemandServerMountsItsOwnClaim(t *testing.T) {
 	if got, want := data.PersistentVolumeClaim.ClaimName, DataClaimName(srv.Name); got != want {
 		t.Errorf("claim = %q, want %q", got, want)
 	}
-	// Never, not Always: a player typing /stop is a player stopping their
-	// server, and Always cannot tell that from a crash.
+	// Always cannot tell a player's /stop from a crash.
 	if pod.Spec.RestartPolicy != corev1.RestartPolicyNever {
 		t.Errorf("RestartPolicy = %q, want Never", pod.Spec.RestartPolicy)
 	}
 }
 
 func TestAnEphemeralPodIsNotLiftedAgainByKubelet(t *testing.T) {
-	// RestartPolicyAlways restarts the container inside the same pod, and an
-	// ephemeral server's /data is an emptyDir -- so the same world comes back
-	// and the operator never sees a pod that stopped.
+	// Always would restart over the same emptyDir and bring back the same world.
 	ephemeral := build(t, nil)
 	if got, want := ephemeral.Spec.RestartPolicy, corev1.RestartPolicyNever; got != want {
 		t.Errorf("ephemeral restartPolicy = %q, want %q", got, want)
@@ -722,8 +647,6 @@ func TestPodUsesTheServerServiceAccountButNoAutomount(t *testing.T) {
 		t.Errorf("serviceAccountName = %q, want %q",
 			pod.Spec.ServiceAccountName, ServerServiceAccountName)
 	}
-	// The claim "these pods carry no Kubernetes credentials" only holds with
-	// automount off; the projected, audience-bound token is the exception.
 	if pod.Spec.AutomountServiceAccountToken == nil || *pod.Spec.AutomountServiceAccountToken {
 		t.Error("automountServiceAccountToken is not off")
 	}
@@ -760,8 +683,6 @@ func TestContainerKnowsWhereToReachTheOperator(t *testing.T) {
 	}
 }
 
-// A user mount must never shadow the token, and the API server's generic
-// rejection is no substitute for the operator saying what is wrong.
 func TestCollidingUserMountsAreRefused(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -802,9 +723,6 @@ func TestCollidingUserMountsAreRefused(t *testing.T) {
 			want: DataMountPath,
 		},
 		{
-			// The case the check exists for: a mount nested inside the agent
-			// volume can shadow the exact file the agent reads its token
-			// from, and Kubernetes permits nested mounts without complaint.
 			name: "nested inside the agent mount, shadowing the token file",
 			mount: spawneryv1alpha1.Mount{
 				Name:      "eigenes",
@@ -849,8 +767,6 @@ func TestCollidingUserMountsAreRefused(t *testing.T) {
 			want: TmpMountPath,
 		},
 		{
-			// The reverse nesting: a mount over a parent directory of one of
-			// ours sits above it, not beside it.
 			name: "mounted over a parent of the agent mount",
 			mount: spawneryv1alpha1.Mount{
 				Name:      "eigenes",
@@ -895,9 +811,6 @@ func TestCollidingUserMountsAreRefused(t *testing.T) {
 			want: ConfigMountPath,
 		},
 		{
-			// The case the check exists for on this path too: a mount nested
-			// inside it can shadow the forwarding secret the renderer reads,
-			// and Kubernetes permits nested mounts without complaint.
 			name: "nested inside the config mount, shadowing the forwarding secret",
 			mount: spawneryv1alpha1.Mount{
 				Name:      "eigenes",
@@ -909,11 +822,6 @@ func TestCollidingUserMountsAreRefused(t *testing.T) {
 			want: ConfigMountPath,
 		},
 		{
-			// ConfigOverlayVolumeName itself nests here when a group declares
-			// spec.configOverlay; a user mount at the same path would shadow
-			// it just as a mount over any other file under ConfigMountPath
-			// would, and the general bidirectional check on ConfigMountPath
-			// is what has to catch this, not a check specific to the overlay.
 			name: "mounted over where the overlay volume nests",
 			mount: spawneryv1alpha1.Mount{
 				Name:      "eigenes",
@@ -936,12 +844,8 @@ func TestCollidingUserMountsAreRefused(t *testing.T) {
 			want: ConfigMountPath,
 		},
 		{
-			// Design spec 5 promises this refusal, and checkMountCollision
-			// has no entry naming FileSourceMountPath at all: what refuses it
-			// is that the path nests under AgentMountPath, which gets the
-			// bidirectional check. If that check is ever narrowed to an exact
-			// match, or the file claim moves out from under the agent mount,
-			// this case fails — which is the point of having it.
+			// checkMountCollision has no entry for FileSourceMountPath: this is refused
+			// only because it nests under AgentMountPath.
 			name: "mounted over the extraFiles claim",
 			mount: spawneryv1alpha1.Mount{
 				Name:      "eigenes",
@@ -953,11 +857,6 @@ func TestCollidingUserMountsAreRefused(t *testing.T) {
 			want: AgentMountPath,
 		},
 		{
-			// The case a code comment on checkMountCollision used to get
-			// wrong, by calling FileSourceMountPath exact-match-only and so
-			// implying a mount *inside* it was permitted. It is not, and
-			// docs/guides/mounts-and-files.md has always said so. Pinned here so the two
-			// cannot drift apart again.
 			name: "nested inside the extraFiles claim",
 			mount: spawneryv1alpha1.Mount{
 				Name:      "eigenes",
@@ -986,25 +885,12 @@ func TestCollidingUserMountsAreRefused(t *testing.T) {
 	}
 }
 
-// TestNonCollidingUserMountsAreAccepted guards the two ways the collision
-// check must stay permissive: a path nested under DataMountPath or
-// TmpMountPath, which is a feature and not a collision (see the comment on
-// checkMountCollision), and a sibling path that merely shares a textual
-// prefix with a reserved one, which a naive strings.HasPrefix check would
-// wrongly reject.
 func TestNonCollidingUserMountsAreAccepted(t *testing.T) {
 	cases := []struct {
 		name      string
 		mountPath string
 	}{
 		{
-			// A tree nested inside /data, which is how worlds and assets
-			// arrive. Not DataMountPath+"/config": see ServerConfigDirPath
-			// and TestAMountInsideTheServersConfigDirectoryIsRefused below.
-			//
-			// If this case is ever removed as "redundant with TestUserMounts",
-			// it is not: this one exercises checkMountCollision, the other
-			// exercises the resulting volume and mount.
 			name:      "a world tree nested inside /data, the documented pattern",
 			mountPath: DataMountPath + "/worlds",
 		},
@@ -1013,9 +899,6 @@ func TestNonCollidingUserMountsAreAccepted(t *testing.T) {
 			mountPath: DataMountPath + "-extra",
 		},
 		{
-			// Inside the plugins directory, which is the ordinary way to add
-			// a plugin. Only the directory itself is refused -- the entrypoint
-			// writes one file beside whatever is mounted here.
 			name:      "a plugin nested inside the plugins directory",
 			mountPath: PluginsMountPath + "/my-plugin",
 		},
@@ -1047,16 +930,6 @@ func TestNonCollidingUserMountsAreAccepted(t *testing.T) {
 	}
 }
 
-// GroupConfigMapName is what the group controllers name the ConfigMap they
-// render and what BuildServerPod and BuildProxyPod look for by name; the two
-// sides only agree on a running pod if this one function is the single
-// source both call.
-//
-// What it pins is that the role changes the name, not a fixed literal: a
-// ServerGroup and a ProxyGroup are different Kinds and Kubernetes lets them
-// share a name, so a name built from the group alone would be one ConfigMap
-// fought over by both controllers, and a user's own ConfigMap named after
-// their group silently adopted.
 func TestGroupConfigMapNameIsScopedByRoleAsWellAsGroup(t *testing.T) {
 	server := GroupConfigMapName("lobby", RoleServer)
 	proxy := GroupConfigMapName("lobby", RoleProxy)
@@ -1074,16 +947,9 @@ func TestGroupConfigMapNameIsScopedByRoleAsWellAsGroup(t *testing.T) {
 	}
 }
 
-// TestTwoUserMountsCannotCollideWithEachOther closes the last clause of the
-// mount item in docs/reference/known-issues.md: "it still does not check for two user
-// mounts sharing a name — the API server catches that, but with a generic
-// message instead of a clear operator error."
-//
-// checkMountCollision takes one mount, so a collision between two of them is
-// structurally invisible to it; the check belongs to the loop. Both shapes are
-// caught by the API server as an invalid pod, which reaches a user as a
-// Degraded condition quoting an apimachinery message about an index in an
-// array — technically complete and unreadable.
+// checkMountCollision sees one mount at a time; collisions between two user
+// mounts are caught in the loop instead of by the API server's index-based
+// message.
 func TestTwoUserMountsCannotCollideWithEachOther(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -1107,9 +973,6 @@ func TestTwoUserMountsCannotCollideWithEachOther(t *testing.T) {
 			says: "already targets",
 		},
 		{
-			// The same path written two ways. checkMountCollision cleans before
-			// comparing against the reserved paths, so this loop has to as
-			// well or the two checks disagree about what one path is.
 			name: "the same path spelled differently",
 			mounts: []spawneryv1alpha1.Mount{
 				{Name: "one", MountPath: "/data/plugins/x", ConfigMap: &corev1.ConfigMapVolumeSource{}},
@@ -1135,13 +998,8 @@ func TestTwoUserMountsCannotCollideWithEachOther(t *testing.T) {
 	}
 }
 
-// The group selector has to keep matching the pods ServerLabels writes.
-//
-// A selector naming a label that had gone would match no pods at all — and a
-// group with no pods reads as a group with nothing wrong with it, which is the
-// worst way for a report to fail. Its only caller is
-// ServerGroupReconciler.groupPods, which feeds the forwarding-secret rotation
-// report.
+// A selector naming a label that is gone would match no pods, and a group
+// with no pods reads as healthy.
 func TestTheServerGroupSelectorIsASubsetOfServerLabels(t *testing.T) {
 	full := ServerLabels("production", "lobby", "lobby-x7k2")
 	selector := ServerGroupSelector("production", "lobby")
@@ -1156,9 +1014,6 @@ func TestTheServerGroupSelectorIsASubsetOfServerLabels(t *testing.T) {
 			t.Errorf("the selector wants %s=%q, ServerLabels writes %q", key, want, got)
 		}
 	}
-	// The one label that must not be in it: it names a single server, so a
-	// selector carrying it would match one pod and report the whole group on
-	// that one.
 	if _, ok := selector[LabelServer]; ok {
 		t.Errorf("the selector carries %s, which differs per pod", LabelServer)
 	}
@@ -1168,14 +1023,6 @@ func TestTheServerGroupSelectorIsASubsetOfServerLabels(t *testing.T) {
 	}
 }
 
-// TestAMountAtThePluginsDirectoryIsRefused closes the entry in
-// docs/reference/known-issues.md that this was the last live half of: the entrypoint
-// copies the agent jar into the plugins directory on every start, every user
-// mount is read-only, and a mount here therefore failed that copy under
-// `set -eu` with a bare `cp:` message naming no cause. Unlike /data/config,
-// which was solved by moving the operator's own target to /etc/spawnery, the
-// jar has to land in Paper's own plugins directory whatever a user does --
-// so refusing the mount is the only place this can be answered.
 func TestAMountAtThePluginsDirectoryIsRefused(t *testing.T) {
 	for _, mountPath := range []string{PluginsMountPath, PluginsMountPath + "/"} {
 		t.Run(mountPath, func(t *testing.T) {
@@ -1192,9 +1039,6 @@ func TestAMountAtThePluginsDirectoryIsRefused(t *testing.T) {
 			if err == nil {
 				t.Fatalf("BuildServerPod accepted a mount at %q; the server would not have come up", mountPath)
 			}
-			// The message has to carry the remedy, because the failure it
-			// replaces was a bare `cp:` and the difference between the two is
-			// the whole point of refusing here.
 			for _, want := range []string{PluginsMountPath, "agent plugin", "Mount inside it instead"} {
 				if !strings.Contains(err.Error(), want) {
 					t.Errorf("error = %q, want it to mention %q", err, want)
@@ -1205,28 +1049,19 @@ func TestAMountAtThePluginsDirectoryIsRefused(t *testing.T) {
 }
 
 func TestTheServerContainerKeepsStdinOpenForTheConsole(t *testing.T) {
-	// Without this, `kubectl attach` connects and the keystrokes go nowhere:
-	// the container gets /dev/null on stdin, so the server's console reader
-	// sees EOF immediately and no command ever arrives. Measured on a live
-	// 0.2.7 lobby before this was added, and it is what makes /cloud usable by
-	// an operator who has granted nobody a permission.
+	// Without stdin the console reader sees EOF and `kubectl attach` keystrokes
+	// go nowhere.
 	pod := build(t, nil)
 	c := pod.Spec.Containers[0]
 
 	if !c.Stdin {
 		t.Error("the container closes stdin, so the console cannot be reached at all")
 	}
-	// The one that is easy to add and ruins it. StdinOnce closes the
-	// container's stdin the moment the first attaching client disconnects, so
-	// the console would answer exactly one session and be dead for the rest of
-	// the pod's life -- and the second operator to try it would find a command
-	// that used to work.
+	// StdinOnce would close stdin when the first attached client disconnects.
 	if c.StdinOnce {
 		t.Error("StdinOnce is set: the console would work once and then never again")
 	}
-	// No TTY, deliberately. Paper switches to its terminal console when it has
-	// one, which changes how its output is written, and nothing here needs a
-	// terminal: the harness drives `cloud list` over a plain pipe.
+	// A TTY would switch Paper to its terminal console output.
 	if c.TTY {
 		t.Error("a TTY was allocated; the console needs stdin, not a terminal")
 	}
@@ -1249,9 +1084,7 @@ func TestExtraPluginsMountsTheClaimReadOnlyOutsideData(t *testing.T) {
 	if vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != "plugins" {
 		t.Fatalf("volume source = %+v, want the named claim", vol.VolumeSource)
 	}
-	// Read-only at the volume as well as at the mount. One claim may serve
-	// several groups, and a group that could write it could change what every
-	// other group loads.
+	// One claim may serve several groups.
 	if !vol.PersistentVolumeClaim.ReadOnly {
 		t.Error("the claim is mounted writable")
 	}
@@ -1271,8 +1104,7 @@ func TestExtraPluginsMountsTheClaimReadOnlyOutsideData(t *testing.T) {
 	if mount.MountPath != PluginSourceMountPath {
 		t.Errorf("mountPath = %q, want %q", mount.MountPath, PluginSourceMountPath)
 	}
-	// The bound that makes this work at all: a read-only mount under
-	// /data/plugins fails the entrypoint's own copy under `set -eu`.
+	// A read-only mount under /data/plugins fails the entrypoint's own copy.
 	if isPathUnder(path.Clean(mount.MountPath), path.Clean(DataMountPath)) {
 		t.Errorf("mountPath %q is under %s, where a read-only mount breaks the start",
 			mount.MountPath, DataMountPath)
@@ -1280,8 +1112,7 @@ func TestExtraPluginsMountsTheClaimReadOnlyOutsideData(t *testing.T) {
 }
 
 func TestNoExtraPluginsRendersNoVolume(t *testing.T) {
-	// Every installation that never asks for this must get the pod it got
-	// before -- which is also what keeps the golden digests still for them.
+	// Keeps the golden digests still for installations that do not use this.
 	pod := build(t, nil)
 
 	for _, v := range pod.Spec.Volumes {
@@ -1313,9 +1144,7 @@ func TestExtraFilesIsMountedReadOnlyOutsideData(t *testing.T) {
 	if vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != "files" {
 		t.Fatalf("volume source = %+v, want the named claim", vol.VolumeSource)
 	}
-	// Read-only at the volume as well as at the mount. One claim may serve
-	// several groups, and a group that could write it could change what every
-	// other group loads.
+	// One claim may serve several groups.
 	if !vol.PersistentVolumeClaim.ReadOnly {
 		t.Error("the claim is mounted writable")
 	}
@@ -1355,9 +1184,7 @@ func TestNoExtraFilesVolumeWithoutTheField(t *testing.T) {
 	}
 }
 
-// Every reserved name, from the slice the check reads rather than a
-// hand-written list: extra-plugins was missing from the check for as long as
-// the cases were typed out one by one.
+// Reads the slice the check uses rather than a hand-written list.
 func TestEveryReservedVolumeNameIsRefusedAsAUserMount(t *testing.T) {
 	for _, name := range reservedVolumeNames {
 		err := checkMountCollision(spawneryv1alpha1.Mount{

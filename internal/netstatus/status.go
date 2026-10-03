@@ -38,8 +38,6 @@ import (
 // ErrUnknownTarget is a target that names nothing this audience may see.
 var ErrUnknownTarget = errors.New("no group, server or proxy by that name")
 
-// Source builds status answers from the manager's cache, the registry and the
-// metrics API.
 type Source struct {
 	Reader  client.Reader
 	Agents  *agent.Registry
@@ -48,12 +46,10 @@ type Source struct {
 	// MetricsTimeout bounds the live metrics call, which runs on the asking
 	// agent's session loop. Zero means DefaultMetricsTimeout.
 	MetricsTimeout time.Duration
-	// Log says why usage was unavailable; the answer itself only says that it was.
-	Log logr.Logger
+	Log            logr.Logger
 }
 
-// DefaultMetricsTimeout is well under the agent's own ten-second request
-// deadline, and metrics-server answers from memory in milliseconds.
+// DefaultMetricsTimeout is well under the agent's ten-second request deadline.
 const DefaultMetricsTimeout = 3 * time.Second
 
 type view struct {
@@ -99,8 +95,7 @@ func (s Source) Status(ctx context.Context, namespace string, audience netstate.
 	return nil, ErrUnknownTarget
 }
 
-// read lists everything once and drops what this audience may not see. Pods
-// are never dropped: hiding a name must not hide its usage from the total.
+// read never drops pods: hiding a name must not hide its usage from the total.
 func (s Source) read(ctx context.Context, namespace string, audience netstate.Audience) (*view, error) {
 	v := &view{pods: map[string]*corev1.Pod{}, now: s.Clock()}
 	var sgs spawneryv1alpha1.ServerGroupList
@@ -155,7 +150,6 @@ func (s Source) read(ctx context.Context, namespace string, audience netstate.Au
 	return v, nil
 }
 
-// add counts one pod into u.
 func (v *view) add(u *agentpb.ResourceUsage, p *corev1.Pod) {
 	u.Pods++
 	for _, c := range p.Spec.Containers {
@@ -189,7 +183,7 @@ func (v *view) groupPods(role, group string) []*corev1.Pod {
 	return out
 }
 
-// ticks is what a server reported, or zeros once the report is stale.
+// ticks returns zeros once the report is stale.
 func ticks(agents *agent.Registry, podUID string) (float64, float64) {
 	if podUID == "" {
 		return 0, 0

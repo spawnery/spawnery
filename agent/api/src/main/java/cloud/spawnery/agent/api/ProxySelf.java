@@ -19,10 +19,8 @@ package cloud.spawnery.agent.api;
 /**
  * A Velocity proxy's view of itself.
  *
- * <p>It adds nothing to {@link Self}, and the empty body is the point: a proxy
- * has no capacity of its own that a plugin should read as a backend's slots.
- * The type exists so that {@code self() instanceof ProxySelf} is how a plugin
- * asks which side it is running on, rather than a string comparison.
+ * <p>It adds nothing to {@link Self}; {@code self() instanceof ProxySelf} is how
+ * a plugin asks which side it is running on.
  */
 public non-sealed interface ProxySelf extends Self {
 }

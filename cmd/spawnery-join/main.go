@@ -15,25 +15,16 @@ limitations under the License.
 */
 
 // Command spawnery-join logs in to a Minecraft proxy far enough to be routed
-// to a backend, and turns the result into an exit code and one line of JSON.
-// It is the automated half of milestone 3's success criterion, run from a
-// developer machine or a runbook against a NodePort:
+// to a backend, and turns the result into an exit code and one line of JSON:
 //
 //	spawnery-join --host 192.168.1.10 --port 30565
 //
-// It is test-only: no image carries it, and it is of no use against an
-// online-mode proxy, which asks for an encryption handshake this client has
-// no Microsoft account to answer. So the proxy it is pointed at needs
-// spec.config.onlineMode: false on its ProxyGroup — that field, and not a
-// configOverlay: internal/render reasserts the keys it owns after merging an
-// overlay, so the custom resource is the only place online-mode can be moved
-// from. Nothing else about the proxy has to be special, and nothing has to be
-// edited by hand.
+// It is test-only and needs a proxy with spec.config.onlineMode: false, since
+// it has no Microsoft account for the encryption handshake.
 //
-// --hold keeps the connection open after a successful join, which is the only
-// way a proxy's status.connectedPlayers can be non-zero when the next line of
-// a runbook reads it. --follow-transfers lets that hold survive a proxy that
-// transfers the player away; "transfers" in the output counts how often.
+// --hold keeps the connection open after a successful join.
+// --follow-transfers lets that hold survive a proxy that transfers the player
+// away; "transfers" in the output counts how often.
 package main
 
 import (
@@ -53,9 +44,7 @@ const (
 	defaultPort     = 25565
 	defaultUsername = "spawnery_probe"
 
-	// defaultTimeout covers a proxy that has to dial a backend, and a backend
-	// that may be answering its first player. Nothing kills this process from
-	// outside, unlike spawnery-slp's readiness probe, so it is generous.
+	// Generous: a backend may be answering its first player.
 	defaultTimeout = 30 * time.Second
 )
 
@@ -79,9 +68,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 	if err := fs.Parse(args); err != nil {
 		return 2
 	}
-	// Caught here rather than in mcjoin, where it is also caught, because
-	// this one can name the two flags that disagree. Both have defaults, so
-	// asking for a hold at all is what usually produces it.
+	// mcjoin catches this too, but cannot name the flags.
 	if *hold >= *timeout {
 		_, _ = fmt.Fprintf(stderr, "spawnery-join: --hold %s does not fit inside --timeout %s\n", *hold, *timeout)
 		return 2
@@ -96,8 +83,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
-	// One line, so a runbook step can pipe it into jq and assert on a field
-	// rather than on prose.
 	line, err := json.Marshal(result)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "spawnery-join: %v\n", err)

@@ -32,64 +32,36 @@ import (
 )
 
 const (
-	// ProxyContainerName is the name of the Velocity container.
 	ProxyContainerName = "velocity"
 
-	// ProxyReadyPort is the ready gate of design 6.6. The Velocity agent binds
-	// it only once it has processed its first FullSync, so a proxy cannot turn
-	// green before it has a server list — a plain tcpSocket check on 25565
-	// would, and a proxy that gets traffic without a list disconnects every
-	// player with "no available server".
-	ProxyReadyPort int32 = 8081
-	// ProxyReadyPortName names that port.
-	ProxyReadyPortName = "ready"
+	// ProxyReadyPort is bound by the Velocity agent only after its first
+	// FullSync, so a proxy without a server list cannot turn green and
+	// disconnect every player with "no available server".
+	ProxyReadyPort     int32 = 8081
+	ProxyReadyPortName       = "ready"
 
-	// EnvPlayerLimit names the container env var carrying the proxy's player
-	// limit. The agent reports it as slots, and the registry discards any
-	// report above it, so it is load-bearing rather than cosmetic.
+	// EnvPlayerLimit is load-bearing: the registry discards any report above it.
 	EnvPlayerLimit = "SPAWNERY_PLAYER_LIMIT"
-	// EnvFallbackGroups carries ProxyGroup.spec.routing.fallbackGroups to the
-	// agent, comma separated and in order. It is the same list the operator puts
-	// in DrainPlayers.toGroups, so a join and a drain resolve against one source
-	// rather than two that can disagree. The CRD marks the field required with
-	// MinItems=1, so the agent treats an empty value as an operator bug and
-	// refuses to connect rather than coming up unable to route.
-	EnvFallbackGroups = "SPAWNERY_FALLBACK_GROUPS"
-	// EnvProxy names the container env var carrying the pod's own name.
+	// EnvFallbackGroups is the same list the operator puts in
+	// DrainPlayers.toGroups, comma separated. The agent refuses to connect on an
+	// empty value, which the CRD's MinItems=1 makes an operator bug.
+	EnvFallbackGroups            = "SPAWNERY_FALLBACK_GROUPS"
 	EnvProxy                     = "SPAWNERY_PROXY"
 	EnvTransferForceAfterSeconds = "SPAWNERY_TRANSFER_FORCE_AFTER_SECONDS"
 	EnvForwardingSecretFile      = "SPAWNERY_FORWARDING_SECRET_FILE"
 
-	// DefaultPlayerLimit is what a ProxyGroup that sets none gets. Zero would
-	// be worse than a guess: the registry rejects every report where players
-	// exceed slots, so a limit of zero would silently discard every count.
+	// DefaultPlayerLimit exists because zero would make the registry discard
+	// every count.
 	DefaultPlayerLimit int32 = 500
 
-	// DefaultDrainTimeoutSeconds mirrors the CRD default on
-	// ProxyGroup.spec.drain. It is repeated here because a ProxyGroup built in
-	// a unit test never passes through the API server's defaulting, and a nil
-	// drain block must not produce a grace period of zero — that would kill a
+	// DefaultDrainTimeoutSeconds mirrors the CRD default for objects that never
+	// went through API server defaulting; a zero grace period would kill a
 	// proxy's sessions the instant it was replaced.
 	DefaultDrainTimeoutSeconds int32 = 300
 )
 
-// BuildProxyPod renders one pod of a ProxyGroup. The group owns the pod, so
-// deleting the group cascades — there is no per-proxy CR to hang it from, and
-// none is wanted: proxies are fungible and have no state machine.
-// ProxyPlayerLimit is the limit a ProxyGroup runs at: its own if it set one,
-// DefaultPlayerLimit otherwise.
-//
-// One function because the answer is needed in two places that must not
-// disagree -- the pod's SPAWNERY_PLAYER_LIMIT, which the agent reports slots
-// from, and the rendered velocity.toml's show-max-players, which the proxy
-// serves. Two copies of the predicate is how a ProxyGroup comes up Accepted,
-// with its Service, while every pod crash-loops on a playerLimit one side
-// defaulted and the other left unset.
-//
-// A zero in spec.config is not a limit but an unset field: the CRD's own
-// +optional leaves it at Go's zero value, and a limit of zero would make the
-// registry discard every player count, since it rejects any report where
-// players exceed slots.
+// ProxyPlayerLimit feeds both SPAWNERY_PLAYER_LIMIT and velocity.toml's
+// show-max-players, which must agree. A zero in spec.config means unset.
 func ProxyPlayerLimit(group *spawneryv1alpha1.ProxyGroup) int32 {
 	if cfg := group.Spec.Config; cfg != nil && cfg.PlayerLimit > 0 {
 		return cfg.PlayerLimit
@@ -97,6 +69,8 @@ func ProxyPlayerLimit(group *spawneryv1alpha1.ProxyGroup) int32 {
 	return DefaultPlayerLimit
 }
 
+// BuildProxyPod's pod is owned by the group: proxies are fungible and have no
+// CR of their own.
 func BuildProxyPod(
 	net *spawneryv1alpha1.Network,
 	group *spawneryv1alpha1.ProxyGroup,
@@ -109,16 +83,9 @@ func BuildProxyPod(
 		return nil, err
 	}
 
-	// Stamped here rather than by the caller: every proxy pod this operator
-	// creates must carry it, and a caller that forgot would build a pod the
-	// rollout reads as stale on the very next pass. DesiredProxyHash renders
-	// its own pod with the name held empty rather than trying to redact this
-	// one after the fact — see its doc comment for why that is the safer
-	// shape. configValues is threaded straight through to it rather than
-	// hashed here or accepted as an already-computed digest, so the label
-	// this stamps is always the same hash a caller computing wantHash from
-	// the identical inputs would arrive at -- accepting a precomputed digest
-	// instead would let a caller stamp a wrong one.
+	// Stamped here, not by the caller, so no proxy pod can miss it. configValues
+	// is passed through rather than accepted as a digest so a caller cannot
+	// stamp a wrong one.
 	hash, err := DesiredProxyHash(net, group, agentEndpoint, configValues)
 	if err != nil {
 		return nil, err
@@ -128,11 +95,8 @@ func BuildProxyPod(
 	return pod, nil
 }
 
-// renderProxyPod is the shared render behind both BuildProxyPod and
-// DesiredProxyHash: the latter calls it with name held empty so that nothing
-// derived from the pod's name — including fields that are not the pod's own
-// ObjectMeta.Name, such as the SPAWNERY_PROXY container env var below — can
-// reach the digest.
+// renderProxyPod is shared with DesiredProxyHash, which passes an empty name
+// so nothing derived from it (such as SPAWNERY_PROXY) reaches the digest.
 func renderProxyPod(
 	net *spawneryv1alpha1.Network,
 	group *spawneryv1alpha1.ProxyGroup,
@@ -180,9 +144,7 @@ func renderProxyPod(
 				Projected: &corev1.ProjectedVolumeSource{
 					Sources: []corev1.VolumeProjection{
 						{
-							// The audience is what makes a standard API server
-							// token worthless here, and the short expiry keeps
-							// the replay window small. The kubelet rotates it.
+							// The audience makes a standard API server token worthless here.
 							ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
 								Audience:          AgentTokenAudience,
 								ExpirationSeconds: ptr.To(TokenExpirationSeconds),
@@ -209,9 +171,6 @@ func renderProxyPod(
 		{Name: AgentVolumeName, MountPath: AgentMountPath, ReadOnly: true},
 		{Name: ConfigVolumeName, MountPath: ConfigMountPath, ReadOnly: true},
 	}
-	// Nested inside ConfigVolumeName's own mount, exactly as BuildServerPod
-	// does it — see the comment there on why Kubernetes allows this and on
-	// ConfigOverlayVolumeName for why it is a separate, unfiltered volume.
 	if vol := configOverlayVolume(group.Spec.ConfigOverlay); vol != nil {
 		volumes = append(volumes, *vol)
 		mounts = append(mounts, corev1.VolumeMount{
@@ -221,9 +180,6 @@ func renderProxyPod(
 		})
 	}
 
-	// The group's own file mounts, through the same renderUserMounts a server
-	// pod goes through: same reserved paths, same refusals, same treatment of
-	// a claim.
 	userVolumes, userVolumeMounts, err := renderUserMounts(group.Spec.Mounts)
 	if err != nil {
 		return nil, err
@@ -231,13 +187,8 @@ func renderProxyPod(
 	volumes = append(volumes, userVolumes...)
 	mounts = append(mounts, userVolumeMounts...)
 
-	// The group's own plugin volume, if it named one. Read-only at the volume
-	// as well as at the mount: one claim may serve several groups, and a group
-	// that could write it could change what every other group loads.
-	//
-	// Mounted outside DataMountPath -- see PluginSourceMountPath. The
-	// entrypoint copies out of it; it is not the plugins directory itself,
-	// which a read-only mount could not be.
+	// Read-only at the volume as well as the mount: one claim may serve several
+	// groups.
 	if group.Spec.ExtraPlugins != nil {
 		volumes = append(volumes, sourceVolume(PluginSourceVolumeName,
 			group.Spec.ExtraPlugins.ClaimName, group.Spec.ExtraPlugins.Image, group.Spec.ExtraPlugins.PullPolicy))
@@ -248,10 +199,6 @@ func renderProxyPod(
 		})
 	}
 
-	// The group's own file volume, if it named one. Same reasoning as the
-	// plugin source above: read-only at both the volume and the mount, and
-	// outside DataMountPath because a read-only mount cannot be the directory
-	// it fills.
 	if group.Spec.ExtraFiles != nil {
 		volumes = append(volumes, sourceVolume(FileSourceVolumeName,
 			group.Spec.ExtraFiles.ClaimName, group.Spec.ExtraFiles.Image, group.Spec.ExtraFiles.PullPolicy))
@@ -267,19 +214,10 @@ func renderProxyPod(
 		ContainerPort: MinecraftPort,
 		Protocol:      corev1.ProtocolTCP,
 	}
-	// The HostPort strategy publishes this port on whatever node the pod
-	// lands on, which is what lets it work with no Service at all -- and what
-	// makes the kube-scheduler decline to place a second pod of this group on
-	// the same node, capping replicas at the node count.
-	//
-	// Set here, inside renderProxyPod, rather than by any caller:
-	// DesiredProxyHash renders through this same function, so a hostPort
-	// applied anywhere else would not reach the hash, and a group switched
-	// into or out of HostPort would keep pods the rollout still called
-	// current. The nil check is not defensive noise -- the CRD's CEL rules
-	// guarantee the sub-block only for objects that went through the API
-	// server, and a ProxyGroup built in a unit test never does. This is the
-	// same hazard DefaultDrainTimeoutSeconds exists for.
+	// HostPort caps replicas at the node count, since the scheduler will not put
+	// two pods with the same host port on one node. Applied here so it reaches
+	// the hash; the nil check matters for objects that skipped the CRD's CEL
+	// rules.
 	if group.Spec.Expose.Type == spawneryv1alpha1.ExposeHostPort &&
 		group.Spec.Expose.HostPort != nil {
 		minecraft.HostPort = group.Spec.Expose.HostPort.Port
@@ -288,7 +226,6 @@ func renderProxyPod(
 	container := corev1.Container{
 		Name:  ProxyContainerName,
 		Image: group.Spec.Image,
-		// See BuildServerPod's own note: stdin open, StdinOnce false, no TTY.
 		Stdin: true,
 
 		Ports: []corev1.ContainerPort{
@@ -299,9 +236,6 @@ func renderProxyPod(
 				Protocol:      corev1.ProtocolTCP,
 			},
 		},
-		// The group's own variables come last; see BuildServerPod for why
-		// the position is a readability decision rather than the thing that
-		// keeps the six below intact.
 		Env: append(append(append([]corev1.EnvVar{
 			{Name: "SPAWNERY_NETWORK", Value: net.Name},
 			{Name: "SPAWNERY_GROUP", Value: group.Name},
@@ -311,9 +245,7 @@ func renderProxyPod(
 			{Name: EnvOperatorEndpoint, Value: agentEndpoint},
 		}, transferEnv(group)...), substitutionEnv(group.Spec.Substitution)...), group.Spec.Env...),
 		VolumeMounts: mounts,
-		// Readiness only, for the same reason the server pod has no liveness
-		// probe: a restart would disconnect every player on this proxy, and
-		// the client connection terminates here.
+		// Readiness only: a restart would disconnect every player on this proxy.
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				TCPSocket: &corev1.TCPSocketAction{
@@ -360,9 +292,7 @@ func renderProxyPod(
 			AutomountServiceAccountToken:  ptr.To(false),
 			ImagePullSecrets:              pullSecrets,
 			TerminationGracePeriodSeconds: ptr.To(int64(grace)),
-			// FSGroup for the same reason BuildServerPod gives: a writable
-			// claim on spec.mounts arrives owned by root, and the proxy runs
-			// as uid 10001 like the servers do.
+			// FSGroup: a writable claim on spec.mounts arrives owned by root.
 			SecurityContext: &corev1.PodSecurityContext{
 				RunAsNonRoot:        ptr.To(true),
 				SeccompProfile:      &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
@@ -378,11 +308,8 @@ func renderProxyPod(
 		pod.Spec.Affinity = scheduling.Affinity
 	}
 
-	// Stamped from the Network's status rather than computed here: one reader
-	// of the Secret is the whole point (design section 2.1), and the group
-	// controllers copy a string out of an object they already hold. Empty
-	// means the operator does not know the digest yet, and an absent label is
-	// "unknown" — see LabelForwardingHash.
+	// Stamped from the Network's status so the Secret has one reader. An absent
+	// label means "unknown", see LabelForwardingHash.
 	if hash := net.Status.ForwardingSecretHash; hash != "" {
 		pod.Labels[LabelForwardingHash] = hash
 	}

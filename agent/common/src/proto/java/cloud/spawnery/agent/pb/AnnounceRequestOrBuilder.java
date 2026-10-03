@@ -13,11 +13,6 @@ public interface AnnounceRequestOrBuilder extends
   /**
    * <pre>
    * What the server says it is doing. Free-form, and empty clears it.
-   *
-   * No enum, and that is deliberate rather than unfinished. The states a game
-   * has are the game's -- waiting, running, ending, whatever a mode invents --
-   * and an enum here would be this repository guessing at them and then
-   * shipping a new operator whenever somebody guessed wrong.
    * </pre>
    *
    * <code>string state = 1;</code>
@@ -27,11 +22,6 @@ public interface AnnounceRequestOrBuilder extends
   /**
    * <pre>
    * What the server says it is doing. Free-form, and empty clears it.
-   *
-   * No enum, and that is deliberate rather than unfinished. The states a game
-   * has are the game's -- waiting, running, ending, whatever a mode invents --
-   * and an enum here would be this repository guessing at them and then
-   * shipping a new operator whenever somebody guessed wrong.
    * </pre>
    *
    * <code>string state = 1;</code>

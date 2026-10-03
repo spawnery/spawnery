@@ -15,34 +15,22 @@ limitations under the License.
 */
 
 // Package mcjoin logs in to a Minecraft proxy far enough to be routed to a
-// backend, so that "a player can join" can be claimed without a human holding
-// a Microsoft account.
+// backend, so that "a player can join" can be claimed without a Microsoft
+// account.
 //
-// Velocity does not dial a backend when the login completes. It dials it when
-// the client answers Login Success with Login Acknowledged, and needs nothing
-// further -- no FinishConfiguration, no acknowledgement of one. A client that
-// stops short of that acknowledgement still produces Velocity's "has
-// connected" line and no backend attempt at all, so that line is not evidence
-// of routing.
+// Velocity dials a backend when the client answers Login Success with Login
+// Acknowledged, not when the login completes; its "has connected" line alone is
+// not evidence of routing. A routing failure reaches the client only
+// afterwards, as a configuration-state Disconnect, so Join reads one packet
+// past the acknowledgement: that Disconnect is an error, anything else is the
+// backend's configuration forwarded.
 //
-// Join reads one packet past the acknowledgement, because a routing failure
-// reaches the client only after the login has already succeeded, as a
-// configuration-state Disconnect. Returning at the acknowledgement would
-// report success for a proxy that can route the player nowhere, which is the
-// one failure this tool exists to catch. So a configuration-state Disconnect
-// is an error, and anything else is the proxy forwarding the backend's
-// configuration and therefore proof of a backend.
+// The two disconnects differ: in login state, packet 0x00 with a
+// length-prefixed JSON string; in configuration state, packet 0x02 with network
+// NBT and a nameless root compound.
 //
-// The two disconnects are neither the same packet nor the same encoding,
-// which is why they are handled separately below: in login state, packet 0x00
-// carrying a length-prefixed JSON string; in configuration state, packet 0x02
-// carrying network NBT with a nameless root compound.
-//
-// The proxy has to be in offline mode, since this client authenticates
-// against nothing and an online-mode proxy answers it with an encryption
-// request it cannot satisfy. Set spec.config.onlineMode: false on the
-// ProxyGroup -- the CRD field, which no configOverlay can reach, because the
-// renderer reasserts the keys it owns after merging one.
+// The proxy has to be in offline mode. Set spec.config.onlineMode: false on the
+// ProxyGroup; no configOverlay can reach that key.
 package mcjoin
 
 import (
@@ -65,9 +53,8 @@ import (
 	"github.com/spawnery/spawnery/internal/slp"
 )
 
-// Packet ids. Only the ones this client sends or recognises are named; the
-// numbers are the same across every protocol version Velocity 3.5.1 accepts
-// for the login and configuration states.
+// Packet ids. The login and configuration ids are the same across every
+// protocol version Velocity 3.5.1 accepts.
 const (
 	// Serverbound.
 	idHandshake         = 0x00
@@ -117,114 +104,79 @@ const (
 	idPlayAcknowledgeConfig  = 0x10
 )
 
-// cookieProtocol (1.20.5) introduced cookies and transfers. Store Cookie and
-// Transfer are the configuration-state packets whose ids moved since: 26.3
-// (postEffectsProtocol) inserted Post Effects ahead of both.
+// cookieProtocol (1.20.5) introduced cookies and transfers. 26.3
+// (postEffectsProtocol) moved the configuration-state Store Cookie and Transfer
+// ids.
 const (
 	cookieProtocol      = 766
 	postEffectsProtocol = 777
 )
 
-// nextStateLogin and nextStateTransfer are the handshake's final field.
-// internal/slp sends 1 for a status request.
 const (
 	nextStateLogin    = 2
 	nextStateTransfer = 3
 )
 
-// announceUnsupported is the protocol version this client announces when it
-// asks a server which version it speaks, and it is deliberately one no server
-// supports.
+// announceUnsupported is the protocol version announced when asking a server
+// which version it speaks, deliberately one no server supports: Velocity
+// answers a status request with the asker's own version whenever it supports
+// it, while an unsupported one gets the proxy's own maximum.
 //
-// The obvious thing does not work: Velocity answers a status request with the
-// asker's own version whenever it supports it, so slp.Ping's handshake
-// version comes back unchanged, and logging in with it reaches the backend
-// only to be refused as an outdated client. Announcing a version no server
-// supports is answered with the proxy's own maximum instead. -1 is what a
-// client with no version to declare conventionally sends; 0 and 2147483647
-// behave identically.
-//
-// What this relies on is that the proxy's newest supported version and the
-// backend's version agree, which is true of every pinned pair this repository
-// ships and is not guaranteed of an arbitrary one. When it stops being true,
-// the failure is the "Outdated client!" line above, which names the version
-// to fix it to.
+// This relies on the proxy's newest version matching the backend's. When it
+// does not, the backend refuses with "Outdated client!".
 const announceUnsupported = -1
 
-// maxPacketLen bounds a compressed packet's frame and its inflated size, for
-// the same reason mcproto bounds an uncompressed one: it is the only
-// unbounded allocation on this path, and a data-length VarInt is attacker
-// controlled twice over — once as the frame length and once as the size the
-// zlib stream claims to expand to.
+// maxPacketLen bounds a compressed packet's frame: the frame length is attacker
+// controlled.
 const maxPacketLen = 2 << 20
 
-// maxInflatedLen is the vanilla client's bound on a decompressed packet. A
-// play-state hold receives chunk data, which can inflate past maxPacketLen.
+// maxInflatedLen is the vanilla client's bound on a decompressed packet;
+// play-state chunk data can exceed maxPacketLen.
 const maxInflatedLen = 8 << 20
 
-// validUsername is what a Minecraft username may be, and what Paper enforces
-// on a player arriving through a proxy.
 var validUsername = regexp.MustCompile(`^[A-Za-z0-9_]{1,16}$`)
 
-// Result is what a completed login proves. The JSON tags are cmd/spawnery-join's:
-// it prints a Result as one line for a runbook step to assert on with jq, and
-// lower-case keys are what such a step should have to type.
+// Result is what a completed login proves. The JSON tags are what
+// cmd/spawnery-join prints for a runbook step to assert on with jq.
 type Result struct {
-	// Protocol is the version number the server reported for itself and this
-	// client then announced. It is asked for rather than hardcoded — see Join.
+	// Protocol is the version the server reported and this client then
+	// announced.
 	Protocol int `json:"protocol"`
 	// Username and UUID are the server's own answer in Login Success, not the
-	// values sent. Against an offline-mode server they come back unchanged,
-	// and a difference is worth seeing rather than hiding.
+	// values sent.
 	Username string `json:"username"`
 	UUID     string `json:"uuid"`
 	// Compressed records whether the server switched on compression during
-	// login. Velocity's default compression-threshold is 256, so a false here
-	// against a real proxy means the framing was never exercised.
+	// login. Velocity's default threshold is 256, so false against a real proxy
+	// means the compressed framing was never exercised.
 	Compressed bool `json:"compressed"`
 	Transfers  int  `json:"transfers"`
 }
 
 type Options struct {
 	Hold time.Duration
-	// FollowTransfers holds the player in the play state, which is where a
-	// proxy counts them as on a server and so where it transfers them from,
-	// and reconnects where a Transfer points until Hold is up. Without it the
-	// hold stays in the configuration state and a Transfer ends it with an
-	// error. Play-state packet ids are known for playProtocol only.
+	// FollowTransfers holds the player in the play state, where a proxy counts
+	// them as on a server and transfers them from, and reconnects where a
+	// Transfer points until Hold is up. Without it a Transfer ends the hold
+	// with an error. Play-state packet ids are known for playProtocol only.
 	FollowTransfers bool
 }
 
 // Join connects, logs in as username against an offline-mode server, and
-// returns once the server has acknowledged the login and shown that it can
-// route the player somewhere.
+// returns once the server has shown that it can route the player somewhere.
 //
-// The protocol version is asked for rather than hardcoded, which is what
-// keeps this client in step with a Paper or Velocity bump — but it is asked
-// for with announceUnsupported rather than through slp.Ping, for the reason
-// recorded there.
-//
-// The deadline comes from ctx, applied to both connections. Plain
-// cancellation with no deadline set is not otherwise observed, the same
-// caveat slp.Ping carries.
+// The deadline comes from ctx, applied to every connection; cancellation
+// without a deadline is not observed.
 func Join(ctx context.Context, host string, port int, username string) (*Result, error) {
 	return JoinAndHold(ctx, host, port, username, 0)
 }
 
 // JoinAndHold is Join with the connection kept open for hold once the join has
-// succeeded, which is the only way anything outside this process can observe
-// the player: Join closes the socket as it returns, and a proxy's
-// status.connectedPlayers is back to zero before a kubectl in the next line of
-// a runbook could read it.
+// succeeded, so something outside this process can observe the player. A
+// disconnect during the hold is an error.
 //
-// During the hold this client answers configuration-state keep alives, because
-// a server that gets no answer disconnects. It returns early, with an error, if
-// the server disconnects the player anyway — a hold that ended in a disconnect
-// is not a player who stayed.
-//
-// hold must fit inside ctx's deadline. A hold that would outlast it is refused
-// rather than silently truncated, because a truncated hold and a completed one
-// end with the same read timeout and would be indistinguishable here.
+// hold must fit inside ctx's deadline: a truncated hold and a completed one
+// would both end in the same read timeout.
 func JoinAndHold(ctx context.Context, host string, port int, username string, hold time.Duration) (*Result, error) {
 	return JoinWith(ctx, host, port, username, Options{Hold: hold})
 }
@@ -239,13 +191,9 @@ func JoinWith(ctx context.Context, host string, port int, username string, opts 
 			hold, time.Until(deadline).Round(time.Millisecond))
 	}
 
-	// Checked here rather than left to the server, because the two disagree
-	// and the second one is late. Velocity 3.5.1 in offline mode accepted
-	// "spawnery-probe" and logged it in; Paper 26.2 then dropped the forwarded
-	// connection with "Internal Exception: java.lang.IllegalStateException:
-	// Invalid characters in username", which reached the client as the proxy's
-	// own "Unable to connect to lobby: disconnect.genericReason" — a message
-	// naming neither the username nor the character in it.
+	// Checked here because Velocity in offline mode accepts names Paper later
+	// rejects, and the proxy's error then names neither the username nor the
+	// character.
 	if !validUsername.MatchString(username) {
 		return nil, fmt.Errorf("%q is not a valid Minecraft username: 1 to 16 characters of A-Z, a-z, 0-9 or _", username)
 	}
@@ -347,10 +295,7 @@ func (s *session) visit(ctx context.Context, host string, port int, nextState in
 		return nil, fmt.Errorf("write handshake: %w", err)
 	}
 
-	// The offline-mode UUID, computed the way Velocity and Paper compute it,
-	// so the client does not present an identity the proxy would reject: the
-	// MD5 name-based UUID of "OfflinePlayer:<username>", with the version
-	// nibble forced to 3 and the variant to RFC 4122.
+	// The offline-mode UUID Velocity and Paper compute; see OfflineUUID.
 	offline := OfflineUUID(s.username)
 	var loginStart []byte
 	loginStart = mcproto.AppendString(loginStart, s.username)
@@ -371,9 +316,7 @@ func (s *session) visit(ctx context.Context, host string, port int, nextState in
 			if err != nil {
 				return nil, fmt.Errorf("read compression threshold: %w", err)
 			}
-			// A negative threshold turns compression back off; the spec
-			// allows it and nothing in this project sends it, so it is
-			// handled by the same assignment rather than by a special case.
+			// A negative threshold turns compression back off.
 			conn.threshold = int(threshold)
 			result.Compressed = threshold >= 0
 		case idLoginDisconnect:
@@ -383,16 +326,10 @@ func (s *session) visit(ctx context.Context, host string, port int, nextState in
 			}
 			return nil, fmt.Errorf("the server refused the login: %s", reason)
 		case idEncryptionRequest:
-			// Not a protocol failure but a configuration one, and worth its
-			// own sentence: this client has no Microsoft account and cannot
-			// answer.
 			return nil, errors.New("the server is in online mode and asked for encryption, which this client cannot answer")
 		case idLoginPluginRequest:
-			// Velocity sends these towards backends as its modern forwarding
-			// handshake, not towards clients, so this is unreachable against
-			// the proxy this tool exists to test. Refusing loudly beats the
-			// alternative: a server that gets no response waits forever, and
-			// the symptom would be a timeout naming nothing.
+			// Velocity sends these only towards backends. Unanswered, the
+			// server would wait forever.
 			return nil, errors.New("the server sent a login plugin request, which this client does not implement")
 		case idLoginCookieRequest:
 			if err := s.answerCookie(conn, idLoginCookieResponse, payload); err != nil {
@@ -405,8 +342,8 @@ func (s *session) visit(ctx context.Context, host string, port int, nextState in
 			if err := conn.writePacket(idLoginAcknowledged, nil); err != nil {
 				return nil, fmt.Errorf("write login acknowledged: %w", err)
 			}
-			// Login Acknowledged is what makes Velocity dial a backend; see
-			// the package comment. What comes back says whether it found one.
+			// Login Acknowledged is what makes Velocity dial a backend; see the
+			// package comment.
 			id, payload, err := conn.awaitRouting()
 			if err != nil {
 				return nil, err
@@ -417,9 +354,8 @@ func (s *session) visit(ctx context.Context, host string, port int, nextState in
 			if s.holdEnd.IsZero() {
 				s.holdEnd = time.Now().Add(s.opts.Hold)
 			}
-			// The read timeout is how the hold ends, so the deadline is moved
-			// in from ctx's to the end of the hold. The check at the top of
-			// JoinWith is what makes that a shortening.
+			// The read timeout is how the hold ends; JoinWith checked that
+			// holdEnd is within ctx's deadline.
 			if err := c.SetDeadline(s.holdEnd); err != nil {
 				return nil, fmt.Errorf("set hold deadline: %w", err)
 			}
@@ -485,30 +421,17 @@ func readTransfer(payload []byte) (*transfer, error) {
 // packet until the connection's deadline expires, which is how a successful
 // hold ends, or until a Transfer is followed.
 //
-// # What a held connection is not, unless it follows transfers
+// Without FollowTransfers the client stays in the configuration state. Paper's
+// getOnlinePlayers() never contains such a client, so Server.status.players
+// reads zero, and Velocity never sets its current server, which it does only on
+// Join Game.
 //
-// Without FollowTransfers it stays one packet after Login Acknowledged, in the
-// configuration state, which is as far as Velocity needs before it dials a
-// backend. Paper's getOnlinePlayers() never contains such a client, because
-// it never finishes the configuration phase -- so Server.status.players reads
-// zero for a connection the proxy is holding open, and Velocity never sets the
-// player's current server, which it does only on Join Game.
-//
-// Finishing it needs this client to drive the exchange rather than answer it.
-// After Login Acknowledged the server sends Plugin Message 0x01
-// (minecraft:brand), Feature Flags and Known Packs (0x0d and 0x0f at protocol
-// 777), and then nothing but Keep Alive 0x04 for as long as the client waits.
-// What moves it:
-//
-//   - serverbound Known Packs 0x07 with an empty list, after which the server
-//     sends its Registry Data and Update Tags, tens of kilobytes
-//   - clientbound Finish Configuration 0x03, empty payload
-//   - serverbound Acknowledge Finish Configuration 0x03, empty -- after which
-//     the client is in the play state and the server sends Join Game
-//
-// In the play state Keep Alive is 0x2d out and 0x1c back at protocol 777, and
-// a server switch sends Start Configuration, which leads back through the
-// same exchange. Every other play packet, chunks included, is ignored.
+// Reaching the play state takes the client driving the exchange: after Login
+// Acknowledged the server sends brand, Feature Flags and Known Packs and then
+// only Keep Alives. The client answers Known Packs with an empty list, the
+// server sends registry data and Finish Configuration, and the client
+// acknowledges it. In the play state a server switch sends Start Configuration,
+// which leads back through the same exchange; other play packets are ignored.
 func (s *session) holdOpen(c *framedConn, id int32, payload []byte) (*transfer, error) {
 	play := false
 	for {
@@ -533,22 +456,14 @@ func (s *session) holdOpen(c *framedConn, id int32, payload []byte) (*transfer, 
 	}
 }
 
-// configurationPacket acts on one configuration-state packet and says whether
-// the client is now in the play state.
+// configurationPacket reports whether the client is now in the play state.
 func (s *session) configurationPacket(c *framedConn, id int32, payload []byte) (*transfer, bool, error) {
 	switch id {
 	case idConfigurationDisconnect:
 		return nil, false, fmt.Errorf("the player was disconnected during the hold: %s", nbtText(payload))
 	case idConfigurationKeepAlive:
-		// Echoed whole: the payload is the id the server wants back, and
-		// a server that does not get it drops the connection. Measured
-		// against the pinned pair — which sends one about every second —
-		// by holding a real join open for 40 seconds, several times any
-		// keep-alive timeout: the proxy logged the disconnect only when
-		// this client closed the socket, 40s after the connect.
-		//
-		//	[19:04:13 INFO]: [server connection] spawnery_probe -> lobby has connected
-		//	[19:04:54 INFO]: [connected player] spawnery_probe has disconnected
+		// The payload is the id the server wants back; without the echo it
+		// drops the connection.
 		if err := c.writePacket(idConfigurationKeepAlive, payload); err != nil {
 			return nil, false, fmt.Errorf("answer a keep alive: %w", err)
 		}
@@ -583,8 +498,7 @@ func (s *session) configurationPacket(c *framedConn, id int32, payload []byte) (
 	return nil, false, nil
 }
 
-// playPacket acts on one play-state packet and says whether the client is
-// still in the play state.
+// playPacket reports whether the client is still in the play state.
 func (s *session) playPacket(c *framedConn, id int32, payload []byte) (*transfer, bool, error) {
 	switch id {
 	case idPlayDisconnect:
@@ -636,8 +550,6 @@ func (c *framedConn) awaitRouting() (int32, []byte, error) {
 
 // OfflineUUID is the UUID an offline-mode server assigns to username: the MD5
 // name-based UUID of "OfflinePlayer:<username>", version 3, RFC 4122 variant.
-// Exported because cmd/spawnery-join prints it and a runbook step that greps
-// a server log for the player's UUID needs the same value.
 func OfflineUUID(username string) [16]byte {
 	sum := md5.Sum([]byte("OfflinePlayer:" + username))
 	sum[6] = (sum[6] & 0x0f) | 0x30
@@ -645,7 +557,6 @@ func OfflineUUID(username string) [16]byte {
 	return sum
 }
 
-// formatUUID renders sixteen bytes in the canonical 8-4-4-4-12 form.
 func formatUUID(b []byte) string {
 	const hex = "0123456789abcdef"
 	var out []byte
@@ -658,11 +569,9 @@ func formatUUID(b []byte) string {
 	return string(out)
 }
 
-// readLoginSuccess reads the two fields this tool reports out of Login
-// Success: the UUID as sixteen raw bytes, then the username. Everything after
-// them — the property array, and whatever a later protocol version appends —
-// is deliberately not parsed, because none of it is evidence of anything this
-// tool claims and every field parsed is a field that can break on a bump.
+// readLoginSuccess reads the UUID and username out of Login Success. The rest
+// is deliberately not parsed: every field parsed is one that can break on a
+// protocol bump.
 func readLoginSuccess(payload []byte, result *Result) error {
 	if len(payload) < 16 {
 		return fmt.Errorf("login success carries %d bytes, too few for a UUID", len(payload))
@@ -676,7 +585,6 @@ func readLoginSuccess(payload []byte, result *Result) error {
 	return nil
 }
 
-// readString reads one length-prefixed string from the front of b.
 func readString(b []byte) (string, error) {
 	return nextString(bytes.NewReader(b))
 }
@@ -701,28 +609,17 @@ func nextBytes(r *bytes.Reader) ([]byte, error) {
 	return b, nil
 }
 
-// nbtText renders a configuration-state disconnect reason readably.
-//
-// That payload is network NBT, not JSON, and its text sits in string tags
-// whose lengths and tag bytes are binary. Rather than carry an NBT decoder
-// for a diagnostic message, this keeps printable runs of three characters or
-// more and joins them with a space. The field names survive alongside their
-// values, which is untidy and honest: the payload rendered legibly, not a
-// component tree resolved.
-//
-// The one place it does more is the length prefix. An NBT string is two
-// big-endian length bytes and then its content, so a message of 32 to 126
-// characters has a low length byte that is itself printable and would lead
-// the message as a stray character. A run whose first byte is exactly the
-// length of what follows it is that prefix, and is dropped.
+// nbtText renders a configuration-state disconnect reason readably without an
+// NBT decoder: it keeps printable runs of three bytes or more, joined by a
+// space. A run whose first byte equals the length of the rest is an NBT string
+// length prefix (two big-endian bytes, the low one printable for 32 to 126
+// characters) and loses that byte.
 func nbtText(payload []byte) string {
 	var runs []string
 	start := -1
 	flush := func(end int) {
 		if start >= 0 && end-start >= 3 {
 			from := start
-			// The two bytes before the content of an NBT string are its
-			// length. When the low one is printable it opened this run.
 			if from >= 1 && int(payload[from-1])<<8|int(payload[from]) == end-from-1 {
 				from++
 			}
@@ -746,20 +643,17 @@ func nbtText(payload []byte) string {
 	return strings.Join(runs, " ")
 }
 
-// framedConn is one connection and the framing currently in force on it.
-// Compression is negotiated mid-login, so the same connection speaks both
-// framings and the switch is a field rather than a type.
+// framedConn is one connection. Compression is negotiated mid-login, so the
+// framing is a field rather than a type.
 type framedConn struct {
 	rw io.ReadWriter
-	// threshold is the compressed framing's minimum body size, or a negative
-	// number while compression is off. Zero is a real value and means
-	// compress everything, so "off" cannot be spelled as zero here.
+	// threshold is the compressed framing's minimum body size, or negative
+	// while compression is off; zero means compress everything.
 	threshold int
 }
 
 func (c *framedConn) compressed() bool { return c.threshold >= 0 }
 
-// writePacket frames and writes one packet in whichever framing is in force.
 func (c *framedConn) writePacket(id int32, payload []byte) error {
 	if !c.compressed() {
 		return mcproto.WritePacket(c.rw, id, payload)
@@ -769,10 +663,9 @@ func (c *framedConn) writePacket(id int32, payload []byte) error {
 	body = mcproto.AppendVarInt(body, id)
 	body = append(body, payload...)
 
-	// A body under the threshold is sent with a data length of zero and no
-	// zlib stream at all. Compressing it anyway is not merely wasteful, it is
-	// wrong: a server reading a data length below its own threshold treats
-	// the connection as broken.
+	// A body under the threshold is sent uncompressed with a data length of
+	// zero; a server reading a data length below its own threshold treats the
+	// connection as broken.
 	var inner []byte
 	if len(body) >= c.threshold {
 		var deflated bytes.Buffer
@@ -797,7 +690,6 @@ func (c *framedConn) writePacket(id int32, payload []byte) error {
 	return err
 }
 
-// readPacket reads one packet in whichever framing is in force.
 func (c *framedConn) readPacket() (int32, []byte, error) {
 	if !c.compressed() {
 		return mcproto.ReadPacket(c.rw)
@@ -832,9 +724,6 @@ func (c *framedConn) readPacket() (int32, []byte, error) {
 			return 0, nil, fmt.Errorf("inflate: %w", err)
 		}
 		defer func() { _ = zr.Close() }()
-		// dataLen is what the server says the packet inflates to, so it is
-		// both the allocation and the bound: reading one byte more than that
-		// means the stream disagrees with its own header.
 		plain := make([]byte, dataLen)
 		if _, err := io.ReadFull(zr, plain); err != nil {
 			return 0, nil, fmt.Errorf("inflate: %w", err)

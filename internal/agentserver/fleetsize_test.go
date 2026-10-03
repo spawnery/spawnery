@@ -54,18 +54,13 @@ func counterOver(objects ...client.Object) *FleetCounter {
 	}
 }
 
-// failingReader is a client.Reader whose List always fails, which is the state
-// a counter is in before the manager's cache has synced.
+// failingReader is the state before the manager's cache has synced.
 type failingReader struct{ client.Reader }
 
 func (failingReader) List(context.Context, client.ObjectList, ...client.ListOption) error {
 	return errors.New("the cache has not synced")
 }
 
-// TestTheCountIsUnknownUntilItSucceeds is the distinction the whole type
-// exists for. An operator that has not counted yet must not be told its fleet
-// is empty: PeerLimiter.Expect turns unknown into no bound at all and zero
-// into a real, if floored, one.
 func TestTheCountIsUnknownUntilItSucceeds(t *testing.T) {
 	counter := &FleetCounter{Pods: failingReader{}}
 	if size, known := counter.Size(); known {
@@ -79,8 +74,6 @@ func TestTheCountIsUnknownUntilItSucceeds(t *testing.T) {
 	}
 }
 
-// TestAnEmptyClusterIsCountedRatherThanUnknown is the other side of it. Zero
-// managed pods is an answer, not an absence.
 func TestAnEmptyClusterIsCountedRatherThanUnknown(t *testing.T) {
 	counter := counterOver()
 	if err := counter.count(context.Background()); err != nil {
@@ -95,11 +88,6 @@ func TestAnEmptyClusterIsCountedRatherThanUnknown(t *testing.T) {
 	}
 }
 
-// TestOnlyManagedPodsThatCanHoldAConnectionAreCounted pins both narrowings.
-// The label one keeps a cluster's other workloads out of a number that bounds
-// our own agents. The phase one keeps a cluster that retains its failures from
-// raising the ceiling by every pod that ever died -- which is the same as
-// having no ceiling, arrived at quietly.
 func TestOnlyManagedPodsThatCanHoldAConnectionAreCounted(t *testing.T) {
 	counter := counterOver(
 		managedPod("lobby-0", corev1.PodRunning),
@@ -115,16 +103,13 @@ func TestOnlyManagedPodsThatCanHoldAConnectionAreCounted(t *testing.T) {
 	if !known {
 		t.Fatal("a successful count reported unknown")
 	}
-	// Running and Pending: the Pending one holds nothing yet and is counted
-	// anyway, because counting high only ever loosens the bound.
+	// Pending holds nothing yet and is counted anyway: counting high only
+	// loosens the bound.
 	if size != 2 {
 		t.Errorf("counted %d pods, want the 2 that can hold a connection", size)
 	}
 }
 
-// TestALastGoodCountSurvivesAFailedOne is what keeps a cache hiccup from
-// turning the fleet bound off. The alternative -- dropping back to unknown --
-// would mean a single failed list handed the fleet its slack back.
 func TestALastGoodCountSurvivesAFailedOne(t *testing.T) {
 	counter := counterOver(managedPod("lobby-0", corev1.PodRunning))
 	if err := counter.count(context.Background()); err != nil {
@@ -141,9 +126,6 @@ func TestALastGoodCountSurvivesAFailedOne(t *testing.T) {
 	}
 }
 
-// TestTheCounterStopsWithItsContext guards the Start loop's exit. A Runnable
-// that ignored cancellation would hold the manager's shutdown open for an
-// interval, every time.
 func TestTheCounterStopsWithItsContext(t *testing.T) {
 	counter := counterOver()
 	ctx, cancel := context.WithCancel(context.Background())

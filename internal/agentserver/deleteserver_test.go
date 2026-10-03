@@ -31,10 +31,8 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// The manager's cache holds only claims carrying this operator's label, so a
-// claim somebody else made under a member's name is invisible through it.
-// Reading claims through the cache would answer NOT_FOUND where REFUSED is
-// the truth.
+// The manager's cache holds only claims carrying this operator's label, so
+// reading through it would answer NOT_FOUND where REFUSED is the truth.
 func TestDeleteSeesAClaimTheCacheCannot(t *testing.T) {
 	group := &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "private-servers", Namespace: "minecraft"},

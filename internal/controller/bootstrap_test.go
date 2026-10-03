@@ -77,8 +77,8 @@ func TestEnsureIsIdempotent(t *testing.T) {
 	}
 }
 
-// A rotation has to reach every namespace, or agents in the ones left behind
-// would stop trusting the operator.
+// A rotation has to reach every namespace, or agents left behind stop
+// trusting the operator.
 func TestEnsureUpdatesAChangedCA(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -134,14 +134,8 @@ func TestEnsureRepairsAHandEditedConfigMap(t *testing.T) {
 	}
 }
 
-// Unlike the ConfigMap, a hand-edited ServiceAccount is deliberately NOT
-// repaired: restoring the label would need Client.Update, and the
-// serviceaccounts RBAC marker grants no update verb on purpose — a
-// clusterwide write to every ServiceAccount's secrets is too big a grant for
-// a cosmetic label. Ensure must still succeed; the pod only needs the
-// ServiceAccount to exist under its name, not to carry the label. This
-// asserts no write happened at all: the label must still be gone afterwards,
-// not merely that Ensure tolerated either outcome.
+// The serviceaccounts grant deliberately has no update verb, so a stripped
+// label is not repaired: Ensure must succeed and write nothing.
 func TestEnsureLeavesAnUnlabelledServiceAccountAlone(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -170,11 +164,8 @@ func TestEnsureLeavesAnUnlabelledServiceAccountAlone(t *testing.T) {
 	}
 }
 
-// restrictedCacheClient returns a cached client filtered exactly the way
-// main.go filters the manager's cache: ConfigMaps and ServiceAccounts, and
-// only those carrying the managed-by label. Everything else is invisible to
-// it — which is the whole point, and the reason ensureConfigMap needs a repair
-// path at all.
+// restrictedCacheClient filters the cache the way main.go filters the
+// manager's: ConfigMaps and ServiceAccounts carrying the managed-by label.
 func restrictedCacheClient(t *testing.T, ctx context.Context) client.Client {
 	t.Helper()
 	managed := labels.SelectorFromSet(labels.Set{podspec.LabelManagedBy: podspec.ManagedByValue})
@@ -209,13 +200,9 @@ func restrictedCacheClient(t *testing.T, ctx context.Context) client.Client {
 	return mgr.GetClient()
 }
 
-// The repair path in ensureConfigMap only exists because the manager's cache
-// is filtered on the managed-by label: strip the label and the cached client
-// stops seeing the object, so CreateOrUpdate's Get misses, its Create comes
-// back AlreadyExists, and only a read through the uncached Reader can recover.
-// Every other test in this file wires Client and Reader to the same unfiltered
-// client, where that branch is unreachable. This one uses a real restricted
-// cache, so the branch is the only way through.
+// With the label stripped the cached Get misses and the Create returns
+// AlreadyExists; only the uncached Reader can recover. Needs a real
+// restricted cache: the other tests' unfiltered client never reaches here.
 func TestEnsureRepairsAConfigMapThatFellOutOfTheCache(t *testing.T) {
 	direct, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, direct)
@@ -237,9 +224,8 @@ func TestEnsureRepairsAConfigMapThatFellOutOfTheCache(t *testing.T) {
 		t.Fatalf("update ConfigMap: %v", err)
 	}
 
-	// The watch delivers the label removal asynchronously. Without waiting for
-	// it the cached Get could still hit the old, labelled copy, and the test
-	// would quietly exercise the ordinary update path instead of the repair.
+	// The watch delivers the removal asynchronously; a stale cached copy
+	// would take the ordinary update path instead of the repair.
 	deadline := time.Now().Add(20 * time.Second)
 	for {
 		err := cached.Get(ctx, key, &corev1.ConfigMap{})
@@ -270,10 +256,8 @@ func TestEnsureRepairsAConfigMapThatFellOutOfTheCache(t *testing.T) {
 	}
 }
 
-// The ServiceAccount half of the same situation, and the deliberate asymmetry:
-// there is no repair, because restoring the label would need an update verb on
-// every ServiceAccount in the cluster. Ensure has to succeed anyway — the pod
-// only needs the account to exist under its name.
+// No repair: that would need an update verb on every ServiceAccount in the
+// cluster. The pod only needs the account to exist.
 func TestEnsureToleratesAServiceAccountThatFellOutOfTheCache(t *testing.T) {
 	direct, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, direct)
@@ -309,9 +293,8 @@ func TestEnsureToleratesAServiceAccountThatFellOutOfTheCache(t *testing.T) {
 		time.Sleep(20 * time.Millisecond)
 	}
 
-	// The cached Get misses, the Create comes back AlreadyExists, and that is
-	// swallowed on purpose: one wasted call per pod creation in a namespace
-	// someone edited by hand, instead of a clusterwide write permission.
+	// AlreadyExists is swallowed on purpose, at one wasted call per pod
+	// creation in a namespace someone edited by hand.
 	if err := b.Ensure(ctx, ns); err != nil {
 		t.Fatalf("Ensure over a ServiceAccount the cache cannot see: %v", err)
 	}
@@ -323,8 +306,8 @@ func TestEnsureToleratesAServiceAccountThatFellOutOfTheCache(t *testing.T) {
 	}
 }
 
-// Ensure must not run before the provider has a CA — an empty ca.crt would be
-// worse than none, because the pod would start and fail the handshake.
+// An empty ca.crt is worse than none: the pod would start and fail the
+// handshake.
 func TestEnsureRefusesAnEmptyCA(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -335,10 +318,8 @@ func TestEnsureRefusesAnEmptyCA(t *testing.T) {
 	}
 }
 
-// Without this a proxy pod would have no identity to present at all: the token
-// projection names a ServiceAccount, and the kubelet cannot mint a token for
-// one that does not exist — the pod fails before it reaches the first TLS
-// handshake, with an error about a volume rather than about credentials.
+// The kubelet cannot mint a projected token for a missing ServiceAccount; the
+// pod would fail with a volume error rather than a credentials one.
 func TestEnsureCreatesBothServiceAccounts(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -360,8 +341,7 @@ func TestEnsureCreatesBothServiceAccounts(t *testing.T) {
 	}
 }
 
-// The no-write guarantee has to hold for both. It is what lets the operator
-// keep get;list;watch;create on serviceaccounts and no update verb at all.
+// This is what lets the operator hold no update verb on serviceaccounts.
 func TestEnsureLeavesExistingServiceAccountsAlone(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)

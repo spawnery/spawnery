@@ -1,8 +1,4 @@
 # The Velocity base image.
-#
-# The second consumer of oci-common, and the reason it was extracted: the
-# numeric user, the entrypoint shebang rewrite and the layered-image frame are
-# shared with nix/paper-image.nix by construction, not by two files agreeing.
 { bash
 , buildEnv
 , coreutils
@@ -27,26 +23,18 @@ oci-common.layeredImage {
   name = "ghcr.io/spawnery/velocity";
   tag = "${velocity.velocityVersion}-${imageVersion}";
 
-  # Ordered by rate of change, the same rationale as the Paper image: the JRE
-  # and the pinned jar are large and almost static; the agent plugin,
-  # spawnery-config and the entrypoint are small and change per commit.
+  # Ordered by rate of change.
   contents = [
     (buildEnv {
       name = "velocity-tools";
-      # bash because the entrypoint's shebang points at it; coreutils for the
-      # mkdir/cp the entrypoint uses to place the agent jar.
-      # findutils for the find the entrypoint's chmod walks with: it stops at
-      # filesystem boundaries, which chmod -R cannot, and coreutils has no find.
+      # findutils as in paper-image.nix.
       paths = [ bash coreutils findutils velocity-jre ];
       pathsToLink = [ "/bin" ];
     })
     oci-common.passwd
     oci-common.group
     velocityHome
-    # The agent plugin, under the path image/velocity-entrypoint.sh already
-    # copies out of on every start. Its own layer rather than part of
-    # velocityHome: it changes on every commit that touches agent/, and the
-    # pinned proxy jar beside it changes about twice a year.
+    # Its own layer: it changes on every commit, the pinned proxy jar rarely.
     (runCommand "velocity-agent" { } ''
       install -Dm644 ${agents}/share/spawnery/velocity/spawnery-agent.jar \
         $out/opt/velocity/agent/spawnery-agent.jar
@@ -67,8 +55,8 @@ oci-common.layeredImage {
       "org.opencontainers.image.title" = "Spawnery Velocity base image";
       "org.opencontainers.image.version" = "${velocity.velocityVersion}-${imageVersion}";
       "org.opencontainers.image.source" = "https://github.com/spawnery/spawnery";
-      # The Velocity build number lives here rather than in the tag, so an
-      # upstream rebuild does not force every sample manifest to be touched.
+      # The build number lives here rather than in the tag, so an upstream rebuild
+      # does not touch every sample manifest.
       "cloud.spawnery.velocity-build" = velocity.velocityBuild;
     };
   };

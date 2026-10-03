@@ -67,15 +67,12 @@ func init() {
 	}
 }
 
-// agentEndpoint is the address a game server pod dials. It is the Service, not
-// the pod: the gRPC endpoint only runs on the leader, and the Service is what
-// keeps a standby out of the way.
+// agentEndpoint is the Service, not the pod: the gRPC endpoint only runs on
+// the leader.
 func agentEndpoint(namespace string) string {
 	return fmt.Sprintf("%s.%s.svc:%d", podspec.AgentServiceName, namespace, agentserver.DefaultPort)
 }
 
-// validateAgentFlags rejects a configuration that would only fail much later
-// and somewhere else.
 func validateAgentFlags(operatorNamespace string, renewAfter, hardDeadline time.Duration) error {
 	if operatorNamespace == "" {
 		return fmt.Errorf("--operator-namespace is empty and POD_NAMESPACE is unset: " +
@@ -86,9 +83,6 @@ func validateAgentFlags(operatorNamespace string, renewAfter, hardDeadline time.
 		return fmt.Errorf("--agent-session-renew-after (%s) must be below --agent-session-deadline (%s), "+
 			"or the operator would cut every stream off mid-renewal", renewAfter, hardDeadline)
 	}
-	// A stream is authenticated once, when it opens. Its deadline is what
-	// makes "an intercepted token is useful until it expires" true, so it may
-	// not outlive the token it was opened with.
 	if token := time.Duration(podspec.TokenExpirationSeconds) * time.Second; hardDeadline > token {
 		return fmt.Errorf("--agent-session-deadline (%s) is above the agent token's lifetime (%s): "+
 			"a stream is authenticated once, so a stolen token would stay useful past its expiry",
@@ -97,25 +91,12 @@ func validateAgentFlags(operatorNamespace string, renewAfter, hardDeadline time.
 	return nil
 }
 
-// rescueWindowWarning is the one comparison between the two numbers that decide
-// whether a player on a dead node is moved or kicked, and the empty string when
-// there is nothing to say.
-//
-// A warning and not a refusal. A report interval this high is a degradation and
-// not a broken configuration -- every other thing the interval governs goes on
-// working, and refusing to start would turn a fleet that loses a rescue into a
-// fleet that loses everything. It is also not the operator's place to decide
-// how much room is enough: the threshold here is one this code owns, namely
-// that the operator can only act at a resync, so a window shorter than one
-// resync is one it may spend entirely on not having looked yet.
-//
-// phase.RescueWindow says what the arithmetic is and what half of it the
-// operator cannot see.
+// rescueWindowWarning is empty unless the rescue window for a dead node is
+// shorter than one resync. A warning, not a refusal: everything else the
+// report interval governs still works.
 func rescueWindowWarning(reportInterval time.Duration) string {
-	// Zero for the timeout, which means the value this repository ships. This
-	// runs before any proxy has connected and is a statement about the flag
-	// alone; what a proxy actually parsed reaches the Network's
-	// RescueWindowShort condition instead, per namespace, once one has said.
+	// Zero means the shipped read timeout; what a proxy actually reports
+	// reaches the Network's RescueWindowShort condition.
 	window := phase.RescueWindow(reportInterval, 0)
 	if window >= controller.ResyncInterval {
 		return ""
@@ -135,10 +116,7 @@ func rescueWindowWarning(reportInterval time.Duration) string {
 		reportInterval, window, controller.ResyncInterval)
 }
 
-// taintKeys collects a repeatable flag, the same shape as the names collector
-// in cmd/spawnery-stubop. A cluster may mark a departing node with more than
-// one vendor's taint, and one flag per key needs no separator convention of
-// its own.
+// taintKeys collects the repeatable --drain-taint flag.
 type taintKeys []string
 
 func (t *taintKeys) String() string { return strings.Join(*t, ",") }
@@ -147,24 +125,9 @@ func (t *taintKeys) Set(value string) error {
 	if value == "" {
 		return fmt.Errorf("an empty taint key would match nothing")
 	}
-	// A *key*, not a taint. Taints are written key=value:Effect nearly
-	// everywhere a person meets them -- `kubectl taint`, node manifests, every
-	// tutorial -- so passing the whole thing here is the mistake to expect, and
-	// it is the one this operator was worst at surviving: a key with a colon or
-	// an equals sign in it matches no taint that exists, so the flag would be
-	// accepted, nothing would ever drain, and nothing would say why.
-	// What stays true after this check, and is on the flag's own usage string:
-	// a well-formed key that is simply absent from the cluster cannot be told
-	// from a typo by anything here. The only case that warns is a node carrying
-	// a well-known drain taint this operator was not configured for
-	// (wellKnownDrainTaints, internal/controller/nodes.go); for a key of
-	// somebody's own choosing there is no list to check against.
-	//
-	// IsQualifiedName is what Kubernetes itself validates a taint key with, so
-	// this refuses exactly what the API server would refuse and nothing more. A
-	// key that is well-formed but simply absent from the cluster still cannot
-	// be told from a typo -- nothing can tell those apart -- and this does not
-	// pretend to.
+	// A whole key=value:Effect would match no taint, and nothing would ever
+	// drain. A well-formed key absent from the cluster still cannot be told
+	// from a typo.
 	if errs := validation.IsQualifiedName(value); len(errs) > 0 {
 		return fmt.Errorf(
 			"%q is not a taint key: %s. This flag takes the key alone -- `node.kubernetes.io/unreachable`, "+
@@ -176,14 +139,9 @@ func (t *taintKeys) Set(value string) error {
 	return nil
 }
 
-// leaderReadyCheck reports ready only once this replica holds the leader lock.
-//
-// The agent gRPC service is a leader-bound runnable, so a standby serves
-// nothing on port 9443. Were it a ready endpoint of the Service anyway, agents
-// would land on it, fill a registry no controller reads, and their servers
-// would never reach Ready. The check must not block: kubelet probes it on a
-// timer, and a standby has to answer "no" promptly rather than hang until it
-// is elected.
+// leaderReadyCheck reports ready only once this replica holds the leader lock:
+// a standby serves no agent endpoint and must stay out of the Service. It must
+// not block until election.
 func leaderReadyCheck(elected <-chan struct{}) healthz.Checker {
 	return func(_ *http.Request) error {
 		select {
@@ -195,9 +153,6 @@ func leaderReadyCheck(elected <-chan struct{}) healthz.Checker {
 	}
 }
 
-// managerFlags are the command-line values managerOptions reads. A struct
-// rather than a run of same-typed parameters, so that a call site cannot
-// silently swap two of them.
 type managerFlags struct {
 	metricsAddr       string
 	probeAddr         string
@@ -206,10 +161,6 @@ type managerFlags struct {
 	operatorNamespace string
 }
 
-// managerOptions builds the manager's configuration.
-//
-// Split out of main so the two decisions below can be asserted. Everything
-// else here is a value handed straight through.
 func managerOptions(f managerFlags) manager.Options {
 	opts := manager.Options{
 		Scheme:                 scheme,
@@ -217,43 +168,23 @@ func managerOptions(f managerFlags) manager.Options {
 		HealthProbeBindAddress: f.probeAddr,
 		LeaderElection:         f.leaderElect,
 		LeaderElectionID:       "spawnery-operator.spawnery.cloud",
-		// Left empty, controller-runtime reads the namespace out of the
-		// ServiceAccount mount, which exists only inside a pod -- so a local
-		// `go run` failed at startup and had to be told --leader-elect=false,
-		// which is what every runbook in docs/ passes. The lease belongs in
-		// the operator's own namespace either way, and --operator-namespace
-		// already carries it (POD_NAMESPACE in the chart, from
-		// metadata.namespace), so naming it here changes nothing in a cluster
-		// and lets a local run keep leader election on.
+		// Left empty, controller-runtime reads it from the ServiceAccount
+		// mount, which a local `go run` does not have.
 		LeaderElectionNamespace: f.operatorNamespace,
 	}
 	if f.watchNamespace != "" {
 		opts.Cache.DefaultNamespaces = map[string]cache.Config{f.watchNamespace: {}}
 	}
-	// The bootstrap touches exactly two kinds of object, one per namespace,
-	// and both carry our label. Without this restriction the cache would hold
-	// every ConfigMap in the cluster — kube-root-ca.crt from every namespace
-	// included — for the sake of one per namespace that is ours.
+	// Without the label restrictions the cache would hold every ConfigMap,
+	// ServiceAccount and claim in the cluster.
 	managed := labels.SelectorFromSet(labels.Set{podspec.LabelManagedBy: podspec.ManagedByValue})
-	// Per-kind cache restrictions; see the comment on each entry for why it is
-	// there.
 	opts.Cache.ByObject = map[client.Object]cache.ByObject{
 		&corev1.ConfigMap{}:      {Label: managed},
 		&corev1.ServiceAccount{}: {Label: managed},
-		// A persistent server's world claim carries the same label, and there
-		// is one per server. Since 5b the Server controller reads claims back
-		// as well as creating them — growClaim and readResizePending
-		// (internal/controller/server_controller.go) — and both go through
-		// this cache, so a claim missing the label is invisible to them: it
-		// never grows and never reports a pending filesystem resize. Without
-		// the restriction those reads would start an informer holding every
-		// claim in every watched namespace, ours and everybody else's, for the
-		// sake of the one they asked for.
+		// A claim missing the label is invisible to growClaim and
+		// readResizePending.
 		&corev1.PersistentVolumeClaim{}: {Label: managed},
-		// The node cache exists for one bool per node — cordoned, or tainted to
-		// repel. status.images is tens of kilobytes per node and nothing here
-		// reads it, so it is dropped on the way in, for the same reason the
-		// ConfigMap restriction above exists.
+		// status.images is tens of kilobytes per node and nothing reads it.
 		&corev1.Node{}: {
 			Transform: func(obj any) (any, error) {
 				if node, ok := obj.(*corev1.Node); ok {
@@ -370,9 +301,7 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The TLS bundle is read and written directly, never through the cache: a
-	// cached Secret would mean an informer over every Secret in the cluster,
-	// and the operator's role deliberately grants no list or watch on them.
+	// Secrets bypass the cache: the role grants no list or watch on them.
 	directClient, err := client.New(restConfig, client.Options{
 		Scheme:     scheme,
 		Mapper:     mgr.GetRESTMapper(),
@@ -389,17 +318,10 @@ func main() {
 		Name:      certs.SecretName,
 		DNSNames:  certs.ServingDNSNames(podspec.AgentServiceName, operatorNamespace),
 		Clock:     time.Now,
-		// Not wrapped in a cloudevent.Recorder, and that is deliberate rather
-		// than an omission: this one reports on Secrets in the operator's own
-		// namespace, which cloudevent.Derive drops -- there are no agents
-		// there and nobody to show it to. Wrapping it would add a
-		// construction that can only ever produce nothing.
+		// No cloudevent.Recorder: the operator's own namespace has no agents.
 		Recorder: mgr.GetEventRecorder("certs"),
-		// The same value the agent endpoint below cuts streams off with. A CA
-		// rotation waits it out before switching the serving certificate, so
-		// that every stream opened before the new CA was published has been
-		// closed and reopened by then; a second, independently configured
-		// duration would make that a coincidence rather than a bound.
+		// A CA rotation waits out the stream deadline before switching the
+		// serving certificate, so it must be the same value.
 		AgentSessionDeadline: hardDeadline,
 	})
 	if err := mgr.Add(provider); err != nil {
@@ -413,15 +335,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// What the API server says this identity may actually do, asked now and
-	// then again on an interval.
-	//
-	// Added as a Runnable so it runs after the manager has started and the
-	// leader election, if any, has settled -- a check that ran before Start
-	// would report before the process is in a position to act on anything
-	// anyway. rbacaudit.Checker carries the rest of the reasoning: why it is
-	// not leader-bound, why it is loud rather than fatal, and what asking
-	// repeatedly costs, which was measured before it was decided.
 	if err := mgr.Add(&rbacaudit.Checker{
 		Reviewer: clientset.AuthorizationV1().SelfSubjectAccessReviews(),
 		Scopes:   rbacaudit.DefaultScopes(operatorNamespace),
@@ -431,9 +344,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// Said once, at startup, where a flag is set. It is not a condition on any
-	// object because it is not about any object: it is about the pair of
-	// numbers this process was started with.
 	if warning := rescueWindowWarning(reportInterval); warning != "" {
 		setupLog.Info("the rescue window for a dead node is short", "warning", warning)
 	}
@@ -441,19 +351,12 @@ func main() {
 	started := time.Now()
 	registry := agent.New(time.Now, reportInterval, started)
 
-	// One Fleet for the whole process: the controllers write into it and the
-	// gRPC endpoint reads from it. Two would mean a registration reaching a
-	// fan-out nobody is streaming from.
-	// The picture both fan-outs send, built once. Two Sources reading the same
-	// cache would answer the same today and are two places to change when the
-	// mirror gains a field -- and the promise the plugin API makes is exactly
-	// that a backend and a proxy get the same answer.
+	// One Source for both fan-outs, so backends and proxies get the same
+	// picture.
 	state := netstate.Source{Reader: mgr.GetClient(), Agents: registry}
 
 	proxies := proxyreg.New(proxyreg.Options{Reader: mgr.GetClient(), State: state})
 
-	// The backend side's fan-out. A Runnable like the Fleet, and leader-bound
-	// for the same reason: only the leader holds the streams it sends to.
 	servers := serverreg.New(serverreg.Options{State: state})
 	if err := mgr.Add(servers); err != nil {
 		setupLog.Error(err, "unable to add the server fanout")
@@ -464,9 +367,6 @@ func main() {
 		os.Exit(1)
 	}
 
-	// The pod count behind the fleet connection bound. It reads the manager's
-	// cache, which already holds the pods for the controllers' sake, so this
-	// adds a walk over them every FleetCountInterval and no API traffic at all.
 	fleet := &agentserver.FleetCounter{Pods: mgr.GetClient()}
 	if err := mgr.Add(fleet); err != nil {
 		setupLog.Error(err, "unable to add the fleet counter")
@@ -551,16 +451,8 @@ func main() {
 	}
 }
 
-// bothFanouts sends a cloud event to the backends and to the proxies.
-//
-// Both, because an administrator may be standing on a game server or on a
-// proxy and the operator cannot know which -- and each fan-out already drops
-// the event for every session that did not ask for one, so the cost of the
-// one that has nobody watching is a map walk.
-//
-// A named type rather than a closure so that the nil case is one thing to
-// reason about: cloudevent.Recorder treats a nil Sink as "no feed", and a nil
-// *this* would be a panic inside a reconcile.
+// bothFanouts sends a cloud event to the backends and to the proxies, since an
+// administrator may be on either.
 type bothFanouts struct {
 	servers *serverreg.Registry
 	proxies *proxyreg.Fleet

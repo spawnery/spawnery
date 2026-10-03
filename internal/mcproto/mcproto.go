@@ -14,11 +14,8 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package mcproto encodes and decodes the primitives shared by every part of
-// the Minecraft protocol this project speaks: VarInts, length-prefixed
-// strings, and the uncompressed packet framing used before compression is
-// negotiated. internal/slp and the agent's join client both build on it, so
-// the framing exists in exactly one place.
+// Package mcproto encodes and decodes VarInts, length-prefixed strings and the
+// uncompressed packet framing used before compression is negotiated.
 package mcproto
 
 import (
@@ -28,13 +25,10 @@ import (
 	"io"
 )
 
-// maxPacketLen bounds what ReadPacket is willing to allocate for one packet.
-// A status document or a login packet is at most a few hundred bytes;
-// anything near this is a broken or hostile peer, and reading it would be
-// the only unbounded allocation here.
+// maxPacketLen bounds what ReadPacket allocates for one packet; status and
+// login packets are a few hundred bytes.
 const maxPacketLen = 2 << 20
 
-// AppendVarInt appends v to b in the Minecraft VarInt encoding.
 func AppendVarInt(b []byte, v int32) []byte {
 	u := uint32(v)
 	for {
@@ -46,13 +40,11 @@ func AppendVarInt(b []byte, v int32) []byte {
 	}
 }
 
-// AppendString appends s to b as a VarInt length followed by its bytes.
 func AppendString(b []byte, s string) []byte {
 	b = AppendVarInt(b, int32(len(s)))
 	return append(b, s...)
 }
 
-// ReadVarInt reads one Minecraft VarInt from r.
 func ReadVarInt(r io.ByteReader) (int32, error) {
 	var value uint32
 	for i := 0; i < 5; i++ {
@@ -68,9 +60,7 @@ func ReadVarInt(r io.ByteReader) (int32, error) {
 	return 0, errors.New("varint longer than five bytes")
 }
 
-// WritePacket frames one uncompressed packet. Compression is negotiated
-// during login; callers that have not reached that point yet can rely on
-// this simple framing.
+// WritePacket frames one uncompressed packet.
 func WritePacket(w io.Writer, id int32, payload []byte) error {
 	var body []byte
 	body = AppendVarInt(body, id)
@@ -84,9 +74,8 @@ func WritePacket(w io.Writer, id int32, payload []byte) error {
 	return err
 }
 
-// ReadPacket reads one uncompressed packet: a VarInt length, then a VarInt
-// packet id, then the rest. The length bounds the read, so a server that
-// announces more than it sends fails here rather than blocking forever.
+// ReadPacket reads one uncompressed packet: a VarInt length, a VarInt packet
+// id, then the rest.
 func ReadPacket(r io.Reader) (int32, []byte, error) {
 	length, err := ReadVarInt(ByteReader(r))
 	if err != nil {
@@ -106,16 +95,12 @@ func ReadPacket(r io.Reader) (int32, []byte, error) {
 	if err != nil {
 		return 0, nil, fmt.Errorf("read packet id: %w", err)
 	}
-	// rest is a bytes.Reader over an in-memory slice, so ReadAll cannot fail.
 	payload, _ := io.ReadAll(rest)
 	return id, payload, nil
 }
 
-// ByteReader adapts a plain io.Reader to io.ByteReader without buffering.
-// Buffering would be wrong here: a length prefix is often followed by
-// exactly that many bytes, and a bufio.Reader could swallow part of them
-// into its buffer where io.ReadFull on the underlying connection would not
-// find them.
+// ByteReader adapts r to io.ByteReader without buffering: a bufio.Reader could
+// swallow bytes that a later io.ReadFull on r needs.
 func ByteReader(r io.Reader) io.ByteReader {
 	return &byteReader{r: r}
 }

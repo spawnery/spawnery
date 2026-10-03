@@ -25,8 +25,6 @@ import (
 	"github.com/spawnery/spawnery/internal/phase"
 )
 
-// setUpdatePolicy gives the fixture's group a floor of servers and an update
-// policy before its first reconcile.
 func (f *fixture) setUpdatePolicy(t *testing.T, minReplicas int32, update *spawneryv1alpha1.UpdateSpec) {
 	t.Helper()
 	g := f.serverGroup(t, f.group.Name)
@@ -48,8 +46,6 @@ func (f *fixture) reportPlayersOn(t *testing.T, name string, players int32) {
 	}
 }
 
-// bringUpCurrent readies every server of the group's current generation that
-// is not Ready yet.
 func (f *fixture) bringUpCurrent(t *testing.T, group string) {
 	t.Helper()
 	g := f.serverGroup(t, group)

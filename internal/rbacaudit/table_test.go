@@ -21,11 +21,8 @@ import (
 	"testing"
 )
 
-// tables is every hand-maintained permission table in this package, named so a
-// failure says which one. A table added later and not listed here is outside
-// both checks below, which is the one way these can be quietly bypassed --
-// there is no reflection over package-level vars that would catch it, and
-// inventing one would be a worse trade than this comment.
+// tables must list every permission table; there is no reflection over
+// package-level vars to catch one left out.
 func tables() map[string][]Permission {
 	return map[string][]Permission{
 		"RequiredCluster":          RequiredCluster,
@@ -34,15 +31,7 @@ func tables() map[string][]Permission {
 	}
 }
 
-// TestEveryRequiredPermissionSaysWhyItIsThere enforces that Why is filled in
-// and that Required is free of duplicates.
-//
-// Why is documentation rather than identity -- Permission.Key ignores it -- so
-// nothing else in the tree can notice it rotting: a grant that names one of
-// its three call sites reads exactly like one that names all three. An empty
-// Why is the same defect at its starting point: a
-// permission nobody has to justify is a permission nobody can later argue
-// away, and the table's whole purpose is to be the argument.
+// Why is not part of the identity, so nothing else notices it missing.
 func TestEveryRequiredPermissionSaysWhyItIsThere(t *testing.T) {
 	for name, table := range tables() {
 		for _, p := range table {
@@ -55,14 +44,8 @@ func TestEveryRequiredPermissionSaysWhyItIsThere(t *testing.T) {
 	}
 }
 
-// TestNoRequiredPermissionIsListedTwice guards the other half, and it matters
-// for a reason the duplicate itself hides: Compare builds a map keyed by
-// Permission.Key, so a second entry for one key silently replaces the first.
-// Both are granted identically -- the audit still passes -- but only the last
-// one's Why survives into any message the audit prints, so a duplicate pair
-// whose two Whys disagree resolves to whichever happens to be written lower in
-// the file. That is a coin toss deciding which explanation a future reader
-// gets.
+// Compare keys a map by Permission.Key, so a duplicate silently replaces the
+// first and only the lower entry's Why survives.
 func TestNoRequiredPermissionIsListedTwice(t *testing.T) {
 	for name, table := range tables() {
 		seen := make(map[string]Permission, len(table))
@@ -80,13 +63,8 @@ func TestNoRequiredPermissionIsListedTwice(t *testing.T) {
 	}
 }
 
-// TestTheTablesDoNotOverlapEachOther is the cross-table case the two above
-// cannot see. The three tables become three different Kubernetes objects — a
-// ClusterRole and two Roles in different namespaces — so the same permission
-// appearing in two of them is not automatically wrong. What is wrong is the
-// silent kind: a namespaced entry duplicating a cluster-scoped one is already
-// granted everywhere by the ClusterRole, and the Role that repeats it is dead
-// weight nobody will dare remove later without this test to say what it found.
+// A namespaced entry duplicating a cluster-scoped one is dead weight in a
+// Role the ClusterRole already covers.
 func TestTheTablesDoNotOverlapEachOther(t *testing.T) {
 	cluster := make(map[string]Permission, len(RequiredCluster))
 	for _, p := range RequiredCluster {

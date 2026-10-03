@@ -38,9 +38,8 @@ const (
 	defaultHost = "127.0.0.1"
 	defaultPort = 25565
 
-	// defaultTimeout sits below the probe's TimeoutSeconds of 5 on purpose. If
-	// ours fired later, the kubelet would kill the process and the log would
-	// say nothing about why the server did not answer.
+	// Below the probe's TimeoutSeconds of 5, so this fires before the kubelet
+	// kills the process.
 	defaultTimeout = 4 * time.Second
 )
 

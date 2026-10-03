@@ -49,33 +49,20 @@ type NetworkReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
 
-	// SecretReader reads the Network's forwarding secret. It must be an
-	// uncached reader — mgr.GetAPIReader(), which setup.go supplies: a cached
-	// Secret would need an informer over every Secret in scope, and this
-	// operator deliberately holds no list or watch on them
-	// (internal/rbacaudit/required.go).
+	// SecretReader must be uncached: the operator holds no list or watch on
+	// Secrets (internal/rbacaudit/required.go).
 	SecretReader client.Reader
 
-	// OperatorNamespace is where this operator runs, and it is the one value
-	// the policy cannot derive from the Network it protects.
 	OperatorNamespace string
 
-	// Agents is the runtime state reported by the in-game agents. This
-	// controller reads exactly one thing from it -- the shortest read timeout
-	// the namespace's proxies have reported -- and nil is tolerated, because a
-	// Network reconciles correctly without it and the condition says Unknown.
+	// Agents may be nil; the rescue-window condition then says Unknown.
 	Agents *agent.Registry
-	// ReportInterval is how often agents report, which is the other half of
-	// the rescue-window arithmetic. Zero reads as the operator's own default
-	// through phase.RescueWindow's fallback.
+	// ReportInterval zero means phase.RescueWindow's default.
 	ReportInterval time.Duration
 
-	// Bootstrap puts the CA bundle and the agent ServiceAccounts into this
-	// Network's namespace. It is the same instance ServerReconciler holds:
-	// that one guarantees the objects exist before the first pod needs them,
-	// and this one guarantees they stay current afterwards, in a namespace
-	// where no pod is being created and nothing else would call Ensure at
-	// all.
+	// Bootstrap keeps the CA bundle and agent ServiceAccounts current in a
+	// namespace where no pod is being created; ServerReconciler only ensures
+	// them before a create.
 	Bootstrap *Bootstrapper
 }
 
@@ -85,15 +72,11 @@ type NetworkReconciler struct {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=list
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update
 
-// Reconcile decides whether this network is the one that owns its namespace
-// and, if so, sums up its groups.
 func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	network := &spawneryv1alpha1.Network{}
 	if err := r.Get(ctx, req.NamespacedName, network); err != nil {
 		if apierrors.IsNotFound(err) {
-			// No finalizer holds a Network back for cleanup, so this is the
-			// only pass a deletion ever reaches: by the time DeletionTimestamp
-			// could be observed non-zero, the object is usually already gone.
+			// No finalizer, so a deletion is usually only ever seen as NotFound.
 			ChangeoversInFlight.DeleteLabelValues(req.Namespace, req.Name)
 			ChangeoversWaiting.DeleteLabelValues(req.Namespace, req.Name)
 		}
@@ -108,34 +91,14 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 	if owner != network.Name {
-		// Counted even though this Network is being refused, because the
-		// numbers are about what points at it and not about whether it is
-		// serving. A refused Network that reported only what it last counted
-		// would say zero forever in the ordinary case -- created second,
-		// refused from its very first pass -- however many groups were later
-		// pointed at it. The count is how you see what is stranded behind the
-		// refusal.
-		//
-		// A failure here is not allowed to swallow the refusal: the condition
-		// below is the more important of the two things this pass has to say,
-		// so a List error is logged and the refusal is written anyway.
+		// Counted even when refused, to show what is stranded behind the refusal.
+		// A List error must not keep the refusal from being written.
 		if err := r.countGroups(ctx, network); err != nil {
 			log.FromContext(ctx).Error(err, "counting the groups behind a refused network")
 		}
 		message := fmt.Sprintf(
 			"namespace %q is already served by network %q; put staging and production in separate namespaces",
 			network.Namespace, owner)
-		// The condition alone was the whole report until now, which meant a
-		// Network created into an occupied namespace did nothing observable
-		// unless somebody thought to describe that particular object. Everything
-		// else this reconciler refuses -- a missing forwarding secret, a
-		// namespace it could not bootstrap -- says so as an event too, and this
-		// is the refusal a user is most likely to cause by hand.
-		//
-		// Gated on the transition, like the forwarding-secret events beside it:
-		// this branch runs on every pass for as long as the duplicate stands,
-		// and an event per minute forever is not a report, it is noise that
-		// buries the one that mattered.
 		entering := !hasConditionReason(network.Status.Conditions,
 			spawneryv1alpha1.ConditionAccepted, spawneryv1alpha1.ReasonDuplicateNetwork)
 		meta.SetStatusCondition(&network.Status.Conditions, metav1.Condition{
@@ -147,7 +110,6 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		if err := r.Status().Update(ctx, network); err != nil {
 			return ctrl.Result{}, err
 		}
-		// After the write, for the reason the announce slice below carries.
 		if entering {
 			r.Recorder.Eventf(network, nil, corev1.EventTypeWarning,
 				spawneryv1alpha1.ReasonDuplicateNetwork, actionSyncStatus, "%s",
@@ -163,27 +125,10 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		Message: "this network owns its namespace",
 	})
 
-	// announce holds an event until the status write that records the state it
-	// announces has landed.
-	//
-	// Both of these fire on *entering* a state, and whether this pass is an
-	// entry is decided by the condition as it stands before SetStatusCondition
-	// below -- that is, by what is still in etcd. Emitting before the write
-	// meant that anything failing between the two -- the pod List that returns
-	// on error just below, a conflict on the update, a refused write -- left
-	// the old status in etcd, so the retry found the same transition and
-	// announced it again. A rotation could be reported twice, or without end
-	// under a persistently failing update, and three places state "exactly one
-	// event per transition" unconditionally: the runbook's §5 step 3, the
-	// event-reason comments in api/v1alpha1/common_types.go, and design §4.4.
-	//
-	// Holding them here makes the property true rather than usual. The cost is
-	// that a pass whose write fails announces nothing, which is the right way
-	// round: the event describes a state that was not recorded.
+	// announce holds transition events until the status write recording the
+	// transition lands; otherwise a failed write lets the retry announce it again.
 	var announce []func()
 
-	// commit persists what this pass decided and, only if that landed,
-	// announces it.
 	commit := func() error {
 		if err := r.Status().Update(ctx, network); err != nil {
 			return err
@@ -194,18 +139,8 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return nil
 	}
 
-	// record commits before requeuing on err. Everything below here has
-	// already decided that this Network is accepted, and the condition saying
-	// so is set above and not yet written -- so returning an error straight
-	// out took Accepted down with it, and nothing the pass had decided was
-	// persisted. Both group controllers derive networkUsable from that
-	// condition (servergroup_controller.go, proxygroup_controller.go), which
-	// put a secret-detection concern on the path that publishes Accepted: a
-	// List that fails stopped every group in the namespace, with a log line as
-	// the only trace. The verdict is written; the error still requeues.
-	//
-	// A failing write is logged rather than returned: err is what says why the
-	// pass ended, and replacing it with the write's error would hide that.
+	// record writes the status before requeuing on err, so a later failure does
+	// not keep Accepted, which every group gates on, from being persisted.
 	record := func(err error) (ctrl.Result, error) {
 		if writeErr := commit(); writeErr != nil {
 			log.FromContext(ctx).Error(writeErr,
@@ -214,24 +149,8 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	// The policy, before anything else this reconcile does. A Forbidden here
-	// is a security control failing to land and it must not pass silently:
-	// recording Accepted=True alongside it would release every group in the
-	// namespace to create the pods the policy was meant to fence, so this
-	// stays fail-closed.
-	//
-	// Fail-closed *and named*. Returning before any status write would leave
-	// the condition unpersisted, so a fresh Network keeps whatever it had --
-	// nothing, for a new one -- and every group in the namespace refuses with
-	// "network ... has not been accepted yet": true and misleading in the same
-	// breath, since the network was accepted and only the acceptance could not
-	// be written down. Saying nothing here does not avoid a report; it
-	// produces one on every group in the namespace, naming the wrong thing.
-	//
-	// So Accepted goes to False with the write's own error on it, and then
-	// through record like every other failure. Groups still refuse, for the
-	// same reason and with the same gate -- but what they quote now says the
-	// policy could not be written.
+	// Fail-closed: Accepted=True would release the groups to create the pods the
+	// policy was meant to fence.
 	if err := r.reconcileNetworkPolicy(ctx, network); err != nil {
 		meta.SetStatusCondition(&network.Status.Conditions, metav1.Condition{
 			Type:   spawneryv1alpha1.ConditionAccepted,
@@ -248,9 +167,6 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return record(err)
 	}
 
-	// The forwarding secret. This sits after the Accepted branch above returns,
-	// so a Network that does not own its namespace never reads a secret it does
-	// not manage.
 	read := readForwardingSecret(ctx, r.SecretReader, network)
 	if read.Hash != "" {
 		if previous := network.Status.ForwardingSecretHash; previous != "" && previous != read.Hash {
@@ -261,11 +177,8 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 					rotationRunbook)
 			})
 		}
-		// Only on a successful read: see NetworkStatus.ForwardingSecretHash.
 		network.Status.ForwardingSecretHash = read.Hash
 	}
-	// Both events fire on entering a state, so the condition as it stands
-	// before SetStatusCondition below is what says whether this is an entry.
 	entering := !hasConditionReason(network.Status.Conditions,
 		spawneryv1alpha1.ConditionForwardingSecretResolved, read.Reason)
 	if read.Reason == spawneryv1alpha1.ReasonSecretNotFound && entering {
@@ -275,22 +188,9 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 				eventNote("%s", read.Message))
 		})
 	}
-	// A read the API server refused, said out loud. The condition alone was
-	// the whole report, and its message is written for a person rather than
-	// quoting the API server -- so it carries no `is forbidden:` substring,
-	// and test/e2e's theOperatorWasNeverDenied, which greps the operator's log
-	// for exactly that, could not see a broken
-	// config/rbac/forwarding-secret-reader.yaml grant at all. The consequence
-	// is quiet rather than loud (groups keep scheduling; only rotation
-	// detection breaks, for that namespace), which is precisely why it needs
-	// saying.
-	//
-	// Gated on the transition, like the events beside it: this branch runs on
-	// every pass for as long as the refusal stands, and at ResyncInterval that
-	// is a line every five seconds per Network. The cost of the gate is that
-	// an operator restarted into an already-refused state finds the condition
-	// already set and says nothing more; the condition itself is the durable
-	// report, and this line is the one that reaches a log grep.
+	// Logged so the API server's own `is forbidden:` text reaches the log, which
+	// test/e2e's theOperatorWasNeverDenied greps; the condition message does not
+	// quote it.
 	if read.Err != nil && entering {
 		log.FromContext(ctx).Error(read.Err, "reading the forwarding secret",
 			"network", network.Name, "namespace", network.Namespace)
@@ -302,13 +202,8 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	}
 	meta.SetStatusCondition(&network.Status.Conditions, resolvedCondition(read))
 
-	// A failure here leaves the rotation condition exactly as the last
-	// successful pass left it, rather than computing one from an empty stamp
-	// set: an empty set makes rotationCondition report ForwardingSecretInSync
-	// with no pod examined (forwardingsecret.go), which would trade a rare
-	// blocked status update for a confident wrong report. Absent, on a Network
-	// that has never had a successful pass, is the honest answer -- not yet
-	// determined -- and everything else this pass decided is still recorded.
+	// On failure the rotation condition is left as it was: an empty stamp set
+	// would report ForwardingSecretInSync with no pod examined.
 	pods := &corev1.PodList{}
 	if err := r.List(ctx, pods, client.InNamespace(network.Namespace),
 		client.MatchingLabels(podspec.ManagedSelector(network.Name))); err != nil {
@@ -323,33 +218,8 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, err
 	}
 
-	// The bootstrap runs after acceptance, after the policy, and last of all
-	// -- after the status has been persisted.
-	//
-	// After acceptance and after the policy because a Network that lost its
-	// namespace must write nothing into it, and because a namespace left
-	// without its NetworkPolicy would be the worse trade if a ConfigMap write
-	// were the thing blocking.
-	//
-	// Last because Ensure fails for two very different reasons and only one of
-	// them passes on its own. An empty bundle -- the operator started, but
-	// certs.Provider has not published yet -- clears itself within seconds. A
-	// refused write does not: an admission webhook, a ResourceQuota on
-	// ConfigMaps, a namespace policy stripping what it does not recognise.
-	// Ahead of the status update, a reconcile in such a namespace would record
-	// nothing at all for as long as the refusal stood. A new Network would
-	// never persist Accepted, and both servergroup_controller.go and
-	// proxygroup_controller.go gate on that condition, so every group in the
-	// namespace would stop with a log line as the only trace. An accepted one
-	// would keep a stale Accepted=True while its player counts, its group
-	// counts and its forwarding-secret rotation condition all froze.
-	//
-	// This is not what ServerReconciler does on the same call, and the
-	// difference is deliberate: there the bootstrap gates a pod creation that
-	// has not happened yet, so it says so on the Server's own Accepted
-	// condition and falls through to the status update. A Network has no such
-	// verdict to record -- it owns its namespace either way -- so the event
-	// carries the report and the returned error requeues.
+	// Last, after the status write: a refused ConfigMap write (webhook, quota)
+	// can persist, and must not keep Accepted from being recorded.
 	if err := r.Bootstrap.Ensure(ctx, network.Namespace); err != nil {
 		r.Recorder.Eventf(network, nil, corev1.EventTypeWarning,
 			ReasonNamespaceNotBootstrapped, actionBootstrapNamespace, "%s",
@@ -360,20 +230,8 @@ func (r *NetworkReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	return ctrl.Result{RequeueAfter: ResyncInterval}, nil
 }
 
-// rescueWindowCondition reports whether the proxies serving this namespace give
-// up on a silent backend before the operator can react to one.
-//
-// The arithmetic is phase.RescueWindow's and the threshold is ResyncInterval:
-// the operator acts on time-driven transitions at a resync, so a window
-// shorter than one is a window it may spend entirely on not having looked yet.
-// Neither number is a judgement about how much room is comfortable, which is a
-// fact about a cluster; both are facts about this code meeting a number the
-// proxies report.
-//
-// Unknown when no proxy in the namespace has reported one, and that is not the
-// same as sufficient. A namespace with no proxy running, or one whose agents
-// predate the field, has nothing to say -- and saying "sufficient" there would
-// be asserting the shipped default is in force when it may not be.
+// rescueWindowCondition reports whether the proxies give up on a silent
+// backend before the operator's next resync could react.
 func (r *NetworkReconciler) rescueWindowCondition(namespace string) metav1.Condition {
 	unknown := metav1.Condition{
 		Type:   spawneryv1alpha1.ConditionRescueWindowShort,
@@ -411,10 +269,7 @@ func (r *NetworkReconciler) rescueWindowCondition(namespace string) metav1.Condi
 	}
 }
 
-// reconcileNetworkPolicy keeps the policy that admits only this network's own
-// proxies to its own backends. It carries no delete: the owner reference on
-// the object means the garbage collector removes it when the Network goes,
-// which is why internal/rbacaudit's table has none either.
+// No delete: the owner reference lets the garbage collector remove it.
 func (r *NetworkReconciler) reconcileNetworkPolicy(
 	ctx context.Context,
 	network *spawneryv1alpha1.Network,
@@ -435,8 +290,6 @@ func (r *NetworkReconciler) reconcileNetworkPolicy(
 	return err
 }
 
-// namespaceOwner picks the network that owns the namespace out of everything
-// that currently lives in it.
 func (r *NetworkReconciler) namespaceOwner(ctx context.Context, namespace string) (string, error) {
 	list := &spawneryv1alpha1.NetworkList{}
 	if err := r.List(ctx, list, client.InNamespace(namespace)); err != nil {
@@ -445,19 +298,8 @@ func (r *NetworkReconciler) namespaceOwner(ctx context.Context, namespace string
 	return pickNamespaceOwner(list.Items), nil
 }
 
-// pickNamespaceOwner is the one-network-per-namespace rule: the oldest network
-// owns the namespace, with the name as the tiebreaker so the choice is stable
-// across reconciles when two were created within the same second. Networks on
-// their way out are skipped, so deleting the owner hands the namespace to the
-// next oldest rather than leaving every group in it unsized.
-//
-// Age has to decide before the name does. The reverse — newest wins — would
-// mean one stray kubectl apply of a Network rejects the running one, and every
-// ServerGroup in the namespace stops sizing until somebody deletes the
-// newcomer. It is split out from namespaceOwner because that difference is only
-// testable over a list with hand-set creation timestamps: two Networks created
-// back to back against a real API server land in the same second, the tie-break
-// decides, and the comparison direction never comes into it.
+// pickNamespaceOwner: the oldest wins, so a stray apply cannot unseat the
+// running Network.
 func pickNamespaceOwner(networks []spawneryv1alpha1.Network) string {
 	owner := ""
 	var ownerCreated metav1.Time
@@ -476,42 +318,19 @@ func pickNamespaceOwner(networks []spawneryv1alpha1.Network) string {
 	return owner
 }
 
-// SetupWithManager registers the controller.
-//
-// No Owns/Watches on ServerGroup: nothing sets an owner reference from a
-// ServerGroup to its Network, so a watch keyed on that owner reference could
-// never fire. The aggregated status is kept fresh by the ResyncInterval poll
-// in Reconcile instead. An event-driven refresh would need a mapping handler
-// from a ServerGroup (or ProxyGroup) change to its Network's request, which is
-// for Task 12's manager wiring to add if the poll interval turns out to be
-// too coarse.
-//
-// Owns(&networkingv1.NetworkPolicy{}) is different: the policy does carry an
-// owner reference, so a hand-deleted one comes back on the next watch event
-// instead of waiting out ResyncInterval.
+// No watch on the groups: they carry no owner reference to their Network, and
+// the ResyncInterval poll keeps the counts fresh.
 func (r *NetworkReconciler) SetupWithManager(mgr ctrl.Manager) error {
 	return ctrl.NewControllerManagedBy(mgr).
 		For(&spawneryv1alpha1.Network{}).
 		Owns(&networkingv1.NetworkPolicy{}).
-		// For() enqueues the Network the event is about. This enqueues its
-		// siblings, which is a different question and the one that was going
-		// unanswered: pickNamespaceOwner decides between the Networks in a
-		// namespace, so deleting the winner changes the verdict for every
-		// loser -- and none of them is the object the delete event names.
-		// Without this they waited out the one-minute requeue below.
+		// Deleting the owner changes the verdict for its siblings.
 		Watches(&spawneryv1alpha1.Network{},
 			handler.EnqueueRequestsFromMapFunc(r.siblingNetworks)).
 		Named("network").
 		Complete(r)
 }
 
-// countGroups writes the three counts a Network's status carries: the groups
-// in its namespace that name it, and the players those server groups report.
-//
-// Both directions of the filter matter. A namespace can hold more than one
-// Network -- that is what the duplicate rule refuses, not what it prevents --
-// so counting every group in the namespace would credit this Network with
-// groups pointed at its rival.
 func (r *NetworkReconciler) countGroups(ctx context.Context, network *spawneryv1alpha1.Network) error {
 	serverGroups := &spawneryv1alpha1.ServerGroupList{}
 	if err := r.List(ctx, serverGroups, client.InNamespace(network.Namespace)); err != nil {
@@ -558,13 +377,7 @@ func (r *NetworkReconciler) countGroups(ctx context.Context, network *spawneryv1
 	return nil
 }
 
-// siblingNetworks maps a Network event onto the other Networks in its
-// namespace.
-//
-// It excludes the object the event is about, because For() already has that
-// one and enqueueing it twice buys nothing. A List error returns nothing
-// rather than failing: this is an optimisation over the requeue, so losing it
-// costs a minute of latency and never correctness.
+// A List error returns nothing: the one-minute requeue covers it.
 func (r *NetworkReconciler) siblingNetworks(ctx context.Context, obj client.Object) []reconcile.Request {
 	list := &spawneryv1alpha1.NetworkList{}
 	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace())); err != nil {

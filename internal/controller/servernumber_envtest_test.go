@@ -27,8 +27,7 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// The floor under a server's number is the API server's, so it holds against
-// every writer rather than against the one path the reconciler writes through.
+// The floor is the API server's, so it holds against every writer.
 
 func numberedServer(ns string, number int32) *spawneryv1alpha1.Server {
 	return &spawneryv1alpha1.Server{
@@ -76,8 +75,8 @@ func TestAServerWithoutANumberCarriesZero(t *testing.T) {
 	if err := c.Get(ctx, client.ObjectKeyFromObject(srv), &read); err != nil {
 		t.Fatalf("get: %v", err)
 	}
-	// Zero is the whole contract for a server nobody numbered: every reader
-	// falls back on it rather than asking whether the field was set.
+	// Zero is the contract for an unnumbered server: every reader falls back
+	// on it.
 	if read.Spec.Number != 0 {
 		t.Errorf("number = %d, want 0", read.Spec.Number)
 	}

@@ -1,27 +1,10 @@
 image:
   repository: ghcr.io/spawnery/spawnery-operator
-  # The tag, and it stays the tag here. The master design's section 8 asks for
-  # digests in shipped manifests because a tag can move under a running
-  # cluster -- but a digest cannot live in this file usefully, and the RKE2
-  # rollout is what established that: hack/publish.sh takes it from
-  # `skopeo copy --digestfile`, so it does not exist until after the tag is
-  # published, and the commit writing it back is necessarily behind the tag it
-  # describes. A chart installed at vX therefore renders whatever digest vX-1
-  # produced, which is worse than rendering the tag.
-  #
-  # Keeping it empty also re-arms a check the digest had quietly disarmed:
-  # internal/rbacaudit's TestTheOperatorImageIsNotAMutableTag returns early
-  # when a digest is set, so with one here nothing compared this tag against
-  # flake.nix's operatorVersion. Measured on 2026-08-20 -- with digest empty
-  # and this line left at 0.1.0 against an operatorVersion of 0.1.1, that test
-  # fails and names both.
-  #
-  # A deployment that wants an immutable reference pins it where the
-  # deployment is described. See docs/reference/known-issues.md, "From the RKE2
-  # rollout".
+  # A tag, not a digest: hack/publish.sh only learns the digest after the tag
+  # is pushed, so a digest written here would always describe the previous
+  # release. Pin by digest in the deployment instead.
   tag: "0.17.0"
-  # Set, this wins over tag and the image is referenced by digest. Left empty
-  # deliberately; see above.
+  # Set, this wins over tag. Left empty deliberately; see above.
   digest: ""
   pullPolicy: IfNotPresent
 
@@ -32,48 +15,31 @@ resources:
   limits:
     memory: 256Mi
 
-# Passed through to the operator pod unchanged. On a cluster whose control
-# plane carries a taint, tolerations are often the difference between Running
-# and Pending.
+# Passed through to the operator pod unchanged.
 nodeSelector: {}
 tolerations: []
 affinity: {}
 
 networkPolicy:
-  # The ingress rule in front of the agent endpoint, milestone 6b's
-  # network-independent half. Disabling it is the right answer on a cluster
-  # that manages its own policies centrally -- and makes no difference at all
-  # on a CNI that implements no NetworkPolicy controller, which is what 6b
-  # measured of the CNI in this repository's own end-to-end harness.
+  # The ingress rule in front of the agent endpoint.
   enabled: true
 
 metrics:
-  # Both objects below need the Prometheus Operator's CRDs, which most clusters
-  # do not have, so both default to off. A chart that renders a
-  # ServiceMonitor unasked fails `helm install` on every cluster without
-  # monitoring.coreos.com -- and fails it at apply time, with a message about
-  # an unknown kind rather than about monitoring.
+  # Both need the Prometheus Operator's CRDs, so both default to off.
   serviceMonitor:
     enabled: false
-    # Left empty so the ServiceMonitor inherits the release's own labels. A
-    # Prometheus instance usually selects ServiceMonitors by a label it names
-    # itself (kube-prometheus-stack uses `release: <its own release>`), and
-    # that label is a fact about the monitoring installation rather than about
-    # this one, so it cannot be defaulted here.
+    # Empty: inherits the release's labels. The label a Prometheus selects on
+    # (e.g. `release: <its release>`) belongs to the monitoring installation.
     additionalLabels: {}
     interval: 30s
   prometheusRule:
     enabled: false
     additionalLabels: {}
-    # Days of CA lifetime left below which caExpiringSoon fires. The default is
-    # generous on purpose: the rotation it warns about is a deliberate,
-    # multi-step procedure with a hold in the middle that waits for a human,
-    # not something to be started the week it expires.
+    # Days of CA lifetime left below which caExpiringSoon fires. Generous
+    # because the rotation is a multi-step procedure that waits for a human.
     caExpiryWarningDays: 90
-  # A Grafana dashboard of the network's players, groups, servers (TPS, MSPT,
-  # heap) and proxies, as a ConfigMap for Grafana's dashboard sidecar. The
-  # labels are the ones the sidecar selects on (kube-prometheus-stack's
-  # default is grafana_dashboard: "1"); annotations can name its folder.
+  # A Grafana dashboard as a ConfigMap for Grafana's dashboard sidecar; the
+  # labels are the ones the sidecar selects on, annotations can name a folder.
   dashboard:
     enabled: false
     labels:
@@ -81,56 +47,29 @@ metrics:
     annotations: {}
 
 operator:
-  # The production value. hack/e2e.sh overrides it for its own run.
+  # hack/e2e.sh overrides this for its own run.
   startupDeadline: 5m
   leaderElect: true
-  # Lets a group name a spec.extraPlugins claim, whose contents are copied
-  # into every server's plugins directory on start (docs/guides/plugins-from-a-volume.md). Until
-  # 0.2.x this flag also governed a claim-backed spec.mounts entry; that is
-  # now allowMountVolumes below, because each claim-consuming field earns its
-  # own switch rather than sharing a name that promises less than it governs.
+  # Lets a group name a spec.extraPlugins claim, copied into every server's
+  # plugins directory on start (docs/guides/plugins-from-a-volume.md).
   #
-  # Off by default, and NOT as a security control: a PersistentVolumeClaim is a
-  # namespaced object in the same trust domain as the group naming it, so
-  # anybody who can write one can write the other. What this buys is an
-  # operator being able to say "this installation runs no third-party plugins"
-  # and have that be a fact rather than a convention.
+  # None of the three claim switches is a security control: whoever can write
+  # the group can write the claim. They let an installation state as a fact
+  # that it runs nothing an administrator dropped in.
   allowPluginVolumes: false
 
-  # Lets a group name a spec.extraFiles claim whose tree is copied into every
-  # server's working directory on start -- the way to deliver a file that is
-  # not a plugin and that no mount can reach, config/sponge/sponge.conf being
-  # the case that motivated it.
-  #
-  # Like allowPluginVolumes, this is not a security control. It exists so an
-  # operator can say "this installation runs nothing an administrator dropped
-  # in" and have that be a fact rather than a convention.
+  # Lets a group name a spec.extraFiles claim, copied into every server's
+  # working directory on start.
   allowFileVolumes: false
 
-  # Lets a group's spec.mounts name a PersistentVolumeClaim. Until 0.2.x this
-  # was governed by allowPluginVolumes, whose name never promised it; each of
-  # the three claim-consuming fields has its own switch now.
-  #
-  # Not a security control, for the same reason as the other two.
+  # Lets a group's spec.mounts name a PersistentVolumeClaim.
   allowMountVolumes: false
 
 # The namespaces that hold a Network, and the forwarding secret in each.
-#
-# Empty by default, and that is not caution: a chart installed once cannot know
-# the game namespaces somebody will create later, which is why
-# config/rbac/forwarding-secret-reader.yaml stays a hand-applied file and
-# remains the answer for a namespace nobody listed here. Listing one is for the
-# case where you do know, and it buys two things hand-applying cannot.
-#
-# It renders resourceNames, which the master design's §8 asks for and the
-# hand-applied file leaves out -- not because it is wrong but because by hand it
-# costs an edit per namespace and another whenever a secret is renamed. And it
-# renders the RoleBinding's subject into this release's namespace, where the
-# hand-applied file hard-codes spawnery-system and has to be edited first.
-#
-# An entry with no secrets is refused rather than rendered wide: a Role granting
-# get on every Secret in the namespace is what this exists to avoid, and getting
-# it by omission would be silent.
+# Renders a Role with resourceNames and a RoleBinding to this release's
+# namespace; config/rbac/forwarding-secret-reader.yaml covers namespaces not
+# listed here. An entry with no secrets is refused rather than rendered as
+# get on every Secret.
 #
 #   networkNamespaces:
 #     - namespace: minecraft

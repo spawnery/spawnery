@@ -19,11 +19,8 @@ package cloud.spawnery.agent.api;
 /**
  * What this process is, in the network's own vocabulary.
  *
- * <p>Sealed rather than a single type with a nullable {@code slots}: a proxy
- * has no player capacity of the kind a backend has, and a field that is
- * meaningless on one of two shapes is a field every caller has to remember is
- * meaningless. The two shapes say which one they are by their type, and a
- * plugin that only ever runs on one platform never meets the other.
+ * <p>A {@link ServerSelf} or a {@link ProxySelf}; only a backend has
+ * {@code slots}.
  *
  * <p>The names are the Kubernetes object names, so what a plugin prints here
  * is what an operator can paste into {@code kubectl}.
@@ -37,16 +34,8 @@ public sealed interface Self permits ServerSelf, ProxySelf {
 
     /**
      * The {@code Network} this belongs to, which is also the boundary of
-     * everything this API can see.
-     *
-     * <p>The network's name and not the Kubernetes namespace, for two reasons.
-     * It is the concept a plugin is actually asking about -- one namespace
-     * holds exactly one {@code Network}, so the two identify the same thing,
-     * and only one of them is in this project's own vocabulary. And it is the
-     * one a pod can answer: the operator gives every game pod
-     * {@code SPAWNERY_NETWORK} and no namespace at all, and adding one would
-     * change the rendered pod, which restarts every server and every proxy in
-     * the cluster.
+     * everything this API can see. One namespace holds exactly one
+     * {@code Network}.
      */
     String network();
 }

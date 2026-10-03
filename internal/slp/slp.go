@@ -34,17 +34,9 @@ import (
 	"github.com/spawnery/spawnery/internal/mcproto"
 )
 
-// handshakeProtocolVersion is the protocol version announced in the handshake.
-// For a status request against a server it does not have to match: a Paper
-// 26.2 server (protocol 776) answers a handshake announcing 771. This tool
-// therefore never has to track Minecraft versions, which is measured, not
-// hoped for — see section 7 of the design.
-//
-// A proxy is the exception, and it is why PingVersion exists: Velocity 3.5.1
-// answers with the version the handshake announced whenever it supports it,
-// so a caller that needs the version the proxy would really speak has to
-// announce one it does not support. See PingVersion, and internal/mcjoin,
-// which is that caller.
+// handshakeProtocolVersion need not match the server for a status request: a
+// Paper 26.2 server (protocol 776) answers a handshake announcing 771. A proxy
+// echoes an announced version it supports instead; see PingVersion.
 const handshakeProtocolVersion = 771
 
 // Version is the part of the status document that proves a server answered
@@ -54,31 +46,21 @@ type Version struct {
 	Protocol int    `json:"protocol"`
 }
 
-// Status is what Ping returns. It carries deliberately little: player counts
-// are the agent's business from milestone 2c on, and a probe that interpreted
-// them would be a second truth about the same thing.
+// Status carries deliberately little: player counts are the agent's business.
 type Status struct {
 	Version Version `json:"version"`
 }
 
-// Ping performs one server list ping. It returns an error unless the peer
-// answered with a status packet whose document is a JSON object carrying a
-// version field. The deadline comes from ctx: after the dial, ctx.Deadline()
-// is applied to the connection, but plain cancellation with no deadline set
-// is not otherwise observed, so it will not abort an in-flight read or write.
+// Ping performs one server list ping. It fails unless the peer answers with a
+// JSON object carrying a version field. ctx's deadline is applied to the
+// connection; cancellation without a deadline is not observed.
 func Ping(ctx context.Context, host string, port int) (*Status, error) {
 	return PingVersion(ctx, host, port, handshakeProtocolVersion)
 }
 
-// PingVersion is Ping with the protocol version the handshake announces made
-// explicit. The readiness probe has no use for it — every server answers a
-// status request whatever it is told — but a client that has to log in
-// afterwards does: Velocity echoes a version it supports back at the asker,
-// so announcing 771 to the pinned proxy is answered "771" and the login that
-// follows is then refused by a Paper 26.2 backend with "Outdated client!
-// Please use 26.2". Announcing something no server supports is what makes the
-// answer the proxy's own maximum instead. See internal/mcjoin for the
-// measurement.
+// PingVersion is Ping announcing protocol. Velocity echoes back an announced
+// version it supports, so a client that logs in afterwards has to announce one
+// no server supports to learn the proxy's own; see internal/mcjoin.
 func PingVersion(ctx context.Context, host string, port int, protocol int32) (*Status, error) {
 	var dialer net.Dialer
 	conn, err := dialer.DialContext(ctx, "tcp", net.JoinHostPort(host, strconv.Itoa(port)))
@@ -96,7 +78,6 @@ func PingVersion(ctx context.Context, host string, port int, protocol int32) (*S
 	if err := writeHandshake(conn, host, port, protocol); err != nil {
 		return nil, fmt.Errorf("write handshake: %w", err)
 	}
-	// The status request itself is an empty packet 0x00.
 	if err := mcproto.WritePacket(conn, 0x00, nil); err != nil {
 		return nil, fmt.Errorf("write status request: %w", err)
 	}
@@ -137,9 +118,8 @@ func readStatusResponse(r io.Reader) (*Status, error) {
 		return nil, fmt.Errorf("read document: %w", err)
 	}
 
-	// Decoding into a map first is what makes a missing version an error.
-	// Decoding straight into Status would silently accept "{}" as success, and
-	// a probe that accepts anything makes every pod look ready.
+	// Through a map so a missing version is an error: decoding into Status
+	// would accept "{}" and make every pod look ready.
 	var fields map[string]json.RawMessage
 	if err := json.Unmarshal(doc, &fields); err != nil {
 		return nil, fmt.Errorf("status document is not a JSON object: %w", err)

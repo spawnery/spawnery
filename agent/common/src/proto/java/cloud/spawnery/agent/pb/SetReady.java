@@ -8,27 +8,16 @@ package cloud.spawnery.agent.pb;
 /**
  * <pre>
  * SetReady is the operator asserting whether this proxy should be taking new
- * connections. It is a state and not an event, the same way Hello.ready is:
- * the operator re-sends the value it last asserted on every resync — one every
- * 30 seconds, on the same tick as FullSync and after it — so a reconnect
- * cannot leave a proxy stuck in the wrong one, a cancelled drain simply
- * reverts, and an agent whose gate has come to disagree with what the operator
- * asserted is corrected within one interval rather than never. Between those
- * ticks it is sent only when the value changes, so an agent sees repeats at
- * the resync rate and not at the reconcile rate; applying a value the agent
- * already holds has to be harmless.
+ * connections. A state, not an event: the operator re-sends it on every
+ * resync, after FullSync, and otherwise only on a change, so applying a value
+ * the agent already holds must be harmless.
  *
- * The agent maps it onto its readiness gate, which the kubelet probes. So the
- * effect an operator is really asking for is "leave the Service's endpoints" —
- * established connections are not touched, because Kubernetes does not close
- * them when an endpoint is removed.
+ * The agent maps it onto its readiness gate. Established connections are not
+ * touched.
  *
- * An agent must not open that gate before a FullSync has applied. Readiness
- * means routable, and a proxy with no server list disconnects every player it
- * is sent with "no available server", so a ready=true asserted that early is
- * recorded and takes effect with the first FullSync that applies rather than
- * on arrival. ready=false is applied whenever it arrives: an agent that cannot
- * build its server list has no business in the endpoints either.
+ * An agent must not open the gate before a FullSync has applied: a proxy with
+ * no server list disconnects every player it is sent. An early ready=true is
+ * held until then; ready=false applies on arrival.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.SetReady}
@@ -249,27 +238,16 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * SetReady is the operator asserting whether this proxy should be taking new
-   * connections. It is a state and not an event, the same way Hello.ready is:
-   * the operator re-sends the value it last asserted on every resync — one every
-   * 30 seconds, on the same tick as FullSync and after it — so a reconnect
-   * cannot leave a proxy stuck in the wrong one, a cancelled drain simply
-   * reverts, and an agent whose gate has come to disagree with what the operator
-   * asserted is corrected within one interval rather than never. Between those
-   * ticks it is sent only when the value changes, so an agent sees repeats at
-   * the resync rate and not at the reconcile rate; applying a value the agent
-   * already holds has to be harmless.
+   * connections. A state, not an event: the operator re-sends it on every
+   * resync, after FullSync, and otherwise only on a change, so applying a value
+   * the agent already holds must be harmless.
    *
-   * The agent maps it onto its readiness gate, which the kubelet probes. So the
-   * effect an operator is really asking for is "leave the Service's endpoints" —
-   * established connections are not touched, because Kubernetes does not close
-   * them when an endpoint is removed.
+   * The agent maps it onto its readiness gate. Established connections are not
+   * touched.
    *
-   * An agent must not open that gate before a FullSync has applied. Readiness
-   * means routable, and a proxy with no server list disconnects every player it
-   * is sent with "no available server", so a ready=true asserted that early is
-   * recorded and takes effect with the first FullSync that applies rather than
-   * on arrival. ready=false is applied whenever it arrives: an agent that cannot
-   * build its server list has no business in the endpoints either.
+   * An agent must not open the gate before a FullSync has applied: a proxy with
+   * no server list disconnects every player it is sent. An early ready=true is
+   * held until then; ready=false applies on arrival.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.SetReady}

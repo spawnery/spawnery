@@ -15,14 +15,12 @@ limitations under the License.
 */
 
 // Package proxyreg is the port the controllers reach the proxies through. It
-// owns every live proxy session and turns a registration decision into
-// messages on them.
+// owns every live proxy session and turns a registration decision into messages
+// on them.
 //
-// It is the mirror of internal/agent: that package is what the gRPC server
-// writes into and the controllers read from, this one is what the controllers
-// write into and the gRPC server reads from. Neither lives inside
-// internal/agentserver, so that neither direction has to know about TLS,
-// tokens or streams.
+// It mirrors internal/agent in the opposite direction. Neither lives inside
+// internal/agentserver, so neither direction has to know about TLS, tokens or
+// streams.
 package proxyreg
 
 import (
@@ -43,18 +41,16 @@ import (
 )
 
 const (
-	// DefaultResyncInterval is how often every live session is re-sent the
-	// construction Join builds. See Resync for why it is not optional.
+	// DefaultResyncInterval is how often every live session is re-sent its
+	// snapshot; see Resync for why it is not optional.
 	DefaultResyncInterval = 30 * time.Second
 	// DefaultOutboxSize is how far a session may fall behind before it is cut.
 	DefaultOutboxSize = 64
 )
 
-// Options configures a Fleet.
 type Options struct {
-	// Reader lists Server objects and reads ProxyGroups. The manager's cached
-	// client: FullSync is a read of the informer's indexer, not an API round
-	// trip, which is what makes it cheap enough to build under the mutex.
+	// Reader should be the manager's cached client: snapshot reads it under the
+	// mutex.
 	Reader client.Reader
 	// ResyncInterval is how often Start re-syncs every session. Zero means
 	// DefaultResyncInterval.
@@ -62,54 +58,33 @@ type Options struct {
 	// OutboxSize bounds a session's queue. Zero means DefaultOutboxSize.
 	OutboxSize int
 	// State builds the NetworkState a session is sent after its FullSync.
-	//
-	// Zero-valued when a caller has none -- the tests that predate the mirror
-	// construct a Fleet without one -- and snapshot then simply sends no state
-	// message. A proxy that receives no mirror routes exactly as it did
-	// before; a proxy that receives no FullSync cannot route at all, and that
-	// asymmetry is why one is optional here and the other is not.
+	// Optional, unlike the FullSync: a proxy without the mirror still routes.
 	State netstate.Source
 }
 
-// session is one live proxy stream's queue.
 type session struct {
 	namespace string
 	group     string
 	outbox    chan *agentpb.OperatorToProxy
-	// closed guards against a double close. A session is closed either because
-	// its stream left or because it fell behind, and both can happen.
-	closed bool
-	// lastReady is the readiness this session was last told to have, and
-	// whether it has been told at all. The operator asserts the desired state
-	// on every reconcile; without this the same message would go out every
-	// five seconds for the whole of a drain.
-	//
-	// Suppressing the reconcile's repeats is all it does. It is not a claim
-	// that the agent was told once and that settles it: Resync re-sends this
-	// value on every tick, which is what bounds a disagreement between the
-	// agent's gate and this memo to one interval. Read the two together —
-	// this decides the rate, Resync makes it periodic.
-	//
-	// It belongs to the session and not to the Fleet on purpose: a new stream
-	// starts without one, so the state is re-asserted on reconnect without the
-	// operator having to know a reconnect happened.
+	closed    bool
+	// lastReady suppresses re-sending the same readiness on every reconcile;
+	// Resync re-asserts it each interval. It lives on the session so a
+	// reconnect re-asserts the state without the operator noticing the
+	// reconnect.
 	lastReady    bool
 	lastReadySet bool
-	// wantsEvents is what this agent last reported about whether anybody is
-	// there to read a cloud event. It belongs to the session for the reason
-	// lastReady does: a new stream starts without one.
+	// wantsEvents is whether this agent last reported anybody reading cloud
+	// events.
 	wantsEvents bool
 }
 
-// Fleet is every live proxy session. Safe for concurrent use.
 type Fleet struct {
 	mu sync.Mutex
-	// sessions is keyed by pod UID, the same key the agent registry uses.
+	// keyed by pod UID, the same key the agent registry uses
 	sessions map[string]*session
 	opts     Options
 }
 
-// New creates a Fleet.
 func New(opts Options) *Fleet {
 	if opts.ResyncInterval <= 0 {
 		opts.ResyncInterval = DefaultResyncInterval
@@ -121,14 +96,9 @@ func New(opts Options) *Fleet {
 }
 
 // Join enters a session and returns its outbox together with the function that
-// removes it. The first message on the channel is always the FullSync.
-//
-// That guarantee is the whole point of this function's shape. Everything
-// between the lock and the unlock — reading the servers, building the messages,
-// filling the queue, entering the session — happens where no broadcast can run,
-// because every broadcast takes the same mutex. A RegisterServer therefore
-// cannot overtake the FullSync it belongs after, and the ordering is a property
-// of the code rather than of a test that has to win a race to notice.
+// removes it. The first message on the channel is always the FullSync: it is
+// built and queued under the mutex every broadcast takes, so no broadcast can
+// overtake it.
 //
 // The Fleet closes the channel if the session falls too far behind. A caller
 // that reads a closed channel must end its stream; see send.
@@ -136,26 +106,10 @@ func (f *Fleet) Join(ctx context.Context, namespace, group, podUID string) (<-ch
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
-	// This looks like a redundant guard on a context nothing downstream reads
-	// again — until you ask why it could ever be cancelled here at all.
-	// sessions.enter cancels a superseded stream's derived context, but that
-	// cancellation cannot interrupt the two blocking stream.Send calls
-	// sessionPrologue makes before ProxySession ever reaches Join: those are
-	// bound to stream.Context(), a different context that enter never
-	// touches. So the superseded stream (call it B) can still reach Join
-	// after its successor (C) already has — B.enter's cancellation raced
-	// nothing C was waiting on, B's two sends simply finished late. Without
-	// this check, B would find C installed as "previous" below, close C's
-	// live outbox, and install itself in its place: a healthy session killed
-	// and mislabelled as having fallen behind. The check is sound because
-	// enter happens-before Join within one handler, whichever of the three
-	// ways this context ends is the one we observe here: a successor's enter
-	// (the case above), the stream's own context ending, or the hard-deadline
-	// timer calling sessions.cancel. In the first, a successor already holds
-	// the map entry and it, not us, is the one that must keep it. In the
-	// other two, this session is ending on its own — nothing has displaced
-	// it, but nothing here needs installing either, so returning early is
-	// still the right call.
+	// sessions.enter cannot interrupt sessionPrologue's two stream.Send calls,
+	// so a superseded stream can reach Join after its successor did. Its
+	// context is cancelled by then; going on would close the successor's live
+	// outbox.
 	if err := ctx.Err(); err != nil {
 		return nil, nil, err
 	}
@@ -165,9 +119,8 @@ func (f *Fleet) Join(ctx context.Context, namespace, group, podUID string) (<-ch
 		return nil, nil, err
 	}
 
-	// The queue is sized to hold the initial burst on top of the steady-state
-	// budget, so a namespace that happens to be draining many servers at once
-	// cannot cut a session off at the moment it joins.
+	// Sized for the initial burst on top of the steady-state budget, so joining
+	// while many servers drain cannot cut the session.
 	s := &session{
 		namespace: namespace,
 		group:     group,
@@ -176,13 +129,8 @@ func (f *Fleet) Join(ctx context.Context, namespace, group, podUID string) (<-ch
 	for _, msg := range initial {
 		s.outbox <- msg
 	}
-	// A second Join for a pod already registered supersedes the first, the same
-	// make-before-break case leave guards against. Close the displaced session
-	// here rather than leaving it to leave: once the map entry is overwritten,
-	// the old session's own leave call finds a different pointer at this key and
-	// exits at the identity guard without closing anything, so the channel would
-	// otherwise stay open forever and a caller ranging over it would never see
-	// it end.
+	// Closed here because the displaced session's own leave will find a
+	// different pointer at this key and close nothing.
 	if previous, ok := f.sessions[podUID]; ok {
 		f.close(previous)
 	}
@@ -191,12 +139,9 @@ func (f *Fleet) Join(ctx context.Context, namespace, group, podUID string) (<-ch
 	return s.outbox, func() { f.leave(podUID, s) }, nil
 }
 
-// leave removes a session, if it is still the one registered for that pod.
-//
-// The guard matters for the same reason it does in agentserver's sessions:
-// make-before-break means an agent opens its next stream before the current
-// one ends, so a displaced session's leave runs after its successor has
-// already entered. Without the identity check it would remove the live one.
+// leave removes a session only if it is still the one registered for that pod:
+// under make-before-break a displaced session's leave runs after its successor
+// entered.
 func (f *Fleet) leave(podUID string, s *session) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -207,7 +152,7 @@ func (f *Fleet) leave(podUID string, s *session) {
 	f.close(s)
 }
 
-// close closes a session's outbox at most once. Callers hold f.mu.
+// Callers hold f.mu.
 func (f *Fleet) close(s *session) {
 	if s.closed {
 		return
@@ -217,12 +162,8 @@ func (f *Fleet) close(s *session) {
 }
 
 // send queues a message, or cuts the session loose if its queue is full.
-//
-// Dropping the message instead would leave the proxy routing on a list it has
-// no way of knowing is wrong, looking healthy the whole time, until the next
-// resync. Closing is loud: the agent's stream ends, it reconnects, and it is
-// rebuilt from a fresh FullSync. A proxy that cannot accept a queue this deep
-// is not serving players either.
+// Dropping it instead would leave the proxy routing on a stale list that looks
+// healthy; closing makes the agent reconnect and get a fresh FullSync.
 //
 // Callers hold f.mu.
 func (f *Fleet) send(s *session, msg *agentpb.OperatorToProxy) {
@@ -251,11 +192,9 @@ func (f *Fleet) snapshot(ctx context.Context, namespace, group string) ([]*agent
 	var draining []*spawneryv1alpha1.Server
 	for i := range servers.Items {
 		srv := &servers.Items[i]
-		// status.registered, not phase Ready. The flag is the record of what
-		// this operator actually told the proxies — applyDecision writes it in
-		// the same block that calls Register — while the phase is the record of
-		// what the server is. They disagree for one reconcile after a
-		// deregistration, and there the flag is the one that matches the wire.
+		// status.registered, not phase Ready: the flag records what the proxies
+		// were told, and the two disagree for one reconcile after a
+		// deregistration.
 		if srv.Status.Registered && srv.Status.Address != "" {
 			sync.Servers = append(sync.Servers, registeredServer(srv))
 		}
@@ -263,8 +202,7 @@ func (f *Fleet) snapshot(ctx context.Context, namespace, group string) ([]*agent
 			draining = append(draining, srv)
 		}
 	}
-	// Sorted so two snapshots of the same state are the same bytes, which is
-	// what lets an agent treat an unchanged resync as a no-op.
+	// Sorted so an unchanged state is the same bytes and an agent can skip it.
 	sort.Slice(sync.Servers, func(i, j int) bool { return sync.Servers[i].GetName() < sync.Servers[j].GetName() })
 	sort.Slice(draining, func(i, j int) bool { return draining[i].Name < draining[j].Name })
 
@@ -276,14 +214,9 @@ func (f *Fleet) snapshot(ctx context.Context, namespace, group string) ([]*agent
 		out = append(out, drainMessage(srv, fallbacks))
 	}
 
-	// Last, after the FullSync and the drains. ProxyRole opens the pod's
-	// readiness gate on the FullSync, so a message ahead of it would reach an
-	// agent that is not yet routable -- and the drains have to follow the list
-	// they refer to.
-	//
-	// A state that cannot be built is logged and skipped rather than failing
-	// the snapshot. Routing is what keeps players connected and the mirror is
-	// what a plugin reads; losing the second must not cost the first.
+	// Last: ProxyRole opens the readiness gate on the FullSync, and the drains
+	// refer to its list. A state that cannot be built is skipped: losing the
+	// mirror must not cost routing.
 	if f.opts.State.Reader != nil {
 		state, err := f.opts.State.Build(ctx, namespace, netstate.ForProxies)
 		if err != nil {
@@ -298,15 +231,11 @@ func (f *Fleet) snapshot(ctx context.Context, namespace, group string) ([]*agent
 	return out, nil
 }
 
-// fallbacks reads one ProxyGroup's fallback list.
+// fallbacks reads one ProxyGroup's fallback list. Per group, not a union: two
+// ProxyGroups may route to different fallbacks.
 //
-// Deliberately per group rather than a union across the namespace: two
-// ProxyGroups of one network may route to different fallbacks, and a union
-// would tell a proxy to move players onto a group it has no server for.
-//
-// A missing ProxyGroup is not an error. A proxy pod outlives its group by
-// however long the orphan sweep takes, and an empty list is the honest answer
-// for that window.
+// A missing ProxyGroup yields an empty list; a proxy pod outlives its group
+// until the orphan sweep.
 func (f *Fleet) fallbacks(ctx context.Context, namespace, group string) []string {
 	pg := &spawneryv1alpha1.ProxyGroup{}
 	key := types.NamespacedName{Name: group, Namespace: namespace}
@@ -336,7 +265,8 @@ func drainMessage(srv *spawneryv1alpha1.Server, fallbacks []string) *agentpb.Ope
 }
 
 // broadcast delivers one message to every session in a namespace. build takes
-// the session because DrainPlayers differs per ProxyGroup.
+// the session because DrainPlayers differs per ProxyGroup; a nil result sends
+// nothing.
 func (f *Fleet) broadcast(namespace string, build func(*session) *agentpb.OperatorToProxy) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -344,11 +274,6 @@ func (f *Fleet) broadcast(namespace string, build func(*session) *agentpb.Operat
 		if s.namespace != namespace {
 			continue
 		}
-		// A build that returns nil sends nothing. That is what lets one
-		// broadcast serve both "everybody in this namespace" and "only the
-		// sessions that asked for events": the filter lives in the caller's
-		// build, where its reason is readable, rather than in a second
-		// broadcast that would drift from this one.
 		if msg := build(s); msg != nil {
 			f.send(s, msg)
 		}
@@ -356,12 +281,8 @@ func (f *Fleet) broadcast(namespace string, build func(*session) *agentpb.Operat
 }
 
 // SetInterest records whether this session's agent has anybody to show events
-// to.
-//
-// An unknown pod is ignored rather than remembered. A report can arrive from a
-// session a renewal has just displaced, and creating an entry for it would
-// leak one per reconnect and leave the operator holding interest for a stream
-// that no longer exists.
+// to. An unknown pod is ignored: a report from a just-displaced session would
+// otherwise leak an entry per reconnect.
 func (f *Fleet) SetInterest(podUID string, wanted bool) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -370,11 +291,7 @@ func (f *Fleet) SetInterest(podUID string, wanted bool) {
 	}
 }
 
-// Interested reports what SetInterest last recorded.
-//
-// Exported for tests, and that is a cost paid deliberately: the alternative is
-// asserting a leak through a channel that stays empty whether or not the entry
-// is there, which is the same as not asserting it.
+// Interested reports what SetInterest last recorded. Exported for tests.
 func (f *Fleet) Interested(podUID string) bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -383,12 +300,8 @@ func (f *Fleet) Interested(podUID string) bool {
 }
 
 // Publish sends one event to every session in the namespace that asked for
-// events. It implements cloudevent.Sink.
-//
-// It reports nothing, and cannot: this is called from inside a reconcile, and
-// a feed nobody is watching must not be able to fail one. A build that returns
-// nil sends nothing, which is what lets broadcast serve both "everybody" and
-// "only the sessions that asked" without a second helper to drift from it.
+// events. It implements cloudevent.Sink and reports nothing: a feed nobody is
+// watching must not be able to fail a reconcile.
 func (f *Fleet) Publish(namespace string, ev *agentpb.CloudEvent) {
 	f.broadcast(namespace, func(s *session) *agentpb.OperatorToProxy {
 		if !s.wantsEvents {
@@ -401,15 +314,9 @@ func (f *Fleet) Publish(namespace string, ev *agentpb.CloudEvent) {
 }
 
 // Move asks the proxies of a namespace to move one player to one server.
-//
-// Broadcast rather than addressed, because nothing here knows which proxy has
-// the player: Registry.Roster merges every proxy's roster and drops which one
-// reported what. A proxy without that player does nothing with the message,
-// which makes the broadcast correct and not merely survivable.
-//
-// It reports nothing back, and the operator promises nothing about the
-// outcome: the proxy does not wait on Velocity's own future either. See
-// agentpb.ConnectResult for the whole of that reasoning.
+// Broadcast, because nothing here knows which proxy has the player; a proxy
+// without that player ignores it. No outcome is reported; see
+// agentpb.ConnectResult.
 func (f *Fleet) Move(namespace, playerUUID, targetServer string) {
 	f.broadcast(namespace, func(*session) *agentpb.OperatorToProxy {
 		return &agentpb.OperatorToProxy{
@@ -448,11 +355,8 @@ func (f *Fleet) SendState(ctx context.Context, namespace string) {
 	}
 }
 
-// Register implements controller.Registrar.
-//
-// It returns nil when no proxy is connected. That is not a degraded state: a
-// Network with no ProxyGroup is legitimate, and it is the state every server
-// ran in through milestone 2.
+// Register implements controller.Registrar. With no proxy connected it is a
+// no-op: a Network without a ProxyGroup is legitimate.
 func (f *Fleet) Register(ctx context.Context, srv *spawneryv1alpha1.Server) error {
 	f.broadcast(srv.Namespace, func(*session) *agentpb.OperatorToProxy {
 		return &agentpb.OperatorToProxy{
@@ -484,21 +388,12 @@ func (f *Fleet) Drain(ctx context.Context, srv *spawneryv1alpha1.Server) error {
 	return nil
 }
 
-// SetReady tells one proxy whether it should be taking new connections.
+// SetReady tells one proxy whether it should be taking new connections; its
+// readiness decides whether the Service keeps its endpoint. A pod with no live
+// stream is not an error.
 //
-// The proxy's readiness is what the kubelet probes and therefore what decides
-// whether the Service keeps its endpoint, so this is how the operator takes a
-// proxy out of rotation without touching the sessions already on it.
-//
-// A pod with no live stream is not an error: it is not taking connections
-// either, and the next reconcile asserts the state again if it comes back.
-//
-// The memo below suppresses a repeat of a value this session already carries,
-// which is what keeps a five-second reconcile from re-sending the same message
-// for the whole of a drain. It is not the only thing that ever asserts: Resync
-// re-sends the memo's value on every tick, so the assertion is periodic at the
-// resync interval rather than once per change. That is deliberate — see
-// Resync — and the proto's SetReady comment describes the pair of them.
+// A repeat of the memoized value is not sent; Resync re-asserts it each
+// interval.
 func (f *Fleet) SetReady(ctx context.Context, podUID string, ready bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -515,9 +410,6 @@ func (f *Fleet) SetReady(ctx context.Context, podUID string, ready bool) error {
 	return nil
 }
 
-// readyMessage is one readiness assertion on the wire. SetReady and Resync
-// share it so the two paths that assert readiness cannot come to mean
-// different things.
 func readyMessage(ready bool) *agentpb.OperatorToProxy {
 	return &agentpb.OperatorToProxy{
 		Message: &agentpb.OperatorToProxy_SetReady{
@@ -529,47 +421,16 @@ func readyMessage(ready bool) *agentpb.OperatorToProxy {
 // Resync re-sends every live session the same construction Join builds,
 // followed by the readiness this session was last told to have.
 //
-// This is not in section 5.2 of the main design, and it is not redundant with
-// the ordering invariant in Join. That invariant closes the window between a
-// broadcast and a session entering. It cannot close the one between the Server
-// controller writing a status and the cache snapshot reads from catching up:
+// Not redundant with Join's ordering: a FullSync built from a cache that has
+// not yet seen a deregistration keeps that server in the proxy's list, and
+// nothing else would correct it. Likewise SetReady sends only on a change, so
+// re-asserting here bounds any disagreement between the agent's gate and the
+// memo to one interval.
 //
-//	Deregister for X is broadcast and queued on a session
-//	the same session rejoins
-//	its FullSync is built from a cache that still shows X as registered
-//	the proxy ends up with X in its list after being told to drop it
-//
-// Nothing else would ever correct that. The window is short and this closes it
-// within one interval. Do not remove it because "the list is derived from the
-// CRs anyway" — that is exactly the reasoning that leaves it broken.
-//
-// The readiness assertion rides along for the same kind of reason, and it is
-// the half of it that is not about the cache. SetReady sends only on a change,
-// so if the agent's gate and this session's memo ever disagree — a lost race
-// inside the agent, a message applied and then undone, a bug neither end has
-// found yet — nothing else re-states the desired value, and the disagreement
-// lasts as long as the session does. A pod stuck Ready while its drain
-// deadline runs is the expensive direction of that: it keeps taking players
-// who are then disconnected when it is deleted. Re-asserting here bounds any
-// such divergence to one interval (DefaultResyncInterval, 30s) whatever caused
-// it, which is a property no fix to a particular cause can give.
-//
-// After the snapshot, not before it: a SetReady(true) that arrives before a
-// server list asks a proxy to advertise readiness with nothing to route to,
-// and every player sent there is disconnected with "no available server". This
-// repository's Velocity agent now refuses that on its own side — it records a
-// ready asserted before its first FullSync and opens the gate on that sync
-// instead — but that is the agent's guard and not this one's: an older build,
-// or another language's implementation of this proto, has no such rule, and
-// the order the operator sends in is the half of the contract the operator
-// owns.
-//
-// A session never told anything is sent nothing, rather than a default: the
-// operator has no readiness for a pod it has not decided about, and inventing
-// ready=true here would assert one.
-//
-// It is exported rather than only ticked, so tests drive it instead of
-// sleeping.
+// Readiness goes after the snapshot: a ready proxy with no server list
+// disconnects every player with "no available server", and older or foreign
+// agents do not guard against that. A session never told a readiness is sent
+// none.
 func (f *Fleet) Resync(ctx context.Context) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -577,9 +438,8 @@ func (f *Fleet) Resync(ctx context.Context) {
 	for podUID, s := range f.sessions {
 		messages, err := f.snapshot(ctx, s.namespace, s.group)
 		if err != nil {
-			// One unreadable namespace must not stop the others. The next tick
-			// tries again, and the session keeps its last known list until then
-			// — which is the correct answer while the operator cannot read.
+			// One unreadable namespace must not stop the others; the session
+			// keeps its last list until the next tick.
 			log.FromContext(ctx).V(1).Info("skipped a proxy resync",
 				"pod", podUID, "namespace", s.namespace, "reason", err.Error())
 			continue
@@ -608,6 +468,5 @@ func (f *Fleet) Start(ctx context.Context) error {
 	}
 }
 
-// NeedLeaderElection makes this leader-bound, for the same reason the agent
-// endpoint is: only the leader holds the streams these messages go to.
+// NeedLeaderElection: only the leader holds the streams these messages go to.
 func (f *Fleet) NeedLeaderElection() bool { return true }

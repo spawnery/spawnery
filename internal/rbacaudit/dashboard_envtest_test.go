@@ -56,9 +56,8 @@ func TestTheDashboardRendersOnlyWhenAskedFor(t *testing.T) {
 	}
 }
 
-// The operator's own namespace label names the network's namespace. Without
-// honorLabels the Prometheus Operator renames it to exported_namespace, and
-// every join with the kubelet's per-pod series comes back empty.
+// Without honorLabels the Prometheus Operator renames the network's namespace
+// label to exported_namespace, and every join with kubelet series is empty.
 func TestTheServiceMonitorKeepsTheOperatorsLabels(t *testing.T) {
 	doc, ok := renderChartWith(t, `{"metrics":{"serviceMonitor":{"enabled":true}}}`)["ServiceMonitor/spawnery-operator"]
 	if !ok {
@@ -79,9 +78,8 @@ func TestTheServiceMonitorKeepsTheOperatorsLabels(t *testing.T) {
 	}
 }
 
-// A network is chosen from its groups, not its proxies: with every proxy
-// down the network would otherwise vanish from the dashboard. One network at
-// a time, because two networks usually share group names.
+// From groups, so a network with every proxy down stays on the dashboard;
+// one at a time, because networks usually share group names.
 func TestTheDashboardChoosesANetworkFromItsGroups(t *testing.T) {
 	raw, err := os.ReadFile(testenv.RepoPath(t, "charts/spawnery/dashboards/network.json"))
 	if err != nil {

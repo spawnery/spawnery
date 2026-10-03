@@ -55,10 +55,6 @@ private fun cores(milli: Long) = String.format(Locale.ROOT, "%.1f", milli / 1000
 private fun gib(bytes: Long) = String.format(Locale.ROOT, "%.1f", bytes / (1L shl 30).toDouble())
 private fun one(v: Double) = String.format(Locale.ROOT, "%.1f", v)
 
-/**
- * A resource line: the bar against the limit, or against the request where a
- * container has no limit, then used, limit and request in words.
- */
 private fun resource(
     label: String?, used: Long, requested: Long, limit: Long, unlimited: Boolean,
     measured: Boolean, unit: String, show: (Long) -> String,

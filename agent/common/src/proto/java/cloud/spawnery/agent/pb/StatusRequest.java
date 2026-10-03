@@ -8,8 +8,8 @@ package cloud.spawnery.agent.pb;
 /**
  * <pre>
  * StatusRequest asks how the network is doing: its CPU and memory against
- * what it asked for, and each server's tick rate. Namespace-bound like every
- * request; nothing cluster-scoped is ever in the answer.
+ * what it asked for, and each server's tick rate. Nothing cluster-scoped is
+ * ever in the answer.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.StatusRequest}
@@ -267,8 +267,8 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * StatusRequest asks how the network is doing: its CPU and memory against
-   * what it asked for, and each server's tick rate. Namespace-bound like every
-   * request; nothing cluster-scoped is ever in the answer.
+   * what it asked for, and each server's tick rate. Nothing cluster-scoped is
+   * ever in the answer.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.StatusRequest}

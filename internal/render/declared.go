@@ -26,14 +26,9 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// defaultsDir holds the configuration each receiving program writes for
-// itself, byte for byte, out of the jar this repository pins.
-//
-// These were testdata until 2026-08-24 and are not any more: the renderer
-// reads them at startup, to refuse an overlay key the program on the other end
-// does not declare. Deleting them as unused fixtures would take the check with
-// them, which is why they no longer live under a name that says "tests only".
-// paper_test.go and velocity_test.go carry the commands that regenerate each.
+// defaultsDir holds each receiving program's own default configuration, byte
+// for byte from the pinned jar. Not test data: the renderer reads it at
+// startup. paper_test.go and velocity_test.go carry the regeneration commands.
 const defaultsDir = "defaults"
 
 //go:embed defaults/paper-global.default.yml
@@ -48,35 +43,22 @@ var velocityDefaultConfig []byte
 //go:embed defaults/server.properties.default
 var paperPropertiesDefaultConfig []byte
 
-// keyNode is one level of a configuration document's declared shape.
-//
-// The shape is measured, not written down: it comes from the receiving
-// program's own default file, so a Paper or Velocity bump moves it by moving
-// that file. That is the trade this check makes, taken deliberately on
-// 2026-08-24 — a bump refuses a legitimate override for a newly added key
-// until the file is regenerated, and in exchange a key the program does not
-// read stops passing silently. The refusal happens at render time and names
-// the key; the silence happened in a cluster and named nothing, twice.
+// keyNode is one level of a configuration document's declared shape, taken
+// from the program's own default file. A version bump refuses overrides of
+// newly added keys until the file is regenerated, in exchange for refusing
+// keys the program does not read.
 type keyNode struct {
-	// children are the keys declared at this level.
 	children map[string]*keyNode
-	// freeForm marks a level whose child names belong to whoever writes the
-	// configuration rather than to the program: Velocity's [servers] is keyed
-	// by server names somebody chose, Paper's packet-limiter.overrides by
-	// packet ids. children still holds the reserved names declared at such a
-	// level (servers.try is Velocity's, not a server), and shape is what every
-	// other child is checked against.
+	// freeForm marks a level whose child names are the user's (Velocity's
+	// [servers], Paper's packet-limiter.overrides). children still holds the
+	// reserved names at such a level; every other child is checked against
+	// shape.
 	freeForm bool
 	shape    *keyNode
 }
 
-// freeFormPath names a level whose child names are the user's, and the names
-// at that level that are still the program's.
-//
-// This is knowledge about the receiving program that its default file cannot
-// carry: nothing in the document distinguishes "lobby, an example server
-// somebody may replace" from "try, a key Velocity reads". Both are keys under
-// [servers].
+// freeFormPath is knowledge the default file cannot carry: nothing in it
+// distinguishes the example server "lobby" from Velocity's own key "try".
 type freeFormPath struct {
 	path     string
 	reserved []string
@@ -89,61 +71,34 @@ var paperFreeForm = []freeFormPath{
 	{path: "packet-limiter.overrides"},
 }
 
-// paper-world-defaults.yml declares none, and that is a limitation rather than
-// a finding.
-//
-// It has at least two levels whose child names are the user's: tick-rates.
-// behavior and tick-rates.sensor are keyed by entity type and then by goal or
-// sensor name, and the default file carries one example of each (villager.
-// validatenearbypoi, villager.secondarypoisensor). Declaring them would need a
-// free-form level whose *shape* is itself free-form, and buildKeyNode does not
-// build that: a nested free-form path disappears into its parent's shape, and
-// mustKeyTree's own post-check then panics because nodeAt cannot find it.
-//
-// So an override under tick-rates.behavior for any entity but villager is
-// refused, and the refusal names the key. That is the same trade
-// checkDeclaredKeys makes everywhere else -- a legitimate override refused
-// loudly, rather than a stray key accepted silently.
+// paper-world-defaults.yml declares none although tick-rates.behavior and
+// tick-rates.sensor are user-keyed: they nest a free-form level inside
+// another, which buildKeyNode does not support. Overrides there for any
+// entity but villager are refused, loudly.
 var paperWorldDefaultsFreeForm []freeFormPath
 
 var velocityFreeForm = []freeFormPath{
-	// Keyed by server name. try is Velocity's own reserved key in there, and
-	// the fixture's lobby/factions/minigames are its three example servers.
+	// Keyed by server name; the fixture's lobby/factions/minigames are examples.
 	{path: "servers", reserved: []string{"try"}},
 	// Keyed by hostname.
 	{path: "forced-hosts"},
 }
 
-// The two trees are built once at startup. A malformed default file is a
-// broken build rather than a runtime error: these are checked-in files this
-// repository measured itself, not input.
+// Built at startup; a malformed default file is a broken build, not input.
 var (
 	paperDeclared = mustKeyTree(paperDefaultConfig, unmarshalYAML, paperFreeForm, "paper-global.yml")
-	// Purpur's copy of this file is byte-identical to Paper's -- measured on
-	// 2026-08-31 by booting both pinned jars against an empty data directory
-	// and diffing what each wrote. One tree therefore serves both backend
-	// images, and a fork that starts adding its own keys here shows up as a
-	// refused override rather than as a silently ignored one.
+	// Purpur's copy of this file is byte-identical to Paper's, so one tree
+	// serves both images.
 	paperWorldDefaultsDeclared = mustKeyTree(
 		paperWorldDefaultsDefaultConfig, unmarshalYAML, paperWorldDefaultsFreeForm,
 		"paper-world-defaults.yml")
-	velocityDeclared = mustKeyTree(velocityDefaultConfig, unmarshalTOML, velocityFreeForm, "velocity.toml")
-	// server.properties is flat, so its tree is one level deep and needs no
-	// free-form paths: every key in it is Minecraft's own, and there is no
-	// level whose child names belong to whoever writes the file.
+	velocityDeclared        = mustKeyTree(velocityDefaultConfig, unmarshalTOML, velocityFreeForm, "velocity.toml")
 	paperPropertiesDeclared = mustKeyTree(
 		paperPropertiesDefaultConfig, unmarshalProperties, nil, "server.properties")
 )
 
-// unmarshalProperties reads a .properties document as the flat map its
-// declared-key tree is built from.
-//
-// It delegates to parseProperties, which is the same function the renderer
-// applies to a user's overlay, so the two agree about what a key even is --
-// comments, blank lines, whitespace around the separator and a line with no
-// separator at all are all handled once. A second parser here would be a
-// second answer to that question, and the check would then refuse or admit
-// keys the renderer never saw.
+// unmarshalProperties delegates to parseProperties, the parser applied to a
+// user's overlay, so the check and the renderer agree on what a key is.
 func unmarshalProperties(doc []byte) (map[string]any, error) {
 	flat := parseProperties(string(doc))
 	out := make(map[string]any, len(flat))
@@ -188,7 +143,6 @@ func mustKeyTree(doc []byte, parse func([]byte) (map[string]any, error),
 	return tree
 }
 
-// buildKeyNode turns one level of a parsed default document into a keyNode.
 func buildKeyNode(level map[string]any, free map[string][]string, path string) *keyNode {
 	node := &keyNode{children: make(map[string]*keyNode, len(level))}
 	reserved, isFree := free[path]
@@ -212,9 +166,8 @@ func buildKeyNode(level map[string]any, free map[string][]string, path string) *
 		}
 		examples = append(examples, name)
 	}
-	// Deterministic, and the choice is only ever between children of the same
-	// shape: TestEveryFreeFormExampleHasTheSameShape asserts that, so this
-	// picks one rather than trusting one.
+	// TestEveryFreeFormExampleHasTheSameShape guarantees the examples agree, so
+	// any deterministic pick will do.
 	sort.Strings(examples)
 	if len(examples) > 0 {
 		node.shape = node.children[examples[0]]
@@ -253,24 +206,15 @@ func contains(names []string, name string) bool {
 }
 
 // checkDeclaredKeys refuses the first overlay key the receiving program does
-// not declare.
-//
-// The program does not refuse it — that is the whole problem. Paper keeps its
-// own default for the field the author meant and writes the stray key straight
-// back out on the next save, so the document on disk goes on looking like the
-// override took; Velocity's night-config reads out the keys it asks for, so a
-// misspelling is a key nobody reads and a default silently kept. A misplaced
-// key therefore leaves the program behaving exactly as if the setting were
-// absent while the rendered file reads exactly as the author intended, and
-// nothing downstream tells the two apart until a connection behaves
-// strangely. That is the cost this refusal buys out.
+// not declare, because neither program does: Paper keeps its default and
+// writes the stray key back out, Velocity's night-config never reads it, and
+// the rendered file looks exactly as intended.
 func checkDeclaredKeys(declared *keyNode, overlay map[string]any, what string) error {
 	return walkOverlay(declared, declared, overlay, "", what)
 }
 
 func walkOverlay(root, node *keyNode, level map[string]any, path, what string) error {
-	// Sorted, so a document with two undeclared keys always reports the same
-	// one and a failure is reproducible.
+	// Sorted, so the reported key is reproducible.
 	names := make([]string, 0, len(level))
 	for name := range level {
 		names = append(names, name)
@@ -303,9 +247,8 @@ func lookup(node *keyNode, name string) (*keyNode, bool) {
 	return nil, false
 }
 
-// undeclared builds the refusal. It says where the key *is* declared when it
-// is declared somewhere else, because that is the shape both of this project's
-// outages took: a real key at the wrong depth, not an invented one.
+// undeclared names where the key is declared if it exists elsewhere: a real
+// key at the wrong depth is the common mistake.
 func undeclared(root *keyNode, path, name string, node *keyNode, what string) error {
 	where := "the top level"
 	if path != "" {
@@ -323,7 +266,6 @@ func undeclared(root *keyNode, path, name string, node *keyNode, what string) er
 		what, name, where, list(node))
 }
 
-// declaredAt finds every path at which a key of this name is declared.
 func declaredAt(node *keyNode, name, path string) []string {
 	var found []string
 	for child, sub := range node.children {

@@ -62,12 +62,7 @@ spec:
                   type: string
                 description: |-
                   Attributes is what plugins are told about this group. See
-                  GroupAttributes: the operator carries it and acts on none of it.
-
-                  It shapes no pod and is therefore not in the spec hash a server is
-                  replaced on -- the opposite of Env above. Editing it replaces nothing
-                  and restarts nothing; the next network picture simply carries the new
-                  value, which is what a description of a group should cost.
+                  GroupAttributes. Editing it replaces and restarts nothing.
                 maxProperties: 16
                 type: object
                 x-kubernetes-validations:
@@ -85,38 +80,19 @@ spec:
                 description: Config are the rendered Velocity settings.
                 properties:
                   motd:
-                    description: |-
-                      Motd is shown in the server list.
-
-                      Editing it rolls the group's proxies: the rendered config values are
-                      part of the pod digest, so the change reaches every proxy through a
-                      replacement at the group's maxUnavailable pace rather than through a
-                      ConfigMap a running pod never re-reads.
+                    description: Motd is shown in the server list. Editing it rolls
+                      the group's proxies.
                     type: string
                   onlineMode:
                     default: true
                     description: |-
                       OnlineMode is whether the proxy authenticates players with Mojang.
 
-                      Turning it off means the proxy stops authenticating anyone: any client
-                      may connect under any name, including the name of a player who has
-                      paid for the game and owns things on this network, and the network is
-                      only as protected as whatever sits in front of it. There is nothing
-                      further down that catches it — the backends run online-mode=false by
-                      design, because the proxy is the layer that was supposed to do this.
+                      Turning it off lets any client connect under any name; the backends
+                      run online-mode=false and do not catch it. It is not the backends'
+                      proxies.velocity.online-mode, which stays true either way.
 
-                      It is a field on the custom resource rather than something reachable
-                      through configOverlay so that turning it off is a visible edit to the
-                      object an operator reviews, not a line in a ConfigMap nobody reads.
-
-                      This is the proxy's own online-mode, not the backends'
-                      proxies.velocity.online-mode in paper-global.yml, which means "trust
-                      what the proxy forwards" and stays true either way: modern forwarding
-                      works the same whether the proxy authenticated the player or not.
-
-                      Editing it rolls the group's proxies, like Motd and PlayerLimit: the
-                      config values are part of the pod digest, so no proxy runs the old
-                      setting once the roll is through, and the roll starts on the edit.
+                      Editing it rolls the group's proxies.
                     type: boolean
                   playerLimit:
                     description: PlayerLimit is the network-wide player limit of one
@@ -132,29 +108,14 @@ spec:
                   "paper-global.yml", "paper-world-defaults.yml" or "velocity.toml", in
                   the target's own dialect.
 
-                  paper-world-defaults.yml is the one of those the operator writes only
-                  when an overlay names it. Nothing in it is operationally critical, so
-                  there is nothing to assert into it, and a file written empty on every
-                  start would overwrite whatever the server had filled in for itself. It
-                  is also the only route that file has: a mount cannot deliver it, because
-                  a mount anywhere under /data/config stops the server writing its own
-                  configuration and it never starts. See internal/podspec.ServerConfigDirPath.
+                  It outranks the rendered defaults and is outranked by the operationally
+                  critical fields.
 
-                  It is a field of its own rather than a reserved name inside mounts,
-                  because mounts is documented as raw files for plugins and worlds and a
-                  name-based convention is invisible until someone picks that name by
-                  accident. It outranks the rendered defaults and is outranked by the
-                  operationally critical fields, which nothing can reach.
-
-                  A key the receiving program does not declare is refused rather than
-                  written. Paper and Velocity both keep their own default for a key they
-                  do not read and write the stray one straight back out, so the rendered
-                  file goes on looking like the override took while the setting never
-                  applies -- which is the failure this refusal exists to prevent. The
-                  declared keys are taken from each program's own default configuration,
-                  so a Paper or Velocity bump can refuse a legitimately new key until that
-                  file is captured again. server.properties is the exception: it has no
-                  such capture, so a mistyped key there is still only an unused one.
+                  A key the receiving program does not declare is refused, since Paper and
+                  Velocity silently ignore it. The declared keys come from each program's
+                  captured default configuration, so a Paper or Velocity bump can refuse a
+                  new key until that capture is updated. server.properties keys are not
+                  checked.
                 properties:
                   name:
                     description: Name of the referenced object.
@@ -166,16 +127,10 @@ spec:
               displayName:
                 description: |-
                   DisplayName is what this group is called where a person reads it:
-                  a scoreboard, a chat message, a playtime key. A metadata.name is a DNS
-                  label -- lowercase, no spaces -- and a name people say out loud rarely
-                  is, so a plugin that shows "Bingo-Team" reads it from here and not from
-                  the object's name.
+                  a scoreboard, a chat message, a playtime key.
 
-                  The operator carries it and reads none of it, like Attributes below.
-                  Empty is not an error: a plugin then shows the group's own name, and it
-                  is the plugin that makes that substitution rather than the operator,
-                  so that a picture with the field unset and a picture whose operator
-                  predates the field read the same.
+                  The operator carries it and reads none of it. Empty, a plugin shows the
+                  group's own name.
                 maxLength: 64
                 type: string
               drain:
@@ -184,18 +139,9 @@ spec:
                 description: |-
                   Drain bounds how long existing sessions may run out on proxy replacement.
 
-                  Editing it rolls the whole group, and that is worth knowing before an
-                  incident rather than during one. The value reaches the pod as
-                  terminationGracePeriodSeconds, so it is part of the rendered pod the
-                  group's hash covers -- which means raising a drain timeout, the thing an
-                  operator does in the middle of an incident, rolls the group blue/green
-                  on top of whatever prompted it: a replacement for every proxy, not just
-                  one.
-
-                  Raising it while a drain is already in flight otherwise behaves: the
-                  marked pod keeps its mark, being now stale as well as draining, and the
-                  deadline is read from the current spec on every pass. So the edit is
-                  safe, just not free.
+                  It reaches the pod as terminationGracePeriodSeconds, so editing it
+                  replaces every proxy of the group. A drain already in flight picks up
+                  the new deadline.
                 properties:
                   timeoutSeconds:
                     description: TimeoutSeconds is the upper bound for the drain.
@@ -208,15 +154,12 @@ spec:
               env:
                 description: |-
                   Env are extra environment variables for the proxy container, appended
-                  to the ones the operator sets. A name may not begin with
-                  ReservedEnvPrefix.
+                  to the ones the operator sets. A name may not begin with SPAWNERY_.
+                  JVM options go in JAVA_TOOL_OPTIONS.
 
-                  It is ServerGroupSpec.Env for a proxy, rule and reasoning unchanged,
-                  and JAVA_TOOL_OPTIONS is the same seam: the Velocity entrypoint execs
-                  java with its own flag list too. It is in podspec.DesiredProxyHash for
-                  the same reason -- editing it rolls the group through the ordinary
-                  blue/green path, and with the same limit: a valueFrom reference is
-                  digested, the value behind it is not.
+                  Editing it replaces every proxy of the group. A valueFrom reference is
+                  digested, not its value: rotating the Secret or ConfigMap reaches only
+                  new pods.
                 items:
                   description: EnvVar represents an environment variable present in
                     a Container.
@@ -387,22 +330,14 @@ spec:
                     properties:
                       address:
                         description: |-
-                          Address is what a player types.
+                          Address is what a player types. Required, because the operator cannot
+                          learn it from whatever routes to the Service.
 
-                          Required, because the operator cannot learn it: it lives in an
-                          IngressRouteTCP, an HTTPRoute, a tunnel's configuration or a DNS
-                          record — objects under APIs this operator does not read and cannot
-                          know are installed. Optional would make "empty" and "forgotten" the
-                          same state, which is the gap this strategy exists to close.
-
-                          No port is required and none should usually be given: Minecraft
-                          clients default to 25565, so "mc.paul.wtf" is the whole of what a
-                          player types. Give "host:port" only when the entry point really is on
-                          another port.
+                          Give "host:port" only when the entry point is not on 25565, the
+                          client's default.
 
                           Nothing checks that it resolves, that anything listens, or that it
-                          leads to this group's Service. It is a sign on a door, not a test of
-                          the door.
+                          leads to this group's Service.
                         minLength: 1
                         type: string
                     required:
@@ -413,23 +348,13 @@ spec:
                         a URL: no scheme and no spaces'
                       rule: '!self.address.contains('' '') && !self.address.contains(''://'')'
                   hostPort:
-                    description: "HostPort configures type HostPort.\n\nIt cannot
-                      coexist with Pod Security `baseline` or `restricted` in the\nsame
-                      namespace: both disallow a container hostPort outright, so the
-                      API\nserver refuses every pod of such a group and this operator
-                      reports the\nrefusal on Degraded rather than ever admitting
-                      one. Against\n`restricted` the refusal reads:\n\n\tviolates
-                      PodSecurity \"restricted:latest\": hostPort\n\t(container \"velocity\"
-                      uses hostPort 25577)\n\nThe remedy is a namespace of its own
-                      for the HostPort group, with a\nrelaxed Pod Security label,
-                      separate from the restricted namespaces the\nrest of the network
-                      runs in.\n\nThat namespace is necessary and not sufficient.
-                      A hostPort that is\nadmitted, ready and published in status.address
-                      can still be\nunreachable, because whether the port is open
-                      to the world is a\nhost-firewall question rather than a Kubernetes
-                      one: a cluster-wide\npolicy admitting a fixed list of ports
-                      from `world` drops this one while\nthe pod serves perfectly.
-                      See docs/explanation/network-boundaries.md."
+                    description: |-
+                      HostPort configures type HostPort.
+
+                      Pod Security `baseline` and `restricted` both refuse a hostPort, so the
+                      group needs a namespace of its own with a relaxed label; the refusal is
+                      reported on Degraded. Whether the port is reachable from outside is
+                      still up to the host firewall or cluster network policy.
                     properties:
                       port:
                         description: |-
@@ -499,26 +424,14 @@ spec:
               extraFiles:
                 description: |-
                   ExtraFiles names a volume whose tree is copied into this group's
-                  servers on every start. See ExtraFiles.
-
-                  The claim's contents are the truth on every start: a file the server
-                  rewrote at runtime is replaced by the claim's version the next time the
-                  pod starts. A world placed in this claim is therefore overwritten on
-                  every start and does not belong here -- spec.storage and spec.mounts
-                  are what carry one.
-
-                  Nothing about the contents reaches the pod hash, because the spec names
-                  a claim rather than describing what is in it. Changing a file replaces
-                  no running server; it reaches one on that server's next start.
+                  servers on every start, replacing what the server wrote there. See
+                  ExtraFiles.
                 properties:
                   claimName:
                     description: |-
                       ClaimName is a PersistentVolumeClaim in this object's own namespace.
 
-                      It must be ReadWriteMany, for the reason ExtraPlugins.ClaimName gives:
-                      every pod of a group mounts it, and a ReadWriteOnce claim would leave
-                      the second server Pending with a scheduling error naming volume
-                      affinity rather than the cause.
+                      It must be ReadWriteMany: every pod of a group mounts it.
                     minLength: 1
                     type: string
                   image:
@@ -530,9 +443,7 @@ spec:
                     minLength: 1
                     type: string
                   pullPolicy:
-                    description: |-
-                      PullPolicy for Image. Empty means IfNotPresent. No API default: it
-                      would land on claim sources too, which the rule above refuses.
+                    description: PullPolicy for Image. Empty means IfNotPresent.
                     enum:
                     - Always
                     - IfNotPresent
@@ -554,14 +465,9 @@ spec:
                     description: |-
                       ClaimName is a PersistentVolumeClaim in this object's own namespace.
 
-                      It must be ReadWriteMany. A ReadWriteOnce claim mounts on one node, so
-                      the second server of a group would sit Pending with a scheduling error
-                      naming volume affinity rather than the actual cause; the operator
-                      refuses it instead. That refusal also catches a single-replica group,
-                      for which ReadWriteOnce would in fact work -- the simpler rule was
-                      chosen because maxReplicas can be raised by an edit that has nothing to
-                      do with storage, and a group that worked until somebody scaled it is a
-                      worse failure than one that never started.
+                      It must be ReadWriteMany, even for a single-replica group: a
+                      ReadWriteOnce claim would leave the second server Pending on a volume
+                      affinity error.
                     minLength: 1
                     type: string
                   image:
@@ -573,9 +479,7 @@ spec:
                     minLength: 1
                     type: string
                   pullPolicy:
-                    description: |-
-                      PullPolicy for Image. Empty means IfNotPresent. No API default: it
-                      would land on claim sources too, which the rule above refuses.
+                    description: PullPolicy for Image. Empty means IfNotPresent.
                     enum:
                     - Always
                     - IfNotPresent
@@ -594,27 +498,18 @@ spec:
                 minLength: 1
                 type: string
               mounts:
-                description: |-
-                  Mounts are extra ConfigMap, Secret and PersistentVolumeClaim mounts.
-
-                  It is ServerGroupSpec.Mounts for a proxy, and it is here because a
-                  network's proxies may read the same shared asset directory its backends
-                  do, out of a template that targets both.
+                description: Mounts are extra ConfigMap, Secret and PersistentVolumeClaim
+                  mounts.
                 items:
                   description: |-
                     Mount is a single file mount into a managed pod: a ConfigMap, a Secret, or
                     a PersistentVolumeClaim.
 
-                    The claim is what carries the things an image cannot and `extraPlugins` will
-                    not: a world tree, a directory of assets every server reads, a pool one
-                    group writes and another reads. `extraPlugins` is deliberately narrow -- one
-                    claim, read-only, copied into `plugins/` by the entrypoint -- and everything
-                    outside `plugins/` needed somewhere to go. docs/guides/mounts-and-files.md carries what each
-                    of those routes is and the one that is refused.
+                    The claim carries what an image cannot: a world tree, a directory of assets
+                    every server reads, a pool one group writes and another reads.
 
-                    It is still not a layered template system. There is no composition, no
-                    priority, no per-server rendering: a mount is one volume at one path, and
-                    what assembles the volume's contents is somebody else's job.
+                    A mount is one volume at one path. There is no composition, priority or
+                    per-server rendering.
                   properties:
                     configMap:
                       description: ConfigMap source.
@@ -701,19 +596,12 @@ spec:
                           type: string
                         writable:
                           description: |-
-                            Writable mounts the claim read-write. It defaults to false, and the
-                            field is spelled this way round -- Writable rather than ReadOnly --
-                            so that the zero value is the safe one. An omitted field, a field
-                            somebody has not heard of, and a field lost in a hand-written manifest
-                            all land on read-only.
+                            Writable mounts the claim read-write. It defaults to false.
 
-                            One group writing a volume that others read is the case this exists
-                            for: a generator filling a pool of worlds that game servers consume.
-                            Nothing here coordinates that. Two groups that both write the same
-                            claim get exactly what two processes writing one filesystem get, and
-                            the operator has no way to know which of them meant to.
+                            Nothing coordinates writers: two groups that both write the same claim
+                            get what two processes writing one filesystem get.
 
-                            It reaches the pod, so flipping it replaces the group's servers.
+                            Flipping it replaces the group's servers.
                           type: boolean
                       required:
                       - claimName
@@ -785,22 +673,12 @@ spec:
                         SubPath mounts one file or one subdirectory of the source instead of
                         the whole of it, so that MountPath can be a file.
 
-                        Without it, a mount whose path names a file gets a *directory* there --
-                        the source's keys as separate files inside it. A server looking for
-                        /data/bukkit.yml then finds a directory called bukkit.yml, and what it
-                        reports is a parse error rather than anything about a mount. Landing a
-                        single file beside the ones the server writes itself is the case this
-                        exists for; there is no other way to do it.
+                        Without it, a mount whose path names a file gets a *directory* there
+                        holding the source's keys as separate files.
 
-                        **A ConfigMap or Secret mounted through subPath does not update.**
-                        Kubernetes refreshes a projected volume in place, and a subPath mount is
-                        a bind of one file out of it that the kubelet does not re-point. Editing
-                        the ConfigMap changes nothing in a running pod, and nothing reports
-                        that. Without subPath the file does update, eventually and without a
-                        restart -- which is a real difference and the reason this is a field
-                        somebody opts into rather than something inferred from the path looking
-                        like a file. Neither behaviour reaches the pod digest either way, so no
-                        edit to a ConfigMap's contents rolls anything.
+                        **A ConfigMap or Secret mounted through subPath does not update** in a
+                        running pod; without subPath it does, eventually. No edit to a
+                        ConfigMap's contents rolls anything.
                       type: string
                   required:
                   - mountPath
@@ -2002,19 +1880,7 @@ spec:
               observedGeneration:
                 description: |-
                   ObservedGeneration is the spec generation this status was computed from.
-
-                  Literally that, and not the looser convention it is often read as. It
-                  advances on a pass that failed as well as one that succeeded, because
-                  setStatus writes it on every path that observed the pods and the
-                  Service, and refuse() on every path that refused the group before
-                  looking (a missing or unaccepted Network, a volume, scheduling or host
-                  port the Network does not allow, a foreign ConfigMap) -- so a group
-                  permanently refused by Pod Security or by its Network reports
-                  observedGeneration == generation for as long as the refusal stands. A
-                  reader taking that to mean "the controller has caught up and all is
-                  well" is misled; Degraded=True beside the same generation is the
-                  correction, and the two together say the controller did catch up and
-                  what it found was a refusal.
+                  It advances on a refused pass too; check Degraded beside it.
                 format: int64
                 type: integer
               phase:

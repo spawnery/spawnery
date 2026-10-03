@@ -5,11 +5,7 @@ import kotlin.io.path.readText
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * Read from the source rather than from the annotation: loading AgentPlugin
- * pulls in Paper's API, which is compiled for a newer Java than this test JVM,
- * and the class cannot be loaded here at all.
- */
+/** Reads the source: AgentPlugin's Paper API is compiled for a newer Java than this test JVM. */
 class AgentPriorityTest {
     @Test
     fun `the agent reads the load event after every other handler`() {

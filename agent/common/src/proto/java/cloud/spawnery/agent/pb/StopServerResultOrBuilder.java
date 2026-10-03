@@ -12,8 +12,7 @@ public interface StopServerResultOrBuilder extends
 
   /**
    * <pre>
-   * The server that is going, echoed so a caller sees what the operator
-   * matched.
+   * The server that is going, as the operator matched it.
    * </pre>
    *
    * <code>string server = 1;</code>
@@ -22,8 +21,7 @@ public interface StopServerResultOrBuilder extends
   java.lang.String getServer();
   /**
    * <pre>
-   * The server that is going, echoed so a caller sees what the operator
-   * matched.
+   * The server that is going, as the operator matched it.
    * </pre>
    *
    * <code>string server = 1;</code>

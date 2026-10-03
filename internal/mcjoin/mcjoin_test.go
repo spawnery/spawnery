@@ -34,18 +34,13 @@ import (
 	"github.com/spawnery/spawnery/internal/mcproto"
 )
 
-// The fake server below writes its frames by hand rather than through
-// framedConn, and that is the point: a test that encoded with the same code it
-// decodes with would pass on a framing that is internally consistent and wrong
-// on the wire — which is exactly the failure mode compression introduces.
-// Only mcproto's VarInt and string primitives are shared, and those have their
-// own tests.
+// The fake server writes its frames by hand rather than through framedConn:
+// encoding with the code under test would pass on a framing that is consistent
+// and wrong on the wire.
 
-// configurationDisconnectNBT is the payload Velocity 3.5.1 actually sent when
-// it could not route a player, captured from the Step 1 rig: a nameless root
-// compound holding color=red and text=<the message>. Kept verbatim rather than
-// rebuilt from a description, so the one test that reads an NBT reason reads
-// the bytes a real proxy produces.
+// configurationDisconnectNBT is the payload Velocity 3.5.1 sent when it could
+// not route a player: a nameless root compound holding color=red and text=<the
+// message>. Kept verbatim from a real proxy.
 var configurationDisconnectNBT = []byte{
 	0x0a,
 	0x08, 0x00, 0x05, 'c', 'o', 'l', 'o', 'r', 0x00, 0x03, 'r', 'e', 'd',
@@ -57,12 +52,10 @@ var configurationDisconnectNBT = []byte{
 	0x00,
 }
 
-// fake is the server half: what it should do, and what it saw.
 type fake struct {
-	// protocol is what the status document reports.
 	protocol int
-	// compressAt is the Set Compression threshold to send during login, or a
-	// negative number to never send one.
+	// compressAt is the Set Compression threshold to send during login, or
+	// negative for none.
 	compressAt int
 	// loginDisconnect, when set, is the JSON reason sent instead of Login
 	// Success.
@@ -73,37 +66,32 @@ type fake struct {
 	closeAfterLoginStart bool
 	// stallAfterLoginStart answers nothing at all and keeps the socket open.
 	stallAfterLoginStart bool
-	// afterAck is sent once Login Acknowledged arrives. The default is a
-	// configuration-state plugin message, standing in for the proxy
-	// forwarding a backend's configuration.
+	// afterAck is sent once Login Acknowledged arrives; the default stands in
+	// for the proxy forwarding a backend's configuration.
 	afterAckID      int32
 	afterAckPayload []byte
 	// closeAfterAck hangs up instead of sending afterAck.
 	closeAfterAck bool
-	// keepAlives is how many keep alives to send once the
-	// join is done, each of which the client has to echo back before the next
-	// one is sent. After them the connection is held open until the client
-	// closes it, which is what a hold needs to have something to hold.
+	// keepAlives is how many keep alives to send once the join is done, each
+	// echoed before the next is sent. The connection then stays open until the
+	// client closes it.
 	keepAlives int
-	// holdDisconnect, when set, is sent right after afterAck: a player thrown
-	// out during the hold rather than during the join.
+	// holdDisconnect, when set, is sent right after afterAck.
 	holdDisconnect []byte
-	// loginCookieRequests are asked for during login, before Login Success,
-	// the way a proxy receiving a transfer asks.
+	// loginCookieRequests are asked for before Login Success, the way a proxy
+	// receiving a transfer asks.
 	loginCookieRequests []string
-	// play drives the client through Known Packs and Finish Configuration
-	// into the play state at protocol 777 before anything below, and
-	// reconfigure then sends it back through the configuration state once,
-	// the way a server switch does.
+	// play drives the client into the play state at protocol 777 before
+	// anything below; reconfigure then sends it back through the configuration
+	// state once, as a server switch does.
 	play        bool
 	reconfigure bool
 	// storeCookies are stored on the client right after afterAck (or after
 	// Join Game), and cookieRequests asked for after them.
 	storeCookies   map[string][]byte
 	cookieRequests []string
-	// transferHost and transferPort, when set, are sent as a Transfer after
-	// the cookies and transferDelay; the connection then waits for the client
-	// to hang up.
+	// transferHost and transferPort, when set, are sent as a Transfer after the
+	// cookies and transferDelay.
 	transferHost  string
 	transferPort  int
 	transferDelay time.Duration
@@ -141,14 +129,11 @@ func (f *fake) loginsSeen() int {
 	return f.logins
 }
 
-// stateIDs are the ids the fake uses after Login Acknowledged, written out
-// rather than shared with the client.
+// stateIDs are written out rather than shared with the client.
 type stateIDs struct {
 	storeCookie, transfer, cookieRequest, cookieResponse, keepAlive, keepAliveAnswer int32
 }
 
-// configIDs: one packet was inserted ahead of Store Cookie and Transfer in
-// 26.3 (protocol 777).
 func configIDs(protocol int) stateIDs {
 	ids := stateIDs{storeCookie: 0x0a, transfer: 0x0b, cookieRequest: 0x00, cookieResponse: 0x01, keepAlive: 0x04, keepAliveAnswer: 0x04}
 	if protocol >= 777 {
@@ -160,9 +145,7 @@ func configIDs(protocol int) stateIDs {
 // playIDs are protocol 777's, from Velocity 4.2.0-30's StateRegistry.
 var playIDs = stateIDs{storeCookie: 0x7a, transfer: 0x84, cookieRequest: 0x15, cookieResponse: 0x15, keepAlive: 0x2d, keepAliveAnswer: 0x1c}
 
-// configure is the server's half of the configuration phase a play-state
-// client goes through, ending with Join Game and one play packet the client
-// has to ignore.
+// configure ends with Join Game and one play packet the client has to ignore.
 func (f *fake) configure(conn net.Conn, threshold int) error {
 	knownPacks := mcproto.AppendVarInt(nil, 1)
 	knownPacks = mcproto.AppendString(knownPacks, "minecraft")
@@ -197,7 +180,6 @@ func expect(conn net.Conn, threshold int, want int32, name string) error {
 	return nil
 }
 
-// askForCookie sends a Cookie Request and records the Cookie Response.
 func (f *fake) askForCookie(conn net.Conn, threshold int, requestID, responseID int32, key string) error {
 	if err := writeFrame(conn, threshold, requestID, mcproto.AppendString(nil, key)); err != nil {
 		return err
@@ -296,8 +278,8 @@ func (f *fake) sawLogin() (string, [16]byte) {
 	return f.loginName, f.loginUUID
 }
 
-// start listens on a loopback port and serves connections until the test ends.
-// Join makes two: the status ping first, then the login.
+// start serves connections on a loopback port until the test ends. Join makes
+// two: the status ping, then the login.
 func start(t *testing.T, f *fake) (string, int) {
 	t.Helper()
 	if f.protocol == 0 {
@@ -307,8 +289,6 @@ func start(t *testing.T, f *fake) (string, int) {
 		f.compressAt = -1
 	}
 	if f.afterAckID == 0 && f.afterAckPayload == nil {
-		// Configuration-state Plugin Message carrying a brand, which is the
-		// shape of the first thing a routed player really receives.
 		f.afterAckID = 0x01
 		f.afterAckPayload = mcproto.AppendString(nil, "minecraft:brand")
 	}
@@ -408,8 +388,7 @@ func (f *fake) serveLogin(conn net.Conn) error {
 	case f.closeAfterLoginStart:
 		return nil
 	case f.stallAfterLoginStart:
-		// Hold the connection open and say nothing. The read deadline set at
-		// the top of serve is what eventually releases this goroutine.
+		// The read deadline set at the top of serve releases this goroutine.
 		buf := make([]byte, 1)
 		_, _ = conn.Read(buf)
 		return nil
@@ -517,8 +496,6 @@ func (f *fake) serveLogin(conn net.Conn) error {
 		f.mu.Unlock()
 	}
 	if f.keepAlives > 0 {
-		// Stay open until the client goes away, so the hold has a live
-		// connection to hold rather than an EOF to trip over.
 		_, _ = conn.Read(make([]byte, 1))
 	}
 	return nil
@@ -564,8 +541,8 @@ func readPlainPacket(r io.Reader) (int32, []byte, error) {
 	return readFrame(r, -1)
 }
 
-// writeFrame assembles one frame by hand. threshold below zero is the
-// uncompressed framing; at or above it is the compressed one.
+// writeFrame assembles one frame by hand. A negative threshold is the
+// uncompressed framing.
 func writeFrame(w io.Writer, threshold int, id int32, payload []byte) error {
 	body := mcproto.AppendVarInt(nil, id)
 	body = append(body, payload...)
@@ -594,8 +571,8 @@ func writeFrame(w io.Writer, threshold int, id int32, payload []byte) error {
 	return err
 }
 
-// readFrame is writeFrame's inverse, and asserts what the compressed framing
-// requires: a body under the threshold must arrive with a data length of zero.
+// readFrame also asserts that a body under the threshold arrives with a data
+// length of zero.
 func readFrame(r io.Reader, threshold int) (int32, []byte, error) {
 	length, err := mcproto.ReadVarInt(mcproto.ByteReader(r))
 	if err != nil {
@@ -665,12 +642,8 @@ func TestJoinCompletesAnOfflineLogin(t *testing.T) {
 	if result.Username != "spawnery_probe" {
 		t.Errorf("Username = %q, want %q", result.Username, "spawnery_probe")
 	}
-	// The offline-mode UUID of "spawnery_probe", written out rather than
-	// derived from OfflineUUID so this pins the value and not the function.
-	// It is not an arithmetic claim but a measured one: this is the UUID Paper
-	// 26.2 logged for the player when spawnery-join really joined through the
-	// pinned proxy — "UUID of player spawnery_probe is
-	// bcc1dc19-a5eb-33a1-aa1b-4e3907d5e22f".
+	// The UUID Paper 26.2 logged for spawnery_probe joining through the pinned
+	// proxy; a literal, so this pins the value and not the function.
 	const want = "bcc1dc19-a5eb-33a1-aa1b-4e3907d5e22f"
 	if result.UUID != want {
 		t.Errorf("UUID = %q, want %q", result.UUID, want)
@@ -686,9 +659,6 @@ func TestJoinCompletesAnOfflineLogin(t *testing.T) {
 	if name != "spawnery_probe" {
 		t.Errorf("login start carried username %q", name)
 	}
-	// Against the measured literal, not against OfflineUUID: comparing the
-	// wire to the function that put it there passes whatever that function
-	// computes.
 	if got := formatUUID(uuid[:]); got != want {
 		t.Errorf("login start carried UUID %s, want the offline-mode one %s", got, want)
 	}
@@ -698,8 +668,7 @@ func TestJoinCompletesAnOfflineLogin(t *testing.T) {
 }
 
 func TestJoinSendsTheProtocolVersionItWasGiven(t *testing.T) {
-	// A number no Minecraft release has ever used, so a client that quietly
-	// substituted a constant of its own could not accidentally match.
+	// A number no Minecraft release has used.
 	f := &fake{protocol: 4242}
 	result, err := joinAgainst(t, f, "spawnery_probe", 10*time.Second)
 	if err != nil {
@@ -722,36 +691,25 @@ func TestJoinSendsTheProtocolVersionItWasGiven(t *testing.T) {
 }
 
 func TestJoinAsksForTheVersionWithoutAnnouncingOneAServerSupports(t *testing.T) {
-	// The status handshake has to announce a version no server supports, or a
-	// proxy answers with the version it was asked about instead of its own and
-	// the login that follows is refused by the backend. Measured against the
-	// pinned pair — see announceUnsupported.
 	f := &fake{protocol: 776}
 	if _, err := joinAgainst(t, f, "spawnery_probe", 10*time.Second); err != nil {
 		t.Fatalf("Join: %v", err)
 	}
-	// -1 written out rather than compared against announceUnsupported: an
-	// assertion phrased in terms of the constant it is testing passes whatever
-	// that constant is changed to, which is how a test that cannot fail gets
-	// written. Measured against Velocity 3.5.1, -1, 0 and 2147483647 all
-	// produce its own maximum; a supported version produces itself.
+	// -1 written out rather than compared against announceUnsupported, so
+	// changing the constant fails this.
 	if got := f.sawStatusHandshake().protocol; got != -1 {
 		t.Errorf("the status handshake announced protocol %d, want -1, which no server supports", got)
 	}
 	if got := f.sawStatusHandshake().nextState; got != 1 {
 		t.Errorf("the status handshake asked for next state %d, want 1", got)
 	}
-	// And the login handshake still announces what came back, not what was
-	// asked with.
 	if got := f.sawHandshake().protocol; got != 776 {
 		t.Errorf("the login handshake announced protocol %d, want the 776 the status document reported", got)
 	}
 }
 
 func TestJoinRefusesAUsernameMinecraftWouldNot(t *testing.T) {
-	// "spawnery-probe" is the shape this defaulted to until a real Paper
-	// backend refused it. Velocity logs it in happily, so nothing before the
-	// backend catches it.
+	// Velocity accepts "spawnery-probe"; only Paper rejects it.
 	f := &fake{}
 	_, err := joinAgainst(t, f, "spawnery-probe", 10*time.Second)
 	if err == nil {
@@ -773,9 +731,8 @@ func TestNbtTextRendersTheMeasuredDisconnectReason(t *testing.T) {
 }
 
 func TestJoinHandlesSetCompression(t *testing.T) {
-	// Eight, so Login Success is well over the threshold and really arrives
-	// as a zlib stream, while Login Acknowledged is under it and must go back
-	// with a data length of zero. The fake's reader refuses both mistakes.
+	// Login Success arrives as a zlib stream; Login Acknowledged is under the
+	// threshold and must go back with a data length of zero.
 	f := &fake{compressAt: 8}
 	result, err := joinAgainst(t, f, "spawnery_probe", 10*time.Second)
 	if err != nil {
@@ -796,12 +753,9 @@ func TestJoinHandlesSetCompression(t *testing.T) {
 }
 
 func TestJoinReadsPacketsSentWithAZeroDataLength(t *testing.T) {
-	// The branch a real proxy always takes, and the one the threshold-of-8
-	// test above never reaches. Velocity's threshold is 256 and everything
-	// this client reads after the switch is smaller than that — Login Success
-	// was 44 bytes and the configuration Disconnect 84 — so every one of them
-	// arrives compressed-framed with a data length of zero and no zlib stream
-	// at all. 4096 puts every packet in this test on that branch.
+	// Velocity's threshold is 256 and everything this client reads is smaller,
+	// so every packet arrives compressed-framed with a data length of zero.
+	// This puts every packet on that branch.
 	f := &fake{compressAt: 4096}
 	result, err := joinAgainst(t, f, "spawnery_probe", 10*time.Second)
 	if err != nil {
@@ -822,10 +776,7 @@ func TestJoinReadsPacketsSentWithAZeroDataLength(t *testing.T) {
 }
 
 func TestJoinReportsAFailureToRouteUnderCompression(t *testing.T) {
-	// The milestone's headline failure, in the framing it really arrives in.
-	// Against a real proxy that Disconnect is always compressed-framed, and
-	// the uncompressed version of this test below would not notice a client
-	// that could not read it.
+	// Against a real proxy this Disconnect is always compressed-framed.
 	f := &fake{compressAt: 4096, afterAckID: 0x02, afterAckPayload: configurationDisconnectNBT}
 	result, err := joinAgainst(t, f, "spawnery_probe", 10*time.Second)
 	if err == nil {
@@ -849,10 +800,8 @@ func TestJoinReportsADisconnectReason(t *testing.T) {
 }
 
 func TestJoinReportsAFailureToRouteAfterTheLoginSucceeded(t *testing.T) {
-	// The measured shape of a proxy that logged the player in and then found
-	// no backend: a configuration-state Disconnect, packet 0x02, carrying
-	// network NBT rather than JSON. A client that returned as soon as it had
-	// sent Login Acknowledged would call this a successful join.
+	// A proxy that logged the player in and found no backend. A client
+	// returning right after Login Acknowledged would call this a success.
 	f := &fake{afterAckID: 0x02, afterAckPayload: configurationDisconnectNBT}
 	result, err := joinAgainst(t, f, "spawnery_probe", 10*time.Second)
 	if err == nil {
@@ -887,8 +836,6 @@ func TestJoinFailsCleanlyOnAClosedConnection(t *testing.T) {
 }
 
 func TestJoinFailsCleanlyOnAHangupAfterTheAcknowledgement(t *testing.T) {
-	// The same hangup, one step later: nothing follows Login Acknowledged.
-	// A proxy that dropped the connection here routed the player nowhere.
 	f := &fake{closeAfterAck: true}
 	if _, err := joinAgainst(t, f, "spawnery_probe", 10*time.Second); err == nil {
 		t.Fatal("Join succeeded although nothing followed Login Acknowledged")
@@ -898,10 +845,7 @@ func TestJoinFailsCleanlyOnAHangupAfterTheAcknowledgement(t *testing.T) {
 }
 
 func TestJoinAndHoldStaysConnectedAndAnswersKeepAlives(t *testing.T) {
-	// Two things at once, because they are the same claim: the connection is
-	// still there when the hold ends, and it is still there because the keep
-	// alives were answered. The fake refuses to send the second one until the
-	// first has come back.
+	// The fake sends the second keep alive only after the first came back.
 	f := &fake{keepAlives: 2}
 	host, port := start(t, f)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -931,9 +875,6 @@ func TestJoinAndHoldStaysConnectedAndAnswersKeepAlives(t *testing.T) {
 }
 
 func TestJoinAndHoldReportsADisconnectDuringTheHold(t *testing.T) {
-	// A player who was thrown out two seconds after arriving did not stay,
-	// and a hold that swallowed that would be exactly the false green the
-	// read past Login Acknowledged exists to prevent, one packet later.
 	f := &fake{holdDisconnect: configurationDisconnectNBT}
 	host, port := start(t, f)
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
@@ -952,9 +893,7 @@ func TestJoinAndHoldReportsADisconnectDuringTheHold(t *testing.T) {
 }
 
 func TestJoinAndHoldRefusesAHoldTheDeadlineCannotCover(t *testing.T) {
-	// Refused up front rather than truncated, because a truncated hold ends
-	// in the same read timeout a completed one does and the caller would be
-	// told the player stayed for ten seconds when they stayed for one.
+	// A truncated hold ends in the same read timeout as a completed one.
 	f := &fake{}
 	host, port := start(t, f)
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
@@ -1062,8 +1001,7 @@ func TestJoinAndHoldFollowsATransferWithItsCookies(t *testing.T) {
 			if result.Transfers != 1 {
 				t.Errorf("Transfers = %d, want 1", result.Transfers)
 			}
-			// The hold is one span across both connections: it does not
-			// start again on the server the player was transferred to.
+			// The hold is one span across both connections.
 			if elapsed < hold || elapsed > hold+300*time.Millisecond {
 				t.Errorf("JoinWith returned after %s, want about the %s hold, not the hold plus the 500ms before the transfer", elapsed, hold)
 			}

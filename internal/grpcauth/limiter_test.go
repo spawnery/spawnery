@@ -53,15 +53,9 @@ func TestPeerLimiterAllowsABurstThenRefills(t *testing.T) {
 	}
 }
 
-// The key is what makes a rollout safe. Every agent reconnects from its own pod
-// IP, so a fleet coming back after an operator restart spends one bucket each
-// rather than sharing one. A limiter keyed on anything the whole fleet has in
-// common would throttle exactly the case that must not be throttled.
-//
-// This exercises the limiter's own keying with bare IP strings, which is not
-// what the production path produces — peerAddr does, from a context.
-// TestTheRateLimitKeysOnThePodRatherThanTheConnection below is what ties the
-// two together.
+// Per-peer keying is what lets a fleet reconnect after an operator restart
+// without throttling itself. peerAddr's keying is covered by
+// TestTheRateLimitKeysOnThePodRatherThanTheConnection.
 func TestPeerLimiterBucketsArePerPeer(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	l := NewPeerLimiter(func() time.Time { return now })
@@ -74,8 +68,7 @@ func TestPeerLimiterBucketsArePerPeer(t *testing.T) {
 	}
 }
 
-// A bucket never fills past its burst, or a peer that was quiet for an hour
-// could spend an hour's worth of budget at once.
+// Otherwise a peer quiet for an hour could spend an hour's budget at once.
 func TestPeerLimiterDoesNotAccumulatePastItsBurst(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	l := NewPeerLimiter(func() time.Time { return now })
@@ -93,15 +86,8 @@ func TestPeerLimiterDoesNotAccumulatePastItsBurst(t *testing.T) {
 	}
 }
 
-// The limit sits behind the cache, and that ordering is the design rather than
-// an implementation detail: a pod replaying one token must never reach it.
-//
-// This proves only the hit side: every replay after the first is served from
-// the cache and so never enters the branch that consults the limiter at all,
-// which means this assertion (reviews.calls == 1) would hold even if the
-// limiter check were deleted from Authenticate entirely, with no limiter left
-// to reach. TestDistinctTokensFromOnePeerAreRateLimited below is what proves
-// the limiter is wired in and reached on the miss side.
+// Proves only the hit side; TestDistinctTokensFromOnePeerAreRateLimited
+// proves the limiter is reached on a miss.
 func TestARepeatedTokenNeverReachesTheLimiter(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
@@ -125,14 +111,8 @@ func TestARepeatedTokenNeverReachesTheLimiter(t *testing.T) {
 	}
 }
 
-// The replay test above cannot tell "the limiter is wired in and never
-// reached on a hit" apart from "there is no limiter at all" -- both leave it
-// green. This closes that gap with tokens the cache has never seen: every
-// call below is a genuine cache miss, so each one reaches a.Limiter, and a
-// peer presenting more than PeerBurst of them must eventually be refused by
-// the limiter itself. isExhausted pins the refusal to the limiter, not to
-// the reviewer or the pod checker, both of which are stubbed to always
-// succeed.
+// isExhausted pins the refusal to the limiter: reviewer and pod checker are
+// stubbed to succeed.
 func TestDistinctTokensFromOnePeerAreRateLimited(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
@@ -160,39 +140,17 @@ func TestDistinctTokensFromOnePeerAreRateLimited(t *testing.T) {
 	t.Fatalf("%d distinct tokens from one peer were all accepted; the limiter never engaged", PeerBurst+2)
 }
 
-// tcpPeerContext is what a real gRPC server hands the interceptor: a
-// peer.Peer whose Addr is a *net.TCPAddr, so Addr.String() is
-// IP:ephemeral-port. Constructing it by hand rather than standing up a server
-// keeps the test a unit test while still exercising the exact type the
-// transport installs.
+// tcpPeerContext builds the peer.Peer a real gRPC server installs: a
+// *net.TCPAddr whose String() is IP:ephemeral-port.
 func tcpPeerContext(ip string, port int) context.Context {
 	return peer.NewContext(context.Background(), &peer.Peer{
 		Addr: &net.TCPAddr{IP: net.ParseIP(ip), Port: port},
 	})
 }
 
-// The limiter's key must name a POD, not a connection, and nothing else in
-// this package ever looks at the key the production path actually produces:
-// every other test calls Authenticate with context.Background(), where
-// peerAddr returns the constant "unknown", so replacing peerAddr's body with a
-// constant left both this package and internal/agentserver green.
-//
-// Both directions are here because each catches a different defect.
-//
-//   - Same IP, different ephemeral ports must share one bucket. A gRPC peer
-//     address is IP:port and the port is fresh on every TCP connection, so
-//     keying on the whole address gives a pod in a reconnect loop a fresh
-//     PeerBurst per connection — the attack docs/reference/known-issues.md documents,
-//     bounded only by how fast it can complete handshakes.
-//   - Different IPs must not share one bucket. That is the mass-reconnect
-//     safety the design leans on, and it is also what catches a peerAddr that
-//     returns a constant: with one key for everybody, the second pod inherits
-//     the first pod's spent bucket.
-//
-// Every token below is distinct, so every call is a genuine cache miss and
-// therefore genuinely reaches the limiter; isExhausted pins the refusal to the
-// limiter rather than to the reviewer or the pod checker, both stubbed to
-// succeed.
+// Same IP with different ports must share one bucket (else a reconnect loop
+// gets a fresh PeerBurst per connection); different IPs must not (which also
+// catches a peerAddr returning a constant).
 func TestTheRateLimitKeysOnThePodRatherThanTheConnection(t *testing.T) {
 	newAuth := func(now func() time.Time) *Authenticator {
 		return &Authenticator{
@@ -216,8 +174,6 @@ func TestTheRateLimitKeysOnThePodRatherThanTheConnection(t *testing.T) {
 			}
 		}
 
-		// The same pod, a new TCP connection: a different ephemeral port and
-		// therefore a different peer.Addr.String(), but the same host.
 		second := tcpPeerContext("10.244.0.7", 42674)
 		_, err := a.Authenticate(second, "second-connection-token", agent.RoleServer)
 		if err == nil {
@@ -252,8 +208,6 @@ func TestTheRateLimitKeysOnThePodRatherThanTheConnection(t *testing.T) {
 	})
 }
 
-// countingReviewer answers every review the same way and counts the asking.
-// The count is the whole point: it is what shows the API server was spared.
 type countingReviewer struct{ calls int }
 
 func (c *countingReviewer) Create(
@@ -273,8 +227,6 @@ func (c *countingReviewer) Create(
 	}}, nil
 }
 
-// alwaysFoundPods is the half Authenticate must NOT cache, stubbed to succeed
-// so this test measures only the half it must.
 type alwaysFoundPods struct{}
 
 func (alwaysFoundPods) LookupPod(

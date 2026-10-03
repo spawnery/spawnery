@@ -19,15 +19,6 @@ import (
 
 // theOrphanSweepRemovesAStrayPod plants a pod that carries the managed labels
 // but belongs to no Server object, and waits for the sweep to take it.
-//
-// This is the one scenario that checks a code path nothing else in the run
-// reaches: every other pod here was created by the operator itself.
-//
-// The planted pod must carry podspec.LabelRole. The sweep dispatches on it
-// (internal/controller/orphan.go), so a pod built without it is never routed
-// to sweepServerPod at all and the scenario tests nothing while looking
-// exactly like it does. This brief shipped with that defect once; it was
-// caught by reading the switch, not by the run.
 func theOrphanSweepRemovesAStrayPod(t *testing.T) {
 	orphan := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
@@ -38,20 +29,12 @@ func theOrphanSweepRemovesAStrayPod(t *testing.T) {
 				podspec.LabelNetwork:   "production",
 				podspec.LabelGroup:     "lobby",
 				podspec.LabelServer:    "e2e-orphan",
-				// Sweep dispatches on this label (orphan.go's "branch on the
-				// role explicitly"); without it the List still finds the pod
-				// by managed-by, but the switch matches neither RoleServer
-				// nor RoleProxy and sweepServerPod is never called. Verified
-				// the hard way: the first e2e run of this test timed out with
-				// "still there, with no deletion timestamp" even though
-				// Sweep's Delete was never touched -- the pod was invisible
-				// to the switch, not resistant to the sweep.
+				// Sweep dispatches on this label; without it the pod is
+				// never swept.
 				podspec.LabelRole: podspec.RoleServer,
 			},
 		},
 		Spec: corev1.PodSpec{
-			// Never pulled: the sweep deletes it long before the kubelet
-			// gives up, and a real image would cost this run a download.
 			Containers: []corev1.Container{{
 				Name:  "orphan",
 				Image: "ghcr.io/spawnery/paper:e2e-no-such-tag",
@@ -79,31 +62,10 @@ func theOrphanSweepRemovesAStrayPod(t *testing.T) {
 }
 
 // theFinalizerIsReleased deletes a Server by hand and waits for the object to
-// go. The Server carries a finalizer, so the object survives its own deletion
-// until the controller has taken the pod down and released it -- a stuck
-// finalizer is invisible from a diff and shows up only as an object that never
-// disappears.
+// go, which it does only once the controller releases its finalizer.
 //
-// The pick-and-delete step is itself retried, not a single snapshot followed
-// by a Fatal. This harness's churn (created, failed at twenty seconds, corpse
-// held thirty, pruned, replaced) can empty the group's live list between one
-// poll and the next, or retire the very Server just listed before the Delete
-// call reaches it -- a NotFound there would read as a test bug rather than as
-// the churn this package exists to tolerate everywhere else in it (see
-// nonFailedServersInGroup and podsCoverLiveServers for the same discipline).
-// eventually keeps listing and attempting the delete until one succeeds, so a
-// momentarily empty list or a victim pruned mid-flight is absorbed instead of
-// failing the whole scenario on a single unlucky read.
-//
-// It picks from nonFailedServersInGroup rather than serversInGroup on
-// purpose. serversInGroup's Failed entries are corpses already mid-prune, on
-// their own countdown to disappearing on failedRetentionSeconds' clock rather
-// than on any action of this test's -- deleting one would not distinguish
-// "the finalizer-release branch did it" from "the retention pruner would have
-// removed it a few seconds later regardless." A live Server's disappearance
-// has exactly one explanation: the Delete this function issued, and the
-// finalizer-release branch in server_controller.go that has to run for it to
-// take effect.
+// Pick-and-delete is retried, since churn can remove the chosen Server first.
+// It picks a non-Failed Server, because a Failed one would be pruned anyway.
 func theFinalizerIsReleased(t *testing.T) {
 	var victim spawneryv1alpha1.Server
 	eventually(t, 2*time.Minute, "a live Server to pick and delete", func() (bool, string) {
@@ -136,19 +98,10 @@ func theFinalizerIsReleased(t *testing.T) {
 	})
 }
 
-// theStartupDeadlineFailsAServerAndClearsIt is scenario 6, and it proves two
-// things at once.
-//
-// The first is the failure path itself: a server whose image never resolves
-// cannot become Ready, so --startup-deadline is what ends the attempt, and
-// failedRetentionSeconds: 30 is what clears the corpse afterwards.
-//
-// The second is indirect and worth naming. charts/spawnery's production
-// default is --startup-deadline=5m (values.yaml); hack/e2e.sh overrides it
-// with --set operator.startupDeadline=20s for its own run. If that value did
-// not reach the container's args, the deadline would stay 5m and this test
-// would simply time out waiting on the 3-minute budget below. That makes this
-// the only place the override is checked.
+// theStartupDeadlineFailsAServerAndClearsIt: --startup-deadline fails a server
+// whose image never resolves, and failedRetentionSeconds clears it. It also
+// checks that hack/e2e.sh's operator.startupDeadline=20s reaches the
+// container; the chart default of 5m would outlast the budget below.
 func theStartupDeadlineFailsAServerAndClearsIt(t *testing.T) {
 	eventually(t, 3*time.Minute, "a Server to reach phase Failed", func() (bool, string) {
 		var seen []string

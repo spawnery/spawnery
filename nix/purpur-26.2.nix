@@ -1,5 +1,4 @@
-# Purpur 26.2, the counterpart of nix/paper-26.2.nix, and deleted with it. It
-# takes that file's Mojang jar. The build is nix/purpur.nix's.
+# Purpur 26.2, deleted together with nix/paper-26.2.nix, whose Mojang jar it takes.
 { fetchurl
 , jdk25_headless
 , stdenvNoCC

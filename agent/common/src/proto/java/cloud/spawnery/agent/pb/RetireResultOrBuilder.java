@@ -12,8 +12,7 @@ public interface RetireResultOrBuilder extends
 
   /**
    * <pre>
-   * The server that is now retiring, echoed so a caller that asked by a name
-   * it built from a string sees what the operator matched.
+   * The server that is now retiring, as the operator matched it.
    * </pre>
    *
    * <code>string server = 1;</code>
@@ -22,8 +21,7 @@ public interface RetireResultOrBuilder extends
   java.lang.String getServer();
   /**
    * <pre>
-   * The server that is now retiring, echoed so a caller that asked by a name
-   * it built from a string sees what the operator matched.
+   * The server that is now retiring, as the operator matched it.
    * </pre>
    *
    * <code>string server = 1;</code>

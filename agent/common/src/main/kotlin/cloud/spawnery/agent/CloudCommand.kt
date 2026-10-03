@@ -14,88 +14,34 @@ import com.mojang.brigadier.suggestion.SuggestionProvider
 import java.time.ZoneOffset
 import java.time.format.DateTimeFormatter
 
-/** The permission a source needs to read anything. */
 const val PERMISSION_READ: String = "spawnery.cloud.read"
 
-/**
- * The permission a source needs to retire a server.
- *
- * Its own node rather than a level above [PERMISSION_READ], because the two
- * are not the same kind of thing: reading is what you give a moderator so they
- * can see where people are, and retiring changes the fleet. A permission
- * system that made one imply the other would hand every moderator the second
- * the day somebody granted the first.
- */
+/** Its own node, not implied by [PERMISSION_READ]: reading is for moderators, retiring changes the fleet. */
 const val PERMISSION_RETIRE: String = "spawnery.cloud.retire"
 
-/**
- * The permission a source needs to change how much capacity a group has.
- *
- * One permission for `start` and `stop` rather than two: somebody trusted to
- * add servers is trusted to take back what they added, and a grant that let a
- * person start boosts without ending them would leave them no way to undo
- * their own mistake.
- */
+/** Covers both `start` and `stop`, so whoever adds capacity can take it back. */
 const val PERMISSION_SCALE: String = "spawnery.cloud.scale"
 
 /** `/cloud status`, which asks the operator and so is not part of reading the mirror. */
 const val PERMISSION_STATUS: String = "spawnery.cloud.status"
 
-// PERMISSION_EVENTS lives in Feed.kt, beside the thing that reads it: the feed
-// asks for it once a tick to decide whether this agent wants events at all,
-// and a permission split from its only reader is one that drifts.
+// PERMISSION_EVENTS lives in Feed.kt, beside its only reader.
 
 /**
- * The `/cloud` command, written once for both platforms.
- *
- * Generic in the source type, and nothing in this file names Paper's
- * `CommandSourceStack` or Velocity's `CommandSource`. What a platform can be
- * asked for is [SourceAdapter]'s two methods and nothing else, which is what
- * makes "the same command answers the same way on both sides" a property of
- * the code rather than of two implementations kept in step.
- *
- * **The reading branches read only the local mirror.** `list` and `info` are
- * lookups in memory, so they cannot block a platform's main thread, time out,
- * or fail because the operator is unreachable -- which is the promise
- * [SpawneryApi] makes and the reason they are safe to run from a chat message.
- *
- * `retire` is the exception and cannot be otherwise: it changes an object in
- * the cluster. It does not block either -- it hands the request off and
- * answers from the completion, which arrives on a gRPC thread. Both platforms'
- * adapters send to an audience rather than touching the world, which is what
- * makes that safe, and it is the reason [SourceAdapter] has exactly those two
- * methods and no way to ask for anything a main thread would have to own.
+ * `list`, `info` and completion read only the local mirror, so they cannot
+ * block or fail when the operator is unreachable. The other verbs answer from
+ * a gRPC thread, which is safe because [SourceAdapter] can only send to an
+ * audience.
  */
 fun <S> cloudCommand(
     api: SpawneryApi,
     adapter: SourceAdapter<S>,
     feed: FeedState,
-    /**
-     * The same shape the chat feed uses, from the Network's own spec.
-     *
-     * One field and not two: a reply to a command and an announcement about
-     * the cloud come from the same plugin, and a network that styles one
-     * should not have to style the other to match. `$EVENT_MESSAGE` keeps its
-     * name because it is what an installation already wrote down; what it
-     * stands for is simply "what this line has to say".
-     *
-     * A lambda for the reason [Feed]'s own is one: the format arrives in the
-     * NetworkState and an edit must land at the next resync rather than at the
-     * next pod.
-     */
+    /** A lambda so a Network edit lands at the next resync, not the next pod. */
     format: () -> String = { Feed.DEFAULT_FORMAT },
 ): LiteralArgumentBuilder<S> =
     LiteralArgumentBuilder.literal<S>("cloud")
-        // On the root as well as on each branch: without it, `/cloud` with no
-        // arguments would be visible to everybody and answer with usage for
-        // subcommands they cannot see.
-        //
-        // Either permission opens the root, not just the reading one. A root
-        // that demanded PERMISSION_READ would hide the whole tree from
-        // somebody granted only PERMISSION_RETIRE -- and hide it in the worst
-        // way, by making the command look as though it does not exist. The
-        // branches still gate themselves, so this widens what is visible and
-        // nothing else.
+        // Any branch's permission opens the root; the branches gate themselves.
         .requires {
             adapter.hasPermission(it, PERMISSION_READ) ||
                 adapter.hasPermission(it, PERMISSION_RETIRE) ||
@@ -118,9 +64,6 @@ fun <S> cloudCommand(
                 .requires { adapter.hasPermission(it, PERMISSION_READ) }
                 .then(
                     RequiredArgumentBuilder.argument<S, String>("name", StringArgumentType.word())
-                        // Both, because this branch answers about both, and a
-                        // completion that offered only one half would teach
-                        // people the other half is not allowed here.
                         .suggests(suggesting {
                             api.servers().map(ServerInfo::name) + api.proxies().map(ProxyInfo::name) +
                                 api.groups().map(Group::name)
@@ -144,10 +87,6 @@ fun <S> cloudCommand(
                                 }
                                 return@executes 1
                             }
-                            // Names what was asked for. A bare "not found"
-                            // leaves an admin unsure whether they mistyped or
-                            // the thing is gone, and an empty line leaves them
-                            // unsure whether the command works at all.
                             reply(adapter, format, 
                                 ctx.source,
                                 Layout.fail(
@@ -178,24 +117,16 @@ fun <S> cloudCommand(
 
         .then(
             LiteralArgumentBuilder.literal<S>("retire")
-                // Its own permission, and deliberately not PERMISSION_READ:
-                // see PERMISSION_RETIRE.
                 .requires { adapter.hasPermission(it, PERMISSION_RETIRE) }
                 .then(
                     RequiredArgumentBuilder.argument<S, String>("name", StringArgumentType.word())
-                        // Servers and proxies: a group is not a thing that
-                        // retires, and offering one would be offering a refusal.
                         .suggests(suggesting { api.servers().map(ServerInfo::name) + api.proxies().map(ProxyInfo::name) })
                         .executes { ctx ->
                             val name = StringArgumentType.getString(ctx, "name")
                             val source = ctx.source
                             api.retire(name).whenComplete { _, failure ->
                                 if (failure == null) {
-                                    // The second sentence is not decoration.
-                                    // "Retire" reads as "stop" to anybody who
-                                    // has not read the design, and an admin
-                                    // who believes they just disconnected
-                                    // forty people does something worse next.
+                                    // "Retire" reads as "stop" to anybody who has not read the design.
                                     replyOk(adapter, format, 
                                         source,
                                         Style.name(name) + Style.good(" is retiring.") +
@@ -205,11 +136,7 @@ fun <S> cloudCommand(
                                             ),
                                     )
                                 } else {
-                                    // The operator's own words. Every refusal
-                                    // it sends is written for a person --
-                                    // already retiring, no such server, asked
-                                    // too often -- and rewording them here
-                                    // would only lose which one it was.
+                                    // The operator's refusals are written for a person.
                                     replyFail(adapter, format, 
                                         source,
                                         Style.bad("could not retire") + " " + Style.name(name) +
@@ -217,10 +144,7 @@ fun <S> cloudCommand(
                                     )
                                 }
                             }
-                            // One, meaning the request went out -- not that it
-                            // worked. Brigadier wants a number before the
-                            // answer can exist, so this is the only honest
-                            // thing it can be.
+                            // The request went out, not that it worked.
                             1
                         },
                 ),
@@ -228,7 +152,6 @@ fun <S> cloudCommand(
 
         .then(
             LiteralArgumentBuilder.literal<S>("unretire")
-                // PERMISSION_RETIRE: whoever may retire a server may take it back.
                 .requires { adapter.hasPermission(it, PERMISSION_RETIRE) }
                 .then(
                     RequiredArgumentBuilder.argument<S, String>("name", StringArgumentType.word())
@@ -261,10 +184,6 @@ fun <S> cloudCommand(
                 .then(
                     RequiredArgumentBuilder.argument<S, String>("group", StringArgumentType.word())
                         .suggests(suggesting { api.groups().map(Group::name) })
-                        // Without a count, and the default is one. A person
-                        // typing `/cloud start lobby` in a hurry means "one
-                        // more", and refusing them for a missing argument
-                        // would be pedantry at the exact moment they are busy.
                         .executes { ctx -> startBoost(api, adapter, format, ctx.source, group(ctx), 1, null) }
                         .then(
                             RequiredArgumentBuilder.argument<S, Int>("count", IntegerArgumentType.integer(1))
@@ -316,11 +235,6 @@ fun <S> cloudCommand(
                                             Style.bad("could not stop boosts on") + " " + Style.name(name) +
                                                 Style.quiet(": ") + Style.bad(reason(failure)),
                                         )
-                                    // Zero said plainly rather than dressed up
-                                    // as a success. An admin who expected
-                                    // boosts has to learn there were none,
-                                    // because the next thing they do depends
-                                    // on it.
                                     removed == 0 ->
                                         replyOk(adapter, format, 
                                             source,
@@ -343,9 +257,8 @@ fun <S> cloudCommand(
         .then(
             LiteralArgumentBuilder.literal<S>("events")
                 .requires { adapter.hasPermission(it, PERMISSION_EVENTS) }
-                // Two literals rather than one argument, so tab-completion
-                // offers `on` and `off` and a typo is an unknown command
-                // instead of a silent no-op.
+                // Two literals rather than one argument, so a typo is an
+                // unknown command instead of a silent no-op.
                 .then(
                     LiteralArgumentBuilder.literal<S>("on")
                         .executes { ctx -> setFeed(adapter, format, feed, ctx.source, on = true) },
@@ -356,15 +269,6 @@ fun <S> cloudCommand(
                 ),
         )
 
-/**
- * Turns the feed on or off for whoever typed it.
- *
- * The `off` line says the setting lasts for the session, and section 5.5 asks
- * for that sentence rather than leaving it out. Paper could persist this in a
- * player's PersistentDataContainer and Velocity has no equivalent, so symmetry
- * won -- and a setting that quietly comes back after a rejoin is a setting
- * people report as a bug.
- */
 private fun <S> setFeed(
     adapter: SourceAdapter<S>,
     format: () -> String,
@@ -374,9 +278,6 @@ private fun <S> setFeed(
 ): Int {
     val player = adapter.playerId(source)
     if (player == null) {
-        // Said rather than silently doing nothing. A console whose command
-        // appeared to work and changed nothing is the worst of the three
-        // possible behaviours here.
         replyFail(adapter, format, 
             source,
             Style.bad("the console cannot turn the cloud feed off") +
@@ -402,19 +303,7 @@ private fun <S> setFeed(
     return 1
 }
 
-/**
- * One line of command output, wrapped in the network's own format.
- *
- * Every reply in this file goes through it rather than calling
- * [SourceAdapter.send] directly, and that is the point: eighteen call sites are
- * eighteen chances to forget the format at one of them, and the one that
- * forgot would look like a bug in the command rather than a missing wrapper.
- *
- * A blank format falls back to the built-in default, for the reason [Feed]
- * does the same: blank is what an operator older than the field sends, and
- * reading it as "print nothing" would silence the command on exactly the
- * upgrade that introduces it.
- */
+/** A blank format is what an operator older than the field sends. */
 private fun <S> reply(adapter: SourceAdapter<S>, format: () -> String, source: S, message: String) {
     adapter.send(source, format().ifBlank { Feed.DEFAULT_FORMAT }.replace(Feed.MESSAGE_TOKEN, message))
 }
@@ -448,19 +337,6 @@ private fun <S> group(ctx: com.mojang.brigadier.context.CommandContext<S>): Stri
 private fun <S> count(ctx: com.mojang.brigadier.context.CommandContext<S>): Int =
     IntegerArgumentType.getInteger(ctx, "count")
 
-/**
- * Sends the boost and says the three things section 5.3 requires.
- *
- * The second and third lines are not decoration. The second says it is
- * temporary and how to end it early; the third points at the thing a person
- * should edit when the need is not temporary -- because this command
- * deliberately cannot change desired state, and an admin who does not know
- * that will type it again next week and every week after.
- *
- * A command that permanently changes desired state while looking like a
- * one-shot nudge is the class of surprise this repository avoids everywhere
- * else. That is what these lines buy.
- */
 private fun <S> startBoost(
     api: SpawneryApi,
     adapter: SourceAdapter<S>,
@@ -496,20 +372,10 @@ private fun <S> startBoost(
     return 1
 }
 
-/** The expiry, to the minute, on the operator's clock. */
 private val AT_MINUTE_UTC: DateTimeFormatter =
     DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneOffset.UTC)
 
-/**
- * Reads `30m`, `2h`, `90s` and nothing else.
- *
- * Deliberately not java.time's ISO-8601 parser, which would want `PT30M`.
- * Nobody types that into a chat window, and a command that demanded it would
- * be a command people stop using. Null for anything it cannot read, so the
- * caller can name what it could not read rather than guessing a default --
- * silently treating `2hh` as the default hour is how somebody ends up
- * believing they set a length they did not.
- */
+/** Not java.time's ISO-8601 parser: nobody types `PT30M` into a chat window. */
 internal fun parseDuration(text: String): java.time.Duration? {
     if (text.length < 2) return null
     val amount = text.dropLast(1).toLongOrNull() ?: return null
@@ -522,11 +388,6 @@ internal fun parseDuration(text: String): java.time.Duration? {
     }
 }
 
-// The operator's message, unwrapped from the plumbing a plugin author would
-// otherwise read in chat: a CompletionStage reports failures wrapped in
-// CompletionException, and "java.util.concurrent.CompletionException:
-// java.lang.IllegalStateException: REFUSED: ..." is not a sentence anybody
-// wants in a chat line.
 private fun reason(failure: Throwable): String {
     val cause = if (failure is java.util.concurrent.CompletionException && failure.cause != null) {
         failure.cause!!
@@ -536,17 +397,7 @@ private fun reason(failure: Throwable): String {
     return cause.message ?: cause.javaClass.simpleName
 }
 
-/**
- * Completion for one argument, out of the local mirror.
- *
- * The same memory `list` and `info` read, so a tab is a lookup and not a round
- * trip -- a completion that went to the operator would stall a player's client
- * whenever the stream was down, on a keystroke nobody asked to be blocking.
- *
- * Filtered against what is already typed, case-insensitively: Kubernetes names
- * are lower case, but somebody who typed `Lob` meant `lobby` and getting
- * nothing back reads as "there is no such group".
- */
+/** Out of the local mirror, so a keystroke never waits on the operator. */
 private fun <S> suggesting(names: () -> List<String>): SuggestionProvider<S> =
     SuggestionProvider { _, builder ->
         val typed = builder.remaining.lowercase()

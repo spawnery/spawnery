@@ -188,9 +188,8 @@ func TestAnUnboundNetworkCollectorEmitsNothing(t *testing.T) {
 	}
 }
 
-// A pod whose agent is gone -- OOMKilled, restarting under the same UID --
-// keeps its registry entry until it is forgotten. Its last TPS and heap would
-// otherwise stand as a flat line exactly while it is broken.
+// A pod whose agent is gone keeps its registry entry; its last TPS and heap
+// would otherwise stand as a flat line exactly while it is broken.
 func TestNetworkCollectorDropsTheFiguresOfADisconnectedAgent(t *testing.T) {
 	c, reg := networkMetricsFixture(t)
 	reg.Disconnect("u1")

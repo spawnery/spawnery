@@ -10,23 +10,11 @@ package cloud.spawnery.agent.pb;
  * ConnectResult is what the operator did, which is not the same as what
  * happened to the player.
  *
- * **`ordered` and not `moved`, and the difference is not pedantry.** The proxy
- * that carries a move calls Velocity's connectWithIndication and deliberately
- * does not wait on the future it returns -- PlayerRef.moveTo returns nothing,
- * and VelocityPlayer's comment gives the reason: blocking a gRPC callback
- * thread on a round trip to a backend is a cost this agent cannot pay, and
- * that decision is load-bearing for the drain. So no proxy in this system can
- * report whether a player arrived, and an operator claiming to would be
- * inventing the answer.
+ * `ordered` says the instruction reached a proxy holding the player. No proxy
+ * waits on the move, so whether the player arrived shows only in the next
+ * NetworkState.
  *
- * What a caller does with that: `ordered` says the instruction reached a
- * proxy holding the player. Whether they arrived shows up in the next
- * NetworkState, which is what the mirror is for -- a plugin that needs to know
- * reads players() a moment later rather than trusting this field to mean more
- * than it does.
- *
- * `already_there` is the one case where nothing was ordered and nothing is
- * wrong: the player was on the target when the request arrived.
+ * `already_there`: nothing was ordered because the player was on the target.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.ConnectResult}
@@ -332,23 +320,11 @@ private static final long serialVersionUID = 0L;
    * ConnectResult is what the operator did, which is not the same as what
    * happened to the player.
    *
-   * **`ordered` and not `moved`, and the difference is not pedantry.** The proxy
-   * that carries a move calls Velocity's connectWithIndication and deliberately
-   * does not wait on the future it returns -- PlayerRef.moveTo returns nothing,
-   * and VelocityPlayer's comment gives the reason: blocking a gRPC callback
-   * thread on a round trip to a backend is a cost this agent cannot pay, and
-   * that decision is load-bearing for the drain. So no proxy in this system can
-   * report whether a player arrived, and an operator claiming to would be
-   * inventing the answer.
+   * `ordered` says the instruction reached a proxy holding the player. No proxy
+   * waits on the move, so whether the player arrived shows only in the next
+   * NetworkState.
    *
-   * What a caller does with that: `ordered` says the instruction reached a
-   * proxy holding the player. Whether they arrived shows up in the next
-   * NetworkState, which is what the mirror is for -- a plugin that needs to know
-   * reads players() a moment later rather than trusting this field to mean more
-   * than it does.
-   *
-   * `already_there` is the one case where nothing was ordered and nothing is
-   * wrong: the player was on the target when the request arrived.
+   * `already_there`: nothing was ordered because the player was on the target.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.ConnectResult}

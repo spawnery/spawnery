@@ -23,11 +23,7 @@ import (
 	"github.com/spawnery/spawnery/internal/phase"
 )
 
-// ready builds a Ready server with a fresh report. ServerView.PodHash is left
-// empty, which staleSpec reads as "adopt, do not compare" -- so a server built
-// here is never stale, whatever the group's desired hash is. That is what
-// makes it the current-spec server in every changeover case below, opposite a
-// staleReady carrying an explicit older hash.
+// ready leaves PodHash empty, which staleSpec reads as "adopt", so it is never stale.
 func ready(name string, players, slots int32) ServerView {
 	return ServerView{
 		Name: name, Phase: phase.Ready, Players: players, Slots: slots,
@@ -35,8 +31,6 @@ func ready(name string, players, slots int32) ServerView {
 	}
 }
 
-// starting builds a server that has a pod and has never reported: no slots, and
-// a count that is therefore stale.
 func starting(name string) ServerView {
 	return ServerView{Name: name, Phase: phase.Starting, Stale: true}
 }
@@ -58,8 +52,6 @@ func TestDecideSizeCreditsCapacityThatIsOrderedButNotArrived(t *testing.T) {
 		want int32
 	}{
 		{
-			// The whole point of the milestone: a server that has a pod and has
-			// not reported yet is capacity on its way, not a hole to fill.
 			name: "a starting server covers the spare slots",
 			in: ScalingInputs{
 				Views:       []ServerView{starting("a")},
@@ -76,8 +68,6 @@ func TestDecideSizeCreditsCapacityThatIsOrderedButNotArrived(t *testing.T) {
 			want: 0,
 		},
 		{
-			// A server that reported once and then went quiet is not capacity:
-			// unknown counts as occupied throughout this repository.
 			name: "a server whose count went stale credits nothing",
 			in: ScalingInputs{
 				Views: []ServerView{{
@@ -90,18 +80,7 @@ func TestDecideSizeCreditsCapacityThatIsOrderedButNotArrived(t *testing.T) {
 			want: 1,
 		},
 		{
-			// 4a does not roll updates, so its capacity arithmetic does not
-			// read the generation at all, and 4b keeps it that way: a rule
-			// that credited only current-generation servers would order a
-			// full replacement set on every spec edit.
-			//
-			// The group is mid-changeover here - one stale server, one of the
-			// current generation - so coldStart does not fire and the only
-			// thing deciding the outcome is whether the stale server's twenty
-			// free slots are counted. They are: 20 + 20 meets the forty spare
-			// slots exactly. Drop the stale server's contribution and this
-			// wants one create instead of none, which is what makes the case
-			// load-bearing rather than decorative.
+			// 20 + 20 meets the 40 spare exactly; without the stale server's credit this wants a create.
 			name: "a server of another generation still credits its capacity",
 			in: ScalingInputs{
 				Views: []ServerView{
@@ -204,10 +183,7 @@ func TestDecideSizeReportsTheCeilingHoldingCapacityBack(t *testing.T) {
 }
 
 func TestDecideSizeShrinksToALoweredCeilingWithoutWaiting(t *testing.T) {
-	// A lowered maxReplicas is an instruction, not a suggestion: the
-	// stabilization window does not apply. SelectDeletionCandidates still
-	// refuses any server that may be carrying players, which is what keeps
-	// this safe.
+	// SelectDeletionCandidates still refuses any server that may be carrying players.
 	got := DecideSize(ScalingInputs{
 		Views: []ServerView{
 			ready("a", 0, 100), ready("b", 0, 100), ready("c", 5, 100),
@@ -233,8 +209,7 @@ func TestDecideSizeNeverNominatesAServerAlreadyBeingRemoved(t *testing.T) {
 		},
 		MinReplicas: 1, MaxReplicas: 2,
 		SpareSlots: 40, MaxPlayers: 100,
-		// Set, so the demand rule of task 4 finds no stabilized candidate and
-		// this test keeps asserting only what its name says.
+		// Set so the demand rule finds no stabilized candidate.
 		Stabilization:  5 * time.Minute,
 		PendingDeletes: map[string]bool{"a": true},
 	})
@@ -243,17 +218,11 @@ func TestDecideSizeNeverNominatesAServerAlreadyBeingRemoved(t *testing.T) {
 			t.Fatal("nominated a server whose deletion has already been asked for")
 		}
 	}
-	// a is gone from the count, so b and c are already at the ceiling of 2.
 	if len(got.Delete) != 0 {
 		t.Errorf("Delete = %v, want none once the pending removal is counted", got.Delete)
 	}
 }
 
-// TestDecideSizeShortOfCapacityStillObeysALoweredCeiling pins the fixed point
-// the whole-branch review found: three servers against a ceiling of one is an
-// instruction, and the group is also 700 slots short. Before the fix the
-// shortfall returned first and the surplus branch was unreachable, so the
-// group stood above its ceiling for ever while publishing that it wanted more.
 func TestDecideSizeShortOfCapacityStillObeysALoweredCeiling(t *testing.T) {
 	got := DecideSize(ScalingInputs{
 		Views: []ServerView{
@@ -274,10 +243,6 @@ func TestDecideSizeShortOfCapacityStillObeysALoweredCeiling(t *testing.T) {
 	}
 }
 
-// TestDecideSizeShortOfCapacityDoesNotShrinkForLackOfDemand is the other half:
-// an idle server past its window sits beside a full one and the group is short.
-// The demand rule would remove the idle one; the shortfall says the opposite,
-// and the shortfall wins.
 func TestDecideSizeShortOfCapacityDoesNotShrinkForLackOfDemand(t *testing.T) {
 	got := DecideSize(ScalingInputs{
 		Views: []ServerView{
@@ -294,11 +259,6 @@ func TestDecideSizeShortOfCapacityDoesNotShrinkForLackOfDemand(t *testing.T) {
 	}
 }
 
-// TestDecideSizeDoesNotLetALeavingServerHoldTheFloor gives the group exactly
-// as much room as its floor needs, so counting the draining server toward the
-// size — instead of only toward nothing, as countsTowardSize says — is the
-// difference between ordering the replacement and running one short for the
-// whole drain.
 func TestDecideSizeDoesNotLetALeavingServerHoldTheFloor(t *testing.T) {
 	got := DecideSize(ScalingInputs{
 		Views:       []ServerView{{Name: "a", Phase: phase.Draining, Slots: 100}},
@@ -310,13 +270,7 @@ func TestDecideSizeDoesNotLetALeavingServerHoldTheFloor(t *testing.T) {
 	}
 }
 
-// TestDecideSizeDoesNotLetAFinishedServerHoldTheFloor is
-// TestDecideSizeDoesNotLetALeavingServerHoldTheFloor's Finished counterpart.
-// SpareSlots is 0 so the demand path can supply no replacement of its own —
-// the discriminating fixture the end-to-end controller test lacked, where a
-// closed door's lost provisional capacity masked this same gap by ordering a
-// replacement for an unrelated reason. Only the floor can be short here, so a
-// Create of 1 can only come from countsTowardSize excluding phase.Finished.
+// SpareSlots is 0, so only the floor can be short and a Create can only come from it.
 func TestDecideSizeDoesNotLetAFinishedServerHoldTheFloor(t *testing.T) {
 	got := DecideSize(ScalingInputs{
 		Views:       []ServerView{{Name: "a", Phase: phase.Finished, Slots: 100}},
@@ -366,8 +320,6 @@ func TestDecideSizeHoldsTheFloor(t *testing.T) {
 		t.Errorf("Delete = %v at the floor, want none", got.Delete)
 	}
 
-	// The case above cannot tell the floor from the spare: removing the only
-	// server would leave no free slots at all, so feasibility blocks it too.
 	// With a spare of zero, nothing but the floor can stop the removal.
 	got = DecideSize(ScalingInputs{
 		Views: []ServerView{
@@ -382,8 +334,7 @@ func TestDecideSizeHoldsTheFloor(t *testing.T) {
 }
 
 func TestDecideSizeKeepsEnoughFreeSlotsAfterTheRemoval(t *testing.T) {
-	// Two empty servers, spare 150: removing either leaves 100 free, which is
-	// short. Nothing may go, even though both have waited out the window.
+	// Removing either leaves 100 free against a spare of 150.
 	got := DecideSize(ScalingInputs{
 		Views: []ServerView{
 			empty("a", 100, time.Hour),
@@ -397,14 +348,7 @@ func TestDecideSizeKeepsEnoughFreeSlotsAfterTheRemoval(t *testing.T) {
 	}
 }
 
-// TestDecideSizeTestsEachCandidateOnItsOwn pins that an infeasible head of the
-// candidate list does not hide a feasible tail.
-//
-// Both servers are empty and past the window, so both are candidates.
-// SelectDeletionCandidates puts servers that never took players first, so
-// "fresh" is the head. Free slots are 100 + 30 = 130: removing "fresh" leaves
-// 30, short of the 40 spare, while removing "small" leaves 100. A rule that
-// tested only the head would delete nothing.
+// "fresh" sorts first; removing it leaves 30 free against a spare of 40, removing "small" leaves 100.
 func TestDecideSizeTestsEachCandidateOnItsOwn(t *testing.T) {
 	fresh := empty("fresh", 100, time.Hour)
 	fresh.WasRegistered = false
@@ -435,10 +379,7 @@ func TestDecideSizeNeverRemovesAServerWithAnUnreliableCount(t *testing.T) {
 	}
 }
 
-// TestDecideSizeDoesNotCountUntrustedCapacityAsFree pins the other half of the
-// staleness rule. A stale server is never removed — that is tested elsewhere —
-// but its capacity must also not be counted as free, or a removal somewhere
-// else in the group passes a spare check on slots nobody can vouch for.
+// Otherwise a removal elsewhere passes the spare check on slots nobody can vouch for.
 func TestDecideSizeDoesNotCountUntrustedCapacityAsFree(t *testing.T) {
 	untrusted := empty("untrusted", 100, time.Hour)
 	untrusted.Stale = true
@@ -453,17 +394,14 @@ func TestDecideSizeDoesNotCountUntrustedCapacityAsFree(t *testing.T) {
 			"removing b would leave nothing at all against a spare of 40", got.Delete)
 	}
 
-	// The same group with the count trusted again: 200 free slots, and removing
-	// one still leaves 100 against a spare of 40.
+	// Trusted again: removing one still leaves 100 against a spare of 40.
 	in.Views[0].Stale = false
 	if got := DecideSize(in); len(got.Delete) != 1 {
 		t.Errorf("Delete = %v once the count is trustworthy, want exactly one", got.Delete)
 	}
 }
 
-// staleReady builds a Ready server rendered under an older spec. The hash is
-// an opaque token: the rules only ever compare it for equality against the
-// group's desired hash, so any two distinct strings model a changeover.
+// The hash is only compared for equality, so any distinct string models a changeover.
 func staleReady(name string, players, slots int32, hash string) ServerView {
 	v := ready(name, players, slots)
 	v.PodHash = hash
@@ -471,10 +409,7 @@ func staleReady(name string, players, slots int32, hash string) ServerView {
 }
 
 func TestDecideSizeColdStartsAReplacementForAStaleGroup(t *testing.T) {
-	// Two stale servers with plenty of free capacity between them. The
-	// spare-slot rule is satisfied and would create nothing, so without the
-	// cold start no server of the new generation ever exists, nothing may
-	// retire, and the update never begins.
+	// The spare-slot rule alone would create nothing, so the update would never begin.
 	got := DecideSize(ScalingInputs{
 		Views: []ServerView{
 			staleReady("a", 60, 100, "old"),
@@ -489,9 +424,7 @@ func TestDecideSizeColdStartsAReplacementForAStaleGroup(t *testing.T) {
 }
 
 func TestDecideSizeColdStartsOnlyOnce(t *testing.T) {
-	// The replacement is on order but has not reached the cache. Firing
-	// again here would create one server per five-second pass for the whole
-	// boot.
+	// The replacement is on order but has not reached the cache.
 	got := DecideSize(ScalingInputs{
 		Views:   []ServerView{staleReady("a", 60, 100, "old")},
 		PodHash: "current", PendingCreates: 1,
@@ -517,10 +450,7 @@ func TestDecideSizeDoesNotColdStartWhenAReplacementIsAlreadyUp(t *testing.T) {
 }
 
 func TestDecideSizeReportsAColdStartTheCeilingRefuses(t *testing.T) {
-	// A group pinned at maxReplicas has no room for the one extra server the
-	// changeover needs, so the update cannot begin. Stalling is right — the
-	// ceiling is an instruction — but it must not stall silently, and
-	// ScalingLimited is the condition that already exists to say so.
+	// Stalling at the ceiling is right, but ScalingLimited must say so.
 	got := DecideSize(ScalingInputs{
 		Views:       []ServerView{staleReady("a", 0, 100, "old")},
 		PodHash:     "current",
@@ -541,11 +471,7 @@ func TestDecideSizeReportsAColdStartTheCeilingRefuses(t *testing.T) {
 	}
 }
 
-// TestDecideSizeWithholdsTheColdStartWhileNotAdmitted pins the budget's one
-// job in decideSize: a refused changeover withholds the cold start itself,
-// not the demand this pass would otherwise answer, and it must not read as a
-// ceiling refusal — ColdStartBlocked and Limited stay false, since the
-// ceiling never got asked.
+// A refused changeover is not a ceiling refusal: ColdStartBlocked and Limited stay false.
 func TestDecideSizeWithholdsTheColdStartWhileNotAdmitted(t *testing.T) {
 	in := ScalingInputs{
 		Views:       []ServerView{staleReady("a", 0, 100, "old")},
@@ -583,9 +509,6 @@ func TestDecideSizeWithholdsTheColdStartWhileNotAdmitted(t *testing.T) {
 	}
 }
 
-// TestDecideSizeStillAnswersDemandWhileWaiting is the guard on the rule
-// above: waiting withholds only the cold start, and a real shortfall the
-// spare-slot rule would answer regardless still gets its server.
 func TestDecideSizeStillAnswersDemandWhileWaiting(t *testing.T) {
 	got := DecideSize(ScalingInputs{
 		Views: []ServerView{
@@ -633,9 +556,7 @@ func TestDecideSizeRetiresAStaleServerOnceAReplacementIsReady(t *testing.T) {
 }
 
 func TestDecideSizeRetiresAServerThatStillHasPlayers(t *testing.T) {
-	// The point of soft drain, and the reason retirement cannot reuse
-	// SelectDeletionCandidates: that function excludes exactly these
-	// servers, and these are the ones that have to go.
+	// SelectDeletionCandidates excludes exactly these servers, so retirement cannot reuse it.
 	got := DecideSize(ScalingInputs{
 		Views: []ServerView{
 			staleReady("old", 99, 100, "old"),
@@ -674,8 +595,6 @@ func TestDecideSizeDoesNotRetireWithoutAReadyReplacement(t *testing.T) {
 }
 
 func TestDecideSizeRespectsTheUpdateBudget(t *testing.T) {
-	// One is already retiring. maxUnavailable is 1, so the second stale
-	// server waits.
 	retiring := staleReady("first", 5, 100, "old")
 	retiring.Phase = phase.Retiring
 	retiring.Retire = true
@@ -690,9 +609,7 @@ func TestDecideSizeRespectsTheUpdateBudget(t *testing.T) {
 }
 
 func TestDecideSizeCountsAForcedDrainAgainstTheBudget(t *testing.T) {
-	// maxStaleSeconds escalated a retirement into a real drain. spec.retire
-	// stays true across that, so it keeps occupying the budget it started
-	// in — the server is still unavailable because of this update.
+	// spec.retire stays true after maxStaleSeconds escalates to a drain, so it still spends the budget.
 	forced := staleReady("first", 5, 100, "old")
 	forced.Phase = phase.Draining
 	forced.Retire = true
@@ -707,9 +624,7 @@ func TestDecideSizeCountsAForcedDrainAgainstTheBudget(t *testing.T) {
 }
 
 func TestDecideSizeDoesNotCountAScaleDownDrainAgainstTheUpdateBudget(t *testing.T) {
-	// The complement, and the reason spec.retire exists rather than the
-	// phase being read: a server draining because demand fell was not made
-	// unavailable by this update and must not spend its budget.
+	// A server draining because demand fell was not made unavailable by this update.
 	unrelated := staleReady("shrinking", 0, 100, "old")
 	unrelated.Phase = phase.Draining // Retire stays false
 	got := DecideSize(ScalingInputs{
@@ -723,8 +638,7 @@ func TestDecideSizeDoesNotCountAScaleDownDrainAgainstTheUpdateBudget(t *testing.
 }
 
 func TestDecideSizeCountsAReservedRetirementAgainstTheBudget(t *testing.T) {
-	// The patch is out, the cache has not shown it. Counting only what the
-	// cache shows would spend the budget twice.
+	// The patch is out but the cache has not shown it.
 	got := DecideSize(ScalingInputs{
 		Views: []ServerView{
 			staleReady("first", 5, 100, "old"),
@@ -769,9 +683,7 @@ func TestDecideSizeRetiresEmptyServersFirstThenTheOldest(t *testing.T) {
 }
 
 func TestDecideSizeDoesNotRetireAndShrinkInOnePass(t *testing.T) {
-	// 4a's precedent: two removals decided in one pass are two decisions
-	// taken on two readings of the same moment. Retirement comes first and
-	// the pass ends there.
+	// Retirement comes first and ends the pass.
 	idle := staleReady("idle", 0, 100, "old")
 	idle.EmptyFor = time.Hour
 	got := DecideSize(ScalingInputs{
@@ -788,20 +700,7 @@ func TestDecideSizeDoesNotRetireAndShrinkInOnePass(t *testing.T) {
 	}
 }
 
-// TestDecideSizeDoesNotDeleteAServerWhoseRetirementIsReserved pins the answer
-// to the question task 4 carried forward: expectations is keyed by name, so a
-// delete reservation recorded for a server that already has a retire
-// reservation overwrites it, the retirement stops counting against
-// maxUnavailable while its patch is still in flight, and the pass after that
-// spends the budget a second time.
-//
-// The sequence is reachable, and this is the pass that reaches it. A pass that
-// nominates a retirement returns there, so the two decisions never meet within
-// one pass — but on the pass after, the standing reservation is exactly what
-// makes selectRetirement decline, while the cache still shows the server Ready
-// and long empty, which is everything the demand rule asks for. "old" is the
-// only stabilized candidate here, so the demand rule has no other way to
-// spend the pass.
+// expectations is keyed by name, so a delete reservation would overwrite the retire reservation and spend the budget twice.
 func TestDecideSizeDoesNotDeleteAServerWhoseRetirementIsReserved(t *testing.T) {
 	old := staleReady("old", 0, 100, "old")
 	old.EmptyFor = time.Hour
@@ -821,24 +720,7 @@ func TestDecideSizeDoesNotDeleteAServerWhoseRetirementIsReserved(t *testing.T) {
 	}
 }
 
-// TestDecideSizeRetiresTheStaleServerRatherThanDeletingTheColdStart pins what
-// happens next: the cold-start server becomes
-// Ready, and while nothing has retired yet it is empty, it is surplus, and
-// deleting it re-triggers the cold start on the next pass, which creates
-// another.
-//
-// The retirement rule is what closes that loop, and it closes it by ordering
-// rather than by any test of its own: the pass finds a stale server to retire
-// and returns there, so the demand rule never runs. On the next pass the stale
-// server is Retiring, leaving() drops it out of the size, and the fresh server
-// is no longer surplus.
-//
-// The fixture is arranged so the demand rule would otherwise take exactly the
-// wrong server. Both have been empty past the window, so both are candidates;
-// SelectDeletionCandidates sorts the youngest first among servers that took
-// players, and the cold-start server is the younger — so without the branch
-// above it, the group deletes the replacement and keeps the server the update
-// is trying to get rid of.
+// Both are demand candidates and the cold-start server sorts first; only retiring first keeps it.
 func TestDecideSizeRetiresTheStaleServerRatherThanDeletingTheColdStart(t *testing.T) {
 	base := time.Now()
 	old := staleReady("old", 0, 100, "old")
@@ -863,23 +745,7 @@ func TestDecideSizeRetiresTheStaleServerRatherThanDeletingTheColdStart(t *testin
 	}
 }
 
-// TestDecideSizeDoesNotDeleteTheColdStartWhileTheRetirementBudgetIsSpent is the
-// other half of the test above, and the one the ordering does not cover.
-//
-// There, nothing had retired yet, so the pass nominated a retirement and
-// returned before the demand rule ran. Here one stale server is already
-// retiring and maxUnavailable is 1, so selectRetirement correctly declines and
-// the pass falls through to demand with a stale server still standing. The
-// fixture is the state that was probed against the implementation as task 6
-// first committed it, which answered Retire=[] Delete=[new]: the group deleted
-// the cold start's own replacement, leaving no current-generation server, so
-// coldStart fired again on the next pass.
-//
-// The victim was preferred rather than merely permitted — "old2" is a stale,
-// empty server sitting in the same candidate list, and it loses the
-// youngest-first sort to the fresh replacement purely on age. So the assertion
-// is in two parts: the replacement must survive, and the stale server is what
-// the group ought to shed instead.
+// With the budget spent the pass falls through to demand, where "old2" must go rather than the younger replacement.
 func TestDecideSizeDoesNotDeleteTheColdStartWhileTheRetirementBudgetIsSpent(t *testing.T) {
 	base := time.Now()
 	retiring := staleReady("old1", 40, 100, "old")
@@ -914,15 +780,7 @@ func TestDecideSizeDoesNotDeleteTheColdStartWhileTheRetirementBudgetIsSpent(t *t
 	}
 }
 
-// TestDecideSizeStillShedsAStaleServerForLackOfDemand is the guard on the rule
-// above: it holds current-generation servers out of the demand rule, and it
-// must hold nothing else out. A rule that also stopped stale servers being
-// shed would be worse than the bug it fixes — the group would keep paying for
-// capacity nobody is using for the whole of a changeover.
-//
-// The budget is spent, so retirement declines and demand runs. The
-// current-generation server has players and was never a candidate, so the only
-// thing this can measure is whether the empty stale server is still deletable.
+// Holding stale servers out of demand too would pay for idle capacity for the whole changeover.
 func TestDecideSizeStillShedsAStaleServerForLackOfDemand(t *testing.T) {
 	retiring := staleReady("old1", 40, 100, "old")
 	retiring.Phase = phase.Retiring
@@ -942,10 +800,6 @@ func TestDecideSizeStillShedsAStaleServerForLackOfDemand(t *testing.T) {
 	}
 }
 
-// TestDecideSizeDeletesForLackOfDemandWhenNoStaleServerRemains is the
-// regression check on the ordinary case, which is every pass outside a
-// changeover: with no stale server anywhere, the demand rule is exactly what
-// milestone 4a left, and the empty current-generation server is deleted.
 func TestDecideSizeDeletesForLackOfDemandWhenNoStaleServerRemains(t *testing.T) {
 	idle := ready("idle", 0, 100)
 	idle.EmptyFor = time.Hour
@@ -962,20 +816,7 @@ func TestDecideSizeDeletesForLackOfDemandWhenNoStaleServerRemains(t *testing.T) 
 	}
 }
 
-// TestDecideSizeDoesNotDeleteAServerAlreadyShowingSpecRetire is the other half
-// of TestDecideSizeDoesNotDeleteAServerWhoseRetirementIsReserved, and the half
-// the reservation does not cover.
-//
-// observe() satisfies a retire expectation the moment the cache shows
-// spec.retire, while the phase is written by the Server controller in a second
-// write that lands later. So the ordinary sequence — not a race — puts the
-// group in exactly this state for a pass or more: the view reads Retire: true
-// and Phase: Ready, and PendingRetires is already empty. selectRetirement
-// counts the server against the budget and declines, the pass falls through to
-// demand, and if the pool were filtered on the reservation alone the server
-// would be right back in it — the preferred candidate, since the nomination
-// prefers empty servers and an empty server is what the demand rule wants too.
-// The soft drain would become a hard delete.
+// The cache shows spec.retire before the phase moves, and PendingRetires is already empty.
 func TestDecideSizeDoesNotDeleteAServerAlreadyShowingSpecRetire(t *testing.T) {
 	old := staleReady("old", 0, 100, "old")
 	old.EmptyFor = time.Hour
@@ -996,17 +837,7 @@ func TestDecideSizeDoesNotDeleteAServerAlreadyShowingSpecRetire(t *testing.T) {
 	}
 }
 
-// TestDecideSizeDoesNotRetireOnAReplacementNominatedForDeletion pins the input
-// to the "one ready server of the current generation" guard.
-//
-// The guard is not about how many current-generation servers the cache lists,
-// it is about whether one of them will still be there. A replacement this
-// reconciler has already asked to delete will not be, and the ceiling branch
-// makes that the preferred outcome rather than a rare one: it runs before
-// retirement, applies no changeover filter, and sorts never-took-players first
-// then youngest — which is the cold-start replacement exactly. Retiring a stale
-// server on the strength of it deregisters capacity that has nothing to fall
-// back on, and a retirement is not retractable by the next pass.
+// The ceiling branch prefers deleting the cold-start replacement, and a retirement cannot be taken back.
 func TestDecideSizeDoesNotRetireOnAReplacementNominatedForDeletion(t *testing.T) {
 	booting := starting("booting") // current generation, not Ready yet
 
@@ -1023,19 +854,7 @@ func TestDecideSizeDoesNotRetireOnAReplacementNominatedForDeletion(t *testing.T)
 	}
 }
 
-// TestDecideSizeTreatsAnUnsetUpdateBudgetAsOne pins a decision that would
-// otherwise be invisible in both directions.
-//
-// spec.update is optional and no CEL rule requires it, so a nil parent is the
-// ordinary state of a group whose operator never wrote an update policy — and a
-// nil parent means maxUnavailable's CRD default of 1 never applies and 0
-// arrives here. Read literally that is "no budget", and the group would decline
-// every retirement forever with no error, no condition and no event. Because
-// the CRD's Minimum=1 means a real 0 cannot exist, a zero can only mean unset,
-// and the floor is safe.
-//
-// The second half is what stops the floor being read as "unset means
-// unlimited": one is one.
+// spec.update is optional and the CRD minimum is 1, so 0 means unset; read literally it would block every retirement.
 func TestDecideSizeTreatsAnUnsetUpdateBudgetAsOne(t *testing.T) {
 	got := DecideSize(ScalingInputs{
 		Views:       []ServerView{staleReady("old", 60, 100, "old"), ready("new", 0, 100)},
@@ -1061,16 +880,7 @@ func TestDecideSizeTreatsAnUnsetUpdateBudgetAsOne(t *testing.T) {
 	}
 }
 
-// TestDecideSizeDoesNotRetireAnUntrustedCountFirst is the empty-first rule
-// meeting the invariant the rest of the package obeys: unknown counts as
-// occupied.
-//
-// Ready && Stale is a real combination — losing the count is not losing the
-// probe — and a stale server whose last report was zero may be carrying
-// players. Preferring it for retirement inverts the rule's own justification:
-// retiring an empty server costs nobody anything, but this one is only empty as
-// far as anyone can see. The older server with a count that can be trusted is
-// what the ordering asks for instead.
+// Unknown counts as occupied: a stale zero may be carrying players.
 func TestDecideSizeDoesNotRetireAnUntrustedCountFirst(t *testing.T) {
 	base := time.Now()
 	busy := staleReady("busy", 5, 100, "old")
@@ -1090,23 +900,7 @@ func TestDecideSizeDoesNotRetireAnUntrustedCountFirst(t *testing.T) {
 	}
 }
 
-// TestDecideSizeDoesNotSuspendDemandForAStaleServerThatIsAlreadyGone pins
-// staleRemains' countsTowardSize condition.
-//
-// A stale server that is Failed, Draining or Terminating is not capacity the
-// changeover is still racing to remove — it is gone or going, and no rule is
-// going to shed it again. Counting it as "stale capacity remains" would hold
-// every current-generation server out of the demand rule for as long as it is
-// retained, which for a Failed server is the whole failed-retention window, an
-// hour by default. It is also the set coldStart counts, and the two have to
-// agree: the oscillation the changeover filter closes needs coldStart to
-// re-fire, so a filter live in states coldStart is not would suspend
-// scale-downs where the loop cannot happen.
-//
-// The discriminating fixture is the one the suite lacked: the corpse is the
-// *only* stale server, so staleRemains is false solely because of this
-// condition, and there is a demand-eligible current-generation server for it to
-// suspend.
+// Counting a gone stale server would suspend demand for the whole failed-retention window.
 func TestDecideSizeDoesNotSuspendDemandForAStaleServerThatIsAlreadyGone(t *testing.T) {
 	for _, gone := range []phase.Phase{phase.Failed, phase.Draining, phase.Terminating} {
 		t.Run(string(gone), func(t *testing.T) {
@@ -1131,13 +925,6 @@ func TestDecideSizeDoesNotSuspendDemandForAStaleServerThatIsAlreadyGone(t *testi
 	}
 }
 
-// TestDecideSizeShedsAnIdleStaleServerToMakeRoomForARefusedColdStart is the
-// fixed point that used to be permanent. A group at its ceiling with an idle
-// stale server beside it refused to delete the very server the changeover
-// exists to remove, and told the operator to raise maxReplicas instead. The
-// control case below is what makes that a defect rather than a design
-// consequence: the same views and knobs with no changeover shed the same server
-// happily.
 func TestDecideSizeShedsAnIdleStaleServerToMakeRoomForARefusedColdStart(t *testing.T) {
 	views := []ServerView{
 		staleReady("a", 60, 100, "old"),
@@ -1164,8 +951,7 @@ func TestDecideSizeShedsAnIdleStaleServerToMakeRoomForARefusedColdStart(t *testi
 			"cold start was refused for", got.Delete)
 	}
 
-	// The control. Without the changeover the group already sheds b, which is
-	// why refusing to shed it *because* of a changeover is the wrong way round.
+	// The control: without the changeover the group sheds b as well.
 	in.PodHash = "old"
 	if control := DecideSize(in); len(control.Delete) != 1 || control.Delete[0] != "b" {
 		t.Fatalf("control Delete = %v, want [b] — the fixture no longer measures the "+
@@ -1173,10 +959,6 @@ func TestDecideSizeShedsAnIdleStaleServerToMakeRoomForARefusedColdStart(t *testi
 	}
 }
 
-// TestDecideSizeStillReportsARefusedColdStartWithNothingToShed is the other half
-// of the finding above: falling through must not cost the stall its visibility.
-// When the pass genuinely has nothing to shed there is no way out but a higher
-// ceiling, and ScalingLimited has to say so.
 func TestDecideSizeStillReportsARefusedColdStartWithNothingToShed(t *testing.T) {
 	got := DecideSize(ScalingInputs{
 		Views: []ServerView{
@@ -1200,21 +982,8 @@ func TestDecideSizeStillReportsARefusedColdStartWithNothingToShed(t *testing.T) 
 	}
 }
 
-// TestDecideSizeDoesNotShedForARealShortfallEvenWhenTheColdStartIsRefused is
-// the other half of the guard the fall-through above depends on: `demanded <
-// 1`, captured before the cold start's own bump, is what tells "this pass
-// wanted nothing anyway" apart from "this pass is genuinely short and the
-// cold start ate the only slot the ceiling had". Dropping `&& demanded < 1`
-// from `coldOnly` passes the rest of the package, because the per-candidate
-// feasibility test in the demand rule usually catches a real shortfall on its
-// own — `provisional >= readyFree(pool)` for an ordinary view. It does not
-// here: x is Ready with SessionsGone, so provisionalCapacity credits it 0
-// while readyContribution, which has no SessionsGone test, credits it in
-// full. The spare-slot rule reads 10 free (from c alone) against 100 wanted
-// and asks for a server; the feasibility test reads x's phantom 100 and finds
-// room to shed c instead. Both x and c are stale (generation 3, one
-// generation behind), so the cold start is refused at the ceiling and the
-// fall-through is exactly what is being exercised.
+// x is Ready with SessionsGone: provisionalCapacity credits it 0 but the feasibility test credits 100,
+// so only `demanded < 1` in coldOnly stops c being shed.
 func TestDecideSizeDoesNotShedForARealShortfallEvenWhenTheColdStartIsRefused(t *testing.T) {
 	x := ready("x", 0, 100)
 	x.PodHash = "old"
@@ -1243,19 +1012,7 @@ func TestDecideSizeDoesNotShedForARealShortfallEvenWhenTheColdStartIsRefused(t *
 	}
 }
 
-// TestDecideSizeOverhangIsMaxUnavailableServersNotOne pins what the design's
-// "at most one extra server" claim is actually worth. maxReplicas bounds alive,
-// leaving() holds Retiring out of alive, so every concurrent retirement buys the
-// spare-slot rule one server above the ceiling. At maxUnavailable 2 the group
-// holds maxReplicas + 2 Server objects, and design §3.3 and acceptance
-// criterion 5 are true only at the default of 1.
-//
-// The two retirements here are set up directly on the fixture (already
-// Retiring, Retire: true), so this test reaches its assertions through the
-// create path and never calls selectRetirement — MaxUnavailable is inert to
-// this particular outcome. That is fine: this test is about the overhang
-// bound, not the budget rule that lets a second retirement start.
-// TestDecideSizeGrantsASecondRetirementAtBudgetTwo covers that rule.
+// Each concurrent retirement buys the spare-slot rule one server above maxReplicas.
 func TestDecideSizeOverhangIsMaxUnavailableServersNotOne(t *testing.T) {
 	retiring := func(name string) ServerView {
 		v := staleReady(name, 50, 100, "old")
@@ -1283,14 +1040,6 @@ func TestDecideSizeOverhangIsMaxUnavailableServersNotOne(t *testing.T) {
 	}
 }
 
-// TestDecideSizeGrantsASecondRetirementAtBudgetTwo is the budget-2 boundary
-// that TestDecideSizeRespectsTheUpdateBudget never exercises: that test (and
-// every other MaxUnavailable >= 2 fixture in this package, see
-// TestDecideSizeOverhangIsMaxUnavailableServersNotOne) only shows the create
-// path with the retirements already in flight. This is the same fixture as
-// TestDecideSizeRespectsTheUpdateBudget, one retirement already in flight and
-// one stale candidate waiting, but at MaxUnavailable: 2 rather than 1 — the
-// budget selectRetirement actually reads.
 func TestDecideSizeGrantsASecondRetirementAtBudgetTwo(t *testing.T) {
 	retiring := staleReady("first", 5, 100, "old")
 	retiring.Phase = phase.Retiring
@@ -1307,9 +1056,6 @@ func TestDecideSizeGrantsASecondRetirementAtBudgetTwo(t *testing.T) {
 			"one slot free of a budget of 2", got.Retire)
 	}
 
-	// The boundary the case above crosses: the identical fixture at the
-	// default budget of 1 declines, as TestDecideSizeRespectsTheUpdateBudget
-	// already pins.
 	got = DecideSize(ScalingInputs{
 		Views:   views,
 		PodHash: "current", MaxUnavailable: 1,
@@ -1322,9 +1068,7 @@ func TestDecideSizeGrantsASecondRetirementAtBudgetTwo(t *testing.T) {
 }
 
 func TestProvisionalCapacityDoesNotCreditAServerWhosePodIsGone(t *testing.T) {
-	// Slots == 0 means two different things: a server that has never
-	// reported (capacity on its way, credit it) and one whose pod vanished
-	// (nothing there, credit nothing). SessionsGone is what separates them.
+	// SessionsGone separates a never-reported server from one whose pod vanished.
 	gone := ServerView{Name: "a", Phase: phase.Starting, Stale: true, SessionsGone: true}
 	if got := provisionalCapacity(gone, 100); got != 0 {
 		t.Errorf("provisionalCapacity = %d, want 0 for a server whose pod is gone", got)
@@ -1332,43 +1076,22 @@ func TestProvisionalCapacityDoesNotCreditAServerWhosePodIsGone(t *testing.T) {
 }
 
 func TestProvisionalCapacityStillCreditsAStartingServer(t *testing.T) {
-	// The guard against the obvious wrong fix: a starting server is stale
-	// and has never reported too, and crediting it zero brings back the
-	// runaway scale-up 4a built this rule to stop.
+	// Crediting a starting server zero would bring back the runaway scale-up.
 	if got := provisionalCapacity(starting("a"), 100); got != 100 {
 		t.Errorf("provisionalCapacity = %d, want the full 100 for a starting server", got)
 	}
 }
 
-// The door is read before the phase, and that ordering is the answer to a
-// proposed symmetry rather than an oversight of it. AggregateGroup credits a
-// server only while Phase == Ready, so gating the door on Ready here as well
-// looks like it would make one question have one answer.
-//
-// It would do the opposite. A server that shut its door and then lost its
-// readiness probe -- a round in progress, a probe that missed -- is the case
-// that gate would reach, and it has neither free seats nor a way to be
-// reached. Crediting it a full maxPlayers would tell the scale-up rule that
-// spare capacity is on its way when what is actually there is a server nobody
-// can join, and the group would decline to build the one server the players
-// waiting for a seat need. That is the direction this file refuses everywhere
-// else: a group with a server too many costs money, a group with a server too
-// few costs joins.
-//
-// What the ordering does cost is one server too many for as long as a
-// door-closed server sits outside Ready, and scale-down takes that back. The
-// cheap error, deliberately.
+// The door is read before the phase: crediting a door-closed server that left Ready would
+// stop the group building the server waiting players need. One server too many is the cheap error.
 func TestProvisionalCapacityReadsTheDoorBeforeThePhase(t *testing.T) {
-	// Never reported, so Slots == 0 -- the shape that would otherwise be
-	// credited in full by the case above.
+	// Never reported, so Slots == 0: the shape otherwise credited in full.
 	closed := ServerView{Name: "a", Phase: phase.Starting, JoinsClosed: true}
 	if got := provisionalCapacity(closed, 100); got != 0 {
 		t.Errorf("provisionalCapacity = %d, want 0: a server that shut its door has no "+
 			"seat to offer whether or not it is Ready", got)
 	}
 
-	// And the same server once its door is open again, so the assertion above
-	// pins the door rather than the phase.
 	closed.JoinsClosed = false
 	if got := provisionalCapacity(closed, 100); got != 100 {
 		t.Errorf("provisionalCapacity = %d, want 100 once the door is open again", got)
@@ -1405,9 +1128,6 @@ func TestDecideSizeCondemns(t *testing.T) {
 	})
 
 	t.Run("the replacement is asked for in the same pass", func(t *testing.T) {
-		// The only server is condemned, so it stops holding the floor and
-		// stops contributing capacity: the same pass that condemns it must
-		// order its replacement.
 		in := ScalingInputs{
 			Views:       []ServerView{{Name: "a", Phase: phase.Ready, Slots: 10, Condemned: true}},
 			MinReplicas: 1, MaxReplicas: 5, MaxPlayers: 10, SpareSlots: 1,
@@ -1434,8 +1154,6 @@ func TestDecideSizeCondemns(t *testing.T) {
 	})
 
 	t.Run("Delete and Condemn never name the same server", func(t *testing.T) {
-		// A group over its ceiling with a condemned server in it: the surplus
-		// rule must not nominate the pod the node drain is already taking.
 		in := ScalingInputs{
 			Views: []ServerView{
 				{Name: "a", Phase: phase.Ready, Slots: 10, Condemned: true},
@@ -1465,16 +1183,7 @@ func TestDecideSizeCondemns(t *testing.T) {
 	})
 
 	t.Run("a condemned stale server is not also nominated for retirement", func(t *testing.T) {
-		// The two removals must not both claim the same server. Condemn
-		// reserves a delete for it; a retirement patched in the same pass
-		// would overwrite that reservation in the name-keyed expectations map,
-		// and spec.retire would then hold a maxUnavailable slot for the whole
-		// of a drain the node was going to force regardless.
-		//
-		// The stale server is Ready and of an older generation with a Ready
-		// current-generation replacement beside it, which is exactly the state
-		// selectRetirement nominates from — so without the Condemned clause
-		// this case retires "old".
+		// A retirement in the same pass would overwrite Condemn's delete reservation in the name-keyed expectations map.
 		in := ScalingInputs{
 			Views: []ServerView{
 				func() ServerView {
@@ -1497,23 +1206,8 @@ func TestDecideSizeCondemns(t *testing.T) {
 	})
 
 	t.Run("a condemned current-generation server is not the replacement a retirement waits for", func(t *testing.T) {
-		// The mirror of the case above, on the other branch of the same loop:
-		// here the stale server is healthy and the current-generation server
-		// beside it is the one on the departing node. Counting that one as the
-		// replacement would retire "old" against capacity that is itself being
-		// drained away, and a retirement cannot be taken back. Declining is the
-		// deliberate choice — the changeover waits for a replacement that is
-		// staying, which costs it time and costs no player a connection.
-		//
-		// "warming" is load-bearing and not scenery. Without a current-
-		// generation server that counts toward the group's size, the cold-start
-		// branch fires and decideSize returns a Create long before the
-		// retirement branch is reached, so the assertion below would hold for a
-		// reason that has nothing to do with the clause under test. Starting
-		// rather than Ready is what makes it suppress the cold start without
-		// also satisfying readyCurrent by itself. Verified by removing the
-		// clause: this case then reports Retire = [old], while the simpler
-		// two-server version still reports none.
+		// Retiring against a replacement on a departing node cannot be taken back.
+		// "warming" (Starting) suppresses the cold start without satisfying readyCurrent itself.
 		in := ScalingInputs{
 			Views: []ServerView{
 				staleReady("old", 60, 100, "old"),
@@ -1542,9 +1236,6 @@ func TestDecideSizeCondemns(t *testing.T) {
 	})
 
 	t.Run("a condemned server already reserved for delete is not named again", func(t *testing.T) {
-		// The guard condemned() relies on: a server this reconciler already
-		// reserved an ordinary delete for must not be re-listed just because
-		// its node also reads Condemned.
 		in := ScalingInputs{
 			Views:       []ServerView{{Name: "a", Phase: phase.Ready, Slots: 10, Condemned: true}},
 			MinReplicas: 1, MaxReplicas: 5, MaxPlayers: 10, SpareSlots: 1,
@@ -1556,9 +1247,6 @@ func TestDecideSizeCondemns(t *testing.T) {
 	})
 }
 
-// A capacity edit must retire nothing. This is the whole point of 7a: before
-// it, every field of the spec moved metadata.generation, so raising a floor
-// replaced a fleet of functionally identical servers.
 func TestDecideSizeCapacityEditRetiresNothing(t *testing.T) {
 	got := DecideSize(ScalingInputs{
 		Views:          []ServerView{ready("a", 10, 100), ready("b", 10, 100)},
@@ -1574,9 +1262,7 @@ func TestDecideSizeCapacityEditRetiresNothing(t *testing.T) {
 	}
 }
 
-// An image edit must still retire, one at a time under maxUnavailable. This
-// passed before 7a too, and is the regression guard for the case above: a rule
-// that retired nothing at all would satisfy that one.
+// Guards the case above: a rule that retired nothing would satisfy it.
 func TestDecideSizeImageEditStillRetires(t *testing.T) {
 	got := DecideSize(ScalingInputs{
 		Views:          []ServerView{staleReady("a", 10, 100, "old"), ready("b", 10, 100)},
@@ -1592,9 +1278,7 @@ func TestDecideSizeImageEditStillRetires(t *testing.T) {
 	}
 }
 
-// Adoption at the sizing rule, not only at the predicate: a group whose
-// servers all predate spec.podHash retires none of them. Without this, the
-// first reconcile after an operator upgrade is a full fleet changeover.
+// Otherwise the first reconcile after an operator upgrade is a full fleet changeover.
 func TestDecideSizeAdoptsHashlessServers(t *testing.T) {
 	a, b := ready("a", 10, 100), ready("b", 10, 100)
 	a.PodHash, b.PodHash = "", ""
@@ -1625,9 +1309,6 @@ func TestABoostRaisesTheFloor(t *testing.T) {
 }
 
 func TestTheCeilingStillBindsAgainstABoost(t *testing.T) {
-	// The one somebody could get wrong in a hurry, and the reason the boost is
-	// added to the floor rather than to both: maxReplicas is an instruction,
-	// and a command typed in a chat window must not lift it.
 	got := DecideSize(ScalingInputs{
 		MinReplicas: 1, MaxReplicas: 2,
 		SpareSlots: 40, MaxPlayers: 100,
@@ -1640,9 +1321,6 @@ func TestTheCeilingStillBindsAgainstABoost(t *testing.T) {
 }
 
 func TestABoostOfZeroChangesNothing(t *testing.T) {
-	// The ordinary case: no boost objects exist. It must produce exactly what
-	// the group produced before this field existed, which is the state every
-	// group in every cluster is in today.
 	base := ScalingInputs{MinReplicas: 2, MaxReplicas: 10, SpareSlots: 40, MaxPlayers: 100, PodHash: "current"}
 	boosted := base
 	boosted.Boost = 0
@@ -1653,8 +1331,7 @@ func TestABoostOfZeroChangesNothing(t *testing.T) {
 }
 
 func TestABoostAlsoHoldsCapacityAgainstAScaleDown(t *testing.T) {
-	// The second floor site. A boost that reached the create rule and not this
-	// one would build servers and then shed them on the next pass.
+	// A boost that reached the create rule but not this one would build servers and shed them next pass.
 	got := DecideSize(ScalingInputs{
 		Views:       []ServerView{ready("a", 0, 100), ready("b", 0, 100), ready("c", 0, 100)},
 		MinReplicas: 1, MaxReplicas: 10,
@@ -1669,12 +1346,7 @@ func TestABoostAlsoHoldsCapacityAgainstAScaleDown(t *testing.T) {
 }
 
 func TestAGroupWhoseEveryServerIsPlayingBuildsARoom(t *testing.T) {
-	// spareSlots == maxPlayers is a request for one whole free server. With a
-	// single closed-door server the ceiling division hides the bug -- 78 free
-	// seats and 0 free seats both round up to a wanted of 1 against a spare of
-	// 80. It takes every server in the group shut at once, the way
-	// AggregateGroup's own comment describes it, before the unfixed seats
-	// (156) clear the spare-slot bar and the fixed ones (0) do not.
+	// With one closed server rounding hides the miscount; it takes every server shut before 156 free seats clear the bar.
 	in := ScalingInputs{
 		MaxReplicas: 10,
 		MaxPlayers:  80,
@@ -1691,12 +1363,7 @@ func TestAGroupWhoseEveryServerIsPlayingBuildsARoom(t *testing.T) {
 	}
 }
 
-// The demand rule judges a removal against capacity that exists, and the
-// round lifecycle taught the scale-up side what a reachable seat is without
-// teaching this side. Two servers in a round and one open, empty server: the
-// scale-up rule reads 80 free seats and builds nothing, and the demand rule
-// used to read 236, subtract the open server's 80 and delete it -- the only
-// server anybody could join -- then order it back on the next pass.
+// The open, empty server is the only one anybody can join.
 func TestDemandDoesNotShedTheOnlyJoinableServer(t *testing.T) {
 	a := ready("a", 2, 80)
 	a.JoinsClosed = true
@@ -1734,13 +1401,7 @@ func TestReadyContributionReadsTheSameDoorAsAggregateGroup(t *testing.T) {
 	}
 }
 
-// A Ready server that loses its probe while its agent stream stays up goes to
-// Starting and is deregistered, with its counts still known. Crediting its
-// seats tells the scale-up rule that capacity exists which no proxy routes to,
-// and the group builds nothing for up to the whole startup deadline. What
-// separates it from a server that is genuinely starting -- credited in full,
-// see TestProvisionalCapacityStillCreditsAStartingServer -- is that this one
-// has been in the tables before.
+// A server that lost its probe with its stream up is deregistered; its seats are unreachable.
 func TestProvisionalCapacityDoesNotCreditAServerTheProxiesDropped(t *testing.T) {
 	dropped := ServerView{
 		Name: "a", Phase: phase.Starting, Slots: 80, Players: 5,
@@ -1755,16 +1416,7 @@ func TestProvisionalCapacityDoesNotCreditAServerTheProxiesDropped(t *testing.T) 
 	}
 }
 
-// An operator that has just started has heard from no agent yet, so every
-// server it finds reads Stale with Slots 0, and for the fifteen seconds until
-// the agents are back the ready gate takes each one out of Ready and out of
-// the tables. That server has been registered and is not, exactly like the
-// one above -- and crediting it nothing built one extra server per group on
-// every operator restart (measured 2026-09-08, nine groups, nine creates
-// within 25 s of the new pod). What tells the two apart is whether the
-// counts are fresh: a dropped server whose agent is still talking has no
-// seat to offer; one the operator has simply not heard from yet is the case
-// the Slots == 0 credit was written for.
+// After an operator restart every count is stale, not missing seats: crediting nothing built one extra server per group.
 func TestProvisionalCapacityStillCreditsAServerARestartedOperatorHasNotHeardFrom(t *testing.T) {
 	unheard := ServerView{
 		Name: "a", Phase: phase.Starting, Stale: true,

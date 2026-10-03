@@ -31,14 +31,9 @@ type ServerSpec struct {
 	Ordinal *int32 `json:"ordinal,omitempty"`
 
 	// Key is the caller's name for the world this member carries, and it is
-	// set for a member of an OnDemand group and for no other server.
-	//
-	// It is here for the reason Ordinal is: a Server has to be able to say
-	// what kind of member it is without its group, and the Server controller
-	// reconstructs a synthetic group from this object alone when the real one
-	// is gone. An inference from Ordinal alone was exhaustive while there were
-	// two types; with three, a member with neither marker would read as
-	// ephemeral, which is the one answer that is wrong about its world.
+	// set for a member of an OnDemand group and for no other server. Like
+	// Ordinal, it lets a Server say what kind of member it is once its group
+	// is gone.
 	// +optional
 	Key string `json:"key,omitempty"`
 
@@ -46,20 +41,9 @@ type ServerSpec struct {
 	// person counts: the second hub is 2. The group assigns it once, at
 	// creation, and it is given out again only after this server is gone.
 	//
-	// Zero means nobody numbered this server: every server that was already
-	// running when this field arrived, and the ordinal-zero server of a
-	// persistent group, whose number is its ordinal. Nothing backfills them,
-	// and a reader showing this to a player falls back to the name it already
-	// has. That the two cases are indistinguishable is deliberate — a
-	// persistent server is referred to by the name that names its world, so
-	// falling back to that name loses nothing.
-	//
-	// Not Ordinal, and the difference is what each one is for: that one is a
-	// persistent server's identity, the thing its storage claim is named
-	// from, and its presence is read elsewhere as "this server is
-	// persistent". This one is a label a player reads, and every server has
-	// one. A persistent server's Number equals its Ordinal, so the number a
-	// person sees agrees with the name the server already has.
+	// A persistent server's Number equals its Ordinal. Zero means unnumbered:
+	// a server older than this field, or ordinal zero of a persistent group.
+	// A reader then falls back to the server's name.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	Number int32 `json:"number,omitempty"`
@@ -74,27 +58,16 @@ type ServerSpec struct {
 	// group compares it against a freshly computed one to decide whether this
 	// ordinal is running the current spec.
 	//
-	// Empty means adopt, never stale. Every server that existed before this
-	// field did carries an empty value, and reading that as stale would restart
-	// every world in the installation on the first reconcile after an upgrade.
-	// The group stamps the current hash onto such a server and orders no
-	// takedown.
+	// Empty means adopt, never stale: the group stamps the current hash onto
+	// such a server and orders no takedown.
 	// +optional
 	PodHash string `json:"podHash,omitempty"`
 
 	// Retire asks this server to stop taking joins and empty out, without its
 	// players being moved. The ServerGroup controller sets it during a rolling
-	// update, and -- since the /cloud command -- an administrator can too,
-	// through the agent endpoint's retire request rather than by editing this
-	// object. It is also the single signal for spec.update.maxUnavailable: a
-	// server counts against that budget while this is true, which is what
-	// tells a retirement apart from a drain a scale-down or a deletion
-	// started.
-	//
-	// That second writer is why the controller's own retireServer checks the
-	// flag before patching: it can now find a server already retiring for a
-	// reason it did not cause, and must treat that as done rather than as a
-	// state to correct.
+	// update, and an administrator through the agent endpoint's retire
+	// request. A server counts against spec.update.maxUnavailable while this
+	// is true.
 	// +optional
 	Retire bool `json:"retire,omitempty"`
 
@@ -120,25 +93,8 @@ type ServerStatus struct {
 	PodName string `json:"podName,omitempty"`
 
 	// PodUID identifies the pod behind PodName, and so one run of this server
-	// apart from the next one under the same name.
-	//
-	// The name is not enough on its own and for one kind of server it never
-	// will be: an ephemeral server is named afresh every time, but a
-	// persistent one keeps its name across every restart -- that name is the
-	// identity of its world. Anything asking "is this still the same server I
-	// saw" therefore has to compare something that changes when the process
-	// does, and the pod's UID is exactly that.
-	//
-	// Recorded whenever the pod is observed rather than where it is created:
-	// after a Create that came back AlreadyExists the object carries no UID,
-	// and a field written only on the happy path is one that stays empty in
-	// precisely the case somebody is investigating.
-	//
-	// Not cleared when the pod goes. A stale value on a server that has no pod
-	// changes no answer -- such a server is not Ready and nobody is being sent
-	// there -- while clearing it would make the identity flicker through empty
-	// during a restart, and a reader comparing across that would see two
-	// changes where one happened.
+	// apart from the next one under the same name, which a persistent server
+	// keeps across restarts. Not cleared when the pod goes.
 	// +optional
 	PodUID string `json:"podUID,omitempty"`
 
@@ -169,24 +125,16 @@ type ServerStatus struct {
 	Registered bool `json:"registered"`
 
 	// WasRegistered is true once this server has been registered with the
-	// proxies during the life of its current pod. A server that fell out of
-	// Ready is back in Starting but still has its players connected —
-	// deregistering stopped new joins, it did not move anyone — so the phase
-	// alone cannot tell us whether players are at risk.
+	// proxies during the life of its current pod. A server that fell back to
+	// Starting may still have players connected.
 	// +optional
 	WasRegistered bool `json:"wasRegistered"`
 
 	// StartedAt is when this server last began trying to become playable: the
 	// first pass that accepted it, then the pod creation, and then every entry
 	// into phase Starting. It drives the startup deadline, which therefore
-	// bounds the current attempt rather than the age of the pod — a long-lived
-	// server that loses readiness gets a full deadline to recover in, and is
-	// failed if it does not. Do not change this back to pod-creation time.
-	//
-	// The acceptance stamp is what gives a Server whose pod is never created a
-	// clock at all. Written only beside the pod, it left such a Server without
-	// one: nothing could fail it, so it sat in Pending occupying its group's
-	// slot for as long as whatever refused the pod stood.
+	// bounds the current attempt rather than the age of the pod, and also
+	// fails a Server whose pod is never created.
 	// +optional
 	StartedAt *metav1.Time `json:"startedAt,omitempty"`
 
@@ -211,11 +159,8 @@ type ServerStatus struct {
 	FailedAt *metav1.Time `json:"failedAt,omitempty"`
 
 	// RoundEndedAt is when the server said its round was over. Nil for one
-	// that never did.
-	//
-	// Stamped while the server is still running, which is what makes the
-	// distinction survive an operator restart: the registry that heard the
-	// word is memory, and this object is not.
+	// that never did. Stamped while the server still runs, so it survives an
+	// operator restart.
 	// +optional
 	RoundEndedAt *metav1.Time `json:"roundEndedAt,omitempty"`
 
@@ -232,12 +177,9 @@ type ServerStatus struct {
 	StorageResizePending bool `json:"storageResizePending,omitempty"`
 
 	// StorageResizeError names why the last resize of this server's claim
-	// failed, or is empty when none did. It covers a patch of this operator's
-	// own that the API server refused, ordinarily because the claim's storage
-	// class sets allowVolumeExpansion: false, and a resize from any requester
-	// that the storage driver failed, reported on the claim through its
-	// ControllerResizeError or NodeResizeError condition. A patch another
-	// controller had refused is not visible here.
+	// failed, or is empty when none did: this operator's patch refused by the
+	// API server (usually allowVolumeExpansion: false), or a driver failure
+	// from the claim's ControllerResizeError or NodeResizeError condition.
 	// +optional
 	StorageResizeError string `json:"storageResizeError,omitempty"`
 

@@ -1,8 +1,5 @@
-# The two typefaces of the documentation site, served by the site itself.
-#
-# From Fontsource's npm tarballs for the reason nix/mermaid.nix gives: a site
-# served from one's own cluster should not depend on somebody else's. Only the
-# latin and latin-ext subsets, which is what the site's text uses.
+# The documentation site's two typefaces, served by the site itself, latin
+# and latin-ext subsets only.
 { fetchurl
 , runCommand
 }:

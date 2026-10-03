@@ -1,12 +1,6 @@
-# mermaid.min.js for the documentation site.
-#
-# Both loaders reach for unpkg on their own -- mkdocs-material's theme bundle
-# and mkdocs-mermaid2-plugin, independently -- and a site served from one's own
-# cluster should not depend on somebody else's.
-#
-# From npm rather than from nixpkgs' mermaid-cli, whose copy of this file is
-# byte-identical and whose closure is 2.2 GiB: it carries Chromium for the
-# headless rendering nothing here does.
+# mermaid.min.js, served by the site itself: mkdocs-material and the mermaid2
+# plugin would each load it from unpkg. From npm, because nixpkgs' copy comes
+# with mermaid-cli's 2.2 GiB closure.
 { fetchurl
 , runCommand
 }:

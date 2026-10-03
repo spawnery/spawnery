@@ -4,11 +4,8 @@ cover.out
 result
 result-*
 .direnv/
-# The platform APIs are symlinked into their own subprojects before the build;
-# see nix/agents.nix. The Gradle root is agent/, so .gradle/ and build/ now
-# appear once at the root and once per subproject -- and Nix builds from the
-# git index, so an ignore that missed one would stage build output into the
-# tree the build reads.
+# Nix builds from the git index, so build output must never be staged.
+# The platform APIs are symlinked in by nix/agents.nix.
 agent/paper/paper-repo
 agent/velocity/velocity.jar
 agent/.gradle/
@@ -25,5 +22,5 @@ docs/assets/fonts/
 # Vendored by hack/vendor-javadoc.sh from nix/agent-api-javadoc.nix.
 docs/plugin-api/javadoc/
 
-# mkdocs build output; mkdocs.yml sets no site_dir, so this is its default.
+# mkdocs build output.
 site/

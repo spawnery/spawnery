@@ -41,8 +41,8 @@ const (
 	group = "gateway"
 )
 
-// registered builds a Server in the state the fan-out cares about: the flag
-// applyDecision writes next to its Register call, plus an address to route to.
+// registered builds a Server with status.registered set, the flag the fan-out
+// reads, plus an address to route to.
 func registered(name, address string) *spawneryv1alpha1.Server {
 	return &spawneryv1alpha1.Server{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
@@ -61,9 +61,6 @@ func proxyGroup(fallbacks ...string) *spawneryv1alpha1.ProxyGroup {
 	return proxyGroupNamed(group, fallbacks...)
 }
 
-// proxyGroupNamed is proxyGroup with the group name broken out, for tests that
-// need two distinct ProxyGroups in one namespace — proxyGroup alone can only
-// ever produce one, since it hardcodes the package-level group constant.
 func proxyGroupNamed(name string, fallbacks ...string) *spawneryv1alpha1.ProxyGroup {
 	return &spawneryv1alpha1.ProxyGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
@@ -84,8 +81,8 @@ func newReader(t *testing.T, objects ...client.Object) client.Reader {
 	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {
 		t.Fatalf("scheme: %v", err)
 	}
-	// WithStatusSubresource, or Status().Update on the fake client silently
-	// writes nothing and the resync test would pass for the wrong reason.
+	// Without WithStatusSubresource, Status().Update on the fake client
+	// silently writes nothing.
 	return fake.NewClientBuilder().WithScheme(scheme).
 		WithStatusSubresource(&spawneryv1alpha1.Server{}).
 		WithObjects(objects...).Build()
@@ -96,16 +93,13 @@ func newFleet(t *testing.T, objects ...client.Object) *proxyreg.Fleet {
 	return proxyreg.New(proxyreg.Options{Reader: newReader(t, objects...)})
 }
 
-// newFleetWithOutboxSize is for the overflow test: it needs a queue depth
-// small enough to reach with a handful of Registers rather than thousands.
 func newFleetWithOutboxSize(t *testing.T, size int, objects ...client.Object) *proxyreg.Fleet {
 	t.Helper()
 	return proxyreg.New(proxyreg.Options{Reader: newReader(t, objects...), OutboxSize: size})
 }
 
-// recv takes one message or fails. Nothing here blocks in practice: every
-// message this package produces is already in the outbox before the call that
-// produced it returns.
+// Every message this package produces is in the outbox before the call that
+// produced it returns, so recv never waits.
 func recv(t *testing.T, outbox <-chan *agentpb.OperatorToProxy) *agentpb.OperatorToProxy {
 	t.Helper()
 	select {
@@ -120,9 +114,6 @@ func recv(t *testing.T, outbox <-chan *agentpb.OperatorToProxy) *agentpb.Operato
 	}
 }
 
-// drain returns every message currently queued on outbox without blocking for
-// more. It is for tests that assert on how many messages went out rather than
-// on the shape of just one.
 func drain(t *testing.T, outbox <-chan *agentpb.OperatorToProxy) []*agentpb.OperatorToProxy {
 	t.Helper()
 	var got []*agentpb.OperatorToProxy
@@ -161,10 +152,8 @@ func TestFullSyncIsTheFirstMessage(t *testing.T) {
 	}
 }
 
-// A server the operator never told the proxies about must not appear, and the
-// flag is what records that — not the phase. The two disagree for exactly one
-// reconcile after a deregistration, and in that window the flag is the one
-// that matches what was sent.
+// The flag, not the phase, decides; they disagree for one reconcile after a
+// deregistration.
 func TestFullSyncOmitsUnregisteredAndAddresslessServers(t *testing.T) {
 	unregistered := registered("lobby-bbbb", "10.0.0.2:25565")
 	unregistered.Status.Registered = false
@@ -183,9 +172,8 @@ func TestFullSyncOmitsUnregisteredAndAddresslessServers(t *testing.T) {
 	}
 }
 
-// Section 5.2 of the main design: after every FullSync the draining servers are
-// re-announced, or a proxy reconnecting mid-drain would undo the
-// deregistration and start sending players back.
+// Draining servers are re-announced after every FullSync, or a proxy
+// reconnecting mid-drain would undo the deregistration.
 func TestJoinRepeatsTheDrainsAfterTheFullSync(t *testing.T) {
 	draining := registered("lobby-dddd", "10.0.0.4:25565")
 	draining.Status.Phase = "Draining"
@@ -264,10 +252,8 @@ func TestLeaveStopsDelivery(t *testing.T) {
 	}
 }
 
-// Make-before-break: the agent opens its next stream before the current one
-// ends, so two Joins for one pod overlap. The displaced session's leave must
-// not remove the fresh one — the same hazard sessions.leave guards against on
-// the gRPC side, for the same reason.
+// Make-before-break: the displaced session's leave must not remove its
+// successor.
 func TestASupersededSessionDoesNotRemoveItsSuccessor(t *testing.T) {
 	f := newFleet(t, proxyGroup("lobby"))
 
@@ -299,13 +285,8 @@ func TestRegisterWithNoSessionsIsNotAnError(t *testing.T) {
 	}
 }
 
-// The other half of make-before-break: a second Join for a pod that already
-// has a live session must close the first session's outbox, not just stop
-// delivering to it. Join's own doc comment promises that a closed channel
-// means "end your stream" — a consumer that never sees the close would range
-// over the channel forever. Leaving the close to the displaced session's own
-// leave call would work only if that call happens to run after the second
-// Join, which make-before-break does not guarantee.
+// A superseding Join must close the predecessor's outbox: its own leave may run
+// before the second Join.
 func TestASupersedingJoinClosesThePredecessorsOutbox(t *testing.T) {
 	f := newFleet(t, proxyGroup("lobby"))
 
@@ -327,9 +308,6 @@ func TestASupersedingJoinClosesThePredecessorsOutbox(t *testing.T) {
 	}
 }
 
-// The scenario the resync exists for, played out exactly: a registration is
-// broadcast while the reader still shows the old world, the session's FullSync
-// is therefore built without it, and nothing else would ever correct that.
 func TestResyncHealsARegistrationTheCacheHadNotSeen(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
@@ -350,7 +328,6 @@ func TestResyncHealsARegistrationTheCacheHadNotSeen(t *testing.T) {
 		t.Fatalf("FullSync carries %d servers, want none", len(servers))
 	}
 
-	// The world moves on without the session having been told.
 	late := registered("lobby-iiii", "10.0.0.9:25565")
 	if err := reader.Create(context.Background(), late); err != nil {
 		t.Fatalf("create: %v", err)
@@ -370,16 +347,8 @@ func TestResyncHealsARegistrationTheCacheHadNotSeen(t *testing.T) {
 	}
 }
 
-// The cross-session race described on Join's own doc comment: a superseded
-// stream can still reach Join after its successor already has, because
-// sessions.enter's cancellation in agentserver cannot interrupt the blocking
-// stream.Send calls sessionPrologue makes before either stream gets here.
-// Driving that actual interleaving is not practical from this package — it
-// depends on two goroutines racing inside agentserver's gRPC handlers — but
-// the contract Join promises is exercisable directly: a caller whose context
-// is already cancelled must leave whatever session is currently registered
-// for that pod alone, rather than tearing it down and installing nothing
-// useful in its place.
+// A superseded stream can reach Join after its successor did; its context is
+// cancelled by then and it must leave the live session alone.
 func TestJoinRefusesAnAlreadyCancelledContext(t *testing.T) {
 	f := newFleet(t, proxyGroup("lobby"))
 
@@ -396,10 +365,6 @@ func TestJoinRefusesAnAlreadyCancelledContext(t *testing.T) {
 		t.Fatal("Join with an already-cancelled context returned no error")
 	}
 
-	// The live session must be exactly as it was: still registered for this
-	// pod, and its outbox still open. A Register reaching it proves both —
-	// Join's ctx.Err() guard did not close it out from under a caller who was
-	// never told the session was gone.
 	if err := f.Register(context.Background(), registered("lobby-zzzz", "10.0.0.20:25565")); err != nil {
 		t.Fatalf("Register: %v", err)
 	}
@@ -408,11 +373,6 @@ func TestJoinRefusesAnAlreadyCancelledContext(t *testing.T) {
 	}
 }
 
-// This is the test that proves fallbacks are per-ProxyGroup rather than a
-// union across the namespace: two sessions in different groups, with
-// different fallback lists, must each see only their own group's list on a
-// Drain. A union bug would show up here as beta's session receiving alpha's
-// fallback too.
 func TestDrainSendsEachSessionItsOwnGroupsFallbacks(t *testing.T) {
 	f := newFleet(t,
 		proxyGroupNamed("alpha", "fallback-a"),
@@ -459,10 +419,6 @@ func TestDrainSendsEachSessionItsOwnGroupsFallbacks(t *testing.T) {
 	}
 }
 
-// Deregister is otherwise untested in this package: it must carry the right
-// server name, and it must reach only sessions in that server's namespace —
-// the same scoping TestRegisterReachesOnlyItsOwnNamespace proves for
-// Register.
 func TestDeregisterCarriesTheServerAndOnlyItsNamespace(t *testing.T) {
 	f := newFleet(t, proxyGroup("lobby"))
 
@@ -494,10 +450,6 @@ func TestDeregisterCarriesTheServerAndOnlyItsNamespace(t *testing.T) {
 	}
 }
 
-// A full queue cuts the session instead of dropping the message: dropping
-// would leave a proxy routing on a list it has no way of knowing is wrong,
-// looking healthy the whole time, while a closed stream is something the
-// agent already knows how to recover from.
 func TestAFullOutboxCutsTheSession(t *testing.T) {
 	f := newFleetWithOutboxSize(t, 1, proxyGroup("lobby"))
 
@@ -507,10 +459,8 @@ func TestAFullOutboxCutsTheSession(t *testing.T) {
 	}
 	defer leave()
 
-	// The queue's capacity is OutboxSize+len(initial) = 1+1 = 2, and it already
-	// holds the FullSync from Join. The first Register fills the remaining
-	// slot; the second finds the queue full and cuts the session rather than
-	// dropping the message.
+	// Capacity is OutboxSize+len(initial) = 2, and the FullSync already holds
+	// one slot.
 	if err := f.Register(context.Background(), registered("lobby-iiii", "10.0.0.9:25565")); err != nil {
 		t.Fatalf("Register 1: %v", err)
 	}
@@ -518,8 +468,6 @@ func TestAFullOutboxCutsTheSession(t *testing.T) {
 		t.Fatalf("Register 2: %v", err)
 	}
 
-	// Drain what made it into the queue before the cut: the FullSync and the
-	// one RegisterServer that fit.
 	if recv(t, outbox).GetFullSync() == nil {
 		t.Fatal("first message is not a FullSync")
 	}
@@ -531,11 +479,6 @@ func TestAFullOutboxCutsTheSession(t *testing.T) {
 		t.Error("the outbox was not closed after a message overflowed it")
 	}
 }
-
-// SetReady is unlike Register/Deregister/Drain: it targets one pod rather than
-// broadcasting to a namespace, and it must not repeat an assertion the session
-// already carries — the operator calls it on every five-second reconcile
-// whether or not the desired state changed.
 
 func TestSetReadyReachesOneSessionOnly(t *testing.T) {
 	f := newFleet(t, proxyGroup("lobby"))
@@ -574,9 +517,6 @@ func TestSetReadyReachesOneSessionOnly(t *testing.T) {
 }
 
 func TestSetReadyIsNotRepeatedForTheSameState(t *testing.T) {
-	// The operator asserts the desired state on every reconcile, five seconds
-	// apart. Without the memo a draining proxy would be told the same thing
-	// for the whole of its drain.
 	f := newFleet(t, proxyGroup("lobby"))
 
 	s, leave, err := f.Join(context.Background(), ns, group, "pod-a")
@@ -598,9 +538,8 @@ func TestSetReadyIsNotRepeatedForTheSameState(t *testing.T) {
 }
 
 func TestSetReadyIsReassertedOnANewStream(t *testing.T) {
-	// The memo lives on the session, so a reconnect starts without one. That
-	// is what makes the state survive a stream that broke mid-drain: the
-	// operator's next assertion lands even though the value has not changed.
+	// The memo lives on the session, so a reconnect re-asserts an unchanged
+	// value.
 	f := newFleet(t, proxyGroup("lobby"))
 
 	s, leave, err := f.Join(context.Background(), ns, group, "pod-a")
@@ -629,22 +568,14 @@ func TestSetReadyIsReassertedOnANewStream(t *testing.T) {
 }
 
 func TestSetReadyToAnUnknownPodIsNotAnError(t *testing.T) {
-	// A proxy whose stream has gone is a proxy that is not taking connections
-	// either. The reconcile that asked must not fail because of it — it will
-	// assert again on the next pass if the pod comes back.
 	f := newFleet(t, proxyGroup("lobby"))
 	if err := f.SetReady(context.Background(), "pod-gone", false); err != nil {
 		t.Errorf("SetReady to an unknown pod = %v, want nil", err)
 	}
 }
 
-// The memo means SetReady itself never repeats a value on one session, so the
-// resync is the only thing that ever re-states it — and re-stating it is what
-// bounds a disagreement between the agent's readiness gate and what the
-// operator believes it asserted to one interval instead of to the life of the
-// session. The expensive direction of such a disagreement is a pod left Ready
-// while its drain deadline runs: it collects players who are then disconnected
-// when it is deleted.
+// SetReady never repeats a value on one session, so Resync is what bounds a
+// divergence between the agent's gate and the memo.
 func TestResyncReassertsTheLastReadiness(t *testing.T) {
 	f := newFleet(t, proxyGroup("lobby"))
 
@@ -665,9 +596,8 @@ func TestResyncReassertsTheLastReadiness(t *testing.T) {
 	if len(got) != 2 {
 		t.Fatalf("the resync sent %d messages, want the FullSync and the readiness", len(got))
 	}
-	// The order is asserted, not just the pair. A SetReady(true) ahead of the
-	// FullSync would open the gate of an agent that has no server list, and
-	// every player routed there is disconnected with "no available server".
+	// A SetReady(true) ahead of the FullSync would open the gate of an agent
+	// with no server list.
 	if got[0].GetFullSync() == nil {
 		t.Errorf("the resync's first message is %T, want the FullSync", got[0].GetMessage())
 	}
@@ -681,9 +611,7 @@ func TestResyncReassertsTheLastReadiness(t *testing.T) {
 }
 
 func TestResyncAssertsNoReadinessOnASessionNeverTold(t *testing.T) {
-	// The operator has no readiness for a pod it has not decided about, and a
-	// default sent here would be an assertion it never made — ready=true would
-	// put a proxy into the Service's endpoints on a resync tick alone.
+	// A default sent here would be an assertion the operator never made.
 	f := newFleet(t, proxyGroup("lobby"))
 
 	s, leave, err := f.Join(context.Background(), ns, group, "pod-a")
@@ -701,22 +629,13 @@ func TestResyncAssertsNoReadinessOnASessionNeverTold(t *testing.T) {
 	}
 }
 
-// The fallback list has three spellings: the CRD field
-// ProxyGroup.spec.routing.fallbackGroups, the SPAWNERY_FALLBACK_GROUPS the pod
-// spec hands the agent at start, and the DrainPlayers.toGroups the operator
-// sends over the channel while a server empties. A proxy that resolves a join
-// against one and a drain against the other moves players onto a group it has
-// no server for.
-//
-// They cannot disagree today — internal/podspec.BuildProxyPod and Fleet's own
-// fallbacks() both read Spec.Routing.FallbackGroups — and nothing pinned that.
-// This is the only place the two are compared; it lives here rather than in
-// internal/podspec because podspec deliberately imports no other internal
-// package, and the comparison has to happen on the side that can see both.
+// The fallback list has three spellings:
+// ProxyGroup.spec.routing.fallbackGroups, SPAWNERY_FALLBACK_GROUPS in the pod
+// spec, and DrainPlayers.toGroups. A proxy resolving a join against one and a
+// drain against another moves players onto a group it has no server for. The
+// comparison lives here because podspec imports no other internal package.
 func TestTheFallbackListHasOneSourceForJoinAndForDrain(t *testing.T) {
-	// More than one entry, and deliberately not in sorted order: a single
-	// element would pass whether or not order survived, and this is an
-	// ordered try-list.
+	// Unsorted and more than one: this is an ordered try-list.
 	fallbacks := []string{"zulu", "alpha", "mike"}
 	pg := proxyGroup(fallbacks...)
 	f := newFleet(t, pg)
@@ -766,12 +685,9 @@ func TestTheFallbackListHasOneSourceForJoinAndForDrain(t *testing.T) {
 	}
 }
 
-// The mirror reaches a proxy, and it reaches it last.
-//
-// The position is the assertion. ProxyRole opens the pod's readiness gate on
-// the FullSync, so a message ahead of that one would be applied by an agent
-// that is not yet routable -- and a DrainPlayers has to follow the list it
-// names servers from.
+// The mirror comes after the FullSync: ProxyRole opens the readiness gate on
+// the FullSync, and a DrainPlayers has to follow the list it names servers
+// from.
 func TestAJoiningProxyIsSentTheNetworkStateAfterItsFullSync(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
@@ -852,9 +768,8 @@ func TestSendStateCarriesADoorToEveryProxyOfTheNamespace(t *testing.T) {
 	}
 }
 
-// Routing lives on the proxy and so does the plugin that asks for a private
-// server, which is why this is the one picture that carries them: the mirror a
-// proxy is sent is the whole namespace.
+// A proxy's mirror is the whole namespace, private servers included: the plugin
+// that asks for one runs on the proxy.
 func TestAJoiningProxyIsSentPrivateServersAndTheirGroup(t *testing.T) {
 	maxInstances := int32(300)
 	private := &spawneryv1alpha1.ServerGroup{
@@ -905,11 +820,8 @@ func TestAJoiningProxyIsSentPrivateServersAndTheirGroup(t *testing.T) {
 	}
 }
 
-// The interest state, tested on its own rather than assumed from serverreg's.
-//
-// The two fan-outs carry different session structs over different message
-// types, and "it is the same shape" is how the copy that is subtly not the
-// same gets in.
+// Tested on its own rather than assumed from serverreg's: the two fan-outs
+// carry different session structs and message types.
 func proxyCloudEventsIn(ch <-chan *agentpb.OperatorToProxy) []*agentpb.CloudEvent {
 	var got []*agentpb.CloudEvent
 	deadline := time.After(250 * time.Millisecond)

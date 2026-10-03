@@ -1,6 +1,5 @@
-# Paper 26.2, built beside nix/paper.nix's 26.3 for the images that still
-# carry it, and deleted together with them. Frozen: no pin script and no watch
-# reads this file. The build is nix/paper.nix's, whose comments explain it.
+# Paper 26.2, built beside 26.3 for the images that still carry it and
+# deleted with them. Frozen: no pin script reads this file.
 { fetchurl
 , jdk25_headless
 , stdenvNoCC

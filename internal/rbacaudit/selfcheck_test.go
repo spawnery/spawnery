@@ -30,11 +30,8 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// fakeReviewer answers reviews from a set of allowed keys, and records what it
-// was asked. The recording is half the point: the attributes this builds are
-// what the authorizer matches on, and a check that asked about the wrong verb
-// or dropped the subresource would answer "allowed" for a permission nobody
-// holds.
+// fakeReviewer records what it was asked: a check that dropped the verb or
+// subresource would answer "allowed" for a permission nobody holds.
 type fakeReviewer struct {
 	allowed map[string]bool
 	asked   []authorizationv1.ResourceAttributes
@@ -65,14 +62,8 @@ func perms() []Permission {
 	}
 }
 
-// TestVerifyReturnsOnlyWhatIsDenied is the whole function: it asks the
-// authorizer directly rather than waiting for a request to be refused, which
-// is what lets it see a cache-backed verb at all.
 func TestVerifyReturnsOnlyWhatIsDenied(t *testing.T) {
-	// The keys are Permission.Key()'s own rendering, taken from it rather
-	// than spelled by hand: a key format this test guessed wrong would make
-	// every permission read as denied and the assertion below fail for a
-	// reason that has nothing to do with Verify.
+	// Taken from Key() itself, so a guessed key format cannot fail this test.
 	allowed := map[string]bool{}
 	for _, p := range perms() {
 		if p.Subresource == "" {
@@ -88,18 +79,13 @@ func TestVerifyReturnsOnlyWhatIsDenied(t *testing.T) {
 	if len(denied) != 1 || denied[0].Subresource != "status" {
 		t.Fatalf("denied = %+v, want only pods/status get", denied)
 	}
-	// Every permission is asked about, not just up to the first denial: an
-	// administrator fixing one missing verb at a time, restarting between
-	// each, is the worst possible way to learn about four.
+	// Every permission is asked about, not just up to the first denial.
 	if len(reviewer.asked) != len(perms()) {
 		t.Errorf("asked %d reviews, want %d", len(reviewer.asked), len(perms()))
 	}
 }
 
-// TestVerifyAsksAboutTheSubresourceRatherThanTheResource is the attribute most
-// easily dropped, and dropping it is silent in the permissive direction:
-// pods/status is a different resource to the authorizer, and asking about
-// "pods" would answer allowed for an operator that cannot write a status.
+// pods/status is a different resource to the authorizer than pods.
 func TestVerifyAsksAboutTheSubresourceRatherThanTheResource(t *testing.T) {
 	reviewer := &fakeReviewer{allowed: map[string]bool{}}
 
@@ -111,8 +97,6 @@ func TestVerifyAsksAboutTheSubresourceRatherThanTheResource(t *testing.T) {
 		if a.Resource == "pods" && a.Subresource == "status" && a.Verb == "get" {
 			found = true
 		}
-		// And the namespace reaches every review, or a namespaced grant would
-		// be checked at cluster scope and read as missing.
 		if a.Namespace != "spawnery-system" {
 			t.Errorf("review for %s/%s asked namespace %q", a.Resource, a.Verb, a.Namespace)
 		}
@@ -122,10 +106,6 @@ func TestVerifyAsksAboutTheSubresourceRatherThanTheResource(t *testing.T) {
 	}
 }
 
-// TestVerifyFailsWholeRatherThanReportingPhantomDenials pins the error path.
-// An API server that cannot answer a review says nothing about what this
-// operator may do, and counting every unanswered review as a denial would bury
-// the real ones on the day there are any.
 func TestVerifyFailsWholeRatherThanReportingPhantomDenials(t *testing.T) {
 	reviewer := &fakeReviewer{err: errors.New("apiserver is having a moment")}
 
@@ -138,9 +118,6 @@ func TestVerifyFailsWholeRatherThanReportingPhantomDenials(t *testing.T) {
 	}
 }
 
-// TestDeniedMessageNamesTheCallSite is why Permission.Why is worth carrying
-// into the log. "networks: list is missing" leaves an administrator to go and
-// find out what breaks; the table already knows.
 func TestDeniedMessageNamesTheCallSite(t *testing.T) {
 	msg := DeniedMessage([]Permission{
 		{Group: "", Resource: "pods", Verb: "create", Why: "the Server controller creates pods"},
@@ -153,10 +130,7 @@ func TestDeniedMessageNamesTheCallSite(t *testing.T) {
 	}
 }
 
-// TestTheRealTablesAreCheckable is the guard that keeps this useful. Verify
-// builds ResourceAttributes from each Permission, and a table entry with no
-// resource or no verb produces a review the authorizer answers about nothing
-// -- allowed, every time, for a permission that means nothing.
+// An entry without resource or verb would be answered "allowed" every time.
 func TestTheRealTablesAreCheckable(t *testing.T) {
 	for name, table := range map[string][]Permission{
 		"RequiredCluster":    RequiredCluster,
@@ -170,9 +144,6 @@ func TestTheRealTablesAreCheckable(t *testing.T) {
 	}
 }
 
-// recordingLogger captures what the checker logs, which is most of what it
-// does: the gauge says how many permissions are missing and the log is the
-// only thing that says which, and when.
 func recordingLogger(lines *[]string) logr.Logger {
 	return funcr.New(func(prefix, args string) {
 		*lines = append(*lines, args)
@@ -187,8 +158,8 @@ func checkerOver(reviewer Reviewer, interval time.Duration) *Checker {
 	}
 }
 
-// countingReviewer wraps fakeReviewer and stops the checker's context once it
-// has answered enough rounds, so a repeating test does not depend on a sleep.
+// countingReviewer stops the checker's context after enough rounds, so the
+// test needs no sleep.
 type countingReviewer struct {
 	*fakeReviewer
 	after int
@@ -208,9 +179,6 @@ func (c *countingReviewer) Create(ctx context.Context, review *authorizationv1.S
 	return out, err
 }
 
-// TestTheCheckerAsksAgain is the whole change. Before it, a permission revoked
-// while the operator ran was invisible: milestone 6a measured seven and three
-// quarter minutes with pods:list gone and not one log line anywhere.
 func TestTheCheckerAsksAgain(t *testing.T) {
 	fake := &fakeReviewer{allowed: allowAll()}
 	ctx, cancel := context.WithCancel(context.Background())
@@ -226,9 +194,6 @@ func TestTheCheckerAsksAgain(t *testing.T) {
 	}
 }
 
-// TestANegativeIntervalChecksOnce keeps the old behaviour reachable. An
-// operator whose administrator would rather pay nothing after startup can have
-// exactly what 0.2.3 did.
 func TestANegativeIntervalChecksOnce(t *testing.T) {
 	fake := &fakeReviewer{allowed: allowAll()}
 	checker := checkerOver(fake, -1)
@@ -241,9 +206,6 @@ func TestANegativeIntervalChecksOnce(t *testing.T) {
 	}
 }
 
-// TestADenialRepeatsAndAGrantDoesNot pins the asymmetry. A broken installation
-// has to stay legible in a log somebody tails hours later; a healthy one
-// saying so every ten minutes for a year is how a log stops being read.
 func TestADenialRepeatsAndAGrantDoesNot(t *testing.T) {
 	allowed := allowAll()
 	fake := &fakeReviewer{allowed: allowed}
@@ -278,11 +240,6 @@ func TestADenialRepeatsAndAGrantDoesNot(t *testing.T) {
 	}
 }
 
-// TestTheGaugeCountsWhatIsMissingAndSurvivesAFailedRound covers both readings
-// the gauge has to carry. Zero means asked and nothing is missing, which is
-// what an alert acts on; a round that could not ask leaves the last answer
-// alone, because an API server that cannot answer says nothing about what the
-// operator may do.
 func TestTheGaugeCountsWhatIsMissingAndSurvivesAFailedRound(t *testing.T) {
 	const scope = "gauge-test"
 	t.Cleanup(func() { PermissionsMissing.DeleteLabelValues(scope) })
@@ -316,10 +273,8 @@ func TestTheGaugeCountsWhatIsMissingAndSurvivesAFailedRound(t *testing.T) {
 	}
 }
 
-// TestDefaultScopesAskTheRealTables guards the wiring main.go no longer does
-// itself: the cluster table at cluster scope, the namespaced one in the
-// operator's own namespace. Asking either in the other's scope would answer
-// denied for permissions the operator holds.
+// Asking either table in the other's scope would answer denied for
+// permissions the operator holds.
 func TestDefaultScopesAskTheRealTables(t *testing.T) {
 	scopes := DefaultScopes("spawnery-system")
 	if len(scopes) != 2 {

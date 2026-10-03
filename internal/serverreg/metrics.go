@@ -21,15 +21,9 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
-// SessionsCut counts backend sessions ended because their queue filled up. It
-// is the only outward sign of a backend that cannot keep up: the stream simply
-// ends and the agent reconnects, which on its own looks like an ordinary
-// reconnect.
-//
-// Its own series rather than a label on proxyreg's, because the two mean
-// different things operationally. A cut proxy session is a routing concern; a
-// cut backend session costs a mirror and nothing else, and an alert that
-// treated them alike would page for the cheaper one.
+// SessionsCut counts backend sessions ended because their queue filled up;
+// without it such a cut looks like an ordinary reconnect. Separate from
+// proxyreg's series because a cut backend session costs only a mirror.
 var SessionsCut = prometheus.NewCounter(
 	prometheus.CounterOpts{
 		Name: "spawnery_server_sessions_cut_total",

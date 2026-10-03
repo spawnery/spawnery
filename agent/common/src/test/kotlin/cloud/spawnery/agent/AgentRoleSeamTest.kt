@@ -14,17 +14,9 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 
 /**
- * The seam between [SessionLoop] and [AgentRole], stated without reference to
- * which message produced which directive.
- *
- * [SessionLoopTest] drives the loop with a role that maps the real
- * `OperatorToServer` cases the way Paper's does, so every assertion there reads
- * as a fact about `ReportInterval` and `SessionDeadline`. That is the wrong
- * altitude for what the second agent needs to know: the Velocity role will
- * return the same directives from messages of its own, and what it relies on is
- * that a [Directive.Report] starts a timer and a [Directive.Deadline] schedules
- * a renewal *whatever* was on the wire. So each test here dictates the directive
- * and sends a message the production mapping does not recognise.
+ * The seam between [SessionLoop] and [AgentRole], independent of which message
+ * produced which directive: each test dictates the directive and sends a
+ * message the production mapping does not recognise.
  */
 class AgentRoleSeamTest {
     private val scheduler: ScheduledExecutorService = Executors.newSingleThreadScheduledExecutor()
@@ -47,18 +39,12 @@ class AgentRoleSeamTest {
             version = "26.2-0.2.0",
             log = { _, _ -> },
             note = { },
-            // See SessionLoopTest.loopAgainst: identity jitter, so a test's
-            // delays are the delays it wrote down.
             jitter = { it },
             fallbackAnswerBoundMillis = fallbackAnswerBoundMillis,
         )
     }
 
-    /**
-     * A message with no field set at all: the production mapping answers
-     * [Directive.None] for it, so anything the loop does here is the directive's
-     * doing and not the message's.
-     */
+    /** The production mapping answers [Directive.None] for this. */
     private fun unrecognised(): OperatorToServer = OperatorToServer.getDefaultInstance()
 
     @Test
@@ -90,9 +76,7 @@ class AgentRoleSeamTest {
     fun `a deadline directive schedules a renewal and sets the answer bound`(@TempDir dir: Path) {
         FakeOperator("seam-deadline").use { operator ->
             val role = FakeRole { Directive.Deadline(1, 1) }
-            // A minute, so the give-up asserted below cannot be the fallback
-            // bound firing: within five seconds only the operator's own
-            // hardDeadlineSeconds can produce one.
+            // A minute, so a give-up within five seconds can only be hardDeadlineSeconds.
             loopAgainst(operator, role, dir, fallbackAnswerBoundMillis = 60_000).use { loop ->
                 loop.start()
                 val first = operator.awaitStream(0)
@@ -100,14 +84,10 @@ class AgentRoleSeamTest {
 
                 first.toAgent.onNext(unrecognised())
 
-                // Half 1: the renewal. Nothing else opens a stream, so arriving
-                // at all is the assertion that renewAfterSeconds was acted on.
+                // Nothing but renewAfterSeconds opens a second stream.
                 val second = operator.awaitStream(1)
                 second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
 
-                // Half 2: the same directive's hardDeadlineSeconds became the
-                // bound on the next unanswered attempt, which this operator
-                // never answers.
                 assertTrue(
                     second.closed.await(5, TimeUnit.SECONDS),
                     "the renewed attempt was never given up on, so the directive's " +
@@ -138,8 +118,7 @@ class AgentRoleSeamTest {
 
                 first.toAgent.onNext(unrecognised())
 
-                // Longer than the shortest thing either directive arms: a
-                // report is at least one second and so is a renewal.
+                // A report and a renewal are each at least one second.
                 Thread.sleep(1500)
                 assertEquals(
                     listOf<Directive>(Directive.None),

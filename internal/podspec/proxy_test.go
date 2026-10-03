@@ -61,11 +61,8 @@ func proxyEnv(pod *corev1.Pod, name string) string {
 	return ""
 }
 
-// The probe is the ready gate of design 6.6. It has to be a tcpSocket on a
-// port of its own: Velocity speaks no HTTP, and an exec probe would need
-// another binary in the image and another thing to keep reproducible. The
-// agent binds this port only after it has processed its first FullSync, so a
-// proxy cannot go green without a server list.
+// tcpSocket on its own port: Velocity speaks no HTTP, and an exec probe would
+// need another binary in the image.
 func TestProxyPodReadinessProbeIsTheAgentsOwnPort(t *testing.T) {
 	pod := buildProxy(t)
 	probe := pod.Spec.Containers[0].ReadinessProbe
@@ -80,9 +77,8 @@ func TestProxyPodReadinessProbeIsTheAgentsOwnPort(t *testing.T) {
 	}
 }
 
-// The player limit is not cosmetic: the agent reports it as slots, and the
-// registry discards any report above it. A group that sets none must still
-// produce a workable number.
+// The registry discards any report above the limit, so an unset one must
+// still produce a workable number.
 func TestProxyPodCarriesAPlayerLimit(t *testing.T) {
 	pod := buildProxy(t)
 	if got := proxyEnv(pod, EnvPlayerLimit); got != "500" {
@@ -103,8 +99,6 @@ func TestProxyPodCarriesAPlayerLimit(t *testing.T) {
 func TestProxyPodHasNoServerLabel(t *testing.T) {
 	pod := buildProxy(t)
 	if _, ok := pod.Labels[LabelServer]; ok {
-		// The orphan sweep keys on its absence to tell the two kinds of pod
-		// apart once it lists by managed-by alone.
 		t.Error("a proxy pod must carry no server label")
 	}
 	if pod.Labels[LabelRole] != RoleProxy {
@@ -115,7 +109,6 @@ func TestProxyPodHasNoServerLabel(t *testing.T) {
 	}
 }
 
-// The pod has no CR of its own, so the group is what deletion cascades from.
 func TestProxyPodIsOwnedByItsGroup(t *testing.T) {
 	pod := buildProxy(t)
 	if len(pod.OwnerReferences) != 1 {
@@ -130,8 +123,6 @@ func TestProxyPodIsOwnedByItsGroup(t *testing.T) {
 	}
 }
 
-// The network's defaults reach the proxy layer too — a nodeSelector that keeps
-// game servers off the control plane has to keep proxies off it as well.
 func TestProxyPodInheritsTheNetworkDefaults(t *testing.T) {
 	pod := buildProxy(t)
 	if pod.Spec.NodeSelector["node-role/minecraft"] != "true" {
@@ -165,8 +156,6 @@ func TestProxyPodMountsTheAgentCredentialsAndNothingElse(t *testing.T) {
 	var projected *corev1.Volume
 	for i := range pod.Spec.Volumes {
 		v := &pod.Spec.Volumes[i]
-		// No PVC: proxies hold no state worth keeping, and the cross-proxy
-		// player state that would need one is deferred by the main design.
 		if v.PersistentVolumeClaim != nil {
 			t.Errorf("volume %q is a PVC", v.Name)
 		}
@@ -200,11 +189,6 @@ func TestProxyPodExposesBothPorts(t *testing.T) {
 	}
 }
 
-// TestProxyPodConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret mirrors
-// the server builder's own config-volume test: the two builders share one
-// helper for exactly this volume, and design intent (docs section 4.6) is
-// that they cannot drift into different answers about where configuration
-// lives.
 func TestProxyPodConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret(t *testing.T) {
 	pod := buildProxy(t)
 
@@ -260,13 +244,6 @@ func TestProxyPodConfigVolumeCarriesTheGroupConfigMapAndForwardingSecret(t *test
 	}
 }
 
-// TestProxyPodConfigOverlayIsAnUnfilteredVolumeNestedUnderTheConfigMount
-// mirrors the server builder's own version of this test (see the long
-// comment there for why): the overlay must be a separate, plain ConfigMap
-// volume with no Items, not a third Projected source enumerating a closed
-// set of known names — an enumerated list would drop an unrecognised key at
-// the kubelet, before internal/render.checkOverlayFiles ever got a chance to
-// refuse it by name.
 func TestProxyPodConfigOverlayIsAnUnfilteredVolumeNestedUnderTheConfigMount(t *testing.T) {
 	group := testProxyGroup()
 	group.Spec.ConfigOverlay = &spawneryv1alpha1.ObjectRef{Name: "gateway-overlay"}
@@ -317,10 +294,6 @@ func TestProxyPodConfigOverlayIsAnUnfilteredVolumeNestedUnderTheConfigMount(t *t
 	}
 }
 
-// TestProxyPodConfigOverlayVolumeIsAbsentWhenNoneIsDeclared guards the nil
-// case: a ProxyGroup that sets no configOverlay must get neither the
-// overlay volume nor its mount, and the base config volume keeps exactly
-// its 2 sources.
 func TestProxyPodConfigOverlayVolumeIsAbsentWhenNoneIsDeclared(t *testing.T) {
 	pod := buildProxy(t)
 	for i := range pod.Spec.Volumes {
@@ -339,9 +312,8 @@ func TestProxyPodConfigOverlayVolumeIsAbsentWhenNoneIsDeclared(t *testing.T) {
 	}
 }
 
-// The drain window is how long existing sessions may run out when a proxy is
-// replaced. A grace period shorter than it would have the kubelet kill the
-// process mid-drain.
+// A grace period shorter than the drain window would kill the process
+// mid-drain.
 func TestProxyPodGracePeriodComesFromTheDrainWindow(t *testing.T) {
 	group := testProxyGroup()
 	group.Spec.Drain = &spawneryv1alpha1.DrainSpec{TimeoutSeconds: 120}
@@ -377,10 +349,7 @@ func TestProxyPodCarriesTheFallbackGroups(t *testing.T) {
 	}
 }
 
-// A hostPort is the whole of what makes the HostPort strategy work without a
-// Service, and it is also what makes the kube-scheduler refuse a second pod
-// of the same group on one node. Setting it under any other strategy would
-// impose that cap on groups that never asked for it.
+// A hostPort caps the group at one pod per node, so only HostPort may set it.
 func TestBuildProxyPodBindsAHostPortOnlyForThatStrategy(t *testing.T) {
 	for _, tc := range []struct {
 		name   string
@@ -412,13 +381,8 @@ func TestBuildProxyPodBindsAHostPortOnlyForThatStrategy(t *testing.T) {
 			want: 25565,
 		},
 		{
-			// The CEL rules on ExposeSpec forbid a NodePort object from also
-			// carrying a hostPort sub-block, but a unit test builds the Go
-			// struct directly and never goes through the API server's
-			// validation. If the type check were ever dropped from the
-			// condition below, this is the case that would catch it: every
-			// other subtest here has HostPort == nil, so a mutation that
-			// keys off presence alone would sail through them unnoticed.
+			// The CEL rules forbid this combination, but a unit test never goes through
+			// them; every other case has HostPort == nil.
 			name: "NodePort with a stray HostPort sub-block",
 			expose: spawneryv1alpha1.ExposeSpec{
 				Type:     spawneryv1alpha1.ExposeNodePort,
@@ -451,9 +415,8 @@ func TestBuildProxyPodBindsAHostPortOnlyForThatStrategy(t *testing.T) {
 			if minecraft.HostPort != tc.want {
 				t.Errorf("hostPort = %d, want %d", minecraft.HostPort, tc.want)
 			}
-			// The ready port is the kubelet's probe target and is never
-			// published on a node: a second host port would cap the group by
-			// node count for a port no player dials.
+			// A second host port would cap the group by node count for a port no player
+			// dials.
 			for _, p := range pod.Spec.Containers[0].Ports {
 				if p.Name == ProxyReadyPortName && p.HostPort != 0 {
 					t.Errorf("the ready port carries hostPort %d; it must never be published",
@@ -464,12 +427,8 @@ func TestBuildProxyPodBindsAHostPortOnlyForThatStrategy(t *testing.T) {
 	}
 }
 
-// The hash is what makes a strategy switch roll the pods, and what makes a
-// switch that changes nothing about the pods roll nothing. Both halves are
-// asserted here because only the pair says what the field is for: without
-// the equality, adding the strategy to the hash by any other means would
-// pass while replacing every pod of a group that switched NodePort to
-// LoadBalancer for no reason at all.
+// Both halves: a switch to HostPort rolls the pods, NodePort to LoadBalancer
+// does not.
 func TestDesiredProxyHashSeparatesHostPortFromTheServiceStrategies(t *testing.T) {
 	hashFor := func(t *testing.T, expose spawneryv1alpha1.ExposeSpec) string {
 		t.Helper()
@@ -508,9 +467,7 @@ func TestDesiredProxyHashSeparatesHostPortFromTheServiceStrategies(t *testing.T)
 }
 
 func TestTheProxyContainerKeepsStdinOpenForTheConsole(t *testing.T) {
-	// The same reasoning as the server's, and asserted separately because the
-	// two pods are built by two functions -- "it is the same shape" is how the
-	// one that is subtly not the same gets in.
+	// Asserted separately because the two pods are built by two functions.
 	pod, err := BuildProxyPod(testNetwork(), testProxyGroup(), "gateway-abcd", testEndpoint, nil)
 	if err != nil {
 		t.Fatalf("BuildProxyPod: %v", err)
@@ -529,9 +486,8 @@ func TestTheProxyContainerKeepsStdinOpenForTheConsole(t *testing.T) {
 }
 
 func TestProxyExtraPluginsMountsTheClaimReadOnlyOutsideData(t *testing.T) {
-	// Written out rather than shared with the server's. The two pods are built
-	// by two functions, and "it is the same shape" is how the one that is
-	// subtly not the same gets in.
+	// Written out rather than shared with the server's: the two pods are built
+	// by two functions.
 	group := testProxyGroup()
 	group.Spec.ExtraPlugins = &spawneryv1alpha1.ExtraPlugins{ClaimName: "plugins"}
 	pod, err := BuildProxyPod(testNetwork(), group, "gateway-abcd", testEndpoint, nil)
@@ -595,9 +551,8 @@ func TestProxyWithNoExtraPluginsRendersNoVolume(t *testing.T) {
 }
 
 func TestProxyExtraFilesMountsTheClaimReadOnlyOutsideData(t *testing.T) {
-	// Written out rather than shared with the server's. The two pods are built
-	// by two functions, and "it is the same shape" is how the one that is
-	// subtly not the same gets in.
+	// Written out rather than shared with the server's: the two pods are built
+	// by two functions.
 	group := testProxyGroup()
 	group.Spec.ExtraFiles = &spawneryv1alpha1.ExtraFiles{ClaimName: "files"}
 	pod, err := BuildProxyPod(testNetwork(), group, "gateway-abcd", testEndpoint, nil)

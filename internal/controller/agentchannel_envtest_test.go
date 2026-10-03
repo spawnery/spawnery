@@ -46,18 +46,13 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// The certificate is issued for the service the operator runs behind in a real
-// cluster, not for the throwaway namespace this test runs in: an agent pins
-// exactly these names, so the fixture has to serve them.
+// Agents pin the service the operator runs behind, not this test's namespace.
 const (
 	channelService          = "spawnery-operator"
 	channelServiceNamespace = "spawnery-system"
 	channelServerName       = channelService + "." + channelServiceNamespace + ".svc"
 )
 
-// channelFixture is the whole agent channel in one namespace: certificates,
-// the authenticator, the gRPC service and a Server reconciler whose
-// Bootstrapper hands out the very CA the service is serving.
 type channelFixture struct {
 	*fixture
 	cs   *kubernetes.Clientset
@@ -74,8 +69,7 @@ func newChannelFixture(t *testing.T) *channelFixture {
 		t.Fatalf("clientset: %v", err)
 	}
 
-	// The certificates run on the wall clock, not the fixture's frozen one:
-	// the TLS stack on both ends checks validity against real time.
+	// Wall clock: the TLS stack on both ends checks validity against real time.
 	store := &certs.Store{
 		Client:    base.c,
 		Namespace: base.ns,
@@ -92,13 +86,9 @@ func newChannelFixture(t *testing.T) *channelFixture {
 		t.Fatalf("publish the TLS bundle: %v", err)
 	}
 
-	// The same CA the service serves is the one the bootstrap writes into the
-	// namespace, exactly as main.go wires it.
 	base.reconc.Bootstrap = &Bootstrapper{Client: base.c, Reader: base.c, CA: provider.CABundle}
 
 	srv := agentserver.New(agentserver.Options{
-		// Port 0: the kernel picks a free one, so parallel packages do not
-		// collide.
 		Addr:     "127.0.0.1:0",
 		Provider: provider,
 		Auth: &grpcauth.Authenticator{
@@ -108,9 +98,6 @@ func newChannelFixture(t *testing.T) *channelFixture {
 		},
 		Agents:  base.agents,
 		Proxies: proxyreg.New(proxyreg.Options{Reader: base.c}),
-		// The backend side's fan-out, which ServerSession joins. This fixture
-		// found the wiring on its own: agentserver.New panics without one, and
-		// that panic is what this line answers rather than a compile error.
 		Servers: serverreg.New(serverreg.Options{
 			State: netstate.Source{Reader: base.c, Agents: base.agents},
 		}),
@@ -143,9 +130,6 @@ func newChannelFixture(t *testing.T) *channelFixture {
 
 type channelStream = grpc.BidiStreamingClient[agentpb.ServerMessage, agentpb.OperatorToServer]
 
-// dialAgentFor opens a ServerSession the way the agent in that pod would: a
-// freshly minted, audience-bound, pod-bound token over TLS against the pinned
-// CA. Nothing here is a stand-in for the real path.
 func (f *channelFixture) dialAgentFor(pod *corev1.Pod) (channelStream, func()) {
 	f.t.Helper()
 
@@ -204,9 +188,6 @@ func (f *channelFixture) sendPlayerCount(stream channelStream, players, slots in
 	}
 }
 
-// waitForRegistry blocks until the operator has processed what the agent sent.
-// The messages travel a real connection and are handled on another goroutine,
-// so the reconcile that follows has to wait for them rather than assume them.
 func (f *channelFixture) waitForRegistry(uid string) {
 	f.t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
@@ -222,8 +203,7 @@ func (f *channelFixture) waitForRegistry(uid string) {
 	}
 }
 
-// This is the milestone in one test: no test may call registry.MarkReady
-// here. The only path to Ready is a real agent over a real TLS connection.
+// No test may call registry.MarkReady here: the only path to Ready is a real agent.
 func TestAgentOverTheWireBringsAServerToReady(t *testing.T) {
 	f := newChannelFixture(t)
 
@@ -254,19 +234,8 @@ func TestAgentOverTheWireBringsAServerToReady(t *testing.T) {
 	}
 }
 
-// The bootstrap has to have run before the pod exists, or the kubelet would
-// fail to mount a ConfigMap that is not there.
-//
-// Every assertion here has to be able to tell ServerReconciler's own Ensure
-// apart from the fixture's. newFixture reconciles the Network before this test
-// body starts, and that reconcile bootstraps the namespace too, so a test
-// that only asked whether the objects exist would stay green with the call it
-// guards deleted outright. Two things separate the two callers: the fixture
-// bootstraps with the literal "test-ca" while newChannelFixture rewires only
-// the ServerReconciler's Bootstrapper to the bundle the gRPC service really
-// serves, so the stored ca.crt names which of them wrote it; and the
-// ServiceAccounts, which Ensure never updates, are deleted below so that only
-// a Create in this reconcile can bring them back.
+// The kubelet cannot mount a ConfigMap that is not there yet. newFixture already
+// bootstrapped with "test-ca", so ca.crt and the deleted ServiceAccounts prove this reconcile did it.
 func TestReconcileBootstrapsTheNamespaceBeforeCreatingThePod(t *testing.T) {
 	f := newChannelFixture(t)
 
@@ -301,19 +270,11 @@ func TestReconcileBootstrapsTheNamespaceBeforeCreatingThePod(t *testing.T) {
 	}
 }
 
-// The other half of the ordering rule: as long as the bootstrap cannot run —
-// which is the state of every operator between process start and the moment
-// the leader has published a CA — no pod may be created at all. A pod started
-// against an empty or missing ca.crt does not wait for one; it comes up and
-// fails its handshake, and the operator would have to time it out.
+// A pod started without a CA does not wait for one; it fails its handshake.
 func TestReconcileCreatesNoPodWhileTheCAIsMissing(t *testing.T) {
 	f := newChannelFixture(t)
 
-	// newChannelFixture's own newFixture(t) already ran a Network reconcile
-	// that bootstrapped this namespace with a real CA (that is this task's
-	// whole point), so the ConfigMap this test checks for absence is already
-	// there. Remove it, or the assertion below observes the fixture's setup
-	// rather than what this reconcile does with an empty CA.
+	// newChannelFixture already bootstrapped this namespace with a real CA.
 	if err := f.c.Delete(f.ctx, &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: podspec.CAConfigMapName, Namespace: f.ns},
 	}); err != nil {
@@ -336,8 +297,6 @@ func TestReconcileCreatesNoPodWhileTheCAIsMissing(t *testing.T) {
 		t.Fatalf("get ConfigMap = %v, want NotFound: an empty CA must never be written", err)
 	}
 
-	// And it recovers by itself once the provider has one — no restart, no
-	// manual step.
 	f.reconc.Bootstrap = &Bootstrapper{Client: f.rc, Reader: f.rc, CA: func() []byte { return f.ca }}
 	f.reconcile(srv.Name)
 	if _, ok := f.pod(srv.Name); !ok {

@@ -27,9 +27,7 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// The CRD is installable and the fields survive a write and a read. Cheap, and
-// it catches a marker that does not mean what it looks like -- a validation
-// that rejects a legal value, or an optional field the API server drops.
+// The CRD is installable and the fields survive a write and a read.
 func TestScaleBoostRoundTrip(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -60,8 +58,6 @@ func TestScaleBoostRoundTrip(t *testing.T) {
 }
 
 func TestAScaleBoostWithoutAnExpiryIsAccepted(t *testing.T) {
-	// The "forever" case the type deliberately allows. If this fails, the
-	// +optional marker is not doing what the comment says it does.
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
 
@@ -77,8 +73,6 @@ func TestAScaleBoostWithoutAnExpiryIsAccepted(t *testing.T) {
 }
 
 func TestAScaleBoostOfZeroReplicasIsRefused(t *testing.T) {
-	// Minimum=1. A boost of zero is not a boost, and accepting one would put
-	// an object in the cluster that inflates nothing and explains nothing.
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
 

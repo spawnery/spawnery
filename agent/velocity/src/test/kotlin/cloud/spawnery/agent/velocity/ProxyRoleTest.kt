@@ -28,26 +28,6 @@ import java.util.concurrent.atomic.AtomicBoolean
 import cloud.spawnery.agent.pb.RegisteredServer as PbServer
 import java.util.UUID
 
-/**
- * The mapping between the operator's messages and the four things a proxy
- * agent does with them, and nothing about the loop.
- *
- * `SessionLoopTest` drives the loop with a `FakeRole` of its own — it has to,
- * because the loop lives in `:common` and this class does not — so without
- * this the production role would be the one thing on the proxy's side of the
- * channel that nothing tested.
- *
- * The collaborators are the real [ServerDirectory], [Router] and [Drain] over
- * [FakeRegistry]/[FakePlayers] rather than doubles of their own. Each of the
- * three has its own suite; what is under test here is only that the right one
- * is reached with the right arguments, and an assertion made against their
- * real observable effects cannot pass against a role that called a mock in a
- * way the production wiring would not.
- */
-/**
- * A feed with nobody online. None of these tests is about the feed, and an
- * audience that answers "nobody" makes the dependency inert rather than mocked.
- */
 private fun inertFeed(): Feed = Feed(
     object : FeedAudience {
         override fun holders(permission: String): List<UUID> = emptyList()
@@ -57,6 +37,11 @@ private fun inertFeed(): Feed = Feed(
     System::currentTimeMillis,
 )
 
+/**
+ * The mapping between the operator's messages and what a proxy agent does with
+ * them, over the real [ServerDirectory], [Router] and [Drain] so assertions
+ * hold against their observable effects.
+ */
 class ProxyRoleTest {
     private val registry = FakeRegistry()
     private val logs = mutableListOf<Pair<String, Throwable?>>()
@@ -67,7 +52,6 @@ class ProxyRoleTest {
     private val state = ProxyState(slots = 500)
     private val mirror = NetworkMirror()
 
-    /** How many times the role reported a first sync. See the two gate tests. */
     private var syncs = 0
 
     private val role = ProxyRole(
@@ -87,9 +71,6 @@ class ProxyRoleTest {
 
     @Test
     fun `hello carries the read timeout the proxy actually parsed`() {
-        // The operator races this deadline when a backend's node dies and can
-        // find it out no other way: the value lives in a file the operator
-        // never reads, which a configOverlay is free to lower.
         val hello = role.hello("test-version").hello
         assertEquals(30_000, hello.readTimeoutMillis)
     }
@@ -100,12 +81,6 @@ class ProxyRoleTest {
 
         assertEquals(ProxyMessage.MessageCase.HELLO, hello.messageCase)
         assertEquals("26.2-0.3.0", hello.hello.version)
-        // Not cosmetic, and not a stand-in for "the proxy is not ready yet".
-        // ProxyMessage carries no readiness at all: a proxy's readiness reaches
-        // the operator through the kubelet's probe on ReadyGate's port and
-        // nowhere else, which internal/agentserver's handleProxy says in its
-        // own comment. A `true` here would be a second and contradicting
-        // source for a fact the kubelet owns.
         assertFalse(hello.hello.ready, "the proxy asserted a readiness only the kubelet may state")
     }
 
@@ -116,13 +91,10 @@ class ProxyRoleTest {
         val report = role.playerCount()
         assertEquals(ProxyMessage.MessageCase.PLAYER_COUNT, report.messageCase)
         assertEquals(12, report.playerCount.players)
-        // The proxy's own player limit, not a zero. The operator's registry
-        // discards any report where players exceed slots, so a proxy reporting
-        // zero slots would have every report with a player online thrown away.
+        // Never zero: the operator discards any report where players exceed slots.
         assertEquals(500, report.playerCount.slots)
 
-        // Read when the report is built, not when the role was constructed:
-        // Velocity's scheduler overwrites the count between reports.
+        // Read when the report is built, not when the role was constructed.
         state.sample(players = 13)
         assertEquals(13, role.playerCount().playerCount.players)
     }
@@ -169,10 +141,7 @@ class ProxyRoleTest {
         assertEquals(setOf("lobby-1"), directory.names())
         assertEquals(listOf<FakeRegistry.Call>(FakeRegistry.Call.Register(info("lobby-1", "10.0.0.1", 25565))), registry.calls)
 
-        // A full sync is a full sync: the second one is the whole list, and
-        // what it omits is unregistered. Asserting this here rather than
-        // leaving it to ServerDirectoryTest is what shows the role hands the
-        // message to `apply` and not to `add`.
+        // Shows the role hands the message to `apply` and not to `add`.
         role.onMessage(fullSync(backend("lobby-2", "10.0.0.2:25565", "lobby")))
         assertEquals(setOf("lobby-2"), directory.names())
     }
@@ -192,12 +161,8 @@ class ProxyRoleTest {
         role.onMessage(fullSync(backend("lobby-1", "10.0.0.1:25565", "lobby")))
         role.onMessage(fullSync())
 
-        // ReadyGate.open() is itself idempotent, so in production a role that
-        // called it on every sync would look identical from outside. This
-        // counts calls precisely so that what is pinned is the role's own
-        // once-only behaviour rather than the gate's tolerance of being asked
-        // again -- the operator sends a FullSync roughly every 30 seconds, and
-        // every reconnect starts with one.
+        // Counted, because ReadyGate.open() is idempotent and would hide a
+        // role that opened on every sync.
         assertEquals(1, syncs, "the role re-opened the gate on a later sync")
     }
 
@@ -215,8 +180,6 @@ class ProxyRoleTest {
         )
         assertEquals(setOf("mini-1"), directory.names())
 
-        // A register is not a sync: it must not open the gate, because a proxy
-        // with one incrementally added backend has not been told the list.
         assertEquals(0, syncs, "an incremental register opened the ready gate")
 
         assertEquals(
@@ -258,20 +221,13 @@ class ProxyRoleTest {
             ),
         )
 
-        // Both arguments are asserted, not just that a drain happened: a role
-        // that passed the groups in place of the server, or dropped the
-        // exclusion, would move nobody or move them to the server being
-        // drained.
         assertEquals(listOf("alice" to "lobby-1", "bob" to "lobby-1"), players.moves)
     }
 
     @Test
     fun `a FullSync rotates the drain set, so a drain the operator drops expires`() {
-        // The wiring test for `drain.resynced()`. It is asserted through
-        // behaviour rather than a spy because Drain is a concrete class here,
-        // and behaviour is the thing that matters anyway: a FullSync branch
-        // that stopped rotating would leave this proxy enforcing a drain the
-        // operator cancelled, indefinitely.
+        // Asserted through behaviour: a FullSync that stopped rotating would
+        // enforce a cancelled drain indefinitely.
         val servers = arrayOf(
             backend("lobby-1", "10.0.0.1:25565", "lobby"),
             backend("mini-1", "10.0.1.7:25565", "mini"),
@@ -295,9 +251,7 @@ class ProxyRoleTest {
         drain.landed(players.ref(latecomer))
         assertEquals(listOf("carol" to "lobby-1"), players.moves.filter { it.first == "carol" })
 
-        // Two resyncs with it dropped: gone. The first still carries it --
-        // what arrived since the previous FullSync is what becomes current --
-        // so it takes the second before an arrival is left alone.
+        // Two resyncs with it dropped: gone. The first still carries it.
         role.onMessage(fullSync(*servers))
         role.onMessage(fullSync(*servers))
         drain.landed(players.ref(FakePlayer("dave", "mini-1")))
@@ -309,8 +263,7 @@ class ProxyRoleTest {
 
     @Test
     fun `an unrecognised message yields None and touches nothing`() {
-        // The default instance is MESSAGE_NOT_SET, which is what an older
-        // agent sees when a newer operator sends a case it does not know.
+        // The default instance is MESSAGE_NOT_SET.
         assertEquals(Directive.None, role.onMessage(OperatorToProxy.getDefaultInstance()))
 
         assertEquals(emptyList<FakeRegistry.Call>(), registry.calls)
@@ -323,25 +276,15 @@ class ProxyRoleTest {
     fun `a message whose effect throws is logged and yields None`() {
         registry.failRegisterWith = IllegalStateException("the proxy is shutting down")
 
-        // A FullSync and not a ReportInterval, deliberately: the branches that
-        // return a directive do no work, so a guard wrapped around only those
-        // would pass a test written against them and still let an exception
-        // out of here. This runs on a gRPC callback thread, where an escaping
-        // exception ends the stream -- one malformed entry in one server list
-        // would cost the proxy its session instead of costing it that entry.
+        // A FullSync and not a ReportInterval: the branches that return a
+        // directive do no work, so a guard around only those would pass too.
         assertEquals(
             Directive.None,
             role.onMessage(fullSync(backend("lobby-1", "10.0.0.1:25565", "lobby"))),
         )
 
-        // The gate stays shut, and this is the assertion that pins the
-        // ordering inside the FULL_SYNC branch rather than merely its outcome.
-        // The obvious wrong implementation -- claiming the latch before
-        // directory.apply rather than after it -- is invisible to the final
-        // count below: it would open the gate here, the second sync would find
-        // the latch already set, and `syncs` would still be 1 at the end. Right
-        // number, wrong reason, and a proxy that had spent its one chance to
-        // become ready on the sync that failed.
+        // Pins the ordering inside FULL_SYNC: claiming the latch before
+        // directory.apply would still end with `syncs` at 1.
         assertEquals(0, syncs, "a sync that threw opened the gate anyway")
 
         assertEquals(1, logs.size, "the swallowed failure left no trace")
@@ -351,9 +294,6 @@ class ProxyRoleTest {
         )
         assertEquals("the proxy is shutting down", logs[0].second?.message)
 
-        // The once-only latch is spent by a sync that worked, not by one that
-        // threw: the operator repeats FullSync, and a proxy that had lost its
-        // only chance to open the gate would stay not-ready forever.
         registry.failRegisterWith = null
         role.onMessage(fullSync(backend("lobby-1", "10.0.0.1:25565", "lobby")))
         assertEquals(1, syncs, "a failed first sync consumed the gate's one opening")
@@ -364,9 +304,7 @@ class ProxyRoleTest {
         val states = mutableListOf<Boolean>()
         val role = newRole(onSetReady = { states += it })
 
-        // The sync first, because the reopen is conditional on it: a proxy
-        // with no server list is not made ready by anything. The two tests
-        // below own that rule; this one owns the mapping once it is satisfied.
+        // The sync first, because the reopen is conditional on it.
         role.onMessage(fullSync())
         role.onMessage(setReady(false))
         role.onMessage(setReady(true))
@@ -376,14 +314,8 @@ class ProxyRoleTest {
 
     @Test
     fun `a ready before the first sync is recorded and not passed on`() {
-        // Readiness means routable. A proxy that opened its gate here would be
-        // in the Service's endpoints with an empty routing table, and every
-        // player sent to it is disconnected with "no available server".
-        //
-        // Reaching this needs a FullSync that threw -- Fleet queues a
-        // session's FullSync ahead of anything else -- which is why the same
-        // sequence ends with a sync that works: what is asserted is not lost
-        // while the fault lasts, it takes effect when the fault clears.
+        // Readiness means routable: no gate before a server list. Reaching this
+        // needs a FullSync that threw.
         val states = mutableListOf<Boolean>()
         val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
 
@@ -396,10 +328,7 @@ class ProxyRoleTest {
 
     @Test
     fun `a not-ready before the first sync still reaches the gate`() {
-        // The mirror is not gated, and must not be. A proxy that cannot apply
-        // its directory has no business in the endpoints either, and refusing
-        // a close is the one direction that leaves a draining pod ready --
-        // which is the failure ReadyGate's own comment names.
+        // Closing is not gated.
         val states = mutableListOf<Boolean>()
         val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
 
@@ -410,10 +339,7 @@ class ProxyRoleTest {
 
     @Test
     fun `a standing not-ready survives the first sync`() {
-        // The pod became surplus while it was still starting: the operator's
-        // instruction arrives before the first FullSync. Opening the gate on that
-        // sync would put a draining proxy back into the Service's endpoints and
-        // send it new players.
+        // The operator's not-ready arrives before the first FullSync.
         val states = mutableListOf<Boolean>()
         val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
 
@@ -425,7 +351,6 @@ class ProxyRoleTest {
 
     @Test
     fun `the first sync still opens the gate when nothing was asserted`() {
-        // The ordinary case, and the guard above must not break it.
         val states = mutableListOf<Boolean>()
         val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
 
@@ -447,13 +372,7 @@ class ProxyRoleTest {
 
     @Test
     fun `a cancelled drain leaves the gate open`() {
-        // The brief's hazard scenario, chained in one sequence rather than
-        // left as two separate tests that each pin half of it: the operator
-        // marks the pod not-ready, the drain does not finish before the
-        // operator changes its mind, and a fresh FullSync arrives before the
-        // reversal does. A proxy that got this wrong would come out of the
-        // sequence either still closed (the corpse the brief warns about) or
-        // would have opened the gate on the sync it should not have.
+        // Not-ready, then a fresh FullSync, then the operator changes its mind.
         val states = mutableListOf<Boolean>()
         val role = newRole(onFirstSync = { states += true }, onSetReady = { states += it })
 
@@ -461,45 +380,24 @@ class ProxyRoleTest {
         role.onMessage(fullSync())
         role.onMessage(setReady(true))
 
-        // The sequence in between, not only the final state: the FullSync
-        // must not have opened the gate (a standing not-ready still wins),
-        // and the cancellation must reopen it directly through onSetReady
-        // rather than through the FullSync's spent latch.
+        // The FullSync must not have opened the gate, and the cancellation
+        // reopens it through onSetReady.
         assertEquals(listOf(false, true), states, "the cancelled drain did not leave a working proxy behind")
     }
 
     @Test
     fun `a not-ready racing the first sync leaves the gate closed`() {
-        // The only case in this class that is not single-threaded, and the one
-        // ProxyRole's readiness monitor exists for: SessionLoop's
-        // make-before-break renewal puts two gRPC callback threads inside
-        // onMessage at once, one per live stream. The operator's SET_READY
-        // arrives on one of them while the other is applying the FullSync that
-        // would open the gate.
+        // Two callback threads during a make-before-break renewal: SET_READY
+        // on one while the other applies the FullSync that would open the
+        // gate. `asserted` ends false either way, so the gate must end closed.
         //
-        // `asserted` ends false however the two land -- SET_READY(false) is the
-        // only message here that writes it -- so "the gate agrees with
-        // asserted" is exactly "the gate ends closed". The failure this pins is
-        // a FullSync thread that read the pair before the SET_READY wrote it
-        // and then opened the gate after the SET_READY had closed it: a pod
-        // left Ready, in the Service's endpoints and taking new players, with
-        // the operator's drain deadline already running against it.
-        //
-        // TRIALS is chosen against a measurement rather than a guess. With the
-        // gate call outside the atomic read (the shape this replaced) the bad
-        // interleaving landed 35 times in 20 000 trials on 2026-08-14 -- about
-        // one in 570 -- so 20 000 makes a run that sees none of them
-        // vanishingly unlikely rather than merely lucky, and costs about a
-        // second. A machine slower or less parallel than that one may hit it
-        // less often; that changes how loudly this fails on a regression, not
-        // whether it can pass one.
+        // The race landed about once in 570 trials without the monitor.
         val trials = 20_000
         val pool = Executors.newFixedThreadPool(2)
         try {
             repeat(trials) { trial ->
-                // The last gate operation either callback made. Both run inside
-                // the role's readiness monitor, so the last write is the state
-                // the pod is left in and not one of two racing writes.
+                // Written inside the role's readiness monitor, so the last write
+                // is the state the pod is left in.
                 val gate = AtomicBoolean(false)
                 val role = newRole(onFirstSync = { gate.set(true) }, onSetReady = { gate.set(it) })
 
@@ -515,19 +413,11 @@ class ProxyRoleTest {
             pool.shutdownNow()
         }
 
-        // onMessage swallows and logs whatever its branches throw, so an empty
-        // log is what says the trials raced inside those branches rather than
-        // failing before they got there. It is also what makes `logs` -- a
-        // plain ArrayList the role holds and two threads could have reached --
-        // safe here: nothing wrote to it.
+        // An empty log says the trials raced inside the branches rather than
+        // failing before them.
         assertEquals(emptyList<Pair<String, Throwable?>>(), logs, "a trial failed inside apply instead of racing")
     }
 
-    /**
-     * A second [ProxyRole] over the same collaborators as [role], for the tests
-     * above that need their own `onFirstSync`/`onSetReady` rather than the
-     * counting ones [role] was built with.
-     */
     @Test
     fun `a network state reaches the mirror`() {
         val role = newRole()
@@ -623,8 +513,7 @@ class ProxyRoleTest {
 
         val reports = role.extraReports()
 
-        // Both, and the counts first: BackendPlayers is what the drain reads,
-        // and a change here must not reorder what an operator already parses.
+        // BackendPlayers first: the operator's parsing depends on the order.
         assertEquals(2, reports.size)
         assertTrue(reports[0].hasBackendPlayers())
         assertTrue(reports[1].hasPlayerRoster())
@@ -643,10 +532,7 @@ class ProxyRoleTest {
 
     @Test
     fun `a player still connecting is counted against the server they are heading for`() {
-        // The case the operator could not see, and the reason this message
-        // exists: no currentServer, because Velocity sets connectedServer only
-        // once the transition completes, and the backend has not counted them
-        // either because it counts a player only in its play phase.
+        // Attached but no currentServer, and not counted by the backend yet.
         roster[0].currentServer = "lobby-0"
         roster[1].currentServer = null
         roster[1].attachedServer = "lobby-1"
@@ -666,10 +552,7 @@ class ProxyRoleTest {
 
         val counts = role.extraReports()[0].backendPlayers.playersMap
 
-        // Absence is the answer. That is what makes this a state rather than a
-        // stream of changes -- there is no "left" message to miss -- and it
-        // keeps the message the size of what is happening rather than of the
-        // server list.
+        // Absence is the answer: a state rather than a stream of changes.
         assertTrue(counts.isEmpty(), "expected an empty map, got $counts")
     }
 }

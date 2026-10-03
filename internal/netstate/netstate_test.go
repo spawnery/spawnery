@@ -150,7 +150,6 @@ func TestBuildDescribesEveryGroupAndServerInTheNamespace(t *testing.T) {
 	if len(got.GetGroups()) != 2 {
 		t.Fatalf("groups = %v, want the ServerGroup and the ProxyGroup", got.GetGroups())
 	}
-	// Sorted, so this can be asserted as a list rather than a set.
 	if got.GetGroups()[0].GetName() != "gateway" ||
 		got.GetGroups()[0].GetKind() != agentpb.GroupState_PROXY {
 		t.Errorf("groups[0] = %+v, want gateway as a PROXY group", got.GetGroups()[0])
@@ -171,8 +170,7 @@ func TestBuildDescribesEveryGroupAndServerInTheNamespace(t *testing.T) {
 }
 
 func TestBuildIsScopedToOneNamespace(t *testing.T) {
-	// The property the whole API rests on -- a plugin sees its own network and
-	// nothing else -- and it is one List option away from being wrong.
+	// One List option away from showing a plugin another network.
 	src, _ := source(t,
 		ephemeralGroup("ns", "lobby"),
 		readyServer("ns", "lobby-a", "lobby", 0, 100),
@@ -198,8 +196,6 @@ func TestBuildIsScopedToOneNamespace(t *testing.T) {
 }
 
 func TestBuildCarriesTheRoster(t *testing.T) {
-	// Players come from the registry and not the cache: the operator holds
-	// them in memory and puts them in no object.
 	src, reg := source(t, ephemeralGroup("ns", "lobby"))
 	reg.Connect("proxy-a", agent.RoleProxy)
 	if err := reg.ReportRoster("proxy-a", "ns", []agent.RosterEntry{
@@ -218,9 +214,6 @@ func TestBuildCarriesTheRoster(t *testing.T) {
 }
 
 func TestBuildSurvivesANetworkWithNoProxyReports(t *testing.T) {
-	// An empty roster is a state and not an error. A namespace whose proxies
-	// have not reported has no player list, and the API documents that as
-	// ordinary rather than as a failure a plugin has to handle.
 	src, _ := source(t, ephemeralGroup("ns", "lobby"))
 
 	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
@@ -233,9 +226,7 @@ func TestBuildSurvivesANetworkWithNoProxyReports(t *testing.T) {
 }
 
 func TestAServersPhaseTravelsAsTheOperatorSpellsIt(t *testing.T) {
-	// Not mapped to an enum here. A phase this proto predates has to reach an
-	// agent as itself, so the agent can decide it does not know it -- which is
-	// what ServerPhase.fromWire in the plugin API is for.
+	// Unmapped: ServerPhase.fromWire in the plugin API decides what it knows.
 	src, _ := source(t,
 		ephemeralGroup("ns", "lobby"),
 		serverInPhase("ns", "lobby-a", "lobby", "Retiring", 0, 100),
@@ -251,10 +242,6 @@ func TestAServersPhaseTravelsAsTheOperatorSpellsIt(t *testing.T) {
 }
 
 func TestBuildCarriesWhatAServerSaysAboutItself(t *testing.T) {
-	// From the registry and from no object, for a different reason than the
-	// roster is: this is the server's own word, the operator never acts on it,
-	// and a status field would mean an etcd write every time a game changed
-	// what it was doing.
 	src, reg := source(t,
 		ephemeralGroup("ns", "lobby"),
 		readyServer("ns", "lobby-a", "lobby", 0, 100),
@@ -279,19 +266,12 @@ func TestBuildCarriesWhatAServerSaysAboutItself(t *testing.T) {
 		got.GetServers()[0].GetAttributes()["map"] != "arena" {
 		t.Errorf("lobby-a = %+v, want what it announced", got.GetServers()[0])
 	}
-	// The one that announced nothing is described as nothing, not as its
-	// neighbour: an announcement is attached by name, and a mapping that lost
-	// the name would show every server the last one's description.
 	if got.GetServers()[1].GetState() != "" || len(got.GetServers()[1].GetAttributes()) != 0 {
 		t.Errorf("lobby-b = %+v, want an empty description", got.GetServers()[1])
 	}
 }
 
 func TestAServerThatAnnouncedNothingIsDescribedAsNothing(t *testing.T) {
-	// The picture a network has before anything on it announces, and the
-	// picture every network has while its agents predate the verb. They are
-	// the same picture on purpose -- a plugin that had to tell them apart
-	// would be asking about the agent rather than about the game.
 	src, _ := source(t,
 		ephemeralGroup("ns", "lobby"),
 		readyServer("ns", "lobby-a", "lobby", 0, 100),
@@ -307,9 +287,6 @@ func TestAServerThatAnnouncedNothingIsDescribedAsNothing(t *testing.T) {
 }
 
 func TestBuildCarriesWhatSomebodyWroteDownAboutAGroup(t *testing.T) {
-	// From the spec and not the status: nobody derived this, a person wrote it
-	// in the group's own definition, and the operator's whole part in it is to
-	// carry it to the agents.
 	group := ephemeralGroup("ns", "lobby")
 	group.Spec.Attributes = map[string]string{"permission": "task.build"}
 	proxy := proxyGroupNamed("ns", "gateway")
@@ -325,17 +302,12 @@ func TestBuildCarriesWhatSomebodyWroteDownAboutAGroup(t *testing.T) {
 	if got.GetGroups()[0].GetAttributes()["region"] != "eu" {
 		t.Errorf("gateway = %+v, want the proxy group's own attributes", got.GetGroups()[0])
 	}
-	// Both kinds, because a plugin reading one list should not find that half
-	// of it can be described and half cannot.
 	if got.GetGroups()[1].GetAttributes()["permission"] != "task.build" {
 		t.Errorf("lobby = %+v, want the server group's own attributes", got.GetGroups()[1])
 	}
 }
 
 func TestBuildSaysWhichRunOfAServerThisIs(t *testing.T) {
-	// A persistent server keeps its name across every restart -- that name is
-	// the identity of its world -- so anything asking "is this still the one I
-	// meant" has to compare something else.
 	srv := readyServer("ns", "survival-0", "survival", 0, 100)
 	srv.Status.PodUID = "pod-7c3f"
 	src, _ := source(t, ephemeralGroup("ns", "survival"), srv)
@@ -351,8 +323,6 @@ func TestBuildSaysWhichRunOfAServerThisIs(t *testing.T) {
 }
 
 func TestBuildCarriesAGroupsDisplayName(t *testing.T) {
-	// From the spec, like the attributes: a person wrote it in the group's
-	// own definition, and the operator's whole part in it is to carry it.
 	group := ephemeralGroup("ns", "bingo-team")
 	group.Spec.DisplayName = "Bingo-Team"
 	proxy := proxyGroupNamed("ns", "gateway")
@@ -395,9 +365,7 @@ func TestBuildCarriesAGroupsAdmission(t *testing.T) {
 }
 
 func TestAGroupWithoutADisplayNameTravelsWithAnEmptyOne(t *testing.T) {
-	// The operator does not fill the name in: which name stands in for a
-	// missing display name is the reader's decision, and an agent that made
-	// a different one from the operator would have nothing to notice it by.
+	// Which name stands in for a missing display name is the reader's decision.
 	src, _ := source(t, ephemeralGroup("ns", "lobby"))
 
 	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
@@ -410,12 +378,9 @@ func TestAGroupWithoutADisplayNameTravelsWithAnEmptyOne(t *testing.T) {
 }
 
 func TestBuildCarriesAServersNumber(t *testing.T) {
-	// From the spec, like a group's display name: the group decided this once,
-	// when it created the server, and nothing observes it afterwards.
 	numbered := readyServer("ns", "hub-dvjk", "hub", 3, 100)
 	numbered.Spec.Number = 1
-	// A server from before the field existed. Zero is what every reader falls
-	// back on, so the operator carries it rather than inventing one.
+	// A server from before the field existed.
 	old := readyServer("ns", "hub-old1", "hub", 0, 100)
 	src, _ := source(t, ephemeralGroup("ns", "hub"), numbered, old)
 
@@ -539,8 +504,6 @@ func TestAudienceOfSendsOnlyProxiesTheWholePicture(t *testing.T) {
 	if netstate.AudienceOf(agent.RoleServer) != netstate.ForServers {
 		t.Error("a backend was given the whole picture")
 	}
-	// The default is the narrow one: a role nobody has decided about is shown
-	// too little, and widening later is not a breaking change.
 	if netstate.AudienceOf(agent.Role("something-new")) != netstate.ForServers {
 		t.Error("an unknown role was given the whole picture")
 	}
@@ -688,12 +651,6 @@ func TestBuildCarriesAClosedDoor(t *testing.T) {
 }
 
 func TestAClosedDoorFollowsTheCurrentPodNotTheServerName(t *testing.T) {
-	// A persistent server keeps its name across a restart; the registry
-	// entry for the pod it replaced does not disappear until the orphan
-	// sweep forgets it. The operator's own record of which pod is current
-	// -- status.podUID, the same value Build sends as Incarnation -- is
-	// what a reader has to key on, or the old pod's shut door outlives the
-	// restart that reopened it.
 	srv := readyServer("ns", "survival-0", "survival", 0, 100)
 	srv.Status.PodUID = "new-pod"
 	src, reg := source(t, ephemeralGroup("ns", "survival"), srv)

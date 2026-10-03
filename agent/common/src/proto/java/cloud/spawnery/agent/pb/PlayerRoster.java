@@ -9,25 +9,9 @@ package cloud.spawnery.agent.pb;
  * <pre>
  * PlayerRoster is who this proxy is serving, by identity.
  *
- * It exists because the operator had no source for one. PlayerJoinedServer
- * carries a username and is accepted and ignored; PlayerCount and
- * BackendPlayers are counts. So the operator could say how many people were on
- * a backend and never who, and an API promising a player list had nothing to
- * answer from.
- *
- * **Beside BackendPlayers rather than replacing it, deliberately.** That
- * message is load-bearing for the drain, and its own comment reasons carefully
- * about which players it counts --
- * ConnectedPlayer.getConnectionInFlightOrConnectedServer, so that a player
- * still handshaking is included. Deriving it from this one would put the
- * drain's correctness at the mercy of a change made for a reporting feature.
- * The two are built from one read of the same roster on the same tick, and
- * only this one is new.
- *
- * A state and not an event, like every other report here: each message carries
- * the whole roster, so a dropped one costs a report interval of freshness
- * rather than leaving somebody stranded on a list forever. A player absent
- * from the roster is a player this proxy no longer has.
+ * Kept beside BackendPlayers rather than replacing it, so the drain does not
+ * depend on a reporting feature. Both are built from one read of the roster.
+ * Every message carries the whole roster.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.PlayerRoster}
@@ -286,25 +270,9 @@ private static final long serialVersionUID = 0L;
    * <pre>
    * PlayerRoster is who this proxy is serving, by identity.
    *
-   * It exists because the operator had no source for one. PlayerJoinedServer
-   * carries a username and is accepted and ignored; PlayerCount and
-   * BackendPlayers are counts. So the operator could say how many people were on
-   * a backend and never who, and an API promising a player list had nothing to
-   * answer from.
-   *
-   * **Beside BackendPlayers rather than replacing it, deliberately.** That
-   * message is load-bearing for the drain, and its own comment reasons carefully
-   * about which players it counts --
-   * ConnectedPlayer.getConnectionInFlightOrConnectedServer, so that a player
-   * still handshaking is included. Deriving it from this one would put the
-   * drain's correctness at the mercy of a change made for a reporting feature.
-   * The two are built from one read of the same roster on the same tick, and
-   * only this one is new.
-   *
-   * A state and not an event, like every other report here: each message carries
-   * the whole roster, so a dropped one costs a report interval of freshness
-   * rather than leaving somebody stranded on a list forever. A player absent
-   * from the roster is a player this proxy no longer has.
+   * Kept beside BackendPlayers rather than replacing it, so the drain does not
+   * depend on a reporting feature. Both are built from one read of the roster.
+   * Every message carries the whole roster.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.PlayerRoster}

@@ -8,11 +8,6 @@ package cloud.spawnery.agent.pb;
 /**
  * <pre>
  * AnnounceResult says the operator has it.
- *
- * It carries nothing. Everything it could echo is something the caller just
- * sent, and a result that repeats its own input teaches a reader that the
- * operator changed something when it did not. What the caller learns is which
- * of two things happened -- it was accepted, or it was refused with a reason.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.AnnounceResult}
@@ -205,11 +200,6 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * AnnounceResult says the operator has it.
-   *
-   * It carries nothing. Everything it could echo is something the caller just
-   * sent, and a result that repeats its own input teaches a reader that the
-   * operator changed something when it did not. What the caller learns is which
-   * of two things happened -- it was accepted, or it was refused with a reason.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.AnnounceResult}

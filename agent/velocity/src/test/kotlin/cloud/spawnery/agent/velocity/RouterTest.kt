@@ -7,20 +7,9 @@ import org.junit.jupiter.api.Test
 import java.lang.reflect.Proxy
 
 /**
- * Every test builds its [Router] over a real [ServerDirectory]/[FakeRegistry]
- * pair -- the composition that actually runs in production, per the brief --
- * and drives player counts through [FakeServer.players], the seam task 5
- * built for exactly this.
- *
- * Player identity never matters here, only how many of them a server has, so
- * [players] hands back interchangeable stand-ins rather than any real
- * [Player] -- constructing one by hand would mean implementing the ~30
- * abstract members [Player] inherits from `CommandSource`,
- * `InboundConnection` and the rest, none of which this ever calls. A dynamic
- * proxy that throws on every method is the same shape of fake as
- * [FakeServer.ping]: nothing here ever invokes a method on the elements of
- * [FakeServer.players], only `Collection.size` on the list they sit in, so
- * the handler never actually runs.
+ * Over a real [ServerDirectory]/[FakeRegistry] pair, with player counts driven
+ * through [FakeServer.players]. Only the list's size is ever read, so
+ * [players] hands back a dynamic proxy that throws on every method.
  */
 class RouterTest {
     @Test
@@ -36,10 +25,7 @@ class RouterTest {
         )
         val router = Router(directory)
 
-        // The obvious wrong implementation -- search every group and take the
-        // global minimum -- would prefer an empty hub server over lobby-1.
-        // fallbackGroups is a try list: lobby is tried first, has a server,
-        // and wins outright.
+        // A try list, not a global minimum: lobby has a server and wins.
         val chosen = router.choose(listOf("lobby", "hub"))
 
         assertEquals("lobby-1", chosen?.serverInfo?.name)
@@ -88,8 +74,6 @@ class RouterTest {
         )
         val router = Router(directory)
 
-        // Both servers are equally (un)populated, so nothing but the name
-        // comparison can be picking lobby-a here.
         val chosen = router.choose(listOf("lobby"))
 
         assertEquals("lobby-a", chosen?.serverInfo?.name)
@@ -145,19 +129,8 @@ class RouterTest {
     }
 
     /**
-     * The fall-through from [Router.choose]'s own doc, on the one input that
-     * separates it from the emptiness check it looks like: a first group that
-     * holds a server and still has no *candidate*, because the exclusion took
-     * its only one away.
-     *
-     * The mutant this kills is a line's worth of reordering -- test
-     * `inGroup(group).isEmpty()` and `continue` before applying the exclusion
-     * filter rather than after. Every other test in this class passes under
-     * it, including `the excluded server is never chosen even when it is the
-     * only one`, which has nowhere to fall through to. In a real drain this is
-     * the ordinary case rather than a corner: `Drain` excludes the server it
-     * is emptying, and a single-server group with a second group behind it in
-     * `fallbackGroups` is exactly the shape the runbook builds.
+     * A first group whose only server is excluded falls through; the one
+     * input that catches checking emptiness before the exclusion.
      */
     @Test
     fun `a group the exclusion empties falls through to the next group`() {
@@ -180,9 +153,6 @@ class RouterTest {
         fun fakeServer(registry: FakeRegistry, name: String): FakeServer =
             registry.server(name) as FakeServer
 
-        // A single shared instance is enough: nothing here ever calls a
-        // method on an element of the list, only Collection.size on the list
-        // itself, so identity and behaviour never come into it.
         val dummyPlayer: Player = Proxy.newProxyInstance(
             Player::class.java.classLoader,
             arrayOf(Player::class.java),

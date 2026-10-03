@@ -42,8 +42,6 @@ import (
 	"github.com/spawnery/spawnery/internal/render"
 )
 
-// groupConfigMap re-reads the ConfigMap a ServerGroupReconciler renders for
-// the fixture's group.
 func (f *fixture) groupConfigMap(t *testing.T, group string) *corev1.ConfigMap {
 	t.Helper()
 	cm := &corev1.ConfigMap{}
@@ -54,7 +52,6 @@ func (f *fixture) groupConfigMap(t *testing.T, group string) *corev1.ConfigMap {
 	return cm
 }
 
-// groupReconciler wires a ServerGroup reconciler onto an existing fixture.
 func groupReconciler(f *fixture) *ServerGroupReconciler {
 	return &ServerGroupReconciler{
 		Client:       f.rc,
@@ -63,17 +60,11 @@ func groupReconciler(f *fixture) *ServerGroupReconciler {
 		Agents:       f.agents,
 		Clock:        f.clock.Now,
 		Expectations: newExpectations(f.clock.Now),
-		// The fixture's client is not cache-restricted, so this is the same
-		// object either way here -- but production must pass an uncached
-		// reader, and a reconciler built without one panics inside Reconcile.
+		// Production must pass an uncached reader; Reconcile panics without one.
 		ClaimReader: f.c,
 	}
 }
 
-// scalingEvents drains the recorder and counts the events carrying a given
-// reason. It matched the reason as a substring of the whole rendered line until
-// milestone 6e's final review, which is a match a mutated, longer reason walks
-// straight through -- see eventHasReason, which is what it compares with now.
 func scalingEvents(rec *nonBlockingRecorder, reason string) int {
 	n := 0
 	for _, e := range drainEvents(rec) {
@@ -102,8 +93,6 @@ func (f *fixture) listServers(t *testing.T) []spawneryv1alpha1.Server {
 	return list.Items
 }
 
-// setMinReplicas re-reads the group, moves its floor and writes it back, so
-// the fixture's copy stays in step with the persisted generation.
 func (f *fixture) setMinReplicas(t *testing.T, n int32) {
 	t.Helper()
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, f.group); err != nil {
@@ -115,7 +104,6 @@ func (f *fixture) setMinReplicas(t *testing.T, n int32) {
 	}
 }
 
-// groupPDB re-reads the fixture's ServerGroup's PodDisruptionBudget.
 func (f *fixture) groupPDB(t *testing.T) *policyv1.PodDisruptionBudget {
 	t.Helper()
 	pdb := &policyv1.PodDisruptionBudget{}
@@ -126,21 +114,6 @@ func (f *fixture) groupPDB(t *testing.T) *policyv1.PodDisruptionBudget {
 	return pdb
 }
 
-// assertBudgetSelectsExactlyWhatItCounts pairs the pods a
-// PodDisruptionBudget's selector actually matches against the pods its
-// minAvailable was counted from.
-//
-// Checking each half separately -- minAvailable against a number the test
-// computed, the occupied label against the pods carrying it -- catches no
-// selector that matches the wrong population. A ServerGroup budget selecting
-// on {managed-by, group, occupied} with no role term matches the occupied
-// proxies of a same-named ProxyGroup while counting only occupied servers, and
-// each one it picks up buys the eviction API another disruption to spend on a
-// server pod full of players.
-//
-// It reads the selector off the object rather than rebuilding it, so it is a
-// statement about what Kubernetes will match and not about what the test
-// thinks the controller wrote.
 func (f *fixture) assertBudgetSelectsExactlyWhatItCounts(t *testing.T, name string) {
 	t.Helper()
 	pdb := &policyv1.PodDisruptionBudget{}
@@ -175,18 +148,8 @@ func (f *fixture) assertBudgetSelectsExactlyWhatItCounts(t *testing.T, name stri
 	}
 }
 
-// publishPDBStatus computes and writes the PodDisruptionBudget status that
-// kube-controller-manager's disruption controller would produce. envtest runs
-// no controller manager, and the API server's eviction handler reads only that
-// status: a budget whose observedGeneration lags its generation is refused
-// outright, so without this every eviction below would be refused for a reason
-// that has nothing to do with our labels.
-//
-// The arithmetic is the disruption controller's. Healthy means selected by the
-// budget and Ready; the allowed disruptions are the surplus over minAvailable,
-// floored at zero. Nothing here is hand-picked — it is all derived from what
-// the controllers actually put in the cluster, so the numbers move when the
-// occupancy rule moves.
+// envtest runs no disruption controller, and the eviction handler refuses a
+// budget whose status lags its generation, so this writes the status it would.
 func (f *fixture) publishPDBStatus(t *testing.T) {
 	t.Helper()
 	pdb := f.groupPDB(t)
@@ -223,8 +186,6 @@ func (f *fixture) publishPDBStatus(t *testing.T) {
 	}
 }
 
-// evict makes the call kubectl drain makes: create an Eviction against the
-// pod's eviction subresource and let the API server decide.
 func (f *fixture) evict(t *testing.T, name string) error {
 	t.Helper()
 	pod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns}}
@@ -274,7 +235,6 @@ func TestGroupScalesUpToTheFloor(t *testing.T) {
 		t.Fatalf("got %d servers, want 3", got)
 	}
 
-	// Names must be unique, or the pods would collide.
 	names := map[string]bool{}
 	for _, s := range f.listServers(t) {
 		if names[s.Name] {
@@ -299,7 +259,6 @@ func TestGroupDeletesOnlyEmptySurplus(t *testing.T) {
 		t.Fatalf("got %d servers, want 2", len(servers))
 	}
 
-	// Give both a pod and make one of them busy.
 	busy := servers[0].Name
 	for _, s := range servers {
 		f.reconcile(s.Name)
@@ -322,8 +281,6 @@ func TestGroupDeletesOnlyEmptySurplus(t *testing.T) {
 		f.reconcile(s.Name)
 	}
 
-	// Shrink the floor to 1 — exactly one server must go, and it must be the
-	// empty one.
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, f.group); err != nil {
 		t.Fatalf("get group: %v", err)
 	}
@@ -340,12 +297,7 @@ func TestGroupDeletesOnlyEmptySurplus(t *testing.T) {
 	}
 }
 
-// TestOccupiedServerSurvivesAContinuousScaleDown drives the core invariant the
-// way the operator really runs it: a scale-down under a reconcile loop at the
-// resync cadence, with live agents reporting throughout. A single reconcile
-// cannot see a rule that only breaks on repetition — a group that re-nominates
-// the occupied server once the empty one is gone, or one that keeps deleting
-// past its floor, looks perfectly healthy after one pass.
+// A rule that only breaks on repetition is invisible to a single reconcile.
 func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -373,12 +325,8 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 
 	f.setMinReplicas(t, 1)
 
-	// 60 passes would only reach 295 seconds of emptiness at the last check —
-	// five short of the CRD's 300-second stabilization default — so the idle
-	// server would never clear DecideSize's stabilization gate and the loop
-	// would end with both servers still standing. The extra passes cover that
-	// window and the few more resyncs the drain itself needs once the removal
-	// is ordered: Draining, then Terminating, then the object actually gone.
+	// 60 passes end five seconds short of the 300 s stabilization default; the
+	// rest cover the drain.
 	for i := 0; i < 65; i++ {
 		// Live agents keep reporting, so no count goes stale by accident: the
 		// test must exercise the occupied rule, not the staleness rule.
@@ -387,8 +335,7 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 			if name == busy {
 				players = 7
 			}
-			// A server that has already gone away has no stream left; that is
-			// not a failure of this test.
+			// A server already gone has no stream left.
 			_ = f.agents.ReportPlayers(uid, players, 100)
 		}
 		for _, s := range f.listServers(t) {
@@ -412,26 +359,6 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 		f.clock.Advance(ResyncInterval)
 	}
 
-	// One live server at the end: the occupied one. The idle server waited out
-	// the stabilization window and was shed, which is what this test is named
-	// for, and nothing was built to replace it.
-	//
-	// It settled on two until 7a, and the second was an accident rather than
-	// this test's subject. setMinReplicas moved metadata.generation, the old
-	// staleness rule read every running server as out of date, and a cold
-	// start ordered a replacement that this fixture never reports for -- so it
-	// failed, left a corpse, and 4d's backoff permitted one further attempt
-	// ten seconds later. All of that was a changeover begun by an edit that
-	// changes nothing about the pods, and since 7a a capacity edit begins
-	// none: staleness is podspec.DesiredServerHash, which spec.scaling never
-	// reaches.
-	//
-	// The backoff behaviour that half was incidentally exercising has fourteen
-	// envtests of its own -- TestGroupStopsCreatingWhileItBacksOff and
-	// TestTheGroupHasNoLiveServerWhileItBacksOffAndRebuildsAfter among them --
-	// plus TestDecideBackoffWaitsAndThenAllows for the ten seconds
-	// specifically. Nothing is uncovered by this test asserting only what it
-	// is about.
 	final := f.listServers(t)
 	var live, failed []spawneryv1alpha1.Server
 	for _, s := range final {
@@ -457,8 +384,6 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 		t.Errorf("minAvailable = %d, want 1 — the surviving pod still carries players", got)
 	}
 
-	// No corpse either. The doomed replacement existed only because the
-	// capacity edit started a changeover, so there is now nothing to fail.
 	if len(failed) != 0 {
 		names := make([]string, 0, len(failed))
 		for _, s := range failed {
@@ -468,10 +393,7 @@ func TestOccupiedServerSurvivesAContinuousScaleDown(t *testing.T) {
 	}
 }
 
-// TestGroupHoldsItsFloorWithoutChurn is the other half of the loop: a healthy
-// group must reach its floor and then do nothing at all, pass after pass. A
-// sizing bug that creates one server per reconcile is invisible in a test that
-// reconciles once.
+// A sizing bug that creates one server per reconcile is invisible to a single reconcile.
 func TestGroupHoldsItsFloorWithoutChurn(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -509,13 +431,8 @@ func TestGroupHoldsItsFloorWithoutChurn(t *testing.T) {
 	}
 }
 
-// TestGroupReplacesAFailedServer settles what a Failed server means for the
-// size of a group. A Failed server is deregistered from the proxies and kept
-// for spec.failedRetentionSeconds — an hour by default — purely so somebody can
-// look at it. No player can join it. Counting it toward the floor would leave
-// the group with nothing playable for that whole hour, which turns a diagnostic
-// aid into an outage, so it does not count and a replacement is created at once.
-// The failed server itself stays: its cleanup belongs to the Server controller.
+// Counting a Failed server, kept an hour for diagnosis, toward the floor would
+// leave the group unplayable for that hour.
 func TestGroupReplacesAFailedServer(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -530,11 +447,6 @@ func TestGroupReplacesAFailedServer(t *testing.T) {
 	bringUpNamed(t, f, failed)
 	driveToFailed(t, f, failed)
 
-	// Milestone 4d: the first failure buys a ten-second window, so the
-	// replacement this test is about arrives after it rather than on the very
-	// next pass. What is asserted below is unchanged — a Failed server does not
-	// hold the group at its floor, and a replacement is created while it is
-	// kept for diagnosis — only when the group is allowed to act on it.
 	f.clock.Advance(backoffBase + time.Second)
 	f.reconcileGroup(t, r)
 
@@ -549,8 +461,6 @@ func TestGroupReplacesAFailedServer(t *testing.T) {
 	}
 	uid := bringUpNamed(t, f, replacement)
 
-	// And it stops there: one replacement, not one per pass, and the failed
-	// server is left alone for its retention.
 	for i := 0; i < 30; i++ {
 		_ = f.agents.ReportPlayers(uid, 0, 100)
 		f.reconcile(replacement)
@@ -576,11 +486,6 @@ func TestGroupReplacesAFailedServer(t *testing.T) {
 	}
 }
 
-// TestAFinishedRoundIsReplacedWithoutCountingAFailure walks the whole round
-// lifecycle at once: the server says its round is over, its pod stops, the
-// group builds a replacement, and none of it spends the backoff budget --
-// unlike TestGroupReplacesAFailedServer above, a finished round is not a
-// fault and needs no window before the replacement is allowed.
 func TestAFinishedRoundIsReplacedWithoutCountingAFailure(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -610,8 +515,7 @@ func TestAFinishedRoundIsReplacedWithoutCountingAFailure(t *testing.T) {
 		t.Fatalf("phase after the pod stopped = %q, want Finished", got)
 	}
 
-	// No clock advance: unlike a Failed server, a Finished one is not a
-	// fault, so the group must not need the backoff window to replace it.
+	// No clock advance: a finished round must not wait out the backoff window.
 	f.reconcileGroup(t, r)
 
 	var replacement string
@@ -698,15 +602,9 @@ func TestGroupMaintainsAPodDisruptionBudget(t *testing.T) {
 			"matches the occupied proxies of a same-named ProxyGroup, which its minAvailable "+
 			"never counted", pdb.Spec.Selector.MatchLabels)
 	}
-	// The number and the selector are separate questions, and a budget is only
-	// protection when they answer the same one. See the helper.
 	f.assertBudgetSelectsExactlyWhatItCounts(t, key.Name)
 }
 
-// TestPodDisruptionBudgetTracksThePlayerCount pins that the budget follows
-// reality in both directions. It has to rise before a pod can be evicted and
-// fall again once the last player has left, otherwise a group would either
-// leak protection forever or, worse, protect nobody.
 func TestPodDisruptionBudgetTracksThePlayerCount(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -737,9 +635,7 @@ func TestPodDisruptionBudgetTracksThePlayerCount(t *testing.T) {
 		t.Errorf("minAvailable = %d after the last player left, want 0", got)
 	}
 
-	// A count we can no longer trust protects the pod again — the Server
-	// controller labels it occupied, and the budget has to match that label or
-	// the eviction API gets a disruption to spend on it.
+	// A minute without a report makes the count stale, which counts as occupied.
 	f.clock.Advance(time.Minute)
 	f.reconcile(srv.Name)
 	f.reconcileGroup(t, r)
@@ -782,28 +678,18 @@ func TestGroupWithoutItsNetworkIsNotAccepted(t *testing.T) {
 		t.Error("a group without a network must not create servers")
 	}
 
-	// An ephemeral group whose Network is missing is not limited by
-	// maxReplicas — its Accepted condition already says what is wrong with it —
-	// so ScalingLimited is published as False rather than left absent. The
-	// condition is guarded on IsEphemeral alone, not on the Network being
-	// usable, and this is what says so.
+	// ScalingLimited is guarded on IsEphemeral alone, so it is published without a Network too.
 	cond := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionScalingLimited)
 	if cond == nil || cond.Status != metav1.ConditionFalse {
 		t.Errorf("ScalingLimited = %+v on a group without its Network, want False", cond)
 	}
-	// size() never ran, so the message must say nothing was decided rather
-	// than assert the all-clear a sized pass would have checked.
 	if cond != nil && cond.Message != "scaling is not being decided: the group's network is not usable" {
 		t.Errorf("message = %q, want the not-decided message, not the all-clear", cond.Message)
 	}
 }
 
-// TestGroupWithoutItsNetworkStillProtectsItsPlayers is the guard-scope rule: a
-// missing Network blocks only what depends on it, which is creating servers
-// that could never get a pod. The PodDisruptionBudget and the published status
-// do not depend on the Network at all, and freezing them would leave the pods
-// of a group whose Network was deleted open to the eviction API exactly when
-// nobody is watching.
+// A missing Network blocks only server creation; the budget and status must keep
+// tracking players.
 func TestGroupWithoutItsNetworkStillProtectsItsPlayers(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -816,8 +702,8 @@ func TestGroupWithoutItsNetworkStillProtectsItsPlayers(t *testing.T) {
 	if err := f.c.Delete(f.ctx, f.network); err != nil {
 		t.Fatalf("delete network: %v", err)
 	}
-	// The players arrive only after the network is gone, so the budget has to
-	// be written after the guard, not before it.
+	// The players arrive after the network is gone, so the budget must be written
+	// after the guard.
 	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
 	}
@@ -839,27 +725,13 @@ func TestGroupWithoutItsNetworkStillProtectsItsPlayers(t *testing.T) {
 	}
 }
 
-// TestRetainedFailedPodDoesNotWedgeTheBudget covers the pod of a server that
-// failed with its pod already dead. The state machine calls such a pod terminal
-// and refuses to drain it, precisely because the process is down and its
-// sessions went with it — so there is nobody left to protect. The pod is still
-// kept for the retention window, and across that window its player count goes
-// stale. A rule that reads "stale means occupied" whatever the phase then
-// labels a dead pod as occupied and counts it into minAvailable, and the
-// eviction API answers "cannot evict pod as it would violate the pod's
-// disruption budget" — with currentHealthy below desiredHealthy, the default
-// IfHealthyBudget policy will not release it either. An operator's kubectl
-// drain never finishes on that node and a cluster upgrade wedges.
-//
-// The staleness only shows up after two report intervals, so this has to run
-// as a loop at the resync cadence; a single reconcile sees a count that is
-// still fresh and proves nothing.
+// A retained dead pod whose count went stale must not be labelled occupied, or
+// kubectl drain wedges on it. Staleness takes two report intervals, hence the loop.
 func TestRetainedFailedPodDoesNotWedgeTheBudget(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 
-	// No floor: this test is about the retained failure alone, not about the
-	// replacement the group would otherwise create for it.
+	// No floor, so no replacement blurs the picture.
 	f.setMinReplicas(t, 0)
 
 	bringUpReady(t, f, "lobby-x7k2")
@@ -896,22 +768,13 @@ func TestRetainedFailedPodDoesNotWedgeTheBudget(t *testing.T) {
 	}
 }
 
-// TestPodThatCrashedWithPlayersOnItDoesNotWedgeTheBudget is the budget half of
-// the same regression as
-// TestPodThatCrashedWithPlayersOnItLosesTheOccupiedLabel.
-//
-// TestRetainedFailedPodDoesNotWedgeTheBudget above builds a server whose last
-// reported count was zero, so it exercises only the stale branch of the
-// occupancy rule. A server that dies with players on it takes the other
-// branch: the registry is never told to forget a pod, so its count stays at
-// seven, seven > 0 wins before staleness is even looked at, and minAvailable
-// would sit at 1 against a currentHealthy of 0 for the whole retention
-// window.
+// A server that crashed with players keeps its last count of seven, so the count
+// branch of the occupancy rule, not the stale one, has to let it go.
 func TestPodThatCrashedWithPlayersOnItDoesNotWedgeTheBudget(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 
-	// No floor: this is about the retained failure alone, not the replacement.
+	// No floor, so no replacement blurs the picture.
 	f.setMinReplicas(t, 0)
 
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -952,16 +815,8 @@ func TestPodThatCrashedWithPlayersOnItDoesNotWedgeTheBudget(t *testing.T) {
 	}
 }
 
-// TestTheBudgetRefusesToEvictAPlayedOnPodAndReleasesADeadOne drives the promise
-// through the API server itself rather than through our own arithmetic: it
-// creates an Eviction, the same call kubectl drain makes.
-//
-// The dead pod here is crash-looping rather than PodFailed on purpose. The
-// eviction handler skips every PodDisruptionBudget for a pod in phase Failed or
-// Succeeded, so an eviction test built on those would succeed whatever we
-// labelled the pod — passing for the wrong reason, which is the trap this whole
-// review round is about. A crash-looping pod is still in phase Running, so its
-// eviction really does depend on whether we released it from the budget.
+// The pod crash-loops rather than failing: the eviction handler skips every
+// budget for a pod in phase Failed or Succeeded.
 func TestTheBudgetRefusesToEvictAPlayedOnPodAndReleasesADeadOne(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -983,8 +838,7 @@ func TestTheBudgetRefusesToEvictAPlayedOnPodAndReleasesADeadOne(t *testing.T) {
 		t.Fatalf("eviction of an occupied pod failed with %v, want a disruption-budget refusal", err)
 	}
 
-	// The Minecraft container now dies over and over. The seven sessions went
-	// down with the first crash; the registry just has not been told.
+	// The sessions died with the first crash; the registry has not been told.
 	f.setPodCrashLooping("lobby-x7k2")
 	if err := f.agents.ReportPlayers(uid, 7, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
@@ -1002,30 +856,8 @@ func TestTheBudgetRefusesToEvictAPlayedOnPodAndReleasesADeadOne(t *testing.T) {
 	}
 }
 
-// TestServerThatKeptItsPlayersAfterAReadinessLossIsNotNominated covers the
-// server the phase cannot describe. A server that loses its probe falls back to
-// Starting, and deregistering it only stops new joins — nobody is moved off, so
-// its players are still connected. If its player count then becomes
-// unreadable, a rule that asks "is the phase Ready?" as its proxy for "was this
-// registered?" reads Starting, decides the server is empty and nominates it,
-// while its genuinely empty peer survives. Task 8 drains it so nobody is
-// kicked, but the players get a visible move that the empty server should have
-// absorbed. status.wasRegistered exists to answer that question properly.
-//
-// Driven through the ceiling, not the spare-slot demand rule. The demand
-// branch filters a candidate out before SelectDeletionCandidates ever sees
-// it — a forgotten agent is both Stale and, since it was never given time to
-// wait, short of Stabilization — so mayHavePlayers, the rule this test is
-// actually about, would never get a chance to decide anything there. The
-// surplus branch has neither gate: it calls SelectDeletionCandidates
-// directly on the raw views, so lowering maxReplicas below the current count
-// puts mayHavePlayers back in sole charge of the choice, with the fixture's
-// default spareSlots and stabilization window left untouched — and with no
-// stabilization wait, there is no race against the victim's own
-// StartupDeadline either.
-//
-// Loop-driven: the nomination is made afresh on every pass, so the invariant
-// has to hold on every pass and the group still has to converge.
+// A server that lost its probe falls back to Starting but keeps its players;
+// status.wasRegistered must keep it from being nominated over an empty peer.
 func TestServerThatKeptItsPlayersAfterAReadinessLossIsNotNominated(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -1052,7 +884,6 @@ func TestServerThatKeptItsPlayersAfterAReadinessLossIsNotNominated(t *testing.T)
 		}
 	}
 
-	// Seven players are on the victim when its probe goes red.
 	if err := f.agents.ReportPlayers(uids[victim], 7, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
 	}
@@ -1066,14 +897,12 @@ func TestServerThatKeptItsPlayersAfterAReadinessLossIsNotNominated(t *testing.T)
 		t.Fatal("wasRegistered must survive the readiness loss, or the fixture proves nothing")
 	}
 
-	// The operator restarts, or the pod UID can no longer be resolved: the
-	// registry no longer knows this pod, so its count reads zero and stale.
+	// As after an operator restart: the registry forgets the pod, so its count
+	// reads zero and stale.
 	f.agents.Forget(uids[victim])
 
-	// Lowering the ceiling below the current count, rather than raising the
-	// floor, is what routes DecideSize through the surplus branch and
-	// SelectDeletionCandidates directly, instead of through the demand rule's
-	// own Stale/Stabilization filtering.
+	// Lowering the ceiling, not the floor, takes the surplus branch, which skips the
+	// demand rule's Stale/Stabilization filters and leaves mayHavePlayers to decide.
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, f.group); err != nil {
 		t.Fatalf("get group: %v", err)
 	}
@@ -1083,9 +912,7 @@ func TestServerThatKeptItsPlayersAfterAReadinessLossIsNotNominated(t *testing.T)
 		t.Fatalf("update group: %v", err)
 	}
 
-	// The surplus branch has no stabilization wait, so a handful of passes is
-	// enough to cover the drain that follows once the peer is nominated:
-	// Ready -> Draining -> Terminating -> the object actually gone.
+	// The surplus branch has no stabilization wait; ten passes cover the drain.
 	for i := 0; i < 10; i++ {
 		_ = f.agents.ReportPlayers(uids[peer], 0, 100)
 		for _, s := range f.listServers(t) {
@@ -1120,19 +947,13 @@ func TestServerThatKeptItsPlayersAfterAReadinessLossIsNotNominated(t *testing.T)
 	}
 }
 
-// TestGroupKeepsOnlyOneRetainedFailure bounds what a broken image costs. A
-// Failed server holds its pod and its full resource request for the whole
-// retention window, and it does not take that window to fail — the restart cap
-// plus kubelet backoff gets there in a minute or two, and the group replaces it
-// on the next five-second pass. Uncapped, one floor replica piles up dozens of
-// retained servers before the first one expires. One is enough to diagnose
-// from.
+// A Failed server holds its full resource request for the retention window,
+// and a broken image fails every minute or two.
 func TestGroupKeepsOnlyOneRetainedFailure(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 
-	// No floor, so the replacements the group would otherwise create do not
-	// blur what is being counted.
+	// No floor, so no replacement blurs what is counted.
 	f.setMinReplicas(t, 0)
 
 	names := []string{"lobby-aaaa", "lobby-bbbb", "lobby-cccc"}
@@ -1146,8 +967,7 @@ func TestGroupKeepsOnlyOneRetainedFailure(t *testing.T) {
 		}
 	}
 
-	// Let the pruning run its course: a failed server that still has players is
-	// drained before it goes, so it takes a drain timeout to disappear.
+	// A failed server that still has players drains for a drain timeout first.
 	for i := 0; i < 40; i++ {
 		for _, s := range f.listServers(t) {
 			f.reconcile(s.Name)
@@ -1156,13 +976,8 @@ func TestGroupKeepsOnlyOneRetainedFailure(t *testing.T) {
 		f.clock.Advance(ResyncInterval)
 	}
 
-	// spareSlots keeps its fixture default of 40 free player slots, and
-	// countsTowardSize excludes Phase == Failed from what counts toward it —
-	// so once pruning is down to the one failure it keeps for diagnosis,
-	// DecideSize still sees zero verified free capacity and orders one
-	// replacement to hold those slots. That replacement sits alongside the
-	// retained failure, not in place of it: two servers, not one, is the
-	// correct count once the group is actually sizing itself.
+	// spareSlots still demands capacity the Failed server cannot give, so one
+	// replacement stands beside the retained failure.
 	final := f.listServers(t)
 	if len(final) != 2 {
 		remaining := make([]string, 0, len(final))
@@ -1188,21 +1003,12 @@ func TestGroupKeepsOnlyOneRetainedFailure(t *testing.T) {
 	}
 }
 
-// TestGroupPointingAtARejectedNetworkCreatesNoServers closes the gap Task 10
-// left open: a Network that loses the one-per-namespace contest only carries
-// an Accepted=False/DuplicateNetwork condition, and until a group actually
-// consults it, that condition is decoration — a ServerGroup pointing at the
-// loser would run at full strength in the same namespace as the winner's
-// groups, exactly the isolation failure the rule exists to prevent.
 func TestGroupPointingAtARejectedNetworkCreatesNoServers(t *testing.T) {
 	f := newFixture(t)
 	nr := networkReconciler(f)
 
-	// "staging" is created after the fixture's "production" and loses the
-	// contest — by creation order if the two land in different seconds, or by
-	// the name tie-break ("production" < "staging") if envtest's
-	// second-granularity timestamps put them in the same one, exactly as
-	// TestSecondNetworkInTheSameNamespaceIsRejected already relies on.
+	// "staging" loses by creation order, or by the name tie-break when envtest's
+	// second-granularity timestamps coincide.
 	staging := &spawneryv1alpha1.Network{
 		ObjectMeta: metav1.ObjectMeta{Name: "staging", Namespace: f.ns},
 		Spec: spawneryv1alpha1.NetworkSpec{
@@ -1256,22 +1062,8 @@ func TestGroupPointingAtARejectedNetworkCreatesNoServers(t *testing.T) {
 	}
 }
 
-// TestGroupWithARejectedNetworkStillProtectsItsPlayers is the guard-scope
-// rule (Task 8 lesson 3) applied to the new rejection state: a group whose
-// Network loses the one-per-namespace contest after it already has servers
-// running must not delete anything and must not drop the PodDisruptionBudget
-// that protects its occupied pods — a rejected group holding players is still
-// holding players. Only creating new servers genuinely depends on the Network
-// being usable; this mirrors TestGroupWithoutItsNetworkStillProtectsItsPlayers
-// for rejection instead of deletion.
-//
-// The players arrive only after the rejection, exactly like that sibling
-// test's own comment explains: if the PDB were computed before the guard (or
-// skipped by it), it would already show minAvailable = 1 from a stale prior
-// pass, and a test that only checks the value afterwards could not tell a
-// live PodDisruptionBudget from a frozen one that happens to read the right
-// number by coincidence. Starting from 0 and asserting the rise to 1 proves
-// reconcilePDB actually ran on this pass, with this pass's views.
+// The players arrive after the rejection, so the budget's rise from 0 to 1 proves
+// it was computed on this pass.
 func TestGroupWithARejectedNetworkStillProtectsItsPlayers(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -1286,7 +1078,6 @@ func TestGroupWithARejectedNetworkStillProtectsItsPlayers(t *testing.T) {
 
 	rejectNetwork(t, f, "production")
 
-	// The player joins only now, with the network already rejected.
 	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
 	}
@@ -1314,26 +1105,9 @@ func TestGroupWithARejectedNetworkStillProtectsItsPlayers(t *testing.T) {
 	}
 }
 
-// TestGroupResumesOnceItsNetworkIsAccepted is the recovery half of the story:
-// once whatever made the Network lose the contest goes away, a frozen group
-// has to resume on its own, without an operator touching the group. Driven as
-// a loop at the real network-retry cadence rather than a single jump, because
-// a fix that only works when tried exactly once sails through a
-// single-reconcile test unnoticed.
-//
-// This uses a dedicated network+group pair ("staging-net"/"arena"), not the
-// fixture's own "production"/"lobby". "staging-net" is created after
-// "production" and so deterministically loses the one-per-namespace contest —
-// chronologically if the two real timestamps differ, or by the name
-// tie-break if envtest's second-granularity clock ties them, exactly the
-// guarantee TestGroupPointingAtARejectedNetworkCreatesNoServers relies on.
-// The fixture's own "production" cannot be put in the losing seat this way:
-// it is created first, inside newFixture, before this test's code runs at
-// all, so nothing this test creates can carry an earlier real timestamp.
-// Racing a competitor against it after several seconds of setup work gives
-// "production" enough real elapsed time to win regardless of name, and the
-// test then fails intermittently on its own setup assertion, before ever
-// reaching the behaviour under test.
+// Looped at the network-retry cadence: a fix that works only once passes a single
+// reconcile. "production" is created inside newFixture, before anything here can
+// be older, so a dedicated "staging-net" takes the losing seat.
 func TestGroupResumesOnceItsNetworkIsAccepted(t *testing.T) {
 	f := newFixture(t)
 	nr := networkReconciler(f)
@@ -1393,18 +1167,12 @@ func TestGroupResumesOnceItsNetworkIsAccepted(t *testing.T) {
 		t.Fatalf("got %d servers while the network was rejected, want 0", got)
 	}
 
-	// The winner goes away — a namespace migration finishing, or an operator
-	// cleaning up a mistake.
 	if err := f.c.Delete(f.ctx, f.network); err != nil {
 		t.Fatalf("delete production network: %v", err)
 	}
 
-	// Six passes at the network-retry cadence is 180s of simulated time — a
-	// real loop, well short of the 5-minute startup deadline. This test never
-	// drives the created server to Ready (bringUpNamed is a separate concern,
-	// already covered elsewhere), so a longer loop would eventually fail it
-	// for outliving its startup deadline and create a legitimate replacement,
-	// which would be a false failure of this test, not a bug.
+	// Six passes (180 s) stay short of the five-minute startup deadline the
+	// never-Ready server would otherwise fail.
 	for i := 0; i < 6; i++ {
 		f.reconcileNetwork(t, nr, "staging-net")
 		reconcileArena()
@@ -1432,11 +1200,6 @@ func TestGroupResumesOnceItsNetworkIsAccepted(t *testing.T) {
 	}
 }
 
-// TestServerGroupRendersConfigMap covers design section 5.4's promise: one
-// ConfigMap per group, owned by it, carrying the label the manager's
-// restricted cache requires, and holding exactly what spec.maxPlayers says —
-// not merely a ConfigMap that exists under the right name, which a renderer
-// that wrote an empty document or the wrong key would also produce.
 func TestServerGroupRendersConfigMap(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -1465,19 +1228,11 @@ func TestServerGroupRendersConfigMap(t *testing.T) {
 	if values.MaxPlayers == nil || *values.MaxPlayers != f.group.Spec.MaxPlayers {
 		t.Errorf("maxPlayers = %v, want %d", values.MaxPlayers, f.group.Spec.MaxPlayers)
 	}
-	// The critical fields never travel through this document — there is
-	// nothing in ServerGroupSpec that could even populate them, but a future
-	// change that reached for one directly on Values would slip past a test
-	// that only checked maxPlayers.
 	if values.PlayerLimit != nil || values.Motd != nil {
 		t.Errorf("values = %+v, want only maxPlayers set — a ServerGroup has no playerLimit or motd", values)
 	}
 }
 
-// TestServerGroupConfigMapUpdatesOnSpecChange guards against a renderer that
-// only runs once: a ConfigMap that gets created correctly but never revisited
-// would be indistinguishable from a working one until the day an operator
-// actually edits maxPlayers.
 func TestServerGroupConfigMapUpdatesOnSpecChange(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -1512,12 +1267,8 @@ func TestServerGroupConfigMapUpdatesOnSpecChange(t *testing.T) {
 	}
 }
 
-// TestServerGroupConfigMapWrittenBeforeTheServer proves the ordering the
-// design depends on: a pod's projected volume names this ConfigMap by group,
-// so the ConfigMap must exist before the Server that will eventually get a
-// pod. Reading back the final state after a reconcile cannot tell "written
-// first" apart from "written at some point" — both leave the same two objects
-// sitting there. Recording the actual Create calls can.
+// The final state cannot tell "written first" from "written at some point";
+// the recorded Create calls can.
 func TestServerGroupConfigMapWrittenBeforeTheServer(t *testing.T) {
 	f := newFixture(t)
 	recorder := &createOrderRecorder{Client: f.rc}
@@ -1547,14 +1298,8 @@ func TestServerGroupConfigMapWrittenBeforeTheServer(t *testing.T) {
 	}
 }
 
-// TestGroupCreatesTheShortfallOnceWhileTheNewServersStart is the test that
-// carries this milestone.
-//
-// A group short of spare slots orders replacements. Those replacements are not
-// Ready for tens of seconds, and a scaler reading status.freeSlots would see the
-// same shortfall on every five-second pass and order the same replacement again,
-// until maxReplicas stopped it. An assertion on a single decision cannot see
-// that; only one that keeps reconciling can.
+// Replacements are not Ready for tens of seconds, and a scaler reading
+// status.freeSlots would order the same one again on every pass.
 func TestGroupCreatesTheShortfallOnceWhileTheNewServersStart(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -1581,13 +1326,8 @@ func TestGroupCreatesTheShortfallOnceWhileTheNewServersStart(t *testing.T) {
 		t.Fatalf("got %d servers after the shortfall, want 2", got)
 	}
 
-	// Ten more passes while the new server has no pod and no agent. Its
-	// capacity is ordered, so nothing more may be ordered on top of it.
-	//
-	// The first server keeps reporting throughout, as a real agent does every
-	// five seconds. Without that its count would go stale after two intervals
-	// and the test would pass for the wrong reason — a stale server contributes
-	// nothing either.
+	// The first server keeps reporting, or its count would go stale and the test
+	// would pass for the wrong reason.
 	for i := 0; i < 10; i++ {
 		f.clock.Advance(ResyncInterval)
 		if err := f.agents.ReportPlayers(uid, 70, 100); err != nil {
@@ -1613,25 +1353,16 @@ func TestGroupShrinksOnceTheStabilizationWindowElapses(t *testing.T) {
 	}
 	f.setMinReplicas(t, 1)
 
-	// Three. setMinReplicas performs a real spec update, so a staleness rule
-	// keyed on metadata.generation would read all three Ready servers as stale
-	// and order a cold start -- a changeover begun by an edit that changes
-	// nothing about the pods. Staleness is podspec.DesiredServerHash, which
-	// spec.scaling never reaches, so lowering the floor starts no changeover
-	// and creates nothing. The shrink this test is about happens below, once
-	// the stabilization window elapses.
-	//
-	// All three servers are empty, but none has waited out the window yet.
+	// Three: spec.scaling never reaches podspec.DesiredServerHash, so lowering the
+	// floor starts no changeover, and no empty server has waited out the window yet.
 	f.reconcileGroup(t, r)
 	if got := len(f.listServers(t)); got != 3 {
 		t.Fatalf("got %d servers before the window elapsed, want 3 — a capacity "+
 			"edit must start no changeover", got)
 	}
 
-	// The window is the CRD default, 300 seconds. The agents keep reporting
-	// across it, as real ones do: a count older than twice the report interval
-	// is stale, and stale counts as occupied. A repeated zero must not restart
-	// the emptiness window, which is what makes this assertion meaningful.
+	// The window is the CRD default, 300 s. The agents keep reporting, since a stale
+	// count counts as occupied; a repeated zero must not restart the window.
 	f.clock.Advance(301 * time.Second)
 	for _, uid := range uids {
 		if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
@@ -1651,10 +1382,8 @@ func TestGroupShrinksOnceTheStabilizationWindowElapses(t *testing.T) {
 	if leaving != 1 {
 		t.Fatalf("%d servers marked for deletion, want exactly one per pass", leaving)
 	}
-	// The ephemeral side of size()'s DeleteReason fallback. DecideSize leaves
-	// the field empty -- only the persistent classes fill it, and those are
-	// tabled in persistent_test.go -- so this removal must carry the reason
-	// the ephemeral rule has always used.
+	// DecideSize leaves DeleteReason empty for ephemeral groups; size() falls back
+	// to ServerRemoved.
 	if got := scalingEvents(rec, "ServerRemoved"); got != 1 {
 		t.Errorf("ServerRemoved events = %d, want 1", got)
 	}
@@ -1673,11 +1402,6 @@ func TestGroupRecordsWhatItIssued(t *testing.T) {
 	}
 }
 
-// TestGroupSaysWhenItsCeilingHoldsCapacityBack closes a gap this repository
-// already has once: a proxy that cannot bind its ready port says so only in a
-// container log. A group that cannot serve its spareSlots because maxReplicas
-// stops it is the same kind of silence, and this is the milestone that would
-// otherwise add a second one next to the first.
 func TestGroupSaysWhenItsCeilingHoldsCapacityBack(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -1711,10 +1435,8 @@ func TestGroupSaysWhenItsCeilingHoldsCapacityBack(t *testing.T) {
 	if cond.Reason != spawneryv1alpha1.ReasonMaxReplicasReached {
 		t.Errorf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonMaxReplicasReached)
 	}
-	// Pinned down exactly, not just "contains maxReplicas": this is the
-	// ordinary-shortfall message, and it must stay distinct from the
-	// cold-start-refused message in TestGroupSaysColdStartIsBlockedByTheCeiling
-	// so the two can never silently converge again.
+	// Pinned exactly so it stays distinct from the message in
+	// TestGroupSaysColdStartIsBlockedByTheCeiling.
 	wantMsg := "1 more server(s) needed to cover spareSlots 40; maxReplicas 1 allows 0 now"
 	if cond.Message != wantMsg {
 		t.Errorf("message = %q, want %q", cond.Message, wantMsg)
@@ -1730,15 +1452,12 @@ func TestGroupSaysWhenItsCeilingHoldsCapacityBack(t *testing.T) {
 		t.Errorf("%d MaxReplicasReached events on the flank, want exactly 1", got)
 	}
 
-	// Nothing changed. The group is still at its ceiling and still short, so
-	// the condition stays True — and an event on every resync would be one
-	// every five seconds for as long as the group is popular.
+	// Unchanged: an event on every resync would be one every five seconds.
 	f.reconcileGroup(t, r)
 	if got := scalingEvents(rec, spawneryv1alpha1.ReasonMaxReplicasReached); got != 0 {
 		t.Errorf("%d further MaxReplicasReached events on an unchanged resync, want none", got)
 	}
 
-	// Room again: the condition has to come back down.
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, f.group); err != nil {
 		t.Fatalf("get group: %v", err)
 	}
@@ -1759,15 +1478,8 @@ func TestGroupSaysWhenItsCeilingHoldsCapacityBack(t *testing.T) {
 	}
 }
 
-// TestGroupSaysColdStartIsBlockedByTheCeiling covers the other way Limited
-// gets set: a group pinned at maxReplicas with no shortfall of its own, whose
-// one running server has just gone stale. Wanted and Create are both 0 here
-// — exactly as they are when nothing is limited at all — so the message must
-// name the real cause (the changeover is stalled at the ceiling) rather than
-// the ordinary-shortfall wording, which would tell the operator that nothing
-// is needed. This is the case the Important review finding on Task 5 was
-// about: it must stay distinct from TestGroupSaysWhenItsCeilingHoldsCapacityBack's
-// message so the two can never silently converge again.
+// Wanted and Create are both 0 here, as when nothing is limited, so the message
+// must name the stalled changeover instead.
 func TestGroupSaysColdStartIsBlockedByTheCeiling(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -1787,11 +1499,8 @@ func TestGroupSaysColdStartIsBlockedByTheCeiling(t *testing.T) {
 	bringUpNamed(t, f, servers[0].Name)
 	f.reconcileGroup(t, r)
 
-	// A real spec update bumps the group's generation, so the server just
-	// brought up goes stale. It is empty (100 free of 100 slots, well past
-	// spareSlots 40), so nothing about capacity is short — the only reason
-	// to create anything now is the cold start, and the ceiling (maxReplicas
-	// still 1, one server already alive) has no room left to grant it.
+	// The new image makes the empty server stale: only the cold start wants a
+	// server, and the ceiling has no room for it.
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, f.group); err != nil {
 		t.Fatalf("get group: %v", err)
 	}
@@ -1821,18 +1530,6 @@ func TestGroupSaysColdStartIsBlockedByTheCeiling(t *testing.T) {
 	}
 }
 
-// TestGroupPatchesRetireOntoTheNominatedServer proves the group actually
-// carries out the changeover it decides on: spec.retire is the whole channel
-// between the group's decision and the Server controller that executes it.
-// If this patch does not land, the changeover is a rule nobody carries out.
-//
-// The file has no helper that builds two servers of different generations
-// directly, so this drives the real path instead: bring the floor's one
-// server up, bump the group's generation the way an operator would, and let
-// the cold start create the replacement — exactly what
-// TestOccupiedServerSurvivesAContinuousScaleDown and the ScalingLimited tests
-// above already rely on to get a stale server and a current one onto the
-// board.
 func TestGroupPatchesRetireOntoTheNominatedServer(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -1845,8 +1542,6 @@ func TestGroupPatchesRetireOntoTheNominatedServer(t *testing.T) {
 	old := servers[0].Name
 	bringUpNamed(t, f, old)
 
-	// A real spec update bumps the group's generation, so the server already
-	// up goes stale and the cold start orders its replacement.
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby", Namespace: f.ns}, f.group); err != nil {
 		t.Fatalf("get group: %v", err)
 	}
@@ -1867,8 +1562,6 @@ func TestGroupPatchesRetireOntoTheNominatedServer(t *testing.T) {
 	}
 	bringUpNamed(t, f, newSrv)
 
-	// Both servers are Ready now: old at the previous generation, new at the
-	// current one. This is the one pass that must nominate old to retire.
 	f.reconcileGroup(t, r)
 
 	got := &spawneryv1alpha1.Server{}
@@ -1880,12 +1573,8 @@ func TestGroupPatchesRetireOntoTheNominatedServer(t *testing.T) {
 	}
 }
 
-// TestGroupRetireServerGuardsAgainstARepeatCall exercises retireServer's
-// idempotence guard directly. selectRetirement never nominates a server
-// already showing Retire: true, so the only call site today never reaches
-// the guard; this calls retireServer twice against the same servers map to
-// stand in for a future call site that does not pre-filter, and confirms the
-// second call is a true no-op: no second event, no second patch.
+// selectRetirement never nominates a retiring server, so the guard is called
+// directly.
 func TestGroupRetireServerGuardsAgainstARepeatCall(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -1911,10 +1600,7 @@ func TestGroupRetireServerGuardsAgainstARepeatCall(t *testing.T) {
 		t.Fatalf("first retireServer did not patch spec.retire")
 	}
 
-	// The in-memory server the map points at already reflects the patch —
-	// retireServer sets srv.Spec.Retire = true on it before issuing the
-	// patch — so this second call sees exactly what a future call site that
-	// forgets to pre-filter would see.
+	// retireServer already set Retire on the in-memory server the map holds.
 	if err := r.retireServer(f.ctx, f.group, servers, srv.Name); err != nil {
 		t.Fatalf("second retireServer: %v", err)
 	}
@@ -1933,12 +1619,8 @@ func TestGroupRetireServerGuardsAgainstARepeatCall(t *testing.T) {
 	}
 }
 
-// reconcilePass drives one resync the way the real system does: every Server
-// first, so a phase transition the group ordered on a previous pass (spec.retire,
-// most of all) actually lands before the group looks at the result, and then the
-// group itself. Every loop-driven test above this one already repeats this exact
-// shape inline (TestOccupiedServerSurvivesAContinuousScaleDown is the clearest
-// example); this names it once for a test that needs it standalone.
+// reconcilePass reconciles every Server before the group, so a phase the
+// group ordered lands before it looks.
 func reconcilePass(t *testing.T, f *fixture, r *ServerGroupReconciler) {
 	t.Helper()
 	for _, s := range f.listServers(t) {
@@ -1947,18 +1629,11 @@ func reconcilePass(t *testing.T, f *fixture, r *ServerGroupReconciler) {
 	f.reconcileGroup(t, r)
 }
 
-// markReady brings an already-created server all the way to phase Ready with
-// no players — the state a changeover's replacement is in the moment it
-// becomes eligible to receive a retirement. A thin name for bringUpNamed, so
-// the test below reads at the same level as the milestone's promise rather
-// than the machinery underneath it.
 func (f *fixture) markReady(t *testing.T, name string) {
 	t.Helper()
 	bringUpNamed(t, f, name)
 }
 
-// markReadyWithPlayers is markReady plus a live player count, for a server
-// that must already be occupied by the time the changeover looks at it.
 func (f *fixture) markReadyWithPlayers(t *testing.T, name string, players int32) {
 	t.Helper()
 	uid := bringUpNamed(t, f, name)
@@ -1967,42 +1642,11 @@ func (f *fixture) markReadyWithPlayers(t *testing.T, name string, players int32)
 	}
 }
 
-// bumpPodSpec performs a real spec update, the way an operator rolling a new
-// image would. It changes spec.image, which is what reaches
-// podspec.DesiredServerHash, so every server created under the previous value
-// reads as stale to the scaling rules.
-//
-// The name is not cosmetic: a helper that only moved metadata.generation -- by
-// editing spareSlots, say -- would make nothing stale at all, while every test
-// built on it went on passing and asserting nothing. The image edit below is
-// the load-bearing line.
-//
-// It also pins spec.update explicitly rather than leaving it unset.
-// spec.update is optional, and an unset one arrives at MaxUnavailable: 0 —
-// which ServerGroup.UpdateMaxUnavailable and selectRetirement both floor to 1
-// already (see that accessor's doc comment) — but relying on that floor
-// silently is how a group comes to look as though it works while never
-// actually rolling. Writing the policy out here removes the question.
-//
-// It also raises spareSlots to 150, above what a single fresh replacement
-// (100 free slots once it is Ready and empty) can cover on its own. The
-// fixture's default of 40 never needs a retiring server's capacity backfilled
-// — one fresh replacement already clears it before anything has even
-// retired — so a test that left it there could pass even if a retiring
-// server never dropped out of the group's size at all. 150 is what makes
-// leaving()'s own promise ("dropping out of the group's size is exactly what
-// makes the spare-slot rule order a replacement for a server a rolling
-// update has retired") into something this test actually exercises.
-//
-// 150 also has to stay inside the window that keeps assertion 1 below
-// reading "exactly one": roughly (80, 180]. At or below 80 the pre-bump gap
-// (spareSlots minus the two occupied stale servers' 80 free) goes to zero or
-// negative and the cold start alone would already have to explain the
-// create; above 180 the post-bump gap exceeds what a single fresh server's
-// 100 slots can cover and wanted climbs to 2 at pass 1. 150 sits comfortably
-// mid-window, ~70 clear on either side, so this is not fragile today — but a
-// future spareSlots change made for an unrelated reason could silently push
-// assertion 1 (or 5) outside it.
+// bumpPodSpec edits spec.image because a capacity edit makes nothing stale.
+// spec.update is written out rather than relying on the floor of an unset
+// maxUnavailable. spareSlots 150 exceeds one fresh server's 100, so a retiring
+// server's capacity has to be backfilled, and stays inside (80, 180], where
+// assertion 1 still sees exactly one create.
 func (f *fixture) bumpPodSpec(t *testing.T) {
 	t.Helper()
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, f.group); err != nil {
@@ -2016,15 +1660,8 @@ func (f *fixture) bumpPodSpec(t *testing.T) {
 	}
 }
 
-// serversOfGeneration filters the group's servers down to one generation.
-//
-// Since 7a the sizing rules read spec.podHash and not this field, so this is a
-// proxy for "of the current spec" rather than the rule itself. It is a sound
-// proxy in every test here for one reason: bumpPodSpec changes spec.image,
-// which moves the render hash and the generation together. A test that edited
-// only capacity would move the generation alone, and this helper would report
-// every server stale while the rules correctly reported none. Use PodHash
-// directly in such a test rather than reaching for this.
+// serversOfGeneration stands in for "of the current pod hash", which holds
+// only because bumpPodSpec moves the hash and the generation together.
 func (f *fixture) serversOfGeneration(t *testing.T, generation int64) []spawneryv1alpha1.Server {
 	t.Helper()
 	var out []spawneryv1alpha1.Server
@@ -2036,7 +1673,6 @@ func (f *fixture) serversOfGeneration(t *testing.T, generation int64) []spawnery
 	return out
 }
 
-// retiringCount counts the servers currently in phase Retiring.
 func (f *fixture) retiringCount(t *testing.T) int {
 	t.Helper()
 	n := 0
@@ -2048,7 +1684,6 @@ func (f *fixture) retiringCount(t *testing.T) int {
 	return n
 }
 
-// firstRetiring returns the (assumed unique) server in phase Retiring.
 func (f *fixture) firstRetiring(t *testing.T) *spawneryv1alpha1.Server {
 	t.Helper()
 	for _, s := range f.listServers(t) {
@@ -2061,29 +1696,13 @@ func (f *fixture) firstRetiring(t *testing.T) *spawneryv1alpha1.Server {
 	return nil
 }
 
-// TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone is the whole
-// rolling update, end to end, in one test: two occupied stale servers, a spec
-// change, and a group that ends up entirely on the new generation with nobody
-// having been moved. A regression anywhere in it fails a specific numbered
-// assertion below, not the test as an undifferentiated whole.
-//
-// Driven with the suite's own direct-Reconcile idiom (reconcilePass) rather
-// than bare reconcileGroup calls: this repository runs the Server and
-// ServerGroup reconcilers as two separate direct calls rather than through a
-// running manager, and a phase the group orders (spec.retire, above all) only
-// lands once the Server reconciler for that object runs. Every loop-driven
-// test in this file already reconciles every server before the group on each
-// pass; this test does the same, just for a fixed, small number of passes
-// instead of a loop, because each step here asserts a distinct thing that can
-// break rather than an invariant that must hold across many passes.
+// Each numbered step asserts a distinct thing that can break, so this runs a
+// fixed number of passes rather than a loop.
 func TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 
-	// Two occupied servers of the group's starting generation, created
-	// directly rather than through the reconciler's floor: minReplicas stays
-	// at the fixture's default of 1, so scaling itself would only ever create
-	// one of them.
+	// Created directly: with minReplicas 1, scaling would create only one.
 	a, b := "lobby-a", "lobby-b"
 	f.createServer(a)
 	f.markReadyWithPlayers(t, a, 60)
@@ -2092,37 +1711,23 @@ func TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone(t *testing.T)
 
 	f.bumpPodSpec(t)
 
-	// 1. Exactly one replacement is created — not zero, and not one per
-	// five-second pass while it boots. At this fixture's spareSlots (150,
-	// see bumpPodSpec), this create is explained by ordinary spare-slot
-	// demand alone: pass 1 sees provisional=80 (two occupied stale servers,
-	// 40 free each) against spareSlots=150, gap=70, wanted=1 — already 1
-	// before coldStart's own "if cold && create<1" branch is even consulted.
-	// So this assertion does not, on its own, exercise coldStart's
-	// deadlock-breaker (Task 5); TestARollingUpdateColdStartCreatesExactlyOneServer
-	// below pins that mechanism specifically, with a fixture tuned so the
-	// spare-slot rule wants nothing and the create can only be explained by
-	// coldStart.
+	// 1. Exactly one replacement, not one per pass while it boots. Spare-slot
+	// demand alone explains it (gap 70); TestARollingUpdateColdStartCreatesExactlyOneServer
+	// pins coldStart itself.
 	reconcilePass(t, f, r)
 	fresh := f.serversOfGeneration(t, f.group.Generation)
 	if len(fresh) != 1 {
 		t.Fatalf("cold start created %d servers, want exactly 1", len(fresh))
 	}
 
-	// 2. Nothing retires before the replacement is Ready. This is the
-	// guarantee that stops a group emptying itself: were it not enforced, the
-	// two occupied servers below would already be candidates the instant they
-	// went stale.
+	// 2. Nothing retires before the replacement is Ready.
 	reconcilePass(t, f, r)
 	if n := f.retiringCount(t); n != 0 {
 		t.Fatalf("%d servers retiring before a replacement was Ready", n)
 	}
 
-	// 3. Once the replacement is Ready, exactly one stale server retires —
-	// one, because maxUnavailable defaults to (and here is pinned at) 1. The
-	// first pass below is what nominates it (patches spec.retire); the second
-	// is what lands the phase transition that patch orders, exactly as a real
-	// resync would need two five-second passes to do the same.
+	// 3. Exactly one stale server retires (maxUnavailable 1); the second pass lands
+	// the phase the first ordered.
 	f.markReady(t, fresh[0].Name)
 	reconcilePass(t, f, r)
 	reconcilePass(t, f, r)
@@ -2130,8 +1735,7 @@ func TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone(t *testing.T)
 		t.Fatalf("%d servers retiring, want exactly 1 (maxUnavailable)", n)
 	}
 
-	// 4. The retiring server keeps its players — it is not deleted — and it
-	// is deregistered so it takes no new joins.
+	// 4. The retiring server keeps its players and takes no new joins.
 	retiring := f.firstRetiring(t)
 	if !retiring.DeletionTimestamp.IsZero() {
 		t.Error("a retiring server with players was deleted")
@@ -2140,44 +1744,16 @@ func TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone(t *testing.T)
 		t.Error("a retiring server is still registered")
 	}
 
-	// 5. The retirement above is what leaving() (Task 3) exists to make
-	// possible: the retiring server dropping out of the group's size is what
-	// lets DecideSize notice the capacity it was carrying is gone and order a
-	// replacement for it, in the very same pass — bumpPodSpec's spareSlots
-	// of 150 is chosen so fresh alone cannot cover that gap on its own. If
-	// leaving() stopped including phase.Retiring, the retiring server would
-	// keep holding the group's size, the shortfall would never become
-	// visible, and this is the assertion that would catch it: exactly two
-	// servers of the current generation, the cold start's replacement plus
-	// the backfill for what the retirement just gave up.
+	// 5. The retiring server leaves the group's size, so the capacity it carried is
+	// backfilled in the same pass.
 	if got := len(f.serversOfGeneration(t, f.group.Generation)); got != 2 {
 		t.Fatalf("%d current-generation servers after the retirement, want 2: "+
 			"the cold-start replacement plus the backfill for the capacity the retiring server took with it", got)
 	}
 }
 
-// TestARollingUpdateColdStartCreatesExactlyOneServer pins coldStart's
-// deadlock-breaker in isolation, apart from ordinary spare-slot demand.
-// TestARollingUpdateReplacesAnOccupiedGroupWithoutKickingAnyone's assertion 1
-// no longer can: at that test's spareSlots of 150, ordinary demand alone
-// already wants a create at pass 1, so hard-coding coldStart to always
-// return false there still yields one create and that assertion would not
-// notice. This test's fixture is tuned the other way, so nothing but
+// 80 free slots on the stale servers already cover spareSlots 40, so nothing but
 // coldStart can explain the create.
-//
-// Arithmetic: two stale (old-generation) occupied servers, 60 players each
-// out of maxPlayers 100, for 40 free slots apiece — sum(stale free) = 80.
-// spareSlots is left at the fixture's default of 40 (bumpPodSpec is not
-// used here precisely because it raises spareSlots to 150; this test needs
-// it left alone). At pass 1: provisional = 80 >= spareSlots = 40, so gap <=
-// 0 and wanted = 0. MinReplicas (1) does not raise create either — alive is
-// already 2. So create is 0 before coldStart is consulted at all; coldStart
-// sees stale=2, current=0, PendingCreates=0, reports true, and DecideSize's
-// "if cold && create<1 { create = 1 }" is the only line that can produce the
-// server this test asserts on. The margin is comfortable — sum(stale free)
-// 80 is double spareSlots 40 — so a modest future change to either number
-// will not flip this by accident, but a change that closes the gap (raises
-// spareSlots toward 80, or lowers the two servers' free capacity) would.
 func TestARollingUpdateColdStartCreatesExactlyOneServer(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -2188,9 +1764,7 @@ func TestARollingUpdateColdStartCreatesExactlyOneServer(t *testing.T) {
 	f.createServer(b)
 	f.markReadyWithPlayers(t, b, 60)
 
-	// A real spec update, bumping the generation exactly as bumpPodSpec
-	// does, but deliberately not touching spareSlots — it must stay at the
-	// fixture's default of 40 for the arithmetic above to hold.
+	// bumpPodSpec's image edit, without its spareSlots change.
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, f.group); err != nil {
 		t.Fatalf("get group: %v", err)
 	}
@@ -2205,12 +1779,7 @@ func TestARollingUpdateColdStartCreatesExactlyOneServer(t *testing.T) {
 		t.Fatalf("cold start created %d servers, want exactly 1", len(fresh))
 	}
 
-	// The replacement is still booting (Pending/Starting, never marked
-	// Ready). Once it exists it counts toward coldStart's "current" tally
-	// and its own provisional capacity (a not-yet-reporting server counts as
-	// its full maxPlayers, per provisionalCapacity), so nothing should order
-	// a second one on the next two five-second passes either — the cold
-	// start must produce one server, not one per pass.
+	// A booting server counts its full maxPlayers, so no second one may follow.
 	for i := 0; i < 2; i++ {
 		reconcilePass(t, f, r)
 		if got := len(f.serversOfGeneration(t, f.group.Generation)); got != 1 {
@@ -2244,10 +1813,8 @@ func TestGroupBackoffFieldsRoundTripThroughTheAPIServer(t *testing.T) {
 }
 
 func TestCollectViewsCarriesTheFailureAndReadyTimestamps(t *testing.T) {
-	// Both fields exist on the Server status and were simply never lifted into
-	// the view. The backoff reads them, and a view that leaves them zero makes
-	// every failure look like it happened at the epoch — which counts once and
-	// then never again.
+	// Zero timestamps would date every failure to the epoch, which the backoff
+	// counts once and never again.
 	f := newFixture(t)
 	f.createServer("lobby-tsx1")
 	r := groupReconciler(f)
@@ -2277,9 +1844,6 @@ func TestCollectViewsCarriesTheFailureAndReadyTimestamps(t *testing.T) {
 	}
 }
 
-// oneServerName is the name of the group's only server. It fails the test on
-// any other number, because every backoff test below reasons about one
-// specific corpse and a second server would change what the count means.
 func (f *fixture) oneServerName(t *testing.T) string {
 	t.Helper()
 	servers := f.listServers(t)
@@ -2289,10 +1853,6 @@ func (f *fixture) oneServerName(t *testing.T) string {
 	return servers[0].Name
 }
 
-// newestServerName returns the name of the group's one server not yet in
-// phase Failed — the replacement a closed backoff window just allowed — and
-// false once every server the group has ever created has failed and nothing
-// new was created this pass (a give-up, or a window still open).
 func (f *fixture) newestServerName(t *testing.T) (string, bool) {
 	t.Helper()
 	var name string
@@ -2310,9 +1870,6 @@ func (f *fixture) newestServerName(t *testing.T) (string, bool) {
 	return name, true
 }
 
-// reloadGroup re-reads the group from the API server. The count lives on the
-// status precisely so that it survives a restart, so a test that asserts on it
-// has to read what was persisted rather than the fixture's own copy.
 func (f *fixture) reloadGroup(t *testing.T) *spawneryv1alpha1.ServerGroup {
 	t.Helper()
 	g := &spawneryv1alpha1.ServerGroup{}
@@ -2322,7 +1879,6 @@ func (f *fixture) reloadGroup(t *testing.T) *spawneryv1alpha1.ServerGroup {
 	return g
 }
 
-// setMaxReplicas moves the group's ceiling, the mirror of setMinReplicas.
 func (f *fixture) setMaxReplicas(t *testing.T, n int32) {
 	t.Helper()
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, f.group); err != nil {
@@ -2334,11 +1890,6 @@ func (f *fixture) setMaxReplicas(t *testing.T, n int32) {
 	}
 }
 
-// failServer walks an existing server up to Ready and then past its readiness
-// losses into Failed — bringUpNamed and driveToFailed, named once for the
-// tests below. driveToFailed is what makes the Server controller stamp
-// status.failedAt, and that timestamp, not the moment the group observes it,
-// is what the count and the window are measured from.
 func (f *fixture) failServer(t *testing.T, name string) {
 	t.Helper()
 	bringUpNamed(t, f, name)
@@ -2348,34 +1899,16 @@ func (f *fixture) failServer(t *testing.T, name string) {
 	}
 }
 
-// failServerNeverReady is failServer's other half: a server that never becomes
-// playable at all, rather than one that was Ready and flapped.
-//
-// failServer goes bringUpNamed then driveToFailed, so every failure it produces
-// belongs to a server that reached Ready first. That matters twice over. It is
-// not the broken-image scenario the backoff exists for; and it walks through
-// Starting, which clears status.readySince on its own, so it can never show
-// whether the Failed arm's own clearing is doing anything (see
-// TestServerFailedStraightFromReadyClearsReadySince).
-//
-// This walks the other path, with no new machinery: the pod runs, the server
-// enters Starting, and status.startedAt then ages past the reconciler's
-// StartupDeadline with the ready gate never satisfied — phase.Decide's
-// `StartupDeadlineReached && current != Ready` branch. The clock move is what
-// the failure is made of, so it is not a knob: it has to exceed the deadline.
-//
-// It does not, however, buy the caller anything against the backoff. The
-// advance happens *before* the failure, so the failedAt it produces is stamped
-// at the new time and the window opens from there — a caller driving a streak
-// still has to move the clock again afterwards to earn its next attempt.
+// failServerNeverReady fails a server on its startup deadline without it ever
+// being Ready. failedAt is stamped after the clock advance, so a caller still has
+// to wait out the window it opens.
 func (f *fixture) failServerNeverReady(t *testing.T, name string) {
 	t.Helper()
 	f.reconcile(name)
 	if _, ok := f.pod(name); !ok {
 		t.Fatalf("reconcile did not create the pod for %s", name)
 	}
-	// The kubelet's part, and only that part: the container is up, the probe
-	// never goes green, and no agent ever connects.
+	// The probe never goes green and no agent connects.
 	f.setPodRunning(name, false)
 	f.reconcile(name)
 	if got := f.server(name).Status.Phase; got != string(phase.Starting) {
@@ -2389,14 +1922,7 @@ func (f *fixture) failServerNeverReady(t *testing.T, name string) {
 	if got := srv.Status.Phase; got != string(phase.Failed) {
 		t.Fatalf("phase of %s = %q after its startup deadline elapsed, want Failed", name, got)
 	}
-	// This would fail regardless of whether the server was ever Ready: entering
-	// Starting or Failed clears status.readySince unconditionally (the phase
-	// switch in server_controller.go), so a failServer corpse — which did reach
-	// Ready — passes this identically. What actually shows this server was
-	// never Ready is the Starting assertion above and the fact that
-	// phase.Decide's Ready case, the only place that sets readySince, is never
-	// reached: the deadline advance runs out before the ready gate is ever
-	// satisfied.
+	// Not proof of never-Ready: entering Starting or Failed clears readySince anyway.
 	if srv.Status.ReadySince != nil {
 		t.Fatalf("server %s carries status.readySince", name)
 	}
@@ -2405,10 +1931,8 @@ func (f *fixture) failServerNeverReady(t *testing.T, name string) {
 	}
 }
 
-// shedCount counts the servers the group has asked to remove, ignoring the
-// named ones. envtest runs no kubelet and the Server controller holds a
-// finalizer through the drain, so a deleted Server lingers carrying a deletion
-// timestamp rather than disappearing.
+// envtest runs no kubelet and the finalizer holds through the drain, so a
+// deleted Server lingers with a deletion timestamp.
 func (f *fixture) shedCount(t *testing.T, ignore ...string) int {
 	t.Helper()
 	n := 0
@@ -2421,8 +1945,6 @@ func (f *fixture) shedCount(t *testing.T, ignore ...string) int {
 	return n
 }
 
-// TestGroupStopsCreatingWhileItBacksOff is the point of the milestone: a group
-// whose server failed does not build another one on the next five-second pass.
 func TestGroupStopsCreatingWhileItBacksOff(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -2432,14 +1954,8 @@ func TestGroupStopsCreatingWhileItBacksOff(t *testing.T) {
 	name := f.oneServerName(t)
 	f.failServer(t, name)
 
-	// The pass that counts the failure is already inside the window it opens:
-	// the clock has not moved since failedAt was stamped. So the replacement
-	// the floor asks for must not be created on this pass either, and
-	// asserting that here rather than only on the next pass is deliberate.
-	// With the gate removed the replacement appears on exactly this pass, and
-	// a test that took its baseline afterwards would take that replacement for
-	// the baseline and then see nothing wrong on the next pass — where the
-	// floor is satisfied and nothing more is created anyway.
+	// The pass that counts the failure is already inside the window it opens, so it
+	// must not build the replacement either.
 	f.reconcileGroup(t, r)
 	if got := len(f.listServers(t)); got != 1 {
 		t.Fatalf("%d servers on the pass that counted the failure, want 1: "+
@@ -2461,8 +1977,6 @@ func TestGroupStopsCreatingWhileItBacksOff(t *testing.T) {
 	}
 }
 
-// TestGroupCreatesAgainOnceTheWindowCloses is the other half: the backoff is a
-// wait, not a stop. One failure buys ten seconds and no more.
 func TestGroupCreatesAgainOnceTheWindowCloses(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -2479,36 +1993,22 @@ func TestGroupCreatesAgainOnceTheWindowCloses(t *testing.T) {
 	}
 }
 
-// TestGroupStillShedsWhileItBacksOff pins that the backoff holds back
-// building, not tidying up. A deletion path that waited on an unrelated
-// failure would leave surplus servers standing for the whole window.
-//
-// The window is open by construction rather than by reading a condition:
-// consecutiveFailures is 1 below and the clock has not moved past the failedAt
-// the window runs from, which is DecideBackoff's "must wait" case exactly.
-// Task 4 could only assert consecutiveFailures as a stand-in because the
-// BackingOff condition did not exist yet; now that Task 5 has added it, the
-// assertion below is strengthened to read the condition itself.
+// A deletion path waiting on an unrelated failure would leave surplus servers
+// standing for the whole window.
 func TestGroupStillShedsWhileItBacksOff(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
-	// No floor and a ceiling of one, so a removal is the only thing this pass
-	// can decide: nothing is short, and the surplus is unambiguous.
+	// No floor and a ceiling of one: a removal is the only thing this pass can decide.
 	f.setMinReplicas(t, 0)
 	f.setMaxReplicas(t, 1)
 
-	// Two idle servers against that ceiling, plus a third that fails and opens
-	// the window. The failure does not count toward the group's size, so the
-	// surplus is exactly one of the two idle servers.
+	// The failure does not count toward size, so exactly one idle server is surplus.
 	idle := []string{"lobby-idle-a", "lobby-idle-b"}
 	for _, name := range idle {
 		bringUpReady(t, f, name)
 	}
-	// The failure has to be newer than those two readySince stamps or it is
-	// not a failure since the last success and the streak never starts. The
-	// fixture's clock only moves when a test moves it, so without this the
-	// whole scenario happens in one instant and CountFailures is right to
-	// count nothing.
+	// The failure must be newer than the readySince stamps or the streak never
+	// starts, and the fixture's clock moves only when told to.
 	f.clock.Advance(time.Second)
 	broken := "lobby-broken"
 	f.createServer(broken)
@@ -2525,50 +2025,22 @@ func TestGroupStillShedsWhileItBacksOff(t *testing.T) {
 	}
 }
 
-// TestGroupStillRetiresWhileItBacksOff pins the other half of the same
-// promise as TestGroupStillSheds: the retire loop in size() must not wait on
-// backoff.MayCreate either. The delete loop is covered above; this is the
-// path a rolling update actually depends on, because a retirement is what
-// starts a soft drain — the only thing in this diff that moves a player's
-// session. A retirement stalled behind the window would be a changeover that
-// stops mid-flight over a failure that has nothing to do with it.
-//
-// The fixture is a group mid-changeover: a stale (previous-generation) Ready
-// server, which is the retirement candidate, and a Ready server of the
-// current generation, which selectRetirement refuses to nominate anything
-// without (design §3.4's "at least one ready server of the current
-// generation"). Both are brought up with the fixture's default scaling
-// (spareSlots 40, maxReplicas 10) so that each Ready server's 100 free slots
-// already clears spare-slot demand and DecideSize reaches the retirement
-// branch rather than a create or a ceiling-driven delete.
-//
-// As in TestGroupStillSheds, the window is proved open by construction:
-// consecutiveFailures reads 1 with the clock still short of failedAt +
-// backoffBase, DecideBackoff's must-wait case exactly.
+// A retirement stalled behind the window would stop a changeover mid-flight over
+// an unrelated failure.
 func TestGroupStillRetiresWhileItBacksOff(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 
-	// The retirement candidate, created and readied under the group's
-	// starting generation, before the bump below makes it stale.
 	stale := "lobby-stale"
 	bringUpReady(t, f, stale)
 
-	// The operator's fix in flight: a real generation bump, so the group is
-	// genuinely mid-changeover rather than merely holding one old server.
 	f.bumpPodSpec(t)
 
-	// The current-generation Ready server selectRetirement requires before it
-	// will nominate anything. Its readySince is the watermark the failure
-	// below has to clear.
+	// selectRetirement nominates nothing without a Ready current-generation server.
 	current := "lobby-current"
 	bringUpReady(t, f, current)
 
-	// The failure has to be newer than lobby-current's readySince or it is
-	// not a failure since the last success and the streak never starts — see
-	// CountFailures and the identical comment on TestGroupStillSheds above.
-	// ofAttempt excludes the stale server from the count entirely, so only
-	// this watermark matters here.
+	// Newer than lobby-current's readySince, as in TestGroupStillShedsWhileItBacksOff.
 	f.clock.Advance(time.Second)
 	broken := "lobby-broken"
 	f.createServer(broken)
@@ -2584,9 +2056,6 @@ func TestGroupStillRetiresWhileItBacksOff(t *testing.T) {
 	}
 }
 
-// TestAPodSpecChangeClearsTheBackoff pins the way out. A change to what the
-// servers start with is the operator's answer to whatever broke, so the streak
-// it caused is over and the next attempt is immediate.
 func TestAPodSpecChangeClearsTheBackoff(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -2598,7 +2067,6 @@ func TestAPodSpecChangeClearsTheBackoff(t *testing.T) {
 		t.Fatalf("consecutiveFailures = %d before the spec change, want 1: there is no streak here to clear", got)
 	}
 
-	// The operator's answer to whatever failed.
 	f.bumpPodSpec(t)
 	f.reconcileGroup(t, r)
 
@@ -2606,24 +2074,17 @@ func TestAPodSpecChangeClearsTheBackoff(t *testing.T) {
 	if g.Status.ConsecutiveFailures != 0 {
 		t.Errorf("consecutiveFailures = %d after a spec change, want 0", g.Status.ConsecutiveFailures)
 	}
-	// Kept as the watermark: it is what stops the previous attempt's corpse
-	// being counted into the new streak.
+	// Kept as the watermark that stops the old corpse counting into the new streak.
 	if g.Status.LastFailureAt == nil {
 		t.Error("lastFailureAt was cleared by the reset")
 	}
-	// A cleared counter means no window, so the group builds at once rather
-	// than serving out the wait the old spec earned.
 	if len(f.serversOfGeneration(t, g.Generation)) == 0 {
 		t.Error("the group created nothing on the pass that cleared the streak; after a spec change the next attempt is immediate")
 	}
 }
 
-// TestBackingOffConditionNamesTheCountAndTheWait pins the waiting half of the
-// two conditions Task 5 adds: after a single failure the group must say it is
-// waiting, name the count, and say roughly how long — and it must not claim a
-// fault. derivePhase turns a true Degraded into the group's phase, so
-// conflating the two would make a ten-second wait look identical to a broken
-// image.
+// derivePhase turns a true Degraded into the phase, so a ten-second wait must
+// not claim it.
 func TestBackingOffConditionNamesTheCountAndTheWait(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -2648,19 +2109,10 @@ func TestBackingOffConditionNamesTheCountAndTheWait(t *testing.T) {
 	}
 }
 
-// TestGroupGivesUpAndSaysSo drives the streak all the way to
-// backoffGiveUpAt and checks the other half: once the group has given up,
-// Degraded goes true (so the phase reflects the real fault) and BackingOff
-// goes false — but with a reason and a message that say why, because
-// NoRecentFailures there would be a lie. It then proves the give-up sticks:
-// an hour later, with nothing about the spec changed, the group is carrying
-// its six corpses and nothing live — an absolute count, for the reason the
-// comment on that block gives.
 func TestGroupGivesUpAndSaysSo(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	f.setMinReplicas(t, 1)
-	// Drive the streak to the threshold: fail, wait out the window, repeat.
 	for i := int32(0); i < backoffGiveUpAt; i++ {
 		f.reconcileGroup(t, r)
 		if name, ok := f.newestServerName(t); ok {
@@ -2689,30 +2141,14 @@ func TestGroupGivesUpAndSaysSo(t *testing.T) {
 	if c.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
 		t.Errorf("reason = %q, want CrashLoopBackoff rather than an all-clear", c.Reason)
 	}
-	// The message has to name the way out for a cause outside the group,
-	// which moves nothing the operator reads and is not discoverable from the
-	// field list.
+	// The retry annotation is not discoverable from the field list.
 	if !strings.Contains(c.Message, spawneryv1alpha1.AnnotationRetry) {
 		t.Errorf("message = %q, want it to name the %s annotation", c.Message, spawneryv1alpha1.AnnotationRetry)
 	}
 
-	// The terminal proof, stated as an absolute count rather than a delta.
-	//
-	// A `before := len(f.listServers(t))` taken here would measure nothing: the
-	// pass that established the give-up has already run, so a mutant that
-	// creates anyway has already created its extra server and that server is
-	// absorbed into the baseline — after which the pass an hour later builds
-	// nothing either way, because the floor is by then satisfied. That is
-	// exactly what mutating DecideBackoff's threshold branch to
-	// {GaveUp: true, MayCreate: true} gets away with: the entire envtest suite
-	// stays green.
-	//
-	// So count the state itself. backoffGiveUpAt failures produce
-	// backoffGiveUpAt corpses — pruneFailed asks for all but one to go, but the
-	// Server controller holds a finalizer through the drain and this test never
-	// reconciles a Server again, so every corpse lingers in phase Failed — and
-	// **nothing live at all**. A group that gave up and created anyway shows up
-	// here as a live server, whenever in the run it was built.
+	// An absolute count, not a delta: a group that created anyway has already
+	// absorbed its extra server into any baseline taken here. No Server is reconciled
+	// again, so the finalizer keeps every corpse in Failed.
 	f.clock.Advance(time.Hour)
 	f.reconcileGroup(t, r)
 	live, corpses := 0, 0
@@ -2731,27 +2167,9 @@ func TestGroupGivesUpAndSaysSo(t *testing.T) {
 	}
 }
 
-// TestGroupGivesUpOnServersThatNeverBecomeReady drives the broken-image case
-// end to end: a group whose
-// servers run out their startup deadline without ever becoming playable — a
-// broken image, an unpullable tag, a config the server rejects on boot — makes
-// its six attempts and then gives up.
-//
-// Every other backoff test here fails its servers with failServer, which is
-// bringUpNamed plus driveToFailed: a server that reached Ready and then
-// flapped. Those are valid assertions about the state at count 6, but they are
-// a different scenario, and one that a production reconciler at a five-second
-// resync would see differently — it would observe the Ready state in between
-// and CountFailures would correctly reset the streak. That a server which is
-// *never* Ready climbs the same ladder is what this pins.
-//
-// The round is the same shape as TestGroupGivesUpAndSaysSo's — fail, wait out
-// the window, repeat — and the wait is backoffCap for the same reason: it
-// exceeds every window the schedule can open before the threshold (160s at the
-// most), so no round is held back by a wait this test is not about. Aging the
-// server out of its startup deadline does not serve as that wait, because the
-// advance precedes the failure it causes and the window runs from the failedAt
-// it stamps.
+// failServer's servers reached Ready, which at a real resync would reset the
+// streak; this pins that a never-Ready server climbs the same ladder. backoffCap
+// exceeds every window the schedule opens before the threshold.
 func TestGroupGivesUpOnServersThatNeverBecomeReady(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -2784,8 +2202,7 @@ func TestGroupGivesUpOnServersThatNeverBecomeReady(t *testing.T) {
 		t.Errorf("phase = %q, want Degraded", g.Status.Phase)
 	}
 
-	// The absolute state, for the reason TestGroupGivesUpAndSaysSo's tail gives:
-	// six corpses, none of which was ever Ready, and nothing live.
+	// The absolute state, as in TestGroupGivesUpAndSaysSo.
 	live, corpses := 0, 0
 	for _, s := range f.listServers(t) {
 		if s.Status.Phase != string(phase.Failed) {
@@ -2793,12 +2210,7 @@ func TestGroupGivesUpOnServersThatNeverBecomeReady(t *testing.T) {
 			continue
 		}
 		corpses++
-		// This would fail regardless of whether the server was ever Ready:
-		// entering Starting or Failed clears status.readySince unconditionally,
-		// so a failServer corpse — which did reach Ready — passes this
-		// identically. What actually establishes that these six were never
-		// Ready is failServerNeverReady's own Starting assertion and the ready
-		// gate its deadline advance never satisfies.
+		// Not proof of never-Ready: entering Starting or Failed clears readySince anyway.
 		if s.Status.ReadySince != nil {
 			t.Errorf("corpse %s carries status.readySince", s.Name)
 		}
@@ -2811,11 +2223,6 @@ func TestGroupGivesUpOnServersThatNeverBecomeReady(t *testing.T) {
 	}
 }
 
-// TestBackingOffEventFiresOnTheFlankOnly pins the same non-spam rule
-// ScalingLimited already carries: SetStatusCondition moves lastTransitionTime
-// only on a real change of status, so comparing across the call is what tells
-// a transition apart from a five-second resync, and an event belongs only on
-// the former.
 func TestBackingOffEventFiresOnTheFlankOnly(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -2826,8 +2233,7 @@ func TestBackingOffEventFiresOnTheFlankOnly(t *testing.T) {
 	f.failServer(t, f.oneServerName(t))
 	f.reconcileGroup(t, r)
 
-	// scalingEvents drains the recorder, so this first call also empties it of
-	// whatever fired on the two passes above.
+	// scalingEvents drains the recorder, so this also empties it.
 	if first := scalingEvents(rec, spawneryv1alpha1.ReasonCrashLoopBackoff); first != 1 {
 		t.Fatalf("events = %d after the first failure, want 1", first)
 	}
@@ -2838,17 +2244,8 @@ func TestBackingOffEventFiresOnTheFlankOnly(t *testing.T) {
 	}
 }
 
-// TestBackingOffEventDoesNotFireWhenNetworkDiesMidBackoff pins the review's
-// finding 1 on Task 5: the BackingOff/Degraded event guards must check sized
-// the same way ScalingLimited's guard does (`if sized && decision.Limited !=
-// was`). Without that check, a group whose Network dies while it is actively
-// backing off flips BackingOff from True to the !sized case's False on the
-// very next pass — a real transition by IsStatusConditionTrue's bookkeeping,
-// even though nothing was decided — and fires an event carrying the
-// condition's default NoRecentFailures reason next to a message that says
-// the opposite: that backoff is not being decided, not that servers are
-// healthy. A reassuring Reason paired with an unresolved-problem Message is
-// exactly what the sized guard exists to prevent.
+// Without the sized guard, the !sized pass flips BackingOff to False with the
+// NoRecentFailures reason and fires an all-clear although nothing was decided.
 func TestBackingOffEventDoesNotFireWhenNetworkDiesMidBackoff(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -2862,9 +2259,7 @@ func TestBackingOffEventDoesNotFireWhenNetworkDiesMidBackoff(t *testing.T) {
 	if !meta.IsStatusConditionTrue(f.reloadGroup(t).Status.Conditions, spawneryv1alpha1.ConditionBackingOff) {
 		t.Fatalf("BackingOff is not true after a failure; the network-dies-mid-backoff pass below would prove nothing")
 	}
-	// Drains the recorder of everything that fired getting here (this test is
-	// about the next pass only); scalingEvents empties the whole channel
-	// regardless of which reason it is asked to count.
+	// scalingEvents empties the recorder whichever reason it counts.
 	scalingEvents(rec, spawneryv1alpha1.ReasonCrashLoopBackoff)
 
 	if err := f.c.Delete(f.ctx, f.network); err != nil {
@@ -2877,28 +2272,8 @@ func TestBackingOffEventDoesNotFireWhenNetworkDiesMidBackoff(t *testing.T) {
 	}
 }
 
-// TestDegradedEventDoesNotFireWhenNetworkDiesAfterAGiveUp is the mirror of
-// TestBackingOffEventDoesNotFireWhenNetworkDiesMidBackoff, and it exists
-// because the whole-branch review reproduced the asymmetry: dropping `sized &&`
-// from the *Degraded* event guard alone left the entire suite green, while its
-// byte-identical twin on the backingOff guard was already pinned by that test.
-// An unpinned guard sitting beside a pinned identical one is a trap — the next
-// person to touch the block has a test telling them one of the two matters and
-// nothing telling them the other does.
-//
-// The mechanism is the same as the twin's, one condition over. A group that has
-// given up carries Degraded: True. If its Network then dies, the !sized case
-// forces Degraded back to the false-by-default condition, whose reason is
-// NoRecentFailures — a real transition by IsStatusConditionTrue's bookkeeping,
-// even though nothing was decided this pass. Without the sized check that fires
-// an all-clear "servers are starting normally" reason next to a message saying
-// the opposite, for a group that is six failures deep and creating nothing.
-//
-// NoRecentFailures is the right thing to count and it is unambiguous here:
-// backingOff is False on both passes (CrashLoopBackoff at the give-up, then
-// NoRecentFailures under !sized), so its own guard sees no transition and
-// cannot contribute an event, and ScalingLimited's reason on the !sized pass is
-// WithinLimits. Any NoRecentFailures event reaching the recorder came from the
+// The Degraded twin of the guard above. BackingOff is False on both passes and
+// ScalingLimited reads WithinLimits, so any NoRecentFailures event came from the
 // Degraded guard.
 func TestDegradedEventDoesNotFireWhenNetworkDiesAfterAGiveUp(t *testing.T) {
 	f := newFixture(t)
@@ -2913,9 +2288,6 @@ func TestDegradedEventDoesNotFireWhenNetworkDiesAfterAGiveUp(t *testing.T) {
 		}
 		f.reconcileGroup(t, r)
 		f.clock.Advance(backoffCap)
-		// The recorder's channel blocks its writer once full and nothing else
-		// here drains it; six failures' worth of group events is close enough
-		// to a hundred to be worth not finding out. See drainRecorder.
 		drainRecorder(rec)
 	}
 	f.reconcileGroup(t, r)
@@ -2923,8 +2295,6 @@ func TestDegradedEventDoesNotFireWhenNetworkDiesAfterAGiveUp(t *testing.T) {
 	if !meta.IsStatusConditionTrue(f.reloadGroup(t).Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
 		t.Fatalf("Degraded is not true after %d failures; the network-dies pass below would prove nothing", backoffGiveUpAt)
 	}
-	// Drains everything that fired getting here: this test is about the next
-	// pass only.
 	drainRecorder(rec)
 
 	if err := f.c.Delete(f.ctx, f.network); err != nil {
@@ -2938,15 +2308,8 @@ func TestDegradedEventDoesNotFireWhenNetworkDiesAfterAGiveUp(t *testing.T) {
 	}
 }
 
-// TestBackingOffMessageStaysSilentAboutAFailureThatNeverHappened pins the
-// !newestFailure.IsZero() guard in Reconcile around the write to
-// group.Status.LastFailureAt. No test that reloads the group can ever tell a
-// guarded write apart from an unguarded one: a zero metav1.Time marshals to
-// null and round-trips back to nil either way, so the field itself carries no
-// evidence. What the guard actually protects is the in-memory value on this
-// same pass, and the default BackingOff message is what reads it back — so a
-// group that has never failed must render the plain, dateless message, not a
-// zero time smuggled in by an unconditional write.
+// A zero metav1.Time round-trips to nil, so only this pass's BackingOff message
+// can show an unguarded LastFailureAt write.
 func TestBackingOffMessageStaysSilentAboutAFailureThatNeverHappened(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -2962,9 +2325,6 @@ func TestBackingOffMessageStaysSilentAboutAFailureThatNeverHappened(t *testing.T
 	}
 }
 
-// TestAPodSpecChangeClearsAGaveUpGroupsConditions drives a real give-up
-// first, then a real pod spec change, which is what makes this a test of the
-// clear rather than of two conditions that were already absent.
 func TestAPodSpecChangeClearsAGaveUpGroupsConditions(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -2983,7 +2343,6 @@ func TestAPodSpecChangeClearsAGaveUpGroupsConditions(t *testing.T) {
 		t.Fatalf("Degraded is not true after %d failures; the pod spec change below would prove nothing", backoffGiveUpAt)
 	}
 
-	// The operator's answer to whatever failed.
 	f.bumpPodSpec(t)
 	f.reconcileGroup(t, r)
 
@@ -3002,14 +2361,8 @@ func TestAPodSpecChangeClearsAGaveUpGroupsConditions(t *testing.T) {
 	}
 }
 
-// TestBackingOffIsNotDecidedWithoutAUsableNetwork closes out the carried
-// finding that the counting block sits ahead of the networkUsable &&
-// IsEphemeral guard: a group whose Network does not exist still counts and
-// still computes a real backoff decision it cannot act on. Publishing that
-// decision as BackingOff/Degraded would sit a second, differently-worded
-// explanation for the same standstill next to Accepted: False. It has to say
-// nothing was decided instead, mirroring ScalingLimited's own !sized case
-// exactly.
+// Publishing a backoff decision next to Accepted: False would explain the same
+// standstill twice.
 func TestBackingOffIsNotDecidedWithoutAUsableNetwork(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -3053,51 +2406,13 @@ func TestBackingOffIsNotDecidedWithoutAUsableNetwork(t *testing.T) {
 	}
 }
 
-// drainRecorder empties the recorder between passes, so a count taken after
-// one pass is about that pass rather than about every pass since the fixture
-// was built. nonBlockingRecorder has no buffer to overrun, so nothing here is
-// guarding against a wedge.
 func drainRecorder(rec *nonBlockingRecorder) { drainEvents(rec) }
 
-// TestGroupWithABrokenNewImageDoesNotRebuildEveryPass pins the loop the
-// backoff exists to bound: a broken new image fails, stops counting toward the
-// group's size, and is recreated on the next five-second pass, forever.
-//
-// Three deliberate departures from the obvious way to write this:
-//
-// Every server of the new generation is failed on each pass, rather than "the
-// one server that has not failed yet". The stale server the changeover is
-// replacing stays Ready throughout, so that description matches two servers
-// whenever a replacement exists and identifies neither — and a loop that
-// failed nothing would pass this test with the backoff, the stopgap and
-// everything else removed.
-//
-// The clock advances before each failure rather than after, so the first
-// failedAt is strictly newer than the stale server's readySince.
-// CountFailures restarts the streak on a success newer than the last counted
-// failure and a same-instant stamp is not after it, so without this the run
-// would count no failures at all.
-//
-// The bound is read off the backoff schedule rather than set at one more than
-// the cold start built, and the arithmetic has two factors rather than one.
-//
-// Ten passes move the clock fifty seconds: passes * ResyncInterval = 10 * 5s.
-// backoffDelay(n) = backoffBase * backoffFactor^(n-1) gives windows of 10s,
-// 20s, 40s for n = 1, 2, 3 (backoffBase = 10s, backoffFactor = 2, both in
-// backoff.go). The count is rounds rather than corpses, so it
-// climbs 1, 2, 3 here: the first window opens at t=15s and the second at
-// t=40s, both inside 50s, and the third would need t=85s. Two windows fire.
-//
-// **Each window builds two servers, not one.** DecideSize runs the group above
-// its floor to cover spareSlots, so even at minReplicas 1 a recovery builds
-// two: over these ten passes the group goes 1 -> 3 -> 5 servers, at passes 2
-// and 7.
-//
-// So bound = 1 (the cold start's own server) + 2 windows * 2 servers = 5. A
-// group rebuilding every pass would have built about twenty, so the test still
-// separates the two by a wide margin. Changing passes, backoffBase,
-// backoffFactor, ResyncInterval or spareSlots moves this arithmetic and will
-// turn this red — that is a fixture change, not a backoff regression.
+// Every new-generation server is failed each pass because the stale one stays
+// Ready, and the clock moves first so failedAt is newer than its readySince.
+// bound = 1 cold-start server + 2 windows (opening at 15 s and 40 s of the 50 s
+// run) * 2 servers each, since spareSlots makes a recovery build two; a group
+// rebuilding every pass would build about twenty.
 func TestGroupWithABrokenNewImageDoesNotRebuildEveryPass(t *testing.T) {
 	const (
 		passes = 10
@@ -3113,12 +2428,7 @@ func TestGroupWithABrokenNewImageDoesNotRebuildEveryPass(t *testing.T) {
 	f.reconcileGroup(t, r)
 	generation := f.reloadGroup(t).Generation
 
-	// Every replacement fails immediately, and the clock moves only by the
-	// resync interval — far less than the backoff's first window.
 	for i := 0; i < passes; i++ {
-		// Both recorders, every pass: a group that rebuilt every pass — the
-		// failure this test exists to catch — produces ten servers' worth of
-		// lifecycle events, which is more than a FakeRecorder holds.
 		drainRecorder(f.reconc.Recorder.(*nonBlockingRecorder))
 		drainRecorder(r.Recorder.(*nonBlockingRecorder))
 		f.clock.Advance(ResyncInterval)
@@ -3136,16 +2446,12 @@ func TestGroupWithABrokenNewImageDoesNotRebuildEveryPass(t *testing.T) {
 	}
 }
 
-// TestACordonedNodeCondemnsTheServersOnIt is the server half of the milestone:
-// a node on its way out empties itself of servers, and the group rebuilds them
-// somewhere else without anybody being kicked.
 func TestACordonedNodeCondemnsTheServersOnIt(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	rec := r.Recorder.(*nonBlockingRecorder)
 
-	// Two servers, both Ready, one occupied so the test also proves that
-	// having players does not exempt a server from a node that is leaving.
+	// One occupied: players do not exempt a server from a leaving node.
 	f.setMinReplicas(t, 2)
 	f.reconcileGroup(t, r)
 	servers := f.listServers(t)
@@ -3155,7 +2461,6 @@ func TestACordonedNodeCondemnsTheServersOnIt(t *testing.T) {
 	f.markReadyWithPlayers(t, servers[0].Name, 3)
 	f.markReady(t, servers[1].Name)
 
-	// Place them on two nodes, then cordon the first.
 	going := f.ensureNode(t, "node-going-"+f.ns, false)
 	f.ensureNode(t, "node-staying-"+f.ns, false)
 	for i, srv := range f.listServers(t) {
@@ -3174,35 +2479,20 @@ func TestACordonedNodeCondemnsTheServersOnIt(t *testing.T) {
 
 	f.reconcileGroup(t, r)
 
-	// The server on the cordoned node is going.
 	condemned := f.server(servers[0].Name)
 	if condemned.DeletionTimestamp.IsZero() {
 		t.Error("the server on the cordoned node was not deleted; its players will be evicted instead of moved")
 	}
-	// The one beside it is not.
 	if !f.server(servers[1].Name).DeletionTimestamp.IsZero() {
 		t.Error("the server on the healthy node was deleted; only the departing node's servers may go")
 	}
-	// And the operator is told why. scalingEvents drains the recorder, so the
-	// resync assertion below starts from an empty channel.
+	// scalingEvents drains the recorder, so the resync below starts empty.
 	if n := scalingEvents(rec, "NodeDraining"); n != 1 {
 		t.Errorf("NodeDraining events = %d, want exactly 1", n)
 	}
 
-	// A resync that changes nothing must not announce the same drain again:
-	// the event is the moment of decision, not a status repeated every five
-	// seconds for as long as the server takes to drain. The proxy side has the
-	// same assertion in TestANodeDrainMarkFiresANodeDrainingEvent's third
-	// pass; this is deleteServer's own guard.
-	//
-	// The clock jumps past expectationTTL rather than one resync, and that is
-	// what makes this test the guard's rather than the reservation's. The
-	// delete reserved above keeps condemned() from naming this server again
-	// for as long as it stands, so a pass taken before it expires would emit
-	// nothing whatever deleteServer did. Past the TTL the server is nominated
-	// a second time, deleteServer is actually reached, and its
-	// DeletionTimestamp check is the only thing between it and a second
-	// event. Verified by removing that check: this then reports 1.
+	// Past expectationTTL condemned() names the server again, so only deleteServer's
+	// DeletionTimestamp guard stands between it and a second event.
 	f.clock.Advance(expectationTTL + time.Second)
 	f.reconcileGroup(t, r)
 	if n := scalingEvents(rec, "NodeDraining"); n != 0 {
@@ -3211,18 +2501,9 @@ func TestACordonedNodeCondemnsTheServersOnIt(t *testing.T) {
 	}
 }
 
-// TestAFailedServerOnACordonedNodeGoesAwayOnce is the same omission seen from
-// outside: a Failed server on a departing node is both condemned by size() and
-// collected by pruneFailed, which run over the same in-memory map in one pass.
-// r.Delete stamps no deletion timestamp back onto the local object, so
-// deleteServer's guard against repeating itself never sees the first removal,
-// and one server going away once is deleted twice and announced twice under
-// two different reasons.
-//
-// Both failures sit on the cordoned node, which is what makes the
-// FailedServerPruned count below discriminating: with both condemned there is
-// nothing left for the retention cap to prune, so any such event is the
-// duplicate.
+// size() and pruneFailed both reach a Failed server on a departing node in one
+// pass, and r.Delete stamps no deletion timestamp on the local object. Both
+// failures are condemned, so any FailedServerPruned event is the duplicate.
 func TestAFailedServerOnACordonedNodeGoesAwayOnce(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -3234,8 +2515,7 @@ func TestAFailedServerOnACordonedNodeGoesAwayOnce(t *testing.T) {
 	if len(servers) != 2 {
 		t.Fatalf("servers = %d, want 2", len(servers))
 	}
-	// Two failures, one more than maxRetainedFailures, so the retention cap
-	// really would nominate one of them if it were still looking at them.
+	// One more than maxRetainedFailures, so the cap would prune one if it still looked.
 	for _, s := range servers {
 		f.failServer(t, s.Name)
 	}
@@ -3253,8 +2533,7 @@ func TestAFailedServerOnACordonedNodeGoesAwayOnce(t *testing.T) {
 
 	f.reconcileGroup(t, r)
 
-	// Counted from one read of the channel: each event is delivered once, so
-	// asking twice would empty it before the second question.
+	// Each event is delivered once, so the channel is read once.
 	events := drainEvents(rec)
 	count := func(reason string) int {
 		n := 0
@@ -3277,18 +2556,8 @@ func TestAFailedServerOnACordonedNodeGoesAwayOnce(t *testing.T) {
 	}
 }
 
-// TestABrokenNetworkDoesNotStopACordonedNodeFromEmptying pins condemnation
-// below the Network gate. Design §3.3 calls condemnation "unconditional. The
-// node is leaving with or without our consent": a size() reached only when the
-// Network is usable leaves a group whose Network has been deleted, or which
-// lost the one-per-namespace contest, publishing NodeDraining: True naming the
-// node, condemning nothing, and hanging kubectl drain on an occupied pod
-// indefinitely -- the failure §1 of the design opens by describing, reached
-// through the operator that exists to prevent it.
-//
-// The server here is occupied, so the assertion is not merely about a
-// bookkeeping deletion: this is the pod the eviction API would otherwise be
-// left to take.
+// Condemnation must not wait on a usable Network: the node leaves regardless, and
+// kubectl drain would hang on the occupied pod.
 func TestABrokenNetworkDoesNotStopACordonedNodeFromEmptying(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -3307,18 +2576,12 @@ func TestABrokenNetworkDoesNotStopACordonedNodeFromEmptying(t *testing.T) {
 	f.bindPodToNode(t, pod, node.Name)
 	f.ensureNode(t, node.Name, true)
 
-	// The Network goes after the group is already running, which is the state
-	// an operator actually reaches: a deleted Network, or one that lost the
-	// contest, leaves the groups that referenced it exactly here.
 	if err := f.c.Delete(f.ctx, f.network); err != nil {
 		t.Fatalf("delete network: %v", err)
 	}
 
 	f.reconcileGroup(t, r)
 
-	// The pass really took the broken-Network route. Without this the
-	// assertions below would hold just as well on a pass that found its
-	// Network and sized normally, and would say nothing about the gate.
 	group := f.reloadGroup(t)
 	accepted := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
 	if accepted == nil || accepted.Status != metav1.ConditionFalse ||
@@ -3339,9 +2602,6 @@ func TestABrokenNetworkDoesNotStopACordonedNodeFromEmptying(t *testing.T) {
 	}
 }
 
-// TestCondemnedServersAreReplaced states the property that makes the drain
-// finite: the pass that condemns is the pass that orders the replacement, so
-// the group is never left short while it waits for a second reconcile.
 func TestCondemnedServersAreReplaced(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -3361,12 +2621,6 @@ func TestCondemnedServersAreReplaced(t *testing.T) {
 
 	f.reconcileGroup(t, r)
 
-	// The condemnation has to be checked before the replacement, or this test
-	// says nothing. Counting live servers alone passes just as well against a
-	// build that never condemns anything -- the original is still there and
-	// still counts as one -- which is exactly how a test outlives the code it
-	// was written for. Asserting the original is going is what makes the
-	// count below a statement about a replacement.
 	if f.server(servers[0].Name).DeletionTimestamp.IsZero() {
 		t.Fatal("the server on the cordoned node was not condemned; nothing below tests a replacement")
 	}
@@ -3381,9 +2635,6 @@ func TestCondemnedServersAreReplaced(t *testing.T) {
 	}
 }
 
-// TestNodeDrainingConditionNamesTheNode is what an operator sees in
-// kubectl describe. A bare True would tell them something is happening
-// without telling them where.
 func TestNodeDrainingConditionNamesTheNode(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -3409,8 +2660,6 @@ func TestNodeDrainingConditionNamesTheNode(t *testing.T) {
 		t.Errorf("message %q does not name the node", cond.Message)
 	}
 
-	// Release it: with no pods left on a departing node the condition goes
-	// False rather than staying True until something else clears it.
 	f.ensureNode(t, node.Name, false)
 	f.reconcileGroup(t, r)
 	cond = meta.FindStatusCondition(f.reloadGroup(t).Status.Conditions,
@@ -3420,13 +2669,8 @@ func TestNodeDrainingConditionNamesTheNode(t *testing.T) {
 	}
 }
 
-// createPersistentGroup adds a persistent ServerGroup beside the fixture's
-// ephemeral one, in the same namespace and on the same Network.
-//
-// It is built from scratch rather than by editing the fixture's group,
-// because spec.type is immutable and no edit can turn an ephemeral group into
-// a persistent one. The field sets differ besides: the CRD requires
-// spec.replicas and spec.storage here, and forbids spec.scaling.
+// spec.type is immutable, so a persistent group is built from scratch rather
+// than edited from the fixture's.
 func (f *fixture) createPersistentGroup(t *testing.T, name string, replicas int32) *spawneryv1alpha1.ServerGroup {
 	t.Helper()
 	group := &spawneryv1alpha1.ServerGroup{
@@ -3449,8 +2693,6 @@ func (f *fixture) createPersistentGroup(t *testing.T, name string, replicas int3
 	return group
 }
 
-// reconcileNamedGroup runs the group reconciler once against a group
-// named here, rather than against the fixture's own.
 func (f *fixture) reconcileNamedGroup(t *testing.T, r *ServerGroupReconciler, name string) {
 	t.Helper()
 	if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
@@ -3460,7 +2702,6 @@ func (f *fixture) reconcileNamedGroup(t *testing.T, r *ServerGroupReconciler, na
 	}
 }
 
-// setPersistentReplicas moves spec.replicas of a persistent group.
 func (f *fixture) setPersistentReplicas(t *testing.T, name string, n int32) {
 	t.Helper()
 	group := &spawneryv1alpha1.ServerGroup{}
@@ -3473,8 +2714,6 @@ func (f *fixture) setPersistentReplicas(t *testing.T, name string, n int32) {
 	}
 }
 
-// serverNamesOfGroup is the names of the servers a group owns that still
-// exist, sorted, so an assertion can name what it expects to see.
 func (f *fixture) serverNamesOfGroup(t *testing.T, group string) []string {
 	t.Helper()
 	list := &spawneryv1alpha1.ServerList{}
@@ -3491,8 +2730,6 @@ func (f *fixture) serverNamesOfGroup(t *testing.T, group string) []string {
 	return names
 }
 
-// serverIfPresent reads a Server without failing the test when it is gone,
-// which f.server cannot do and a removal has to be able to ask.
 func (f *fixture) serverIfPresent(name string) (*spawneryv1alpha1.Server, bool) {
 	srv := &spawneryv1alpha1.Server{}
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: name, Namespace: f.ns}, srv); err != nil {
@@ -3501,8 +2738,6 @@ func (f *fixture) serverIfPresent(name string) (*spawneryv1alpha1.Server, bool) 
 	return srv, true
 }
 
-// TestAPersistentGroupBuildsItsOrdinals is the milestone's subject: a number
-// in spec.replicas becomes servers with stable names.
 func TestAPersistentGroupBuildsItsOrdinals(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -3514,9 +2749,7 @@ func TestAPersistentGroupBuildsItsOrdinals(t *testing.T) {
 	if len(names) != 2 || names[0] != "survival-0" || names[1] != "survival-1" {
 		t.Fatalf("servers = %v, want [survival-0 survival-1]", names)
 	}
-	// names is sorted and pinned above, so its index is the ordinal the name
-	// carries. Deriving the expectation with OrdinalOf instead would only ask
-	// the name what the name already says.
+	// The sorted index is the ordinal; OrdinalOf would only ask the name what it says.
 	for i, name := range names {
 		srv := f.server(name)
 		if srv.Spec.Ordinal == nil || *srv.Spec.Ordinal != int32(i) {
@@ -3525,11 +2758,8 @@ func TestAPersistentGroupBuildsItsOrdinals(t *testing.T) {
 	}
 }
 
-// TestAPersistentGroupRemovesTheHighestOrdinal is the other direction. The
-// group reconciler asks for the removal by deleting the Server object; the
-// drain finalizer that would otherwise hold it in Terminating is the Server
-// controller's, and this test drives only the group, so the surplus ordinal
-// leaves the API server outright.
+// Only the group is driven, so no drain finalizer holds the surplus ordinal in
+// Terminating.
 func TestAPersistentGroupRemovesTheHighestOrdinal(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -3539,11 +2769,7 @@ func TestAPersistentGroupRemovesTheHighestOrdinal(t *testing.T) {
 		t.Fatalf("servers = %d, want 3", got)
 	}
 
-	// SizeDecision.DeleteReason says which class nominated an ordinal, and the
-	// event is where it reaches an operator -- nothing else reads the field.
-	// The values are tabled in persistent_test.go; what this asserts is that
-	// size() carries one through to deleteServer instead of falling back to
-	// the ephemeral rule's ServerRemoved.
+	// The event is the only reader of SizeDecision.DeleteReason.
 	rec := newRecorder()
 	r.Recorder = rec
 
@@ -3562,17 +2788,8 @@ func TestAPersistentGroupRemovesTheHighestOrdinal(t *testing.T) {
 	}
 }
 
-// TestAPersistentGroupToleratesAnOrdinalNameAlreadyTaken pins the one thing a
-// derived name can run into that a random one effectively cannot: the name it
-// is about to create is already on an object.
-//
-// The server built here holds no spec.ordinal, which is how an object this
-// rule did not create looks to it -- the rule reads spec.ordinal and never the
-// name, so this one fills no ordinal and the create is asked for anyway. A
-// lagging cache produces the same collision by a shorter route. Either way the
-// object is already what the create wanted, and a reconcile that returned the
-// error would come back to the same refusal on every pass for as long as the
-// object exists, never reaching the status, the PDB or anything else below it.
+// A server holding the name without spec.ordinal is asked for again on every
+// pass; returning AlreadyExists would block the rest of the reconcile for good.
 func TestAPersistentGroupToleratesAnOrdinalNameAlreadyTaken(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -3597,33 +2814,17 @@ func TestAPersistentGroupToleratesAnOrdinalNameAlreadyTaken(t *testing.T) {
 		t.Fatalf("create the server already holding the name: %v", err)
 	}
 
-	// The failure this pins is the reconcile erroring out, which
-	// reconcileNamedGroup reports.
 	f.reconcileNamedGroup(t, r, "survival")
 
 	if names := f.serverNamesOfGroup(t, "survival"); len(names) != 1 || names[0] != "survival-0" {
 		t.Errorf("servers = %v, want [survival-0]", names)
 	}
-	// And nothing announces a creation that did not happen. This was the
-	// quietest part of the AlreadyExists branch and the part nothing held: the
-	// branch's own comment says "No event: nothing was created here", and until
-	// now that was prose. What makes it matter is that the collision is not
-	// always a blip: a squatter holding the name without spec.ordinal is a
-	// steady state, not a lagging cache — the rule reads spec.ordinal, so the
-	// ordinal stays missing and the create is asked for again on every
-	// five-second pass, for as long as the object sits there
-	// (docs/reference/known-issues.md). What fires per pass is the difference between a
-	// quiet wait and an event stream nobody can read past.
 	if n := scalingEvents(r.Recorder.(*nonBlockingRecorder), "ServerCreated"); n != 0 {
 		t.Errorf("ServerCreated events = %d, want none: the object was already there, "+
 			"and this collision repeats every pass for as long as it lasts", n)
 	}
 }
 
-// TestAPersistentServerIsCreatedCarryingItsRenderHash pins the stamp half of
-// this task: a persistent server is created carrying the hash of what the
-// operator would render for it, so a later pass can tell whether the spec has
-// moved.
 func TestAPersistentServerIsCreatedCarryingItsRenderHash(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -3649,9 +2850,7 @@ func TestAPersistentServerIsCreatedCarryingItsRenderHash(t *testing.T) {
 	}
 }
 
-// TestAServerWithNoHashIsAdoptedRatherThanReplaced is the upgrade case, and it
-// must assert both halves. Asserting only that the field gets filled would
-// pass while every world restarted.
+// Asserting only that the hash gets filled would pass while every world restarted.
 func TestAServerWithNoHashIsAdoptedRatherThanReplaced(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -3680,15 +2879,8 @@ func TestAServerWithNoHashIsAdoptedRatherThanReplaced(t *testing.T) {
 	}
 }
 
-// TestAPersistentServerOnACordonedNodeIsCondemned pins acceptance criterion 5.
-// Nothing in the production code is specific to persistent groups here -- that
-// is the claim, and this is what holds it.
-//
-// The removal takes the shape a deletion takes once the Server controller has
-// run: markReady drives that controller, so the drain finalizer is on the
-// object and the delete leaves a deletion timestamp rather than removing the
-// object outright. TestAPersistentGroupRemovesTheHighestOrdinal, which drives
-// only the group, sees the other shape for exactly that reason.
+// markReady runs the Server controller, so the drain finalizer leaves a deletion
+// timestamp rather than removing the object.
 func TestAPersistentServerOnACordonedNodeIsCondemned(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -3716,18 +2908,8 @@ func TestAPersistentServerOnACordonedNodeIsCondemned(t *testing.T) {
 	}
 }
 
-// TestAPersistentGroupPublishesTheReadinessItsPodsSupport pins the removal of
-// the group controller's own refusal. That refusal set Ready: False with
-// reason NotImplementedInThisVersion on every persistent group unconditionally
-// and slowed the group to a one-minute requeue; as of this task such a group
-// builds ordinals that get pods, so the condition contradicted its own
-// servers and the requeue delayed every removal decision behind it.
-//
-// Nothing replaced it, and the three assertions below are what say so rather
-// than a fourth derivation nobody would maintain: no ServerGroup of either
-// type publishes a Ready condition at all — readiness is status.phase, which
-// derivePhase reads off ReadyReplicas against DesiredReplicas() for both kinds
-// — and the requeue is the ordinary resync an ephemeral group gets.
+// No ServerGroup publishes a Ready condition: readiness is status.phase, from
+// ReadyReplicas against DesiredReplicas().
 func TestAPersistentGroupPublishesTheReadinessItsPodsSupport(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -3759,25 +2941,8 @@ func TestAPersistentGroupPublishesTheReadinessItsPodsSupport(t *testing.T) {
 	}
 }
 
-// clearFailedOrdinal takes away the corpse of a persistent ordinal down the
-// one path that removes it for having failed: the Server controller's
-// failed-retention path.
-//
-// It is a step of its own, and not folded into the failure that precedes it,
-// because the two are on opposite sides of the state this test is about.
-// Failing the server opens the backoff window; clearing the corpse costs an
-// hour of the fixture clock and closes that window again. A helper that did
-// both would make the waiting state unobservable -- which is exactly how the
-// first draft of this test reported False and was right to.
-//
-// The clearing itself is why a persistent round is not shaped like the
-// ephemeral ones above: pruneFailed runs only for an ephemeral group, and
-// DecidePersistentSize holds an ordinal whatever phase its server is in, so
-// nothing on the group's side removes a persistent server for having failed --
-// its own removals answer to a lower spec.replicas or a departing node, and
-// neither is happening here. Retention is what is left, which makes the
-// advance below part of the mechanism rather than a convenience: without it
-// the group has no second attempt to back off from.
+// Only the Server controller's failed retention removes a persistent corpse. Kept
+// apart from the failure so the window it opens stays observable.
 func (f *fixture) clearFailedOrdinal(t *testing.T, name string) {
 	t.Helper()
 	f.clock.Advance(time.Hour + time.Second)
@@ -3790,54 +2955,16 @@ func (f *fixture) clearFailedOrdinal(t *testing.T, name string) {
 	t.Fatalf("the corpse of %s was not taken away by its failed retention", name)
 }
 
-// TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp is what the design owed
-// and did not have. §3.5 of the persistent-groups design said of a claim that
-// never binds that "the server goes Failed, the group reports Degraded, and
-// 4d's per-group backoff stops it throwing the same ordinal at the same broken
-// volume in a loop" -- and has since been rewritten, because the reporting
-// half was false. The backoff half held: size() runs its CreateOrdinals loop
-// under the same backoff.MayCreate as the ephemeral count. The reporting half
-// did not: BackingOff and Degraded were published only inside
-// an `if group.IsEphemeral()` block, so a persistent group stalled in silence
-// and its phase read Pending, which is what a group that is merely still
-// starting reads too.
-//
-// The round below is also the answer to a question the design got wrong in
-// both directions, so it is worth naming here rather than leaving to whoever
-// next reads §3.5: a persistent group does have a retry loop. Nothing on the
-// group's side clears a persistent corpse for having failed, but the Server
-// controller's failed-retention path does, and the ordinal is then created
-// again -- which is why each round here ends by aging the corpse out. With
-// survival-0 the only ordinal that ever fails, that loop is also the only way
-// its count can reach the threshold at all, since CountFailures counts a
-// corpse once; a group failing on six or more ordinals could reach it on six
-// distinct first failures and never retry anything, so that half of the
-// argument is this test's, not a general proof. The loop's period is
-// spec.failedRetentionSeconds -- an hour at the CRD default, which is what
-// this group carries -- so at that default the backoff's own windows (160s at
-// the most) never delay an attempt; what the backoff does for this group is
-// end the attempts, which is the last assertion below.
-//
-// survival-1 is the second ordinal spec §5.3 requires this test to carry, a
-// healthy sibling standing the whole time survival-0 is not: with only one
-// ordinal the minimum-over-required-ordinals rule and the maximum-over-all-
-// views rule it replaced cannot disagree, so a group of one could reach
-// Degraded under either and prove nothing about which is running.
-//
-// The failure driven here is a startup deadline rather than an unbound claim.
-// envtest runs no provisioner and no scheduler, so a pod's volume never binds
-// and never fails to bind -- nothing in this environment can make a claim
-// stall a server. What the two have in common is the only thing this test is
-// about: a server that never becomes playable, and a group that must say so.
-// Whether an unbound claim really does end in Failed is a cluster question,
-// and it belongs to the runbook.
+// Each round ages the corpse out, since only failed retention clears a persistent
+// corpse and lets the ordinal be rebuilt. survival-1 stays Ready throughout, so it
+// is the minimum over required ordinals that reaches Degraded. The failure is a
+// startup deadline because envtest never binds or fails to bind a claim.
 func TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "survival", 2)
 
 	f.reconcileNamedGroup(t, r, "survival")
-	// Brought up once and never touched again -- see the function doc for why.
 	bringUpNamed(t, f, "survival-1")
 
 	for i := int32(0); i < backoffGiveUpAt; i++ {
@@ -3849,9 +2976,7 @@ func TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp(t *testing.T) {
 		f.reconcileNamedGroup(t, r, "survival")
 
 		if i == 0 {
-			// The waiting half, taken on the flank rather than after the loop:
-			// once the count reaches the threshold BackingOff goes back to
-			// False and this state is gone.
+			// Taken on the flank: at the threshold BackingOff goes False again.
 			g := f.persistentGroup(t, "survival")
 			c := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
 			if c == nil || c.Status != metav1.ConditionTrue {
@@ -3863,8 +2988,7 @@ func TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp(t *testing.T) {
 			}
 		}
 
-		// Last in the round, so the assertions above see the group while its
-		// window is still open.
+		// Last, so the assertions above still see the window open.
 		f.clearFailedOrdinal(t, "survival-0")
 	}
 	f.reconcileNamedGroup(t, r, "survival")
@@ -3884,42 +3008,23 @@ func TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp(t *testing.T) {
 		t.Errorf("phase = %q, want Degraded: derivePhase maps the condition, and Pending here would "+
 			"be indistinguishable from a group that is still starting", g.Status.Phase)
 	}
-	// Given up, not waiting -- and the reason carries the real cause rather
-	// than an all-clear.
 	backingOff := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionBackingOff)
 	if backingOff == nil || backingOff.Status != metav1.ConditionFalse ||
 		backingOff.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
 		t.Errorf("BackingOff = %+v once the group gave up, want False/%s", backingOff,
 			spawneryv1alpha1.ReasonCrashLoopBackoff)
 	}
-	// And the stall is real: the ordinal is not rebuilt, which is the
-	// behaviour the condition exists to explain rather than to change.
 	if _, present := f.serverIfPresent("survival-0"); present {
 		t.Error("the group rebuilt its ordinal after giving up; the backoff gates persistent creates too")
 	}
-	// The healthy sibling was never touched again after coming up, and the
-	// group reached Degraded anyway -- the assertions above would have
-	// stopped short of the threshold under the old maximum-over-all-views
-	// rule if survival-1 had so much as re-readied once per round.
 	if got := f.server("survival-1").Status.Phase; got != string(phase.Ready) {
 		t.Errorf("phase of survival-1 = %q, want Ready: it was never failed", got)
 	}
 }
 
-// TestAPersistentGroupCountsAFailureAfterItsGenerationMoves pins why the
-// count's filter is ephemeral-only. A generation filter would be the wrong
-// one for a persistent group: spec.groupGeneration is
-// stamped on a Server once at creation and never updated afterwards, so any
-// edit to a persistent group's spec moves group.Generation out from under
-// every ordinal it already has. Filtered by that, CountFailures would see an
-// empty slice on every later pass and status.consecutiveFailures would freeze
-// wherever it stood -- never reaching backoffGiveUpAt, so Degraded would
-// never arrive, regardless of anything this milestone's own change does.
-//
-// The edit below touches spec.drain.timeoutSeconds, which reaches neither the
-// pod hash (so the ordinal is not rebuilt into carrying the new generation
-// itself) nor spec.replicas -- an edit an operator could make for a reason
-// that has nothing to do with the ordinal's own health.
+// spec.groupGeneration is stamped once at creation, so a generation-filtered
+// count would freeze after any edit. spec.drain.timeoutSeconds reaches neither the
+// pod hash nor spec.replicas.
 func TestAPersistentGroupCountsAFailureAfterItsGenerationMoves(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -3947,8 +3052,6 @@ func TestAPersistentGroupCountsAFailureAfterItsGenerationMoves(t *testing.T) {
 	}
 }
 
-// persistentGroup re-reads a ServerGroup named here, rather than the fixture's
-// own, which is what reloadGroup does.
 func (f *fixture) persistentGroup(t *testing.T, name string) *spawneryv1alpha1.ServerGroup {
 	t.Helper()
 	group := &spawneryv1alpha1.ServerGroup{}
@@ -3958,14 +3061,7 @@ func (f *fixture) persistentGroup(t *testing.T, name string) *spawneryv1alpha1.S
 	return group
 }
 
-// TestAPersistentGroupUpdatesOneOrdinalAtATime is the invariant, at the only
-// layer that can show it: two ordinals, a spec change, and never two down at
-// once across the whole sequence.
-//
-// The worst==0 assertion at the end is not decoration. Without it the test
-// would pass just as well if the spec change never moved anything at all —
-// exactly what a hash bug produces, and exactly the shape of non-discriminating
-// assertion that this milestone's review found seven of.
+// Without worst == 0 at the end, a spec change that moved nothing would pass.
 func TestAPersistentGroupUpdatesOneOrdinalAtATime(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -3980,21 +3076,14 @@ func TestAPersistentGroupUpdatesOneOrdinalAtATime(t *testing.T) {
 		t.Fatalf("change the group's image: %v", err)
 	}
 
-	// reconcileGroupOnce runs the group reconciler, whose decision may create
-	// a replacement ordinal or nominate a stale one for deletion, and then
-	// reconciles every server that currently exists once -- the Server
-	// reconciler is what actually creates a fresh ordinal's pod and what
-	// carries a draining one's finalizer removal forward one step.
+	// The Server reconciler creates a fresh ordinal's pod and moves a draining one
+	// forward.
 	reconcileGroupOnce := func() {
 		f.reconcileNamedGroup(t, r, "survival")
 		for _, name := range f.serverNamesOfGroup(t, "survival") {
 			f.reconcile(name)
 		}
 	}
-	// driveNewPodsReady plays the kubelet and the in-game agent for every
-	// server that is not on its way out: it never touches a server carrying a
-	// deletion timestamp, because a draining server's pod is meant to go away,
-	// not to be marked ready.
 	driveNewPodsReady := func() {
 		for _, name := range f.serverNamesOfGroup(t, "survival") {
 			srv, ok := f.serverIfPresent(name)
@@ -4039,25 +3128,14 @@ func TestAPersistentGroupUpdatesOneOrdinalAtATime(t *testing.T) {
 	}
 }
 
-// TestTheStorageResizeMessageComesFromTheLowestOrdinal pins the tie-break
-// storageResizeCondition argues for at length and nothing exercised: with two
-// unhealthy claims, the message must come from the lower ordinal every time,
-// so that an operator reads one steady signal rather than watching two
-// messages alternate between reconciles. Reversing ordinalBefore to pick the
-// highest is a live mutation only against a case where the two views carry
-// *different* messages -- one where they agreed would pass either way.
-//
-// The views are built here rather than driven through a cluster because
-// storageResizeCondition is a pure function of them, and the two distinct
-// messages are the whole fixture.
+// The two views carry different messages, or a reversed ordinalBefore would pass
+// as well.
 func TestTheStorageResizeMessageComesFromTheLowestOrdinal(t *testing.T) {
 	views := []ServerView{
 		{Name: "survival-1", Ordinal: ptr.To(int32(1)), ResizeError: "ordinal 1's message"},
 		{Name: "survival-0", Ordinal: ptr.To(int32(0)), ResizeError: "ordinal 0's message"},
 	}
-	// Listed highest-first above, so "the first one found" would answer with
-	// ordinal 1; collectViews makes no ordering promise, which is the whole
-	// reason the tie-break exists.
+	// Listed highest-first; collectViews makes no ordering promise.
 	got := storageResizeCondition(views)
 	if got.Status != metav1.ConditionFalse {
 		t.Fatalf("Status = %v, want False; two claims carry an error", got.Status)
@@ -4067,8 +3145,6 @@ func TestTheStorageResizeMessageComesFromTheLowestOrdinal(t *testing.T) {
 			got.Message)
 	}
 
-	// A nil ordinal sorts last, so it loses to any numbered view and wins only
-	// when it is the sole candidate.
 	nameless := ServerView{Name: "survival-a7kd", ResizeError: "a squatter's message"}
 	if got := storageResizeCondition([]ServerView{nameless, views[1]}); got.Message != "ordinal 0's message" {
 		t.Errorf("Message = %q, want ordinal 0's; a nil ordinal sorts after a numbered one", got.Message)
@@ -4078,22 +3154,10 @@ func TestTheStorageResizeMessageComesFromTheLowestOrdinal(t *testing.T) {
 	}
 }
 
-// TestAGroupSaysWhenItsStorageClassCannotGrow exercises growClaim's
-// synchronous rejection through envtest's real admission -- the same
-// mechanism TestGrowingStorageSizePatchesTheClaim (server_controller_test.go)
-// confirmed by hand: envtest runs no CSI driver and no external-resizer, so
-// a StorageClass with allowVolumeExpansion: false is real (creating one
-// needs no controller behind it), and the API server's own resize admission
-// refuses the grow patch against it exactly as a real cluster would. The
-// claim's Bound status is faked the same way that test fakes it, for the
-// same reason: nothing in envtest ever binds a claim to a volume, and an
-// unbound claim is refused resize for an unrelated reason of its own.
-//
-// What this does not prove is the asynchronous shape of the same failure --
-// a driver that accepts a resize and fails it only later, reported through
-// the claim's own ControllerResizeError or NodeResizeError condition.
-// resizeConditionError (server_controller.go) is what reads that, but
-// nothing here hand-writes either condition onto a claim to exercise it.
+// envtest has no resizer, but its API server refuses the grow against
+// allowVolumeExpansion: false as a real cluster would. Bound is faked because
+// nothing binds a claim, and an unbound claim is refused for a reason of its own.
+// The asynchronous ControllerResizeError/NodeResizeError path is not exercised.
 func TestAGroupSaysWhenItsStorageClassCannotGrow(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -4107,10 +3171,7 @@ func TestAGroupSaysWhenItsStorageClassCannotGrow(t *testing.T) {
 		t.Fatalf("create StorageClass: %v", err)
 	}
 
-	// storage.storageClassName is immutable once set (CEL rule on
-	// ServerGroupSpec), so it has to be there at creation -- built by hand
-	// rather than through createPersistentGroup for that one reason, the same
-	// as TestGrowingStorageSizePatchesTheClaim.
+	// storageClassName is immutable once set, so the group is built by hand with it.
 	replicas := int32(1)
 	group := &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "g", Namespace: f.ns},
@@ -4152,9 +3213,6 @@ func TestAGroupSaysWhenItsStorageClassCannotGrow(t *testing.T) {
 		t.Fatalf("grow the group: %v", err)
 	}
 
-	// The Server reconciler is the one that runs growClaim and meets the
-	// refusal; the group reconciler that follows is the one that reads
-	// status.storageResizeError back into the condition under test.
 	f.reconcile("g-0")
 	f.reconcileNamedGroup(t, r, "g")
 
@@ -4163,62 +3221,28 @@ func TestAGroupSaysWhenItsStorageClassCannotGrow(t *testing.T) {
 	if cond == nil || cond.Status != metav1.ConditionFalse {
 		t.Fatalf("expected StorageResize=False, got %+v", cond)
 	}
-	// growClaim cannot tell this rejection apart from Task 7's unbound-claim
-	// one by the API error alone (see growClaim's own doc comment), so the
-	// message does not claim allowVolumeExpansion caused it -- this only
-	// checks that an operator reading it is pointed at the field to check
-	// first, alongside the API's own error, which is what actually does.
+	// growClaim cannot tell this rejection from an unbound claim's, so the message
+	// only points at the field to check first.
 	if !strings.Contains(cond.Message, "allowVolumeExpansion") {
 		t.Fatalf("the message does not point at the field to check: %q", cond.Message)
 	}
 
-	// The assertion that matters: it pins the separation the condition
-	// exists for. Without it, folding the refusal into Degraded as well
-	// would satisfy the assertion above just as easily.
+	// Without this, folding the refusal into Degraded would pass as well.
 	degraded := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
 	if degraded != nil && degraded.Status == metav1.ConditionTrue {
 		t.Fatal("a storage class that cannot expand is not a degraded group")
 	}
 }
 
-// TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead pins which of two true
-// messages an operator sees first when a group has both given up and lost its
-// Network. The BackingOff/Degraded switch in Reconcile tests !sized before
-// backoff.GaveUp, so without this ruling such a group reports "backoff is not
-// being decided: the group's network is not usable" -- even though the failure
-// count that produced GaveUp is computed from the views before sized is known
-// and does not depend on the Network at all.
-//
-// Both are true. They are not equally useful. The Network's unusability is
-// transient and already carried by Accepted: False, so repeating it here spends
-// the only two conditions that can report the give-up on a fact reported
-// elsewhere. Giving up is terminal — it takes a spec edit — so an operator who
-// reads only "the group's network is not usable", fixes the Network and walks
-// away has been told the truth and left with a group that still creates
-// nothing. Restoring the old order fails this test, and it also asserts
-// Accepted is still False, so the ruling cannot quietly become hiding the
-// Network rather than declining to repeat it.
-//
-// How this state is reached is the part that cost the most to find. The
-// obvious construction -- point the group's networkRef at something missing --
-// cannot reach it at all, because editing the group is a spec change and a
-// spec change deliberately clears the failure streak. The Network has to
-// become unusable *without* the group being touched: deleted, or made
-// unaccepted by a rival. Any future test about this pair has to break the
-// Network, never the group.
+// Giving up is terminal and needs a retry, while the Network's trouble is
+// transient and already on Accepted, so Degraded names the give-up. The Network is
+// deleted rather than re-pointed: editing the group would clear the streak.
 func TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 
-	// backoffGiveUpAt rounds, each one failing whatever the group built.
-	//
-	// Six of them, because the count is rounds: a count of corpses would let
-	// one round at minReplicas 6 spend the entire budget. Building the give-up
-	// this way is also the honest construction — it is what a genuinely broken
-	// image does.
-	// failServerNeverReady rather than failServer: the latter walks a server up
-	// to Ready first, and a success ends the streak this test is building.
-	// Never-ready is also the broken-image shape the backoff exists for.
+	// The count is rounds, not corpses. failServerNeverReady, because a server that
+	// reached Ready would end the streak.
 	f.setMinReplicas(t, 1)
 	for round := int32(0); round < backoffGiveUpAt; round++ {
 		f.reconcileGroup(t, r)
@@ -4227,8 +3251,7 @@ func TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead(t *testing.T) {
 				f.failServerNeverReady(t, name)
 			}
 		}
-		// Past the window this round earned, or the next pass creates nothing
-		// and there is no next round to fail.
+		// Past the window this round earned, or the next pass creates nothing.
 		f.clock.Advance(10 * time.Minute)
 	}
 	f.reconcileGroup(t, r)
@@ -4237,12 +3260,6 @@ func TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead(t *testing.T) {
 			"needs a group that has actually given up", got, backoffGiveUpAt, backoffGiveUpAt)
 	}
 
-	// And then the Network is taken away underneath it. Deleted rather than
-	// re-pointed, and that is not a stylistic choice: editing the group's
-	// NetworkRef is a spec change, and a spec change deliberately clears the
-	// failure streak — "the operator's answer to whatever broke". A test that
-	// broke the Network by editing the group would therefore destroy the very
-	// state it is about, and did, on the first attempt at writing it.
 	if err := f.c.Delete(f.ctx, f.network); err != nil {
 		t.Fatalf("delete the Network: %v", err)
 	}
@@ -4260,7 +3277,6 @@ func TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead(t *testing.T) {
 		t.Errorf("message = %q, want it to name the remedy the operator actually has to apply",
 			degraded.Message)
 	}
-	// And the Network's trouble is still reported, on the condition that owns it.
 	accepted := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
 	if accepted == nil || accepted.Status != metav1.ConditionFalse {
 		t.Errorf("Accepted = %+v, want False: moving the give-up first must not hide the "+
@@ -4268,16 +3284,7 @@ func TestAGroupThatGaveUpSaysSoEvenWhileItsNetworkIsDead(t *testing.T) {
 	}
 }
 
-// TestAParkedPersistentGroupIsReadyRatherThanPending closes the entry in
-// docs/reference/known-issues.md: "a Persistent group with replicas: 0 reports Pending
-// forever."
-//
-// Zero is a deliberate operator action rather than an edge case. spec.replicas:
-// 0 is the accepted way to park a persistent group and keep its claims, because
-// deleting the group would leave the claims behind but take the ordinals'
-// Server objects with it. Such a group published Accepted: True,
-// Degraded: False, replicas: 0, readyReplicas: 0 — and phase: Pending, which
-// was the only field that was not true.
+// spec.replicas: 0 is how an operator parks a persistent group and keeps its claims.
 func TestAParkedPersistentGroupIsReadyRatherThanPending(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -4300,10 +3307,6 @@ func TestAParkedPersistentGroupIsReadyRatherThanPending(t *testing.T) {
 	}
 }
 
-// TestAGroupShortOfItsTargetIsStillPending is the other half, and it is what
-// says the change above decided one pair rather than loosening the rule. The
-// clause that was removed also read on a group with zero ready and several
-// wanted, and that group must still be Pending.
 func TestAGroupShortOfItsTargetIsStillPending(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -4324,28 +3327,15 @@ func TestAGroupShortOfItsTargetIsStillPending(t *testing.T) {
 	}
 }
 
-// TestASquatterOnAnOrdinalNameSaysSoOnTheGroup closes the entry in
-// docs/reference/known-issues.md: "a squatter can stall an ordinal silently."
-//
-// A persistent ordinal's name is derived, <group>-<ordinal>, so anything
-// created by hand under that name takes it. DecidePersistentSize reads
-// spec.ordinal rather than parsing names, so the squatter never enters its held
-// map and the group goes on believing the ordinal is missing; the create then
-// returns AlreadyExists, which the reconciler treats as success because that is
-// the right answer for the other cause of the same error — a cache one
-// generation behind. So the group retried every five seconds forever, and
-// nothing on its conditions, events or logs distinguished that from an
-// ordinary transient collision. The tell was a kubectl jsonpath on the object.
+// DecidePersistentSize reads spec.ordinal, not names, so a squatter keeps the
+// ordinal missing and the create collides on every pass.
 func TestASquatterOnAnOrdinalNameSaysSoOnTheGroup(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 
-	// Something else holds the name a persistent ordinal will want, without
-	// carrying the ordinal that would make it a member.
 	squatter := &spawneryv1alpha1.Server{
 		ObjectMeta: metav1.ObjectMeta{Name: "held-0", Namespace: f.ns},
-		// GroupRef and nothing else. spec.ordinal is what makes an object a
-		// member of a persistent group, and its absence is the whole point.
+		// No spec.ordinal: that absence is what makes it a squatter.
 		Spec: spawneryv1alpha1.ServerSpec{
 			GroupRef: spawneryv1alpha1.ObjectRef{Name: "held"},
 		},
@@ -4369,8 +3359,6 @@ func TestASquatterOnAnOrdinalNameSaysSoOnTheGroup(t *testing.T) {
 	if cond.Reason != spawneryv1alpha1.ReasonOrdinalNameTaken {
 		t.Errorf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonOrdinalNameTaken)
 	}
-	// The message has to name the object and say what is wrong with it, or a
-	// reader is back to the kubectl jsonpath this replaces.
 	for _, want := range []string{"held-0", "spec.ordinal"} {
 		if !strings.Contains(cond.Message, want) {
 			t.Errorf("message = %q, want it to contain %q", cond.Message, want)
@@ -4378,9 +3366,7 @@ func TestASquatterOnAnOrdinalNameSaysSoOnTheGroup(t *testing.T) {
 	}
 }
 
-// TestAGroupWithNoSquatterSaysTheOrdinalsAreAvailable is the False side. A
-// condition that can only go True stops meaning anything the first time it
-// fires, and this one is set from each pass's own finding rather than latched.
+// Set from each pass's own finding, not latched.
 func TestAGroupWithNoSquatterSaysTheOrdinalsAreAvailable(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -4398,21 +3384,8 @@ func TestAGroupWithNoSquatterSaysTheOrdinalsAreAvailable(t *testing.T) {
 	}
 }
 
-// TestACacheOneGenerationBehindIsNotReportedAsASquatter is the distinction the
-// whole fix turns on, and it went unpinned until a mutation showed it: treating
-// the transient cause as the permanent one broke no test.
-//
-// AlreadyExists on a derived ordinal name has two causes needing opposite
-// answers. A squatter holds the name forever and must be reported. A cache that
-// has not yet shown this reconciler its own creation resolves itself in a pass
-// or two, and reporting it would put a condition on the group for something
-// that is already fixed — the sort of alarm that teaches an operator to ignore
-// the condition.
-//
-// Driven against reportSquatter directly. Through a reconcile it is not
-// reachable at all: the fixture's client is direct, so DecidePersistentSize and
-// the Create see the same objects and the group never tries to create an
-// ordinal that already carries its own number.
+// A cache one generation behind resolves itself and must not be reported.
+// Called directly: with the fixture's uncached client a reconcile never gets here.
 func TestACacheOneGenerationBehindIsNotReportedAsASquatter(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -4440,8 +3413,7 @@ func TestACacheOneGenerationBehindIsNotReportedAsASquatter(t *testing.T) {
 			"through a cache one generation behind, and it resolves itself", c)
 	}
 
-	// And an object carrying a *different* ordinal is a squatter, not a lagging
-	// cache — the field matching is what separates them, not its presence.
+	// A different ordinal is a squatter: the value decides, not the field's presence.
 	other := int32(7)
 	mine.Spec.Ordinal = &other
 	if err := f.c.Update(f.ctx, mine); err != nil {
@@ -4460,10 +3432,6 @@ func TestACacheOneGenerationBehindIsNotReportedAsASquatter(t *testing.T) {
 	}
 }
 
-// reportProgressing is a pure function of the group and its views, so its
-// whole vocabulary fits in a table. The states below are the ones an operator
-// meets; the two that matter most are the last two, which the phase cannot
-// tell apart from the first.
 func TestProgressingSaysWhetherTheGroupHasArrived(t *testing.T) {
 	const gen = "current"
 	view := func(p phase.Phase, hash string) ServerView {
@@ -4547,13 +3515,8 @@ func TestProgressingSaysWhetherTheGroupHasArrived(t *testing.T) {
 	}
 }
 
-// The lag provisionalCapacity's own comment describes, driven.
-//
-// An ephemeral group runs above spec.scaling.minReplicas to keep spareSlots
-// free, and DesiredReplicas() is only that floor — so a group DecideSize has
-// taken to two satisfies the phase with one server ready while the other is
-// still starting. The phase is not wrong about what it says (the group is
-// serving); it just cannot say this. Progressing can.
+// DesiredReplicas() is only the floor, so a group sized above it reads Ready while
+// a server is still starting; only Progressing can say so.
 func TestAGroupAboveItsFloorIsReadyAndStillProgressing(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -4563,8 +3526,7 @@ func TestAGroupAboveItsFloorIsReadyAndStillProgressing(t *testing.T) {
 	if len(first) != 1 {
 		t.Fatalf("got %d servers, want minReplicas = 1", len(first))
 	}
-	// Ready, and busy enough that the 40 spare slots this group wants are no
-	// longer free — so the next pass orders another server it has not got.
+	// 70 players leave fewer than the 40 spare slots free, so the next pass orders another.
 	f.markReadyWithPlayers(t, first[0].Name, 70)
 
 	f.reconcileGroup(t, r)
@@ -4572,10 +3534,8 @@ func TestAGroupAboveItsFloorIsReadyAndStillProgressing(t *testing.T) {
 		t.Fatalf("got %d servers, want a second one ordered for the spare slots", got)
 	}
 
-	// A third pass, because the views this status is built from are collected
-	// before the creates of the same pass — so the server just ordered is
-	// first seen by the next one. reportProgressing says so in its own
-	// comment; it is the property every other field here already has.
+	// Views are collected before the same pass's creates, so the new server shows up
+	// on the next pass.
 	f.reconcileGroup(t, r)
 
 	group := f.reloadGroup(t)
@@ -4592,13 +3552,7 @@ func TestAGroupAboveItsFloorIsReadyAndStillProgressing(t *testing.T) {
 	}
 }
 
-// The group finds its own pods and answers for them.
-//
-// The unit test beside groupRotationCondition covers the decision; this covers
-// the parts it cannot reach — the selector matching real pods, the list, and
-// the digest coming off the Network. A selector that matched nothing would
-// pass every case of that unit test by having no stamps to judge, and report a
-// group mid-rotation as being in sync.
+// A selector matching no pods would report a group mid-rotation as in sync.
 func TestAServerGroupReportsItsOwnRotationState(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -4632,7 +3586,6 @@ func TestAServerGroupReportsItsOwnRotationState(t *testing.T) {
 			got.Status, got.Reason, spawneryv1alpha1.ReasonRotationPending)
 	}
 
-	// Rolled: the stamp catches up and so does the group.
 	pod := &corev1.Pod{}
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby-x7k2", Namespace: f.ns}, pod); err != nil {
 		t.Fatalf("get the pod: %v", err)
@@ -4652,7 +3605,6 @@ func TestAServerGroupReportsItsOwnRotationState(t *testing.T) {
 	}
 }
 
-// taintNode puts a drain taint on a node the fixture already created.
 func (f *fixture) taintNode(t *testing.T, name, key string) {
 	t.Helper()
 	node := &corev1.Node{}
@@ -4667,20 +3619,8 @@ func (f *fixture) taintNode(t *testing.T, name, key string) {
 	}
 }
 
-// The taint half of IsDeparting, against a real Node object.
-//
-// Both halves were covered before this only where it costs least: IsDeparting
-// itself takes a corev1.Node built in memory, and setup_test.go proves
-// Options.DrainTaintKeys reaches the reconciler. What nothing drove was a taint
-// on a Node the API server holds, read back through nodeDeparting on the path a
-// condemnation actually takes — and that is the half an autoscaler exercises,
-// because cluster-autoscaler taints and deletes without touching
-// spec.unschedulable unless --cordon-node-before-terminating is on, which it is
-// not by default.
-//
-// The second subtest is an operator configured with no --drain-taint at all,
-// which is harmless on a cluster with fixed nodes and no autoscaler and makes
-// a scale-in invisible on one without.
+// cluster-autoscaler taints without cordoning unless
+// --cordon-node-before-terminating is set, so a scale-in arrives as a taint.
 func TestATaintedNodeCondemnsOnlyWhenItsKeyIsConfigured(t *testing.T) {
 	const key = "ToBeDeletedByClusterAutoscaler"
 
@@ -4742,19 +3682,15 @@ func TestATaintedNodeCondemnsOnlyWhenItsKeyIsConfigured(t *testing.T) {
 	}
 }
 
-// TestADuplicatedOrdinalReachesTheGroupsConditions is the half of the fix that
-// a rule test cannot show: that the refusal is visible. The rule declining to
-// nominate is only half an answer -- a group that quietly stopped shrinking
-// would look exactly like one that had nothing to shrink.
+// A group that quietly stopped shrinking would look like one with nothing to shrink.
 func TestADuplicatedOrdinalReachesTheGroupsConditions(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	f.createPersistentGroup(t, "survival", 2)
 	f.reconcileNamedGroup(t, r, "survival")
 
-	// A second server carrying ordinal 1, under a name this operator would
-	// never choose -- restored from a backup, or copied. It is a member of the
-	// group by label, which is what puts it in the views.
+	// A second server carrying ordinal 1 under another name, as after a restore; its
+	// labels make it a member.
 	copied := f.server("survival-1").DeepCopy()
 	dup := &spawneryv1alpha1.Server{
 		ObjectMeta: metav1.ObjectMeta{
@@ -4786,18 +3722,14 @@ func TestADuplicatedOrdinalReachesTheGroupsConditions(t *testing.T) {
 		}
 	}
 
-	// And neither server was removed. This is the part that would have cost a
-	// world: with replicas at 2 nothing is surplus here, but the pair is
-	// exactly what the stale and resize paths would also have nominated from.
+	// Nothing is surplus at replicas 2, but the stale and resize paths would nominate
+	// from the pair.
 	names := f.serverNamesOfGroup(t, "survival")
 	if len(names) != 3 {
 		t.Errorf("servers = %v, want all three left standing", names)
 	}
 }
 
-// TestTheOrdinalConditionClearsWhenTheDuplicateGoes pins the other side. A
-// condition that only goes True stops meaning anything the first time it
-// fires, which is why clearOrdinalBlocked runs every pass.
 func TestTheOrdinalConditionClearsWhenTheDuplicateGoes(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -4831,14 +3763,8 @@ func TestTheOrdinalConditionClearsWhenTheDuplicateGoes(t *testing.T) {
 	}
 }
 
-// TestAFailedRetireeIsNamedOnProgressing closes the silent half of
-// docs/reference/known-issues.md's milestone 4b entry, since removed. spec.retire is the update
-// budget's one signal and it survives the server failing, so a server the
-// group patched it onto and that then failed holds a maxUnavailable slot for
-// its whole failedRetentionSeconds -- an hour by default -- and the changeover
-// simply stops. Before this there was no condition, no event and nothing else
-// saying so: the group reported "still being replaced" for the whole window,
-// which is true and useless.
+// spec.retire survives the failure, so the retiree holds a maxUnavailable slot
+// for its whole retention and the changeover stops.
 func TestAFailedRetireeIsNamedOnProgressing(t *testing.T) {
 	group := &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "lobby", Generation: 2},
@@ -4859,9 +3785,7 @@ func TestAFailedRetireeIsNamedOnProgressing(t *testing.T) {
 	if cond.Reason != spawneryv1alpha1.ReasonRetireeStuck {
 		t.Fatalf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonRetireeStuck)
 	}
-	// The name and the remedy, because the remedy is per server: deleting that
-	// one server returns the slot at once, and a count would leave an operator
-	// listing every server to find which.
+	// The remedy is per server, so the message names it.
 	for _, want := range []string{"lobby-old", "spec.retire", "3600", "Deleting it"} {
 		if !strings.Contains(cond.Message, want) {
 			t.Errorf("message %q does not mention %q", cond.Message, want)
@@ -4869,10 +3793,6 @@ func TestAFailedRetireeIsNamedOnProgressing(t *testing.T) {
 	}
 }
 
-// TestAnOrdinaryRetireeIsNotReportedAsStuck keeps the check from firing on the
-// normal path. A retiree that is draining is the update working, not the
-// update stopped, and a condition that fired on it would name every changeover
-// this operator ever performs.
 func TestAnOrdinaryRetireeIsNotReportedAsStuck(t *testing.T) {
 	group := &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "lobby", Generation: 2},
@@ -4893,9 +3813,6 @@ func TestAnOrdinaryRetireeIsNotReportedAsStuck(t *testing.T) {
 	}
 }
 
-// liveServers is the count docs/reference/known-issues.md recorded touching zero: the
-// servers that count toward the group's size, which is every one that is
-// neither leaving nor Failed.
 func (f *fixture) liveServers(t *testing.T) int {
 	t.Helper()
 	n := 0
@@ -4907,28 +3824,8 @@ func (f *fixture) liveServers(t *testing.T) int {
 	return n
 }
 
-// TestTheGroupHasNoLiveServerWhileItBacksOffAndRebuildsAfter is the
-// explanation for an observation that sat in docs/reference/known-issues.md as
-// uninvestigated: a group's count of live servers briefly touched zero under
-// sustained churn before recovering.
-//
-// It is the backoff, and it is not a defect. Creates are gated on
-// backoff.MayCreate, and a Failed server does not count toward the group's
-// size (ServerView.countsTowardSize), so between the failure of the last live
-// server and the expiry of the window the group genuinely has none. That is
-// the whole point of the window: a group whose servers are failing to start
-// must stop rebuilding them for a while, and at minReplicas 1 "a while with
-// none" is the only shape that can take.
-//
-// What makes it a state rather than a mystery is that the group says so while
-// it lasts. TestBackingOffConditionNamesTheCountAndTheWait pins the condition;
-// this pins the count beside it, and then the recovery, which is the half the
-// original observation reported and nothing asserted.
-//
-// The churn that produced it was Task 5's 20-second startup deadline, which is
-// short enough that every server fails it. Nothing here needs to be that
-// realistic: one failure opens the window, and the window is what the count
-// follows.
+// A Failed server does not count toward size and creates wait for the window, so
+// at minReplicas 1 the group has no live server until the window closes.
 func TestTheGroupHasNoLiveServerWhileItBacksOffAndRebuildsAfter(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -4943,9 +3840,7 @@ func TestTheGroupHasNoLiveServerWhileItBacksOffAndRebuildsAfter(t *testing.T) {
 	f.failServer(t, name)
 	f.reconcileGroup(t, r)
 
-	// Zero live, and no replacement ordered. The corpse is still there --
-	// it is kept for diagnosis -- so status.replicas does not read zero and
-	// only this count does.
+	// The corpse is kept, so status.replicas does not read zero; only this count does.
 	if got := f.liveServers(t); got != 0 {
 		t.Fatalf("%d live servers inside the backoff window, want 0: the window is the "+
 			"whole reason a replacement is not ordered yet", got)
@@ -4960,7 +3855,6 @@ func TestTheGroupHasNoLiveServerWhileItBacksOffAndRebuildsAfter(t *testing.T) {
 			"unexplained on the object itself, which is what made it worth recording", c)
 	}
 
-	// Past the first window, which is backoffBase.
 	f.clock.Advance(backoffBase + time.Second)
 	f.reconcileGroup(t, r)
 
@@ -4970,10 +3864,8 @@ func TestTheGroupHasNoLiveServerWhileItBacksOffAndRebuildsAfter(t *testing.T) {
 	}
 }
 
-// An ephemeral server created before spec.podHash had a reader on this side
-// must be stamped, not left hashless. staleSpec adopts a hashless view on
-// every pass, so a server that is never stamped is never stale -- immune to
-// every future image change until it churns for an unrelated reason.
+// staleSpec adopts a hashless view on every pass, so an unstamped server would
+// never be stale.
 func TestAdoptStampsEphemeralServers(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -4992,13 +3884,8 @@ func TestAdoptStampsEphemeralServers(t *testing.T) {
 	}
 }
 
-// requireNoneRetiring fails if any server of the group has been nominated for
-// retirement. It reads spec.retire, not the phase, because the nomination is
-// what the sizing rule decides and it lands a pass before the transition does.
-//
-// listServers is already scoped to the fixture's namespace, which matters:
-// envtest shares one control plane with no cleanup between tests, so a
-// cluster-wide List would make another test's leftovers this test's result.
+// Reads spec.retire, not the phase: the nomination lands a pass before the
+// transition.
 func requireNoneRetiring(t *testing.T, f *fixture, when string) {
 	t.Helper()
 	for _, s := range f.listServers(t) {
@@ -5008,17 +3895,13 @@ func requireNoneRetiring(t *testing.T, f *fixture, when string) {
 	}
 }
 
-// The milestone's acceptance criterion, driven through real reconciles rather
-// than against a hand-built ScalingInputs. Every unit test in this milestone
-// supplies PodHash itself, so none of them can fail if `size` passes the wrong
-// value at the call site -- the defect shape setup.go's comment on
-// newServerGroupReconciler describes, and one this package has been bitten by.
+// Driven through real reconciles: the unit tests supply PodHash themselves and
+// cannot catch a wrong value at the call site.
 func TestCapacityEditDoesNotRollAnEphemeralGroup(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 
-	// Two occupied servers carrying the hash the group renders right now.
-	// Created directly rather than through the floor, which is 1 here.
+	// Created directly; the floor is 1.
 	a, b := "lobby-a", "lobby-b"
 	f.createServer(a)
 	f.markReadyWithPlayers(t, a, 60)
@@ -5028,18 +3911,13 @@ func TestCapacityEditDoesNotRollAnEphemeralGroup(t *testing.T) {
 	reconcilePass(t, f, r)
 	requireNoneRetiring(t, f, "before any edit")
 
-	// A capacity edit. metadata.generation moves; the rendered pod does not.
-	// Two servers are already up, so the raised floor needs no new one either
-	// and the only thing this can produce is a retirement -- which is exactly
-	// what must not happen.
+	// A capacity edit moves metadata.generation but not the rendered pod; with two
+	// servers up, a retirement is the only thing it could produce.
 	f.setMinReplicas(t, 2)
 	reconcilePass(t, f, r)
 	requireNoneRetiring(t, f, "after raising minReplicas")
 
-	// The field 4b's open item was actually written about. Same class as
-	// minReplicas -- it never reaches BuildServerPod -- but asserted rather
-	// than assumed. 80 slots are free across the two servers, so 60 keeps the
-	// spare-slot rule satisfied and this edit stays a pure no-op.
+	// 80 slots are free across the two servers, so 60 keeps the spare-slot rule satisfied.
 	if err := f.c.Get(f.ctx,
 		types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, f.group); err != nil {
 		t.Fatalf("get group: %v", err)
@@ -5051,9 +3929,7 @@ func TestCapacityEditDoesNotRollAnEphemeralGroup(t *testing.T) {
 	reconcilePass(t, f, r)
 	requireNoneRetiring(t, f, "after retuning spareSlots")
 
-	// An image edit. Now the rendered pod really did change, and the
-	// changeover must begin: one replacement first, and only once it is Ready
-	// does exactly one stale server retire, under maxUnavailable.
+	// An image edit changes the rendered pod: one replacement, then one retirement.
 	f.bumpPodSpec(t)
 	reconcilePass(t, f, r)
 
@@ -5070,8 +3946,7 @@ func TestCapacityEditDoesNotRollAnEphemeralGroup(t *testing.T) {
 	}
 }
 
-// The likeliest failure of a boost is not a wrong number but an unexplained
-// one, so the group has to say how much of its floor is not its own spec.
+// An unexplained floor is the likeliest failure of a boost.
 func TestAGroupSaysHowMuchOfItsFloorIsABoost(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -5099,8 +3974,7 @@ func TestAGroupSaysHowMuchOfItsFloorIsABoost(t *testing.T) {
 	}
 }
 
-// Zero and present, not absent: an admin comparing two groups should not have
-// to tell "no boost" from "this operator is too old to say".
+// Zero and present, so "no boost" is not mistaken for an operator too old to say.
 func TestAGroupWithNoBoostReportsZero(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -5117,9 +3991,7 @@ func TestAGroupWithNoBoostReportsZero(t *testing.T) {
 	}
 }
 
-// And a boost really does build a server, driven through a real reconcile
-// rather than against a hand-built ScalingInputs -- the defect shape where a
-// rule is right and the value never reaches it.
+// Through a real reconcile: the rule can be right while the value never reaches it.
 func TestABoostActuallyCreatesAServer(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -5137,13 +4009,11 @@ func TestABoostActuallyCreatesAServer(t *testing.T) {
 
 	f.reconcileGroup(t, r)
 
-	// The fixture's floor is one; the boost adds two.
 	if got := len(f.listServers(t)); got != 3 {
 		t.Fatalf("got %d servers, want 3: a floor of one plus a boost of two", got)
 	}
 }
 
-// pluginPVC creates a claim in the fixture's namespace with the given modes.
 func (f *fixture) pluginPVC(t *testing.T, name string, modes ...corev1.PersistentVolumeAccessMode) {
 	t.Helper()
 	if err := f.c.Create(f.ctx, &corev1.PersistentVolumeClaim{
@@ -5159,7 +4029,6 @@ func (f *fixture) pluginPVC(t *testing.T, name string, modes ...corev1.Persisten
 	}
 }
 
-// setExtraPlugins points the fixture's group at a claim.
 func (f *fixture) setExtraPlugins(t *testing.T, claim string) {
 	t.Helper()
 	f.group.Spec.ExtraPlugins = &spawneryv1alpha1.ExtraPlugins{ClaimName: claim}
@@ -5183,18 +4052,15 @@ func TestAGroupWithAReadWriteOnceClaimIsRefusedAndCreatesNothing(t *testing.T) {
 		accepted.Reason != spawneryv1alpha1.ReasonPluginVolumeUnusable {
 		t.Fatalf("Accepted = %+v, want False/%s", accepted, spawneryv1alpha1.ReasonPluginVolumeUnusable)
 	}
-	// The assertion that matters. Setting a condition and creating the servers
-	// anyway would decorate the group and change nothing it does: every pod
-	// would sit Pending on a volume that will not attach, and the group would
-	// look like a scheduling problem rather than a spec one.
+	// Creating the servers anyway would leave every pod Pending on a volume that
+	// never attaches.
 	if servers := f.listServers(t); len(servers) != 0 {
 		t.Errorf("the group created %d servers despite an unusable plugin claim", len(servers))
 	}
 }
 
 func TestAGroupWithAReadWriteManyClaimIsAcceptedAndCreatesItsFloor(t *testing.T) {
-	// The other half. Without this, a check that refused everything would pass
-	// the test above and nobody would notice until a working claim was tried.
+	// Without this, a check that refused everything would pass the test above.
 	f := newFixture(t)
 	r := groupReconciler(f)
 	r.AllowPluginVolumes = true
@@ -5228,18 +4094,12 @@ func TestAGroupNamingAClaimOnADisabledInstallationIsRefused(t *testing.T) {
 	if accepted == nil || accepted.Reason != spawneryv1alpha1.ReasonPluginVolumesDisabled {
 		t.Fatalf("Accepted = %+v, want False/%s", accepted, spawneryv1alpha1.ReasonPluginVolumesDisabled)
 	}
-	// The claim is perfectly good, so the message has to send somebody to the
-	// operator's arguments and nowhere else.
 	if !strings.Contains(accepted.Message, "--allow-plugin-volumes") {
 		t.Errorf("message = %q, want it to name the flag", accepted.Message)
 	}
 }
 
 func TestTheRefusalIsAnnouncedOnceAndNotEveryResync(t *testing.T) {
-	// This branch runs on every pass for as long as the claim is wrong. An
-	// event per resync forever is not a report, it is noise that buries the
-	// one that mattered -- the rule network_controller.go states and this
-	// follows.
 	f := newFixture(t)
 	r := groupReconciler(f)
 	r.AllowPluginVolumes = true

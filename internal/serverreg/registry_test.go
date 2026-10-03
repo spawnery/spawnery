@@ -82,10 +82,8 @@ func TestAJoiningServerIsSentTheStateFirst(t *testing.T) {
 	}
 }
 
-// The picture a backend is sent leaves out private servers, on both paths that
-// build one: the state a session opens with, and the one every resync repeats.
-// They are two call sites of Build, and a test through only one leaves the
-// other free to hand a lobby three hundred entries.
+// Private servers are left out on both paths that build a picture: the state a
+// session opens with and the one every resync repeats.
 func TestABackendIsNeverSentPrivateServers(t *testing.T) {
 	maxInstances := int32(300)
 	private := &spawneryv1alpha1.ServerGroup{
@@ -126,8 +124,6 @@ func TestABackendIsNeverSentPrivateServers(t *testing.T) {
 }
 
 func TestASessionThatFallsBehindIsCutRatherThanSilentlyStale(t *testing.T) {
-	// Dropping the message instead would leave the agent serving a mirror it
-	// has no way of knowing is stale, looking healthy the whole time.
 	r := newRegistry(t, serverreg.Options{OutboxSize: 1}, group("ns", "lobby"))
 
 	outbox, leave, err := r.Join(context.Background(), "ns", "pod-a")
@@ -136,15 +132,12 @@ func TestASessionThatFallsBehindIsCutRatherThanSilentlyStale(t *testing.T) {
 	}
 	defer leave()
 
-	// Read nothing, and resync until the queue is past its bound.
 	for i := 0; i < 5; i++ {
 		r.Resync(context.Background())
 	}
 
-	// Drain what is buffered, then assert the channel is *closed* rather than
-	// merely empty. A bare `for range outbox` would block forever if the cut
-	// never happened, so this test would hang rather than fail -- and a test
-	// whose failure mode is a hang tells whoever runs it nothing.
+	// Assert *closed*, not merely empty: a bare `for range outbox` would hang
+	// rather than fail if the cut never happened.
 	deadline := time.After(5 * time.Second)
 	for {
 		select {
@@ -161,8 +154,6 @@ func TestASessionThatFallsBehindIsCutRatherThanSilentlyStale(t *testing.T) {
 }
 
 func TestLeavingRemovesTheSessionAndAResyncAfterItDoesNotPanic(t *testing.T) {
-	// A double close is the bug this guards: leave closes the channel, and a
-	// resync that still held the session would close it a second time.
 	r := newRegistry(t, serverreg.Options{}, group("ns", "lobby"))
 
 	_, leave, err := r.Join(context.Background(), "ns", "pod-a")
@@ -202,8 +193,6 @@ func TestResyncReachesEverySessionWithItsOwnNamespacesState(t *testing.T) {
 }
 
 func TestASecondStreamFromOnePodSupersedesTheFirst(t *testing.T) {
-	// The make-before-break renewal: the new session is entered and the old
-	// one's reader sees a closed channel and ends its stream.
 	r := newRegistry(t, serverreg.Options{}, group("ns", "lobby"))
 
 	first, _, err := r.Join(context.Background(), "ns", "pod-a")
@@ -233,12 +222,8 @@ func TestASecondStreamFromOnePodSupersedesTheFirst(t *testing.T) {
 	}
 }
 
-// The interest state, and one test per claim.
-//
-// cloudEventsIn is bounded rather than a bare receive: a test that proves
-// nothing arrives by blocking forever hangs the suite instead of failing it.
-// It skips the other messages a joining session is sent -- the NetworkState
-// comes first on every stream.
+// cloudEventsIn is bounded so a test proving nothing arrives fails instead of
+// hanging. It skips the NetworkState every stream opens with.
 func cloudEventsIn(ch <-chan *agentpb.OperatorToServer) []*agentpb.CloudEvent {
 	var got []*agentpb.CloudEvent
 	deadline := time.After(250 * time.Millisecond)
@@ -255,8 +240,6 @@ func cloudEventsIn(ch <-chan *agentpb.OperatorToServer) []*agentpb.CloudEvent {
 }
 
 func TestAnEventReachesOnlyTheSessionsThatWantOne(t *testing.T) {
-	// The whole point of the interest state. A broadcast that ignored it would
-	// pass every other test in this file.
 	r := newRegistry(t, serverreg.Options{}, group("ns", "lobby"))
 	watching, leaveA, err := r.Join(context.Background(), "ns", "pod-watching")
 	if err != nil {
@@ -281,8 +264,6 @@ func TestAnEventReachesOnlyTheSessionsThatWantOne(t *testing.T) {
 }
 
 func TestInterestIsForgottenWithTheSession(t *testing.T) {
-	// Otherwise the map grows for the operator's lifetime, and a pod that
-	// reconnects into a fresh session would inherit an answer it never gave.
 	r := newRegistry(t, serverreg.Options{}, group("ns", "lobby"))
 	_, leave, err := r.Join(context.Background(), "ns", "pod-a")
 	if err != nil {
@@ -297,9 +278,7 @@ func TestInterestIsForgottenWithTheSession(t *testing.T) {
 }
 
 func TestAnEventDoesNotCrossANamespace(t *testing.T) {
-	// Structural everywhere else in this project; a check here, because
-	// Publish takes the namespace as an argument rather than deriving it from
-	// a token. A check is exactly what needs its own test.
+	// Publish takes the namespace as an argument rather than from a token.
 	r := newRegistry(t, serverreg.Options{}, group("ns", "lobby"), group("other", "lobby"))
 	other, leave, err := r.Join(context.Background(), "other", "pod-other")
 	if err != nil {
@@ -316,9 +295,6 @@ func TestAnEventDoesNotCrossANamespace(t *testing.T) {
 }
 
 func TestInterestForAPodWithNoSessionIsIgnored(t *testing.T) {
-	// A report can arrive from a session that a renewal has just displaced.
-	// Creating an entry for it would leak one per reconnect, and the operator
-	// would then be holding interest for a stream that no longer exists.
 	r := newRegistry(t, serverreg.Options{}, group("ns", "lobby"))
 
 	r.SetInterest("pod-that-never-joined", true)

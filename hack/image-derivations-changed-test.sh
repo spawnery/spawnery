@@ -1,16 +1,6 @@
 #!/usr/bin/env bash
-# Five cases for hack/image-derivations-changed.sh, every one against this
-# repository's own history.
-#
-# There is no seam here and none is wanted. The others in this directory need
-# one because they ask api.github.com a question whose answer cannot be
-# summoned to order; this one asks git a question about commits that already
-# exist and will keep existing. Unlike hack/require-green-ci-test.sh, which
-# expires when GitHub drops its workflow runs after about 90 days, nothing here
-# has a shelf life: git does not garbage-collect reachable history.
-#
-# Requires: nothing but a full clone. Run it inside the dev shell for
-# consistency with its neighbours: `make image-derivations-changed-test`.
+# Cases for hack/image-derivations-changed.sh against this repository's own
+# history, so it needs a full clone.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -25,9 +15,7 @@ fail() {
 	failures=$((failures + 1))
 }
 
-# Deliberately unset for every case below: the script writes to $GITHUB_OUTPUT
-# when it is set, and a test that let it inherit a real one from a runner would
-# be writing into that job's outputs.
+# Inherited from a runner, the script would write into that job's outputs.
 unset GITHUB_OUTPUT
 
 expect() {
@@ -44,35 +32,15 @@ expect() {
 	fi
 }
 
-# ---------------------------------------------------------------------------
-# Two fixed commits, chosen because git will still hold them in a year.
-#
-# v0.1.2..v0.2.0 is the release that carried the vendorHash fix: `git diff
-# --name-only v0.1.2 v0.2.0 -- nix/ flake.nix flake.lock` names flake.nix. So
-# this is not an invented example — it is the real range in which a hash moved,
-# and the job this script gates would have built the images across it.
-#
-# 022a421..a6f766c touches docs/reference/known-issues.md and nothing else, which is the
-# ordinary shape of a commit here and the case the whole script exists to make
-# cheap.
-# ---------------------------------------------------------------------------
+# v0.1.2..v0.2.0 moves flake.nix; 022a421..a6f766c touches only
+# docs/reference/known-issues.md.
 expect true 'v0.1.2' 'v0.2.0' 'a range where flake.nix moved'
 expect false '022a421' 'a6f766c' 'a range that touched only documentation'
 
-# ---------------------------------------------------------------------------
-# The three ways of not knowing. Each must build: the answer that costs runner
-# minutes is always preferred to the answer that costs coverage, and this is
-# the property most worth pinning, because every one of these is reachable on a
-# real runner and none of them is reachable in the ordinary case anyone would
-# think to check by hand.
-# ---------------------------------------------------------------------------
 expect true '0000000000000000000000000000000000000000' 'HEAD' "GitHub's all-zeros base on a branch's first push"
 expect true '' 'HEAD' 'an empty base'
 expect true 'deadbeefdeadbeefdeadbeefdeadbeefdeadbeef' 'HEAD' 'a base this clone does not contain'
 
-# ---------------------------------------------------------------------------
-# The wrong argument count is the one case that is not an answer.
-# ---------------------------------------------------------------------------
 if "$sut" 'only-one-argument' >/dev/null 2>&1; then
 	fail 'one argument: expected a non-zero exit'
 else

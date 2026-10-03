@@ -26,8 +26,7 @@ class CloudEventsTest {
         assertEquals("ReadyGatePassed", info.kind())
         assertEquals("lobby-a3f9", info.subject())
         assertEquals("lobby", info.group())
-        // The operator's own sentence, so a plugin logging it and an operator
-        // reading kubectl see the same words.
+        // The operator's own sentence, as kubectl shows it.
         assertEquals("phase Starting -> Ready", info.message())
         assertTrue(!info.warning())
     }
@@ -45,9 +44,6 @@ class CloudEventsTest {
 
     @Test
     fun `closing twice is not an error`() {
-        // A plugin closing on disable after the agent already stopped is
-        // ordinary, and punishing it would put an exception in a shutdown path
-        // where nobody is looking.
         val handle = bus.subscribe { }
         handle.close()
         handle.close()
@@ -57,8 +53,7 @@ class CloudEventsTest {
 
     @Test
     fun `one listener throwing does not cost the others their event`() {
-        // This runs inside a gRPC callback. One plugin's bug must not take the
-        // session, and must not take every other plugin's events either.
+        // Runs inside a gRPC callback.
         val seen = mutableListOf<CloudEventInfo>()
         bus.subscribe { throw IllegalStateException("a plugin bug") }
         bus.subscribe { seen += it }

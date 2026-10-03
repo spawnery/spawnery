@@ -28,10 +28,6 @@ import (
 	"github.com/spawnery/spawnery/internal/agentpb"
 )
 
-// Without a fleet, ProxySession would panic on its first stream — in a gRPC
-// handler goroutine, minutes after start. New refuses that up front instead,
-// the same way controller.SetupAll refuses a nil Bootstrapper. This is the
-// symmetric test to TestSetupAllRefusesWithoutABootstrapper.
 func TestNewRefusesWithoutAProxyFleet(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -41,15 +37,8 @@ func TestNewRefusesWithoutAProxyFleet(t *testing.T) {
 	New(Options{})
 }
 
-// The same guard on the other half of the fleet, and it needed its own test
-// for a reason worth writing down: this milestone tried to mutation-check the
-// operator binary's wiring instead -- delete `Servers:` from its options and
-// watch something fail -- and nothing did. `go vet` does not run main, and no
-// unit test in this repository constructs the operator's own Options. The
-// binary's wiring is guarded by this panic and by `make e2e`, which starts the
-// real process, and by nothing in between.
-//
-// So the panic is what a test can see, and this is that test.
+// The operator binary's Options are built by no unit test, so this panic and
+// `make e2e` are the only guards on its wiring.
 func TestNewRefusesWithoutAServerFanout(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -59,8 +48,6 @@ func TestNewRefusesWithoutAServerFanout(t *testing.T) {
 	New(Options{Proxies: stubFleet{}})
 }
 
-// And the third, for the source a request is resolved against. Same guard,
-// same reason: without it answerConnect would panic inside a session.
 func TestNewRefusesWithoutANetworkStateSource(t *testing.T) {
 	defer func() {
 		if recover() == nil {
@@ -70,7 +57,6 @@ func TestNewRefusesWithoutANetworkStateSource(t *testing.T) {
 	New(Options{Proxies: stubFleet{}, Servers: stubFanout{}})
 }
 
-// stubFanout satisfies ServerFanout so the test above reaches the State check.
 type stubFanout struct{}
 
 func (stubFanout) Join(context.Context, string, string) (<-chan *agentpb.OperatorToServer, func(), error) {
@@ -79,8 +65,6 @@ func (stubFanout) Join(context.Context, string, string) (<-chan *agentpb.Operato
 
 func (stubFanout) SetInterest(string, bool) {}
 
-// stubFleet satisfies ProxyFleet so the test above reaches the Servers check
-// rather than stopping at the one before it.
 type stubFleet struct{}
 
 func (stubFleet) Join(context.Context, string, string, string) (<-chan *agentpb.OperatorToProxy, func(), error) {
@@ -93,14 +77,8 @@ func (stubFleet) SetInterest(string, bool) {}
 
 func (stubFleet) SendState(context.Context, string) {}
 
-// The opening sends are the one part of a session nothing could end.
-//
-// stream.Send blocks on the client's flow-control window and observes no
-// context, so an agent that opens a stream and then stops reading held this
-// goroutine for good: the hard deadline's timer is armed after the sends, and
-// arming it before would not have helped either, because sessions.cancel
-// cancels a context that only the handler's own loop selects on — and this is
-// before the loop. Returning is the only thing that ends a blocked Send.
+// stream.Send observes no context and the hard deadline cannot reach a handler
+// before its loop, so returning is the only thing that ends a blocked Send.
 func TestTheOpeningSendsAreBounded(t *testing.T) {
 	t.Run("a send that finishes hands its result straight back", func(t *testing.T) {
 		want := errors.New("the stream broke")
@@ -113,20 +91,9 @@ func TestTheOpeningSendsAreBounded(t *testing.T) {
 	})
 
 	t.Run("a send that never finishes gives up", func(t *testing.T) {
-		// Released at the end so this test leaves nothing running, and
-		// checked, because a send that is still blocked when the deadline
-		// fires must still be able to finish afterwards — that is what the
-		// real one does when the handler's return closes the stream.
-		//
-		// What this does not prove is the buffering of the result channel.
-		// `sent <- send()` evaluates send fully, defers included, before it
-		// touches the channel, so nothing inside send can observe the send
-		// that follows it. Making the channel unbuffered parks that goroutine
-		// for good and no assertion here goes red. The alternative is a
-		// runtime.NumGoroutine poll in a package that also runs envtest and
-		// two gRPC servers, which would buy this one detail at the price of a
-		// flaky suite. The buffer is reasoned in sendBounded's comment
-		// instead.
+		// Released at the end so this test leaves nothing running. The
+		// buffering of sendBounded's result channel is not observable here
+		// without a flaky goroutine count.
 		release := make(chan struct{})
 		finished := make(chan struct{})
 		defer func() {

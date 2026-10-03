@@ -14,9 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package image holds tests for the shell parts of the Paper base image. There
-// is no Go code here to build — the entrypoint is a shell script, and this is
-// how its rules stay provable in make test rather than only in a container.
+// Package image tests the shell entrypoints of the base images.
 package image
 
 import (
@@ -30,18 +28,8 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// stubTools puts fake java and spawnery-config binaries on PATH, in place of
-// the real ones. The entrypoint invokes both unqualified rather than by a
-// hardcoded path — spawnery-config the same way it already invoked java —
-// specifically so a double can stand in for either one here without writing
-// anything outside the test's own temp directory. What Paper and Velocity
-// actually read once spawnery-config runs for real is proven in
-// internal/render and cmd/spawnery-config, not here; this package only owns
-// the shell that wires the two real programs together.
-//
-// configExit is the exit code the spawnery-config stub returns, so the
-// caller can simulate the renderer refusing without needing a real,
-// unmounted /etc/spawnery to make it refuse on its own.
+// stubTools puts fake java and spawnery-config binaries on PATH. configExit
+// is the exit code the spawnery-config stub returns.
 func stubTools(t *testing.T, configExit int) string {
 	t.Helper()
 	dir := t.TempDir()
@@ -62,11 +50,6 @@ func stubTools(t *testing.T, configExit int) string {
 }
 
 // runScript runs repoScript in workDir and returns its combined output.
-// configExit controls whether the spawnery-config stub succeeds (0, what
-// every test wants except the refusal one) or fails. Shared by
-// image/entrypoint_test.go and image/velocity_entrypoint_test.go: both
-// scripts invoke spawnery-config unqualified — deliberately, so a PATH stub
-// can stand in for it — and this is that stub's one harness.
 func runScript(t *testing.T, repoScript, workDir string, configExit int, env ...string) (string, error) {
 	t.Helper()
 	script := testenv.RepoPath(t, repoScript)
@@ -81,8 +64,6 @@ func runScript(t *testing.T, repoScript, workDir string, configExit int, env ...
 	return string(out), err
 }
 
-// runEntrypoint runs the Paper entrypoint. SPAWNERY_PAPER_HOME defaults to /opt/paper,
-// overridable through env the same way runScript passes any other variable.
 func runEntrypoint(t *testing.T, workDir string, configExit int, env ...string) (string, error) {
 	t.Helper()
 	return runScript(t, "image/entrypoint.sh", workDir, configExit,
@@ -108,12 +89,6 @@ func TestEntrypointAcceptsTheEula(t *testing.T) {
 func TestEntrypointInvokesSpawneryConfigWithThePaperFlavor(t *testing.T) {
 	dir := t.TempDir()
 
-	// The one thing this script alone is responsible for getting right about
-	// spawnery-config: passing --flavor paper rather than, say, copying
-	// --flavor velocity from image/velocity-entrypoint.sh by accident. What
-	// spawnery-config does with that flag — the files it writes, the layering
-	// of ConfigMap, overlay and critical fields — is internal/render's and
-	// cmd/spawnery-config's own coverage, not this package's.
 	out, err := runEntrypoint(t, dir, 0)
 	if err != nil {
 		t.Fatalf("entrypoint: %v", err)
@@ -147,10 +122,8 @@ func TestEntrypointExecsJavaWithTheBundlerRepo(t *testing.T) {
 func TestEntrypointStopsIfSpawneryConfigRefuses(t *testing.T) {
 	dir := t.TempDir()
 
-	// SPAWNERY_PAPER_HOME points at a real jar, so a script that pressed on regardless
-	// of spawnery-config's exit code would still manage to copy the plugin
-	// and start java — the two assertions below are what tell that apart from
-	// a script that actually stopped.
+	// SPAWNERY_PAPER_HOME points at a real jar, so only the assertions below tell
+	// a script that stopped from one that pressed on.
 	paperHome := filepath.Join(dir, "opt", "paper")
 	if err := os.MkdirAll(filepath.Join(paperHome, "agent"), 0o755); err != nil {
 		t.Fatal(err)
@@ -164,8 +137,7 @@ func TestEntrypointStopsIfSpawneryConfigRefuses(t *testing.T) {
 		t.Fatalf("entrypoint succeeded, want a failure; output: %s", out)
 	}
 
-	// It was actually reached and actually refused, not skipped by some
-	// unrelated shell error earlier in the script.
+	// Reached and refused, not skipped by an earlier shell error.
 	if !strings.Contains(out, "SPAWNERY_CONFIG_ARGV: --flavor paper") {
 		t.Errorf("spawnery-config was never invoked; output: %s", out)
 	}
@@ -176,10 +148,8 @@ func TestEntrypointStopsIfSpawneryConfigRefuses(t *testing.T) {
 		t.Error("the agent plugin was copied anyway, after the renderer refused")
 	}
 
-	// The EULA write comes before spawnery-config on purpose: accepting
-	// Mojang's EULA is not conditional on the renderer's opinion of the
-	// operator's configuration, and a refusal here must not silently undo it
-	// on a restart that later succeeds.
+	// The EULA is written before spawnery-config: accepting it does not depend
+	// on the renderer, and a refusal must not undo it.
 	if _, err := os.ReadFile(filepath.Join(dir, "eula.txt")); err != nil {
 		t.Errorf("eula.txt was not written before the refusal: %v", err)
 	}
@@ -188,9 +158,6 @@ func TestEntrypointStopsIfSpawneryConfigRefuses(t *testing.T) {
 func TestCopiesTheAgentPluginIntoAWritablePluginsDirectory(t *testing.T) {
 	dir := t.TempDir()
 
-	// The image ships the jar in the read-only part; the entrypoint's job is
-	// to get it somewhere Paper may also write, because Paper puts its
-	// plugins' data folders inside the plugins directory.
 	paperHome := filepath.Join(dir, "opt", "paper")
 	if err := os.MkdirAll(filepath.Join(paperHome, "agent"), 0o755); err != nil {
 		t.Fatal(err)
@@ -200,7 +167,6 @@ func TestCopiesTheAgentPluginIntoAWritablePluginsDirectory(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	// A stale copy from a previous start must lose: the image is the truth.
 	if err := os.MkdirAll(filepath.Join(dir, "plugins"), 0o755); err != nil {
 		t.Fatal(err)
 	}
@@ -225,10 +191,8 @@ func TestCopiesTheAgentPluginIntoAWritablePluginsDirectory(t *testing.T) {
 func TestCopiesTheAgentPluginOnASecondStartEvenThoughTheFirstLeftItReadOnly(t *testing.T) {
 	dir := t.TempDir()
 
-	// The jar ships read-only in the Nix store, and cp with no -p inherits the
-	// source's mode — so the copy a first start leaves in plugins/ is 0444
-	// too, the same state a real second start finds. Nothing in the
-	// entrypoint chmods it: cp -f alone has to be able to replace it.
+	// cp keeps the store's 0444 mode, the state a real second start finds;
+	// cp -f alone has to replace it.
 	paperHome := filepath.Join(dir, "opt", "paper")
 	if err := os.MkdirAll(filepath.Join(paperHome, "agent"), 0o755); err != nil {
 		t.Fatal(err)
@@ -251,9 +215,7 @@ func TestCopiesTheAgentPluginOnASecondStartEvenThoughTheFirstLeftItReadOnly(t *t
 		t.Fatalf("setup invalid: the first run's copy is writable (mode %v); this test needs it read-only to prove the second run doesn't depend on a chmod", info.Mode().Perm())
 	}
 
-	// A new image ships a new jar. The source file must be removed before
-	// rewriting it — it is 0444 itself, and os.WriteFile can't truncate a
-	// read-only file it doesn't own the mode of.
+	// The source is 0444 itself, and os.WriteFile cannot truncate it.
 	if err := os.Remove(jar); err != nil {
 		t.Fatal(err)
 	}
@@ -294,11 +256,8 @@ func cgroupRoot(t *testing.T, limit string, v1 bool) string {
 	return "SPAWNERY_CGROUP_ROOT=" + root
 }
 
-// javaArgv is the line the stub java prints, and nothing else. Asserting
-// against the whole output would be wrong in both directions here: the log
-// line this check emits names AlwaysPreTouch in order to say it is not being
-// used, so "the output contains the flag" is true exactly when the flag was
-// dropped.
+// javaArgv is the line the stub java prints. The whole output would mislead:
+// the log line names AlwaysPreTouch exactly when the flag is dropped.
 func javaArgv(t *testing.T, out string) string {
 	t.Helper()
 	for _, line := range strings.Split(out, "\n") {
@@ -310,12 +269,6 @@ func javaArgv(t *testing.T, out string) string {
 	return ""
 }
 
-// TestTheJVMDoesNotPreTouchWithoutAMemoryLimit is the hazard the flag creates
-// outside a limit. AlwaysPreTouch claims the whole heap at start, and
-// MaxRAMPercentage makes that heap a share of whatever bounds the container --
-// the node, when nothing does. So one server with no resources.limits.memory
-// took three quarters of the machine from every other pod on it, the instant
-// it started.
 func TestTheJVMDoesNotPreTouchWithoutAMemoryLimit(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -334,13 +287,9 @@ func TestTheJVMDoesNotPreTouchWithoutAMemoryLimit(t *testing.T) {
 			if strings.Contains(argv, "AlwaysPreTouch") {
 				t.Errorf("the JVM pre-touches its heap with no memory limit; got: %s", argv)
 			}
-			// The rest of the tuning is untouched: this drops one flag, it
-			// does not decide the JVM has no opinion about anything.
 			if !strings.Contains(argv, "-XX:+UseG1GC") {
 				t.Errorf("the other JVM flags went with it; got: %s", argv)
 			}
-			// And it says so, because a pod that quietly starts differently is
-			// a pod nobody can diagnose.
 			if !strings.Contains(out, "no memory limit") {
 				t.Errorf("nothing in the log says why; got: %s", out)
 			}
@@ -348,9 +297,6 @@ func TestTheJVMDoesNotPreTouchWithoutAMemoryLimit(t *testing.T) {
 	}
 }
 
-// TestTheJVMStillPreTouchesUnderALimit is the other half, and the one that
-// keeps the check from being a silent removal of the flag everywhere. Inside a
-// limit the trade AlwaysPreTouch makes is a good one and nothing changes.
 func TestTheJVMStillPreTouchesUnderALimit(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -359,9 +305,7 @@ func TestTheJVMStillPreTouchesUnderALimit(t *testing.T) {
 	}{
 		{"cgroup v2 with a limit", "2147483648", false},
 		{"cgroup v1 with a limit", "2147483648", true},
-		// An unreadable cgroup is treated as limited: the direction that
-		// changes nothing. This is also what every developer machine running
-		// make test lands on.
+		// An unreadable cgroup counts as limited; every developer machine lands here.
 		{"no cgroup files at all", "", false},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
@@ -383,10 +327,6 @@ func TestTheJVMStillPreTouchesUnderALimit(t *testing.T) {
 func TestPluginsFromTheVolumeAreCopiedInWithTheirConfiguration(t *testing.T) {
 	dir := t.TempDir()
 
-	// The volume, as the operator would have mounted it: a jar and a nested
-	// configuration file. The configuration is half the point -- jars alone
-	// would leave every plugin at its defaults on an ephemeral group, whose
-	// /data is an emptyDir.
 	source := filepath.Join(dir, "volume")
 	if err := os.MkdirAll(filepath.Join(source, "LuckPerms"), 0o755); err != nil {
 		t.Fatal(err)
@@ -420,10 +360,6 @@ func TestPluginsFromTheVolumeAreCopiedInWithTheirConfiguration(t *testing.T) {
 }
 
 func TestCopiedPluginFilesAreWritable(t *testing.T) {
-	// The mount is read-only, so every file arrives read-only. Paper writes
-	// its plugins' data folders inside this directory, and a plugin that
-	// cannot rewrite its own config fails in its own way rather than in one
-	// the server reports.
 	dir := t.TempDir()
 	source := filepath.Join(dir, "volume")
 	if err := os.MkdirAll(source, 0o755); err != nil {
@@ -447,9 +383,6 @@ func TestCopiedPluginFilesAreWritable(t *testing.T) {
 }
 
 func TestTheAgentJarWinsOverOneOnTheVolume(t *testing.T) {
-	// The bound. Somebody pinning an older agent by dropping it on the volume
-	// would otherwise leave the operator talking to a version it never
-	// published -- and every object in the cluster would say the right thing.
 	dir := t.TempDir()
 
 	paperHome := filepath.Join(dir, "opt", "paper")
@@ -485,13 +418,6 @@ func TestTheAgentJarWinsOverOneOnTheVolume(t *testing.T) {
 }
 
 func TestLostAndFoundIsSkippedRatherThanCopied(t *testing.T) {
-	// Every ext4 filesystem has one, mode 0700 and owned by root, and Longhorn
-	// formats ext4 by default -- so this is the ordinary case for a plugin
-	// claim rather than an exotic one. A non-root container cannot read it,
-	// and a copy that tried would fail the whole start under `set -eu`.
-	//
-	// Measured on a live claim before this guard existed: `cp -a` reported
-	// "can't preserve ownership of '.../lost+found'" and exited 1.
 	dir := t.TempDir()
 	source := filepath.Join(dir, "volume")
 	if err := os.MkdirAll(filepath.Join(source, "lost+found"), 0o700); err != nil {
@@ -514,10 +440,7 @@ func TestLostAndFoundIsSkippedRatherThanCopied(t *testing.T) {
 }
 
 func TestADotfileOnTheVolumeIsCopiedToo(t *testing.T) {
-	// The loop iterates two globs because a single `*` skips dotfiles, and a
-	// plugin's data directory may well carry one. Without the second glob this
-	// would silently drop them, which is the kind of gap nobody notices until
-	// a plugin behaves oddly.
+	// A single `*` skips dotfiles.
 	dir := t.TempDir()
 	source := filepath.Join(dir, "volume")
 	if err := os.MkdirAll(source, 0o755); err != nil {
@@ -537,9 +460,7 @@ func TestADotfileOnTheVolumeIsCopiedToo(t *testing.T) {
 }
 
 func TestNoSourceDirectoryIsNotAnError(t *testing.T) {
-	// The overwhelmingly common case: a group with no extraPlugins renders no
-	// volume, so the path does not exist. Under `set -eu` a missing guard here
-	// would fail every start in every installation.
+	// A group without extraPlugins has no volume: the common case.
 	dir := t.TempDir()
 
 	if _, err := runEntrypoint(t, dir, 0,
@@ -549,10 +470,6 @@ func TestNoSourceDirectoryIsNotAnError(t *testing.T) {
 }
 
 func TestEntrypointExecsThePurpurJarWhenTheImageNamesOne(t *testing.T) {
-	// The Purpur image sets SPAWNERY_SERVER_JAR; the Paper image does not, and
-	// TestEntrypointExecsJavaWithTheBundlerRepo above is what holds its
-	// default still. Without this the two images would need two entrypoints,
-	// and every behaviour tested in this file would be tested for one of them.
 	dir := t.TempDir()
 
 	out, err := runEntrypoint(t, dir, 0,
@@ -564,9 +481,6 @@ func TestEntrypointExecsThePurpurJarWhenTheImageNamesOne(t *testing.T) {
 	if !strings.Contains(out, "-jar /opt/purpur/purpur.jar") {
 		t.Errorf("java was not invoked with the named jar:\n%s", out)
 	}
-	// The bundler repo still follows SPAWNERY_PAPER_HOME rather than the jar's own
-	// directory. They are the same directory in both images, and a repo
-	// derived from the jar path would break the moment somebody moved one.
 	if !strings.Contains(out, "-DbundlerRepoDir=/opt/purpur/repo") {
 		t.Errorf("the bundler repo did not follow SPAWNERY_PAPER_HOME:\n%s", out)
 	}
@@ -600,15 +514,8 @@ func TestAFileFromTheVolumeLandsUnderConfig(t *testing.T) {
 }
 
 func TestAFileFromTheVolumeMergesIntoConfigInsteadOfNestingUnderIt(t *testing.T) {
-	// spawnery-config always creates config/ before this block runs -- it
-	// writes paper-global.yml into it at startup, at line 45 above. Every
-	// other test in this file leaves config/ absent when the FILE_SOURCE
-	// block runs, because the stub spawnery-config here doesn't reproduce
-	// that write, so none of them prove anything about a destination that
-	// already exists. This test creates config/ by hand, the way the real
-	// renderer would have, and checks the outcome that matters: the volume's
-	// file lands where it should, the renderer's file is undisturbed, and
-	// nothing ends up nested at config/config.
+	// The real spawnery-config creates config/ before the copy; the stub does
+	// not, so this test creates it by hand.
 	dir := t.TempDir()
 	if err := os.MkdirAll(filepath.Join(dir, "config"), 0o755); err != nil {
 		t.Fatal(err)
@@ -678,8 +585,6 @@ func TestAFileTheRendererOwnsRefusesTheStart(t *testing.T) {
 }
 
 func TestAPluginOnTheFileVolumeRefusesTheStart(t *testing.T) {
-	// plugins/ has a mechanism of its own, and the message has to send
-	// somebody to it rather than only saying no.
 	dir := t.TempDir()
 	source := filepath.Join(dir, "volume")
 	if err := os.MkdirAll(filepath.Join(source, "plugins"), 0o755); err != nil {
@@ -699,15 +604,6 @@ func TestAPluginOnTheFileVolumeRefusesTheStart(t *testing.T) {
 	}
 }
 
-// TestARegularFileNamedPluginsRefusesTheStart is the case the scan used to
-// miss. It tested plugins/ with [ -d ], so a claim carrying a regular file of
-// that name passed, landed at /data/plugins, and killed the start further down
-// on the unconditional `mkdir -p plugins` with
-//
-//	mkdir: can't create directory 'plugins': File exists
-//
-// which names neither extraFiles nor extraPlugins -- exactly the bare failure
-// the scan exists to replace with a sentence.
 func TestARegularFileNamedPluginsRefusesTheStart(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "volume")
@@ -728,9 +624,6 @@ func TestARegularFileNamedPluginsRefusesTheStart(t *testing.T) {
 	}
 }
 
-// eula.txt is the fourth writer the copy comment used to count three of:
-// the image writes it before the copy, and a claim carrying its own replaced
-// the acceptance with whatever the file said.
 func TestAClaimCarryingTheEULARefusesTheStart(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "volume")
@@ -751,13 +644,8 @@ func TestAClaimCarryingTheEULARefusesTheStart(t *testing.T) {
 	}
 }
 
-// TestPaperDoesNotRefuseTheVelocityFiles is the mirror of
-// TestVelocityDoesNotRefuseThePaperFiles, and the half where the plausible
-// mistake actually lives: somebody adding lang/ to a shared list, or pasting
-// the proxy's entries into this script. Nothing on a Paper server writes
-// either path, so refusing them would be a rule with no reason behind it --
-// and would crash-loop a group whose claim happens to carry a lang directory
-// for something else entirely.
+// Nothing on a Paper server writes velocity.toml or lang/, so refusing them
+// would crash-loop a group for no reason.
 func TestPaperDoesNotRefuseTheVelocityFiles(t *testing.T) {
 	dir := t.TempDir()
 	source := filepath.Join(dir, "volume")
@@ -776,8 +664,6 @@ func TestPaperDoesNotRefuseTheVelocityFiles(t *testing.T) {
 		t.Fatalf("a Paper server refused a file no Paper server owns: %v", err)
 	}
 
-	// Not refused, and therefore actually copied: a rule with no reason is
-	// still worth nothing if the files never arrive.
 	for _, want := range []string{"velocity.toml", filepath.Join("lang", "messages.properties")} {
 		if _, err := os.Stat(filepath.Join(dir, want)); err != nil {
 			t.Errorf("%s did not reach the working directory: %v", want, err)
@@ -786,8 +672,6 @@ func TestPaperDoesNotRefuseTheVelocityFiles(t *testing.T) {
 }
 
 func TestNothingIsCopiedWhenTheScanRefuses(t *testing.T) {
-	// The scan runs before the copy, so a refused tree leaves no half-written
-	// /data behind.
 	dir := t.TempDir()
 	source := filepath.Join(dir, "volume")
 	if err := os.MkdirAll(filepath.Join(source, "config", "sponge"), 0o755); err != nil {
@@ -811,8 +695,6 @@ func TestNothingIsCopiedWhenTheScanRefuses(t *testing.T) {
 }
 
 func TestLostFoundOnTheFileVolumeIsSkipped(t *testing.T) {
-	// The same ext4 artefact the plugin copy already skips: mode 0700 owned by
-	// root, unreadable to this container, and never anybody's configuration.
 	dir := t.TempDir()
 	source := filepath.Join(dir, "volume")
 	if err := os.MkdirAll(filepath.Join(source, "lost+found"), 0o700); err != nil {

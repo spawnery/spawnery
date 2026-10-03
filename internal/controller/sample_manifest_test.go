@@ -28,14 +28,6 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// TestSampleManifestIsAcceptedByTheAPIServer decodes config/samples/network.yaml
-// and creates every object in it against the envtest control plane. This
-// environment has no container runtime to run the brief's k3d smoke test, so
-// this is the check available here that the shipped sample is not garbage: the
-// structural schema and the CEL rules on Network and ServerGroup both run
-// server-side, exactly as they would against a real cluster. It cannot prove
-// the pod actually gets scheduled — envtest runs no kubelet — only that every
-// object in the sample is accepted.
 func TestSampleManifestIsAcceptedByTheAPIServer(t *testing.T) {
 	c, ctx := testenv.Client(t)
 

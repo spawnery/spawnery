@@ -15,15 +15,9 @@ limitations under the License.
 */
 
 // Command spawnery-config turns the operator's rendered configuration into
-// the files Paper or Velocity actually read, before the JVM starts. It is
-// baked into both images, and image/entrypoint.sh and
-// image/velocity-entrypoint.sh each run it inside the main container, ahead
-// of the exec that replaces the shell with the JVM — there is no init
-// container anywhere in this repository. That placement is why it must exit
-// non-zero, not just log, on anything that would otherwise let the JVM start
-// against bad configuration: a failure here surfaces as this same
-// container's CrashLoopBackOff, not as an Init:Error the kubelet would report
-// separately.
+// the files Paper or Velocity actually read, before the JVM starts. The image
+// entrypoints run it in the main container, so it must exit non-zero on
+// anything that would let the JVM start against bad configuration.
 package main
 
 import (
@@ -84,9 +78,7 @@ func run(args []string, stderr io.Writer) int {
 		// the content that must reach paper-global.yml.
 		files, err = render.Paper(values, secret, overlay)
 	case "velocity":
-		// Velocity's forwarding-secret-file points at the mount itself, so
-		// it is the path — not the content Load also returns — that must
-		// reach velocity.toml. See TestRunWiresTheSecretPathNotItsContentIntoVelocity.
+		// Velocity's forwarding-secret-file takes the path, not the content.
 		files, err = render.Velocity(values, filepath.Join(*configDir, render.SecretFile), overlay)
 	}
 	if err != nil {
@@ -101,7 +93,6 @@ func run(args []string, stderr io.Writer) int {
 	return 0
 }
 
-// pairs collects repeated --pair FROM=INTO flags.
 type pairs []sourcetree.Pair
 
 func (p *pairs) String() string { return fmt.Sprint(*p) }

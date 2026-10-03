@@ -1,9 +1,6 @@
 #!/usr/bin/env bash
-# Drives hack/docs-length.sh through the failures this tree does not
-# contain: a page over its ceiling, and a page named in the table that does
-# not exist. The other two cases -- under and exactly at -- are the shape
-# every page in the tree is in right now, so they need fixtures too rather
-# than reusing a real page that could grow past them tomorrow.
+# Drives hack/docs-length.sh against fixture pages: under, at and over a
+# ceiling, and a missing file.
 set -euo pipefail
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"

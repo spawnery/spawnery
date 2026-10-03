@@ -1,58 +1,31 @@
-# The pinned Paper artifacts, and the patching that has to happen at build time
-# rather than in every pod.
-#
-# The jar PaperMC publishes is not a server: it is a paperclip bootstrap that
-# downloads Mojang's server jar on first start and patches it. Leaving that to
-# runtime would break the main design's promise that nothing is downloaded at
-# runtime, and would extract 166 MB into every ephemeral pod's emptyDir on
-# every single start.
+# The pinned Paper artifacts. PaperMC's jar is a paperclip bootstrap that
+# downloads and patches Mojang's server jar on first start; patching here
+# keeps every pod from downloading and extracting 166 MB on each start.
 { fetchurl
 , jdk25_headless
 , stdenvNoCC
 }:
 
-# Every value below that a Paper bump moves -- both versions and both hashes --
-# is what hack/paper-pin.sh computes and writes. It reads the launcher's URL
-# and checksum from PaperMC's API, downloads the launcher, verifies it against
-# that checksum, and takes Mojang's URL and hash out of META-INF/download-context
-# inside it, which is why the second checksum does not come from the host that
-# serves the artifact. `make paper-pin-check` says whether this file already
-# names a given build and changes nothing.
-#
-# The four lines it rewrites are anchored to their exact shape, so a file that
-# has drifted is a refusal rather than a partial edit. Moving any of them by
-# hand is still possible and still fine; the script exists because doing it by
-# hand is four chances to mistype a hash into a build that fails elsewhere.
+# hack/paper-pin.sh writes both versions and both hashes; `make
+# paper-pin-check` compares without changing anything.
 rec {
   paperVersion = "26.3";
   paperBuild = "135";
 
-  # The launcher. Its hash was computed from a download and checked in here;
-  # that does not make the source trustworthy, it makes the artifact frozen —
-  # a changed upstream breaks the build instead of substituting a jar quietly.
   paperJar = fetchurl {
     url = "https://fill-data.papermc.io/v1/objects/61a8723aa91c523ed279f925344847daf59a83d6fddce481e02304f3a3e66f43/paper-${paperVersion}-${paperBuild}.jar";
     hash = "sha256-YahyOqkcUj7SefklNEhH2vWag9b93OSB4CME86Pmb0M=";
   };
 
-  # Mojang's server jar. This URL and this hash both come from
-  # META-INF/download-context inside paperJar, which is itself pinned above.
-  # The checksum therefore does not come from the host that serves the
-  # artifact — which is what the main design asks for and what no other hash in
-  # this project manages.
+  # URL and hash come from META-INF/download-context inside paperJar, not from
+  # the host that serves the artifact.
   mojangJar = fetchurl {
     url = "https://piston-data.mojang.com/v1/objects/33680f5f2ac32864d6d7cf5e56a705fdb3e05f4c/server.jar";
     hash = "sha256-0FLxTXoXNzT7pVNxHltXAWLi8qMTJn7jGiG5daZ5vmQ=";
   };
 
-  # The patched server, produced offline: every input is already fetched, so
-  # the sandbox needs no network.
-  #
-  # cache/ ships along, 61 MB that nothing reads after this build. Paperclip
-  # touches the cache directory before it decides whether patching is needed at
-  # all, and on a read-only path it fails there with a FileSystemException.
-  # Measured, not assumed. Dropping it would mean a writable cache directory in
-  # every pod, which is worse.
+  # cache/ ships along although nothing reads it after this build: Paperclip
+  # touches it before deciding whether to patch and fails on a read-only path.
   repo = stdenvNoCC.mkDerivation {
     pname = "paper-repo";
     version = "${paperVersion}+${paperBuild}";

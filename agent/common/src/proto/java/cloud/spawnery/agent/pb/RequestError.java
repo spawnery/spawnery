@@ -7,13 +7,8 @@ package cloud.spawnery.agent.pb;
 
 /**
  * <pre>
- * RequestError is why a request was not carried out.
- *
- * The reason is an enum and the message is free text, and the split is
- * deliberate: a caller branches on the reason, a person reads the message. A
- * reason carried as a string would have every caller matching on prose the
- * operator is free to reword, which is a compatibility break nobody would see
- * coming.
+ * RequestError is why a request was not carried out. A caller branches on the
+ * reason; the message is for a person.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.RequestError}
@@ -62,10 +57,8 @@ private static final long serialVersionUID = 0L;
 
   /**
    * <pre>
-   * REASON_UNSPECIFIED is both what a newer operator sends for a reason this
-   * agent predates and what proto3 hands an older one. Reading either as
-   * "something went wrong and I do not know what" is the only reading that
-   * cannot be wrong.
+   * REASON_UNSPECIFIED is also what a reason this agent predates arrives as.
+   * Read it as "failed, cause unknown".
    * </pre>
    *
    * Protobuf enum {@code spawnery.agent.v1alpha1.RequestError.Reason}
@@ -78,9 +71,8 @@ private static final long serialVersionUID = 0L;
     REASON_UNSPECIFIED(0),
     /**
      * <pre>
-     * The player or the target is not on this network. Also what an agent
-     * gets for a player who logged out between the call and the request, which
-     * is ordinary rather than exceptional.
+     * The player or the target is not on this network, including a player
+     * who logged out in the meantime.
      * </pre>
      *
      * <code>NOT_FOUND = 1;</code>
@@ -88,15 +80,11 @@ private static final long serialVersionUID = 0L;
     NOT_FOUND(1),
     /**
      * <pre>
-     * The operator understood and declined, and asking again unchanged will be
-     * declined again while the same state holds: the request met a bound, or
-     * it is itself wrong -- a replica count below one, a name that is not a
-     * DNS label, a server that is not of the kind the verb acts on. A bound
-     * that can clear is refused this way too, and the clause above is why the
-     * promise is no stronger: a group at its instance ceiling and one with no
-     * boost headroom both answer the same request differently once capacity
-     * frees. There is no reason of its own for bad input; a boost for fewer
-     * than one replica was already refused this way.
+     * The operator understood and declined: the request met a bound, or it
+     * is itself wrong (a replica count below one, a name that is not a DNS
+     * label, a server not of the kind the verb acts on). A bound such as an
+     * instance ceiling can clear later, so a retry may succeed once state
+     * changes.
      * </pre>
      *
      * <code>REFUSED = 2;</code>
@@ -104,7 +92,7 @@ private static final long serialVersionUID = 0L;
     REFUSED(2),
     /**
      * <pre>
-     * This pod has asked too often. See the operator's own bound.
+     * This pod has asked too often.
      * </pre>
      *
      * <code>RATE_LIMITED = 3;</code>
@@ -137,9 +125,8 @@ private static final long serialVersionUID = 0L;
     public static final int REASON_UNSPECIFIED_VALUE = 0;
     /**
      * <pre>
-     * The player or the target is not on this network. Also what an agent
-     * gets for a player who logged out between the call and the request, which
-     * is ordinary rather than exceptional.
+     * The player or the target is not on this network, including a player
+     * who logged out in the meantime.
      * </pre>
      *
      * <code>NOT_FOUND = 1;</code>
@@ -147,15 +134,11 @@ private static final long serialVersionUID = 0L;
     public static final int NOT_FOUND_VALUE = 1;
     /**
      * <pre>
-     * The operator understood and declined, and asking again unchanged will be
-     * declined again while the same state holds: the request met a bound, or
-     * it is itself wrong -- a replica count below one, a name that is not a
-     * DNS label, a server that is not of the kind the verb acts on. A bound
-     * that can clear is refused this way too, and the clause above is why the
-     * promise is no stronger: a group at its instance ceiling and one with no
-     * boost headroom both answer the same request differently once capacity
-     * frees. There is no reason of its own for bad input; a boost for fewer
-     * than one replica was already refused this way.
+     * The operator understood and declined: the request met a bound, or it
+     * is itself wrong (a replica count below one, a name that is not a DNS
+     * label, a server not of the kind the verb acts on). A bound such as an
+     * instance ceiling can clear later, so a retry may succeed once state
+     * changes.
      * </pre>
      *
      * <code>REFUSED = 2;</code>
@@ -163,7 +146,7 @@ private static final long serialVersionUID = 0L;
     public static final int REFUSED_VALUE = 2;
     /**
      * <pre>
-     * This pod has asked too often. See the operator's own bound.
+     * This pod has asked too often.
      * </pre>
      *
      * <code>RATE_LIMITED = 3;</code>
@@ -494,13 +477,8 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * RequestError is why a request was not carried out.
-   *
-   * The reason is an enum and the message is free text, and the split is
-   * deliberate: a caller branches on the reason, a person reads the message. A
-   * reason carried as a string would have every caller matching on prose the
-   * operator is free to reword, which is a compatibility break nobody would see
-   * coming.
+   * RequestError is why a request was not carried out. A caller branches on the
+   * reason; the message is for a person.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.RequestError}

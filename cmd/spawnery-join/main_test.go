@@ -30,11 +30,8 @@ import (
 // serveOneJoin serves a status ping and then one uncompressed offline login,
 // which is everything run() has to get through to print a line.
 //
-// Every frame here is built and parsed by hand, and every length in it is
-// below 128 so each VarInt is a single byte — the same tactic
-// cmd/spawnery-slp's test uses, and for the same reason: this test should fail
-// when the command stops speaking the protocol, not when internal/mcjoin's
-// unexported helpers are refactored.
+// Frames are built by hand, independent of internal/mcjoin, with every length
+// below 128 so each VarInt is a single byte.
 func serveOneJoin(t *testing.T) int {
 	t.Helper()
 	ln, err := net.Listen("tcp", "127.0.0.1:0")
@@ -153,8 +150,7 @@ func TestRunPrintsOneJSONLineAndExitsZero(t *testing.T) {
 	if got.Protocol != 776 {
 		t.Errorf(`"protocol" is %d, want the 776 the server reported`, got.Protocol)
 	}
-	// The default username, and its offline-mode UUID as Paper 26.2 logged it
-	// during the end-to-end run.
+	// The default username's offline-mode UUID, as Paper logs it.
 	if got.Username != "spawnery_probe" {
 		t.Errorf(`"username" is %q, want the default`, got.Username)
 	}
@@ -231,7 +227,6 @@ func TestRunFailsWhenNothingListens(t *testing.T) {
 		t.Fatalf("listen: %v", err)
 	}
 	port := ln.Addr().(*net.TCPAddr).Port
-	// Closed immediately, so the port is almost certainly free and refuses.
 	_ = ln.Close()
 
 	var stdout, stderr bytes.Buffer
@@ -246,8 +241,6 @@ func TestRunFailsWhenNothingListens(t *testing.T) {
 	if !strings.HasPrefix(stderr.String(), "spawnery-join: ") {
 		t.Errorf("stderr is %q, want the reason prefixed with the command name", stderr.String())
 	}
-	// Nothing on stdout, or a runbook's jq would be handed a reason it cannot
-	// parse instead of an empty stream it can test for.
 	if stdout.Len() != 0 {
 		t.Errorf("stdout is %q, want nothing on a failure", stdout.String())
 	}

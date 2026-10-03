@@ -22,7 +22,6 @@ import (
 	"time"
 )
 
-// fakeClock is a hand-cranked clock so the time rules are testable.
 type fakeClock struct{ now time.Time }
 
 func (c *fakeClock) Now() time.Time          { return c.now }
@@ -69,10 +68,8 @@ func TestConnectDoesNotImplyReady(t *testing.T) {
 	}
 }
 
-// Make-before-break: the agent opens its next stream while the current one is
-// still up, and that stream is registered before its Hello arrives. Readiness
-// has to survive the handover, or every renewal would look like a readiness
-// loss to the reconciler.
+// The next stream is registered before its Hello arrives; without carried-over
+// readiness every renewal would look like a readiness loss.
 func TestSupersedeKeepsReadiness(t *testing.T) {
 	r, _ := newTestRegistry()
 	r.Connect("pod-uid-1", RoleServer)
@@ -239,8 +236,6 @@ func TestEmptyForStartsWhenTheCountReachesZero(t *testing.T) {
 		t.Errorf("EmptyFor = %v, want 90s since the count reached zero", got)
 	}
 
-	// A second zero report does not restart the clock: the server has been
-	// empty since the first one, and the stabilization window measures that.
 	if err := r.ReportPlayers("pod-uid-1", 0, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
 	}
@@ -275,11 +270,9 @@ func TestEmptyForIsZeroBeforeTheFirstReport(t *testing.T) {
 	}
 }
 
-// TestEmptyForAcrossStreamChanges pins the three edges the design fixes on
-// purpose. Connect may have a restarted process behind it and must forget what
-// the previous one reported; Supersede cannot, because the displaced stream was
-// still live; Disconnect keeps it, which is inert because the count goes stale
-// and stale counts as occupied.
+// Connect forgets emptiness because the process may have restarted; Supersede
+// keeps it because the displaced stream was live; Disconnect keeps it, which is
+// inert because the count goes stale.
 func TestEmptyForAcrossStreamChanges(t *testing.T) {
 	for _, tc := range []struct {
 		name  string
@@ -307,9 +300,6 @@ func TestEmptyForAcrossStreamChanges(t *testing.T) {
 	}
 }
 
-// TestAttachedToSumsTheProxiesThatAreCurrent is the query the drain's exit
-// condition rests on: how many players are on, or heading to, one backend,
-// across every proxy that has said so recently.
 func TestAttachedToSumsTheProxiesThatAreCurrent(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	r := New(clock.Now, 5*time.Second, clock.now)
@@ -330,17 +320,13 @@ func TestAttachedToSumsTheProxiesThatAreCurrent(t *testing.T) {
 	if n, stale := r.AttachedTo("minecraft", "lobby-1", time.Time{}); n != 1 || stale {
 		t.Errorf("lobby-1 = %d stale=%v, want 1 and fresh", n, stale)
 	}
-	// A backend nobody named has nobody on it. That is what makes the map a
-	// state rather than a stream of changes: absence is an answer.
+	// Absence from the map is an answer.
 	if n, stale := r.AttachedTo("minecraft", "lobby-2", time.Time{}); n != 0 || stale {
 		t.Errorf("lobby-2 = %d stale=%v, want 0 and fresh", n, stale)
 	}
 }
 
-// TestAttachedToIsScopedToItsNamespace keeps one network's proxies from
-// answering about another's. Server names are unique per namespace and not
-// across a cluster, so a sum that ignored the namespace would hold a server
-// occupied because a same-named server elsewhere had players.
+// Server names are unique per namespace, not across a cluster.
 func TestAttachedToIsScopedToItsNamespace(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	r := New(clock.Now, 5*time.Second, clock.now)
@@ -357,18 +343,10 @@ func TestAttachedToIsScopedToItsNamespace(t *testing.T) {
 	}
 }
 
-// TestAProxyThatNeverReportedBackendsIsNotStale is the property that lets a
-// fleet upgrade in any order, and it is the one most easily got wrong.
-//
-// An agent too old to send the report says nothing, and reading that as "this
-// proxy may be hiding players" would hold every server in the installation
-// occupied for as long as one un-upgraded proxy ran -- no drain would ever
-// finish. Silent and old are different states and only the first is stale.
 func TestAProxyThatNeverReportedBackendsIsNotStale(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	r := New(clock.Now, 5*time.Second, clock.now)
 	r.Connect("old-proxy", RoleProxy)
-	// It reports players like any agent, and nothing about backends.
 	if err := r.ReportPlayers("old-proxy", 7, 100); err != nil {
 		t.Fatalf("report players: %v", err)
 	}
@@ -379,10 +357,6 @@ func TestAProxyThatNeverReportedBackendsIsNotStale(t *testing.T) {
 	}
 }
 
-// TestAProxyThatStoppedReportingBackendsIsStale is the other half. A proxy
-// that used to report and no longer does may be holding players on this
-// backend without saying so, and the caller has to read that as occupied for
-// the same reason it reads a stale player count that way.
 func TestAProxyThatStoppedReportingBackendsIsStale(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	r := New(clock.Now, 5*time.Second, clock.now)
@@ -391,23 +365,18 @@ func TestAProxyThatStoppedReportingBackendsIsStale(t *testing.T) {
 		t.Fatalf("report: %v", err)
 	}
 
-	// Inside twice the report interval it still counts.
 	clock.now = clock.now.Add(9 * time.Second)
 	if n, stale := r.AttachedTo("minecraft", "lobby-0", time.Time{}); n != 1 || stale {
 		t.Errorf("at 9s: = %d stale=%v, want 1 and fresh", n, stale)
 	}
-	// Past it, the count is not believed and the caller is told so.
 	clock.now = clock.now.Add(3 * time.Second)
 	if n, stale := r.AttachedTo("minecraft", "lobby-0", time.Time{}); !stale {
 		t.Errorf("at 12s: = %d stale=%v, want stale", n, stale)
 	}
 }
 
-// TestABackendReportFromAServerAgentIsRefused keeps the direction of the
-// channel straight. A server agent knows about itself and about nobody else,
-// so a backend map from one is an agent bug rather than a state to store --
-// and storing it would let one compromised server pin any other server in its
-// namespace as occupied for ever.
+// Storing one would let a compromised server pin any other server in its
+// namespace as occupied.
 func TestABackendReportFromAServerAgentIsRefused(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	r := New(clock.Now, 5*time.Second, clock.now)
@@ -421,12 +390,6 @@ func TestABackendReportFromAServerAgentIsRefused(t *testing.T) {
 	}
 }
 
-// TestAReportFromBeforeTheDrainCannotAnswerAboutIt is the deeper half of the
-// drain gap, and the one that is easiest to mistake for freshness.
-//
-// A count taken four seconds ago is perfectly fresh and says nothing about a
-// player who joined three seconds ago. Every source is asked the same way: a
-// report that predates the question cannot answer it, however recent it is.
 func TestAReportFromBeforeTheDrainCannotAnswerAboutIt(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	r := New(clock.Now, 5*time.Second, clock.now)
@@ -435,8 +398,6 @@ func TestAReportFromBeforeTheDrainCannotAnswerAboutIt(t *testing.T) {
 		t.Fatalf("report: %v", err)
 	}
 
-	// The drain begins a second after that report. The report is well inside
-	// its freshness window and still cannot say whether the drain is done.
 	clock.now = clock.now.Add(time.Second)
 	drainStart := clock.now
 	clock.now = clock.now.Add(time.Second)
@@ -444,15 +405,11 @@ func TestAReportFromBeforeTheDrainCannotAnswerAboutIt(t *testing.T) {
 	if n, stale := r.AttachedTo("minecraft", "lobby-0", drainStart); !stale {
 		t.Errorf("= %d stale=%v, want stale: this report predates the drain", n, stale)
 	}
-	// Without a drain to be about, the same report answers perfectly well.
 	if n, stale := r.AttachedTo("minecraft", "lobby-0", time.Time{}); n != 0 || stale {
 		t.Errorf("with no threshold: = %d stale=%v, want 0 and fresh", n, stale)
 	}
 }
 
-// TestTheNextReportAfterTheDrainAnswersIt is what keeps the rule above from
-// being a permanent hold. It clears on the proxy's very next report, at most
-// one interval away -- which is the whole cost of the rule.
 func TestTheNextReportAfterTheDrainAnswersIt(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	r := New(clock.Now, 5*time.Second, clock.now)
@@ -467,8 +424,6 @@ func TestTheNextReportAfterTheDrainAnswersIt(t *testing.T) {
 		t.Fatal("the pre-drain report was believed, so this test would prove nothing")
 	}
 
-	// One report interval later the proxy speaks again, and now it is
-	// answering the question that was actually asked.
 	if err := r.ReportBackends("proxy-a", "minecraft", map[string]int32{}); err != nil {
 		t.Fatalf("second report: %v", err)
 	}
@@ -477,10 +432,6 @@ func TestTheNextReportAfterTheDrainAnswersIt(t *testing.T) {
 	}
 }
 
-// TestAnOldProxyIsStillNotHeldAgainstADrain keeps the upgrade-in-any-order
-// property intact under the new rule. An agent that cannot report backends has
-// no report to predate anything, and treating it as one would hold every
-// draining server in the installation for as long as one old proxy ran.
 func TestAnOldProxyIsStillNotHeldAgainstADrain(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	r := New(clock.Now, 5*time.Second, clock.now)
@@ -497,9 +448,6 @@ func TestAnOldProxyIsStillNotHeldAgainstADrain(t *testing.T) {
 	}
 }
 
-// TestLookupCarriesWhenTheCountArrived is the backend half of the same rule.
-// The Server controller compares this against the drain's start, so a
-// snapshot that did not carry it would leave that half unanswerable.
 func TestLookupCarriesWhenTheCountArrived(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	r := New(clock.Now, 5*time.Second, clock.now)
@@ -517,10 +465,6 @@ func TestLookupCarriesWhenTheCountArrived(t *testing.T) {
 	}
 }
 
-// TestTheShortestReadTimeoutWins is the rule the whole field exists for: a
-// fleet is only as patient as its least patient proxy, because whichever gives
-// up first is the one that disconnects the players the operator was about to
-// move.
 func TestTheShortestReadTimeoutWins(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	r := New(clock.Now, 5*time.Second, clock.now)
@@ -536,10 +480,6 @@ func TestTheShortestReadTimeoutWins(t *testing.T) {
 	}
 }
 
-// TestAnUnreportedReadTimeoutIsUnknownRatherThanZero keeps the fallback honest.
-// Zero and "the shipped default" are different answers, and the caller has to
-// be able to tell them apart: an agent too old to send the field must leave the
-// operator reading what this repository ships, not reading no patience at all.
 func TestAnUnreportedReadTimeoutIsUnknownRatherThanZero(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	r := New(clock.Now, 5*time.Second, clock.now)
@@ -549,18 +489,14 @@ func TestAnUnreportedReadTimeoutIsUnknownRatherThanZero(t *testing.T) {
 		t.Errorf("a proxy that said nothing answered %s as known", got)
 	}
 
-	// A zero is what an older agent's Hello carries, and it must not become an
-	// answer either -- one silent agent would otherwise speak for every
-	// talkative one, since the smallest wins.
+	// An older agent's Hello carries zero, and since the smallest wins it must
+	// not count.
 	r.ReportReadTimeout("proxy-a", "minecraft", 0)
 	if got, known := r.ShortestReadTimeout("minecraft"); known {
 		t.Errorf("a reported zero answered %s as known", got)
 	}
 }
 
-// TestTheReadTimeoutIsScopedAndProxyOnly covers the three ways a value must not
-// count: another namespace's proxy, a disconnected one, and a server agent,
-// which reports about itself and has no such timeout at all.
 func TestTheReadTimeoutIsScopedAndProxyOnly(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	r := New(clock.Now, 5*time.Second, clock.now)
@@ -608,9 +544,7 @@ func TestRosterMergesEveryProxyInTheNamespace(t *testing.T) {
 }
 
 func TestRosterKeepsOneEntryPerPlayerAcrossProxies(t *testing.T) {
-	// A player appears on two proxies while a rollout hands them over. They
-	// are one person and must be counted once -- a plugin iterating this to
-	// message everybody would otherwise message them twice.
+	// A rollout hands the player over; they must be counted once.
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	r := New(clock.Now, 5*time.Second, clock.now)
 	r.Connect("proxy-a", RoleProxy)
@@ -638,9 +572,6 @@ func TestRosterKeepsOneEntryPerPlayerAcrossProxies(t *testing.T) {
 }
 
 func TestRosterSkipsAProxyWhoseReportWentStale(t *testing.T) {
-	// The rule the counts already use: older than twice the report interval.
-	// A proxy that stopped reporting must stop asserting who is online rather
-	// than freezing a roster.
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	r := New(clock.Now, 5*time.Second, clock.now)
 	r.Connect("proxy-a", RoleProxy)
@@ -662,9 +593,6 @@ func TestRosterSkipsAProxyWhoseReportWentStale(t *testing.T) {
 }
 
 func TestARosterFromAServerAgentIsRefused(t *testing.T) {
-	// A backend has no view of anybody but its own players and no UUIDs at
-	// all, so a roster from one is a bug in an agent rather than a state to
-	// store. Same rule, same reason, as ReportBackends.
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	r := New(clock.Now, 5*time.Second, clock.now)
 	r.Connect("pod-uid-1", RoleServer)
@@ -675,8 +603,6 @@ func TestARosterFromAServerAgentIsRefused(t *testing.T) {
 }
 
 func TestRosterIsScopedToItsNamespace(t *testing.T) {
-	// namespace comes from the authenticated identity at the call site, never
-	// from the message. This asserts the reader's half.
 	clock := &fakeClock{now: time.Unix(1000, 0)}
 	r := New(clock.Now, 5*time.Second, clock.now)
 	r.Connect("proxy-other", RoleProxy)
@@ -692,8 +618,6 @@ func TestRosterIsScopedToItsNamespace(t *testing.T) {
 }
 
 func TestAnAnnouncementIsKeptUnderTheNameTheIdentityGave(t *testing.T) {
-	// The server names itself from its authenticated identity and never from
-	// the message, which is what makes this key safe to publish under.
 	r := New(time.Now, time.Second, time.Now())
 	r.Connect("pod-a", RoleServer)
 
@@ -708,16 +632,13 @@ func TestAnAnnouncementIsKeptUnderTheNameTheIdentityGave(t *testing.T) {
 	if got["lobby-a"].State != "running" || got["lobby-a"].Attributes["map"] != "arena" {
 		t.Errorf("announcements = %+v, want what lobby-a said", got)
 	}
-	// Scoped to a namespace, like everything else a network can see.
 	if len(r.Announcements("other")) != 0 {
 		t.Errorf("another namespace sees %+v", r.Announcements("other"))
 	}
 }
 
 func TestAnAnnouncementReplacesItsPredecessorWhole(t *testing.T) {
-	// Not merged. An attribute could otherwise never be taken back without a
-	// second verb for taking it back, and the first typo would sit on that
-	// server's description for the life of the pod.
+	// Not merged: otherwise an attribute could never be taken back.
 	r := New(time.Now, time.Second, time.Now())
 	r.Connect("pod-a", RoleServer)
 
@@ -740,9 +661,6 @@ func TestAnAnnouncementReplacesItsPredecessorWhole(t *testing.T) {
 }
 
 func TestAnAnnouncementIsNotAliasedToTheCallersMap(t *testing.T) {
-	// The map arrives inside a message the caller still owns, and this one
-	// outlives the call: a stored alias would change under every reader in the
-	// namespace when the caller reused its builder.
 	r := New(time.Now, time.Second, time.Now())
 	r.Connect("pod-a", RoleServer)
 
@@ -753,7 +671,6 @@ func TestAnAnnouncementIsNotAliasedToTheCallersMap(t *testing.T) {
 	if got := r.Announcements("ns")["lobby-a"].Attributes["map"]; got != "arena" {
 		t.Errorf("map = %q, want the value as it was announced", got)
 	}
-	// And the copy handed out is not the stored one either.
 	handed := r.Announcements("ns")["lobby-a"].Attributes
 	handed["map"] = "mutated"
 	if got := r.Announcements("ns")["lobby-a"].Attributes["map"]; got != "arena" {
@@ -762,9 +679,6 @@ func TestAnAnnouncementIsNotAliasedToTheCallersMap(t *testing.T) {
 }
 
 func TestAnAnnouncementOutlivesADisconnect(t *testing.T) {
-	// A renewal is make-before-break and a reconnect is seconds. A description
-	// that blanked in between would read, to every other agent in the
-	// namespace, as a server that had changed its mind.
 	r := New(time.Now, time.Second, time.Now())
 	r.Connect("pod-a", RoleServer)
 	_ = r.ReportAnnouncement("pod-a", "ns", "lobby-a", Announcement{State: "running"})
@@ -777,8 +691,6 @@ func TestAnAnnouncementOutlivesADisconnect(t *testing.T) {
 }
 
 func TestAProxyCannotAnnounce(t *testing.T) {
-	// A network's picture has a record per server and none per proxy, so an
-	// announcement from a proxy would be stored where nothing could read it.
 	r := New(time.Now, time.Second, time.Now())
 	r.Connect("proxy-a", RoleProxy)
 
@@ -801,9 +713,6 @@ func TestAnAnnouncementNeedsALiveStream(t *testing.T) {
 }
 
 func TestAServerTakesPlayersUntilItSaysOtherwise(t *testing.T) {
-	// The default that cannot surprise anybody: a network whose agents predate
-	// the verb, and an operator that has just restarted, both go on routing
-	// exactly as they did.
 	r := New(time.Now, time.Second, time.Now())
 
 	if !r.Lookup("nobody-has-heard-of-this-pod").AcceptingJoins {
@@ -817,8 +726,7 @@ func TestAServerTakesPlayersUntilItSaysOtherwise(t *testing.T) {
 }
 
 func TestAServerCanCloseItsDoorAndOpenItAgain(t *testing.T) {
-	// Both directions, because the point of this verb rather than a retire is
-	// that there is a way back.
+	// Both directions: unlike a retire, this verb has a way back.
 	r := New(time.Now, time.Second, time.Now())
 	r.Connect("pod-a", RoleServer)
 
@@ -855,8 +763,6 @@ func TestReportAcceptJoinsSaysWhenTheDoorMoved(t *testing.T) {
 }
 
 func TestAClosedDoorOutlivesADisconnect(t *testing.T) {
-	// A renewal is make-before-break and a reconnect is seconds. A door that
-	// swung open in between would put players into a round that had started.
 	r := New(time.Now, time.Second, time.Now())
 	r.Connect("pod-a", RoleServer)
 	_, _ = r.ReportAcceptJoins("pod-a", "ns", false, false)
@@ -891,8 +797,7 @@ func TestARoundEndIsRememberedAfterTheStreamDrops(t *testing.T) {
 		t.Errorf("after the round ended: %+v", got)
 	}
 
-	// The pod stops; the word has to outlive its stream, because the phase
-	// that reads it only runs once the pod is terminal.
+	// The phase that reads it only runs once the pod is terminal.
 	r.Disconnect("pod-a")
 	if got := r.Lookup("pod-a").RoundEnded; !got {
 		t.Error("the round end was forgotten when the stream dropped")
@@ -933,8 +838,6 @@ func TestClosedDoorsOmitsAServerNothingIsKnownAbout(t *testing.T) {
 }
 
 func TestClosedDoorsSurvivesASameUIDDisconnect(t *testing.T) {
-	// Mirrors TestAClosedDoorOutlivesADisconnect at the ClosedDoors reader:
-	// a renewal of the same pod must not be read as a reopened door.
 	r := New(time.Now, time.Second, time.Now())
 	r.Connect("pod-a", RoleServer)
 	_, _ = r.ReportAcceptJoins("pod-a", "ns", false, false)
@@ -947,12 +850,6 @@ func TestClosedDoorsSurvivesASameUIDDisconnect(t *testing.T) {
 }
 
 func TestClosedDoorsIsKeyedByPodNotByServerName(t *testing.T) {
-	// A persistent server keeps its name across a pod restart; this
-	// registry does not. The old pod's entry survives the restart until
-	// the orphan sweep forgets it, so a reader asking "is lobby-a's door
-	// shut" has to name the pod it means, not the server -- otherwise the
-	// old pod's closed door reads as the new pod's, minutes after the new
-	// one reopened it.
 	r := New(time.Now, time.Second, time.Now())
 	r.Connect("old-pod", RoleServer)
 	_, _ = r.ReportAcceptJoins("old-pod", "ns", false, false)
@@ -978,7 +875,6 @@ func TestAnUnknownPodIsMeasuredFromWhenAgentsCouldReachTheOperator(t *testing.T)
 	if got := r.Lookup("never-seen").StreamDownFor; got != 3*time.Second {
 		t.Errorf("StreamDownFor = %v, want 3s since serving began, not 23s since the process started", got)
 	}
-	// Marked once: a second call must not restart the clock.
 	r.MarkServing()
 	clock.Advance(time.Second)
 	if got := r.Lookup("never-seen").StreamDownFor; got != 4*time.Second {

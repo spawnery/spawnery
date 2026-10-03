@@ -26,8 +26,6 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
-// allowScheduling rewrites the fixture network's policy and returns once the
-// API server has it.
 func (f *fixture) allowScheduling(t *testing.T, policy *spawneryv1alpha1.SchedulingPolicy) {
 	t.Helper()
 	net := &spawneryv1alpha1.Network{}
@@ -40,9 +38,6 @@ func (f *fixture) allowScheduling(t *testing.T, policy *spawneryv1alpha1.Schedul
 	}
 }
 
-// The boundary docs/explanation/network-boundaries.md claims: a group author cannot put
-// a pod where the Network's owner did not say it may go. Before this check a
-// toleration on a control-plane taint was copied into the pod as written.
 func TestAGroupIsRefusedTheSchedulingItsNetworkDoesNotAllow(t *testing.T) {
 	f := newFixture(t)
 	arena := &spawneryv1alpha1.ServerGroup{
@@ -90,7 +85,6 @@ func TestAGroupIsRefusedTheSchedulingItsNetworkDoesNotAllow(t *testing.T) {
 		}
 	}
 
-	// The Network's owner allows the key, and the same spec is accepted.
 	f.allowScheduling(t, &spawneryv1alpha1.SchedulingPolicy{
 		AllowedTolerationKeys: []string{"node-role.kubernetes.io/control-plane"},
 		HostPortRange:         &spawneryv1alpha1.PortRange{Min: 1, Max: 65535},

@@ -16,9 +16,8 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// stubReader answers every Get with the same secret or the same error, which
-// is what makes Forbidden testable at all: a test running against envtest holds
-// admin credentials and can never be denied.
+// stubReader makes Forbidden testable: envtest holds admin credentials and is
+// never denied.
 type stubReader struct {
 	secret *corev1.Secret
 	err    error
@@ -47,9 +46,7 @@ func secretsResource() schema.GroupResource {
 	return schema.GroupResource{Resource: "secrets"}
 }
 
-// Each read outcome has its own remedy, so each gets its own reason. A single
-// "could not read it" would send a user with a typo and a user with a missing
-// RoleBinding to the same place.
+// Each outcome has its own remedy, so each gets its own reason.
 func TestReadForwardingSecretNamesEachOutcome(t *testing.T) {
 	net := testNetworkForSecret()
 
@@ -118,8 +115,8 @@ func TestReadForwardingSecretNamesEachOutcome(t *testing.T) {
 	}
 }
 
-// The Forbidden message is the only place an administrator learns that an
-// install step was skipped, so it has to name the manifest.
+// The message is the only place an administrator learns an install step was
+// skipped.
 func TestForbiddenNamesTheManifestToApply(t *testing.T) {
 	got := readForwardingSecret(context.Background(),
 		stubReader{err: apierrors.NewForbidden(secretsResource(), "fwd", nil)}, testNetworkForSecret())
@@ -163,17 +160,14 @@ func TestForwardingStampsSkipTerminatingPods(t *testing.T) {
 	}
 }
 
-// A failed Server keeps its pod for spec.failedRetentionSeconds — an hour by
-// default — and that pod carries no DeletionTimestamp. Counting it would hold
-// RotationPending at True for the whole retention window after a rotation that
-// is otherwise complete, and name its group as work still to do.
+// A failed Server keeps its pod, without a DeletionTimestamp, for
+// failedRetentionSeconds; counting it would hold RotationPending at True.
 func TestForwardingStampsSkipTerminalPods(t *testing.T) {
 	failed := stampPod("survival", podspec.RoleServer, "aaaa", false)
 	failed.Status.Phase = corev1.PodFailed
 
-	// The container the crash-loop check reads is podspec.ContainerName; a
-	// restart count below MaxContainerRestarts, or any other container name,
-	// does not trip it.
+	// Only podspec.ContainerName at MaxContainerRestarts or more trips the
+	// crash-loop check.
 	looping := stampPod("minigames", podspec.RoleServer, "aaaa", false)
 	looping.Status.Phase = corev1.PodRunning
 	looping.Status.ContainerStatuses = []corev1.ContainerStatus{
@@ -262,9 +256,7 @@ func TestRotationConditionFollowsItsPrecedence(t *testing.T) {
 	}
 }
 
-// The message is read by somebody about to execute the roll, so it lists the
-// work in the order they are to do it: every server group before every proxy
-// group, each sorted by name.
+// The reader executes the roll in this order.
 func TestRotationMessageListsServersBeforeProxies(t *testing.T) {
 	read := forwardingRead{Hash: "aaaa", Status: metav1.ConditionTrue, Reason: spawneryv1alpha1.ReasonSecretResolved}
 	got := rotationCondition(read, forwardingStamps([]corev1.Pod{
@@ -282,14 +274,7 @@ func TestRotationMessageListsServersBeforeProxies(t *testing.T) {
 	}
 }
 
-// A group answering for itself, in the same vocabulary its Network uses.
-//
-// The Network carries the fleet sum and names which groups are behind, in a
-// message; until now that message was the only place the information existed,
-// so `kubectl get servergroup` said nothing about a rotation and a per-group
-// alert had to parse a string. This is the group's own answer, and it follows
-// the same precedence for the same reason — a known problem outranks an
-// unknown one.
+// A known problem outranks an unknown one, as on the Network.
 func TestAGroupAnswersForItsOwnPods(t *testing.T) {
 	for _, tc := range []struct {
 		name        string
@@ -299,10 +284,8 @@ func TestAGroupAnswersForItsOwnPods(t *testing.T) {
 		wantReason  string
 	}{
 		{
-			// Strictly downstream of the Network's own report: the group
-			// controllers hold no reader for the secret and no grant on it, so
-			// a network that published no digest leaves every group in it
-			// saying so rather than guessing.
+			// The group controllers hold no reader for the secret, so they
+			// cannot guess.
 			name:        "no digest published means the group cannot tell",
 			networkHash: "",
 			pods:        []corev1.Pod{stampPod("lobby", podspec.RoleServer, "bbbb", false)},
@@ -334,17 +317,13 @@ func TestAGroupAnswersForItsOwnPods(t *testing.T) {
 			wantReason:  spawneryv1alpha1.ReasonForwardingSecretInSync,
 		},
 		{
-			// A group with no pods at all is in sync by having nothing that
-			// is not: a parked persistent group must not read as pending.
+			// A parked persistent group must not read as pending.
 			name:        "no pods at all",
 			networkHash: "aaaa",
 			wantStatus:  metav1.ConditionFalse,
 			wantReason:  spawneryv1alpha1.ReasonForwardingSecretInSync,
 		},
 		{
-			// forwardingStamps drops it, and this is here so that rule is
-			// pinned on the group path too: a pod on its way out must not hold
-			// the report open after the replacement that fixes it exists.
 			name:        "a terminating pod does not hold the report open",
 			networkHash: "aaaa",
 			pods: []corev1.Pod{

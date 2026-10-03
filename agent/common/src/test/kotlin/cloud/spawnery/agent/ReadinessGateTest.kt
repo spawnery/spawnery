@@ -59,8 +59,7 @@ class ReadinessGateTest {
 
     @Test
     fun `a hold taken after the gate opened changes nothing`() {
-        // Readiness is a one-way latch: ServerState.markReady cannot be
-        // cleared, so a late hold must not pretend it can.
+        // ServerState.markReady cannot be cleared.
         val (gate, opened) = counting()
         gate.serverLoaded()
         gate.hold("too late").close()

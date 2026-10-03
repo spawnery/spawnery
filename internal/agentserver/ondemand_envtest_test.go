@@ -35,18 +35,10 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// One test per bound, each asserting which one fired, and each reading the
-// cluster back afterwards where the verb writes: an answer is not evidence
-// that anything was created or deleted, and the two failure modes -- saying
-// yes without writing, and writing without saying so -- are both invisible to
-// a test that only inspects the response.
+// Every test reads the cluster back where the verb writes: an answer is not evidence
+// that anything was created or deleted.
 
-// askOverTheWire asks on a real proxy stream and returns the answer.
-//
-// A proxy session and not a server one: the plugin that starts and stops
-// private servers runs on a proxy, so that is where these requests come from.
-// The request's id is this helper's, because every caller wants the same
-// thing from it -- the answer to the ask it just made.
+// A proxy session: the plugin that starts and stops private servers runs on a proxy.
 func askOverTheWire(
 	t *testing.T, f *serverFixture, pod *corev1.Pod, req *agentpb.CloudRequest,
 ) *agentpb.CloudResponse {
@@ -158,15 +150,9 @@ func setPhase(t *testing.T, f *serverFixture, srv *spawneryv1alpha1.Server, p ph
 	}
 }
 
-// holdWhileStopping puts the drain finalizer on a member, so that a stop
-// leaves the object behind with a deletion timestamp instead of removing it
-// at once.
-//
-// That is what a stop does in a live cluster -- the Server controller holds
-// the object until the players on it have been moved -- and envtest runs no
-// controller, so without this the whole stopping window is a state these
-// tests could never reach. The finalizer is taken off again at cleanup, or
-// the namespace would never finish deleting.
+// holdWhileStopping adds the drain finalizer the Server controller would hold in a live
+// cluster, so a stop leaves the member Terminating; envtest runs no controller. Cleanup
+// removes it, or the namespace never finishes deleting.
 func holdWhileStopping(t *testing.T, f *serverFixture, name string) {
 	t.Helper()
 	srv := member(t, f, name)
@@ -202,7 +188,6 @@ func TestStartCreatesTheMemberAndEchoesItsName(t *testing.T) {
 		t.Fatal("already_running on the first start")
 	}
 
-	// An answer is not evidence that anything was written.
 	srv := member(t, f, "private-servers-c0ffee")
 	if srv.Spec.Key != "c0ffee" {
 		t.Errorf("spec.key = %q, want c0ffee", srv.Spec.Key)
@@ -210,7 +195,6 @@ func TestStartCreatesTheMemberAndEchoesItsName(t *testing.T) {
 	if srv.Spec.GroupRef.Name != "private-servers" {
 		t.Errorf("spec.groupRef = %q", srv.Spec.GroupRef.Name)
 	}
-	// Owned by its group, so deleting the group takes its members with it.
 	if len(srv.OwnerReferences) != 1 || srv.OwnerReferences[0].Kind != "ServerGroup" {
 		t.Errorf("ownerReferences = %+v, want the group", srv.OwnerReferences)
 	}
@@ -249,7 +233,6 @@ func TestStartRefusesPastTheCeiling(t *testing.T) {
 	if resp.GetError().GetReason() != agentpb.RequestError_REFUSED {
 		t.Fatalf("reason = %v, want REFUSED", resp.GetError().GetReason())
 	}
-	// And the refusal is a refusal: nothing was created past the ceiling.
 	var srv spawneryv1alpha1.Server
 	if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "private-servers-two"},
 		&srv); err == nil {
@@ -257,9 +240,7 @@ func TestStartRefusesPastTheCeiling(t *testing.T) {
 	}
 }
 
-// A member whose run is over holds no slot. Counting it would make a group
-// drift closed as its players' servers ended, and the owner of the next key
-// would be refused by servers nobody is on.
+// Counting a finished member would let a group drift closed under servers nobody is on.
 func TestAMemberWhoseRunIsOverDoesNotHoldASlot(t *testing.T) {
 	f := newServerFixture(t)
 	makeOnDemandGroup(t, f, "private-servers", 1)
@@ -275,9 +256,8 @@ func TestAMemberWhoseRunIsOverDoesNotHoldASlot(t *testing.T) {
 	member(t, f, "private-servers-two")
 }
 
-// The same key again after its run ended starts a fresh member rather than
-// reporting the corpse: its world is on the claim, and refusing here would
-// leave the owner waiting out a retention they cannot see.
+// Its world is on the claim; refusing would make the owner wait out a retention they
+// cannot see.
 func TestStartReplacesAMemberWhoseRunIsOver(t *testing.T) {
 	f := newServerFixture(t)
 	makeOnDemandGroup(t, f, "private-servers", 2)
@@ -299,13 +279,8 @@ func TestStartReplacesAMemberWhoseRunIsOver(t *testing.T) {
 	}
 }
 
-// Ruling: a member carrying a deletion timestamp is not already running.
-//
-// A stop leaves the object alive while its players are moved. Answering
-// "already running" for it would tell a player's plugin the server is up
-// while it is on its way out, and the plugin would send them there. It is
-// UNAVAILABLE rather than REFUSED because the very same request succeeds once
-// the member is gone.
+// Answering "already running" would send players to a member on its way out.
+// UNAVAILABLE, not REFUSED: the same request succeeds once the member is gone.
 func TestStartOnAStoppingMemberIsUnavailable(t *testing.T) {
 	f := newServerFixture(t)
 	makeOnDemandGroup(t, f, "private-servers", 2)
@@ -328,10 +303,8 @@ func TestStartOnAStoppingMemberIsUnavailable(t *testing.T) {
 	}
 }
 
-// The corpse of a terminal member is deleted and then in the way: its own
-// drain finalizer holds the object until the controller lets go. The fresh
-// member cannot be created yet, and the caller is told to ask again rather
-// than told the dead one is theirs.
+// The corpse's own drain finalizer holds it until the controller lets go, so the caller
+// is told to ask again rather than handed the dead member.
 func TestStartBehindALingeringCorpseIsUnavailable(t *testing.T) {
 	f := newServerFixture(t)
 	makeOnDemandGroup(t, f, "private-servers", 2)
@@ -351,11 +324,8 @@ func TestStartBehindALingeringCorpseIsUnavailable(t *testing.T) {
 	}
 }
 
-// Two group names and two keys can compose one server name: on-demand group
-// "a" with key "b-xyz" composes exactly what ephemeral group "a-b" calls its
-// member "a-b-xyz". No race is needed, and the answer must not be
-// already_running -- a plugin told that sends its player to a server that is
-// not theirs, which here is a lobby.
+// On-demand group "a" with key "b-xyz" composes exactly what ephemeral group "a-b" names
+// its member "a-b-xyz"; already_running would send the player to that lobby.
 func TestStartRefusesANameAnotherGroupsServerAlreadyHas(t *testing.T) {
 	f := newServerFixture(t)
 	makeOnDemandGroup(t, f, "a", 2)
@@ -379,7 +349,6 @@ func TestStartRefusesANameAnotherGroupsServerAlreadyHas(t *testing.T) {
 		t.Fatalf("answered with a server: %+v", resp.GetStartServer())
 	}
 
-	// And the other group's server is untouched: neither adopted nor deleted.
 	held := member(t, f, "a-b-xyz")
 	if held.Spec.GroupRef.Name != "a-b" || held.Spec.Key != "" {
 		t.Errorf("the lobby server was rewritten: groupRef=%q key=%q",
@@ -390,9 +359,7 @@ func TestStartRefusesANameAnotherGroupsServerAlreadyHas(t *testing.T) {
 	}
 }
 
-// A server of this group whose key does not compose its own name is not the
-// member the caller asked for, however its name reads. No operator write
-// produces one; an admin or another controller can.
+// No operator write produces such a server; an admin or another controller can.
 func TestStartRefusesAMemberOfThisGroupWhoseKeyDoesNotComposeItsName(t *testing.T) {
 	f := newServerFixture(t)
 	makeOnDemandGroup(t, f, "private-servers", 2)
@@ -425,10 +392,8 @@ func TestStartRefusesAMemberOfThisGroupWhoseKeyDoesNotComposeItsName(t *testing.
 	}
 }
 
-// A ceiling held by a member that is already leaving is a bound that clears
-// by itself, so it is UNAVAILABLE and not REFUSED. REFUSED tells a plugin not
-// to send the same request again, and here asking again shortly is exactly
-// what works.
+// A ceiling held by a leaving member clears by itself, so UNAVAILABLE: REFUSED would
+// tell the plugin not to ask again, and asking again shortly is what works.
 func TestStartIsUnavailableWhileTheCeilingIsHeldByAMemberThatIsGoing(t *testing.T) {
 	f := newServerFixture(t)
 	makeOnDemandGroup(t, f, "private-servers", 1)
@@ -463,9 +428,7 @@ func TestStartRefusesAGroupThatIsNotOnDemand(t *testing.T) {
 	}
 }
 
-// A key that cannot be part of a name is REFUSED and not NOT_FOUND: the
-// caller has to be able to tell "your key is wrong" from "your group is not
-// here", because only one of the two is theirs to fix.
+// REFUSED, not NOT_FOUND: a bad key is the caller's to fix, a missing group is not.
 func TestStartRefusesAKeyNoNameCanBeBuiltFrom(t *testing.T) {
 	f := newServerFixture(t)
 	makeOnDemandGroup(t, f, "private-servers", 2)
@@ -487,10 +450,8 @@ func TestStartOnAGroupThisNetworkDoesNotHaveIsNotFound(t *testing.T) {
 	}
 }
 
-// The other half of the audit in §3.7: the boost headroom check refuses
-// anything that is not an ephemeral group with scaling, and a third type must
-// not slip past it into a ScaleBoost that is created, counted, and changes
-// nothing.
+// The boost headroom check must refuse a third group type too, or the ScaleBoost is
+// created, counted, and changes nothing.
 func TestBoostRefusesAnOnDemandGroup(t *testing.T) {
 	f := newServerFixture(t)
 	makeOnDemandGroup(t, f, "private-servers", 2)

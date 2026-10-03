@@ -76,10 +76,8 @@ type ServerGroupReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
 
-	// Agents is the runtime state reported by the in-game agents.
 	Agents *agent.Registry
-	// Clock is injectable so the time rules are testable.
-	Clock func() time.Time
+	Clock  func() time.Time
 	// Expectations reserves the creates and deletes this reconciler has issued
 	// and the cache has not shown yet. One instance is shared across groups.
 	Expectations *expectations
@@ -87,44 +85,26 @@ type ServerGroupReconciler struct {
 	// count.
 	DrainTaintKeys []string
 
-	// AllowPluginVolumes is Options.AllowPluginVolumes -- an operational
-	// switch and not a security boundary. See that field.
+	// AllowPluginVolumes is Options.AllowPluginVolumes.
 	AllowPluginVolumes bool
 
-	// AllowFileVolumes is Options.AllowFileVolumes -- an operational switch
-	// and not a security boundary. See that field.
+	// AllowFileVolumes is Options.AllowFileVolumes.
 	AllowFileVolumes bool
 
-	// AllowMountVolumes is Options.AllowMountVolumes -- an operational switch
-	// and not a security boundary. See that field.
+	// AllowMountVolumes is Options.AllowMountVolumes.
 	AllowMountVolumes bool
 
 	// ClaimReader reads a group's spec.extraPlugins claim, and it must be
-	// uncached.
-	//
-	// **The manager's cache holds only PersistentVolumeClaims carrying our own
-	// managed-by label** -- see the ByObject restriction in
-	// cmd/spawnery-operator/main.go, whose comment already warns that a claim
-	// missing the label is invisible through it. A plugin claim is created by
-	// an administrator and carries no label of ours, so the cached client
-	// answers NotFound for one that is plainly there -- and the refusal then
-	// says "does not exist in this namespace", which sends somebody looking
-	// for an object they can see with kubectl.
-	//
-	// No test catches this: envtest's client is not cache-restricted the same
-	// way, so the mistake is invisible until a real cluster. Labelling the
-	// claim would be wrong twice over -- it is not our object, and the orphan
-	// sweep deletes by that label.
+	// uncached: the manager's cache holds only claims carrying our managed-by
+	// label (cmd/spawnery-operator/main.go), and an administrator's plugin claim
+	// does not. envtest does not restrict its cache, so no test catches this.
 	ClaimReader client.Reader
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups,verbs=get;list;watch
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups/status,verbs=update
-// Create arrived with its caller: /cloud boost is the thing that makes one, and
-// until it existed a grant here would have been one nobody could justify when
-// they found it. Still no update -- nothing edits a boost, and an edit would be
-// a second way to change a group's floor with none of the expiry that makes the
-// first one safe.
+// No update on scaleboosts: an edit would change a group's floor without the
+// expiry that makes a boost safe.
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=scaleboosts,verbs=get;list;watch;create;delete
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups/finalizers,verbs=update
 // +kubebuilder:rbac:groups=policy,resources=poddisruptionbudgets,verbs=get;list;watch;create;update
@@ -137,19 +117,14 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	group := &spawneryv1alpha1.ServerGroup{}
 	if err := r.Get(ctx, req.NamespacedName, group); err != nil {
 		if apierrors.IsNotFound(err) {
-			// No ServerGroup finalizer exists, so a deleted group is gone from
-			// the API server before any reconcile can observe its deletion
-			// timestamp. This is the only path most deletions take, and without
-			// it a group's reservations outlive it for the life of the process:
-			// expectationTTL is applied inside observe, and observe is only
-			// ever called for a group that still exists.
+			// No ServerGroup finalizer exists, so most deletions are only seen as
+			// NotFound, and observe never runs again to expire the reservations.
 			r.Expectations.forget(req.Namespace + "/" + req.Name)
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !group.DeletionTimestamp.IsZero() {
-		// The Server objects are owned by the group; Kubernetes garbage
-		// collection cascades, and each Server drains through its finalizer.
+		// Owned Servers cascade and drain through their own finalizers.
 		r.Expectations.forget(group.Namespace + "/" + group.Name)
 		return ctrl.Result{}, nil
 	}
@@ -163,17 +138,10 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 		networkFound = false
 	}
-	// A Network that exists is not automatically usable: it also has to have
-	// won the Network controller's one-per-namespace contest. A Network that
-	// lost that contest, or one that simply has not been reconciled yet,
-	// reads the same way here — Accepted is not set to true — and both are
-	// self-healing through the requeue below, so there is no need to tell
-	// them apart.
+	// A Network must also have won the one-per-namespace contest; a loser and
+	// one not yet reconciled read the same here and both heal on requeue.
 	networkUsable := networkFound && meta.IsStatusConditionTrue(network.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
 
-	// Read before the switch, like networkUsable above it, so the chain below
-	// stays a list of plain conditions rather than a call with side effects
-	// hidden in a case expression.
 	volumeReason, volumeMessage, volumesOK := checkGroupVolumes(
 		ctx, r.ClaimReader, group.Namespace,
 		group.Spec.ExtraPlugins, group.Spec.ExtraFiles, group.Spec.Mounts,
@@ -185,8 +153,6 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			group.Status.Conditions, volumeReason, volumeMessage, volumesOK)
 	}
 
-	// Only meaningful once the Network is there; the switch below reaches
-	// this case after the Network ones, so a nil network is never asked.
 	schedulingMessage, schedulingOK := "", true
 	if networkFound {
 		schedulingMessage, schedulingOK = podspec.SchedulingRefusal(network,
@@ -215,17 +181,11 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			Message: networkNotAcceptedMessage(network),
 		})
 		requeue = networkRetryInterval
-	// After the two network cases on purpose. A group whose Network is missing
-	// has a bigger problem than a volume, and reporting the smaller one first
-	// would send somebody to their storage while the real cause sits one
-	// condition away.
+	// After the network cases: a missing Network is the bigger problem.
 	case !volumesOK:
 		logger.Info("volume unusable, no servers are created for this group",
 			"group", group.Name, "reason", volumeReason)
-		// Announced on the transition only, following the rule
-		// network_controller.go states: this branch runs on every pass for as
-		// long as the claim is wrong, and an event per resync forever is not a
-		// report, it is noise that buries the one that mattered.
+		// Announced on the transition only; this branch runs every pass.
 		if !hasConditionReason(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted, volumeReason) {
 			r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, volumeReason, actionSyncStatus,
 				"%s", volumeMessage)
@@ -260,21 +220,11 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		})
 	}
 
-	// Rendered before anything that can create a Server, and unconditionally —
-	// not gated on networkUsable, because the ConfigMap has nothing to do with
-	// the Network, and a spec.maxPlayers edit has to reach it even on a
-	// resync that creates no new server. A pod's projected volume names this
-	// ConfigMap by group (podspec.GroupConfigMapName), so it must exist
-	// before the first pod; failing here returns before createServer runs,
-	// which is what makes that a guarantee and not just where the calls
-	// happen to be written.
-	// A foreign ConfigMap at the rendered name stops this group creating
-	// servers, and nothing else: the pass goes on, because the budget and a
-	// departing node do not depend on who owns a ConfigMap, and returning
-	// here used to freeze minAvailable while the occupied labels moved on.
-	// The Degraded condition is written with the others below, where the
-	// backoff would otherwise overwrite it. Requeued rather than left to a
-	// watch: the colliding object carries no owner reference back here.
+	// Not gated on the Network: a spec.maxPlayers edit must reach the ConfigMap
+	// even on a pass that creates nothing, and every pod mounts it by name, so it
+	// must exist before the first one. A foreign ConfigMap at that name stops only
+	// creation; the budget and condemnation go on. Requeued, since the colliding
+	// object has no owner reference back here.
 	foreignConfigMap := false
 	if err := r.reconcileConfigMap(ctx, group); err != nil {
 		if !errors.Is(err, errForeignConfigMap) {
@@ -289,97 +239,30 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		return ctrl.Result{}, err
 	}
 
-	// Carries the node names collectViews already resolved (ServerView.NodeName)
-	// for every view it found condemned, rather than asking nodeDeparting about
-	// any pod again here. No event accompanies this: condemn(), reached from
-	// size() below, already emits one NodeDraining event per server it
-	// condemns, and a second event tied to this condition's own transition
-	// would report the same occasion twice.
-	//
-	// This condition and that condemnation are computed from the same
-	// Condemned flags on the same views, and size() is now called whether or
-	// not the group's Network is usable — so a node named here is one whose
-	// servers this group has actually condemned, on this pass or on an
-	// earlier one whose reservation is still standing. That was not true
-	// before: a group with a broken Network published this condition naming
-	// the node and condemned nobody, ever, which left kubectl drain hanging on
-	// the strength of a status saying the operator was on it.
+	// No event here: condemn() already emits one NodeDraining event per server.
 	drainingNodes := make([]string, 0, len(views))
 	for _, v := range views {
 		if v.Condemned {
 			drainingNodes = append(drainingNodes, v.NodeName)
 		}
 	}
-	// Published below rather than here, once the backoff is known: the
-	// condition carries whether this group can replace what it condemns, and
-	// that is two facts -- networkUsable, settled above, and backoff.MayCreate,
-	// settled by DecideBackoff further down. See blockedReplacement.
+	// Published below, once the backoff is known; see blockedReplacement.
 
-	// The Network gate, and the rule for deciding which side of it a step
-	// belongs on. The next person adding a step here needs the rule, not just
-	// the list.
+	// Sizing needs a usable Network, mountable claims, allowed scheduling and our
+	// own ConfigMap; a Server created without them would never get a working pod
+	// and would be replaced over and over.
 	//
-	// Sizing needs a usable Network: a Server created without one could never
-	// get a pod, would run into its startup deadline and would be replaced
-	// over and over. That holds whether the Network is missing entirely or
-	// merely not accepted (lost the one-per-namespace contest, or has not been
-	// reconciled yet). The deletes and retirements are the other half of the
-	// same arithmetic and wait with it.
-	//
-	// The rule for everything else: a step that keeps the eviction API off an
-	// occupied pod, or that moves players off a node that is going away, does
-	// not depend on the Network. Both are about players who are already
-	// connected, and a rejected group holding players is still holding
-	// players. Two steps answer to that rule, and both run whatever the
-	// Network is doing: the PodDisruptionBudget below, and the condemnation of
-	// the servers on a departing node — which is why size() now runs on every
-	// pass regardless of this flag, branching internally on the mayResize it
-	// is given rather than being skipped from the call site. The published
-	// status is below the line too, but for the plainer reason that it reports
-	// what those two did. Design §3.3 calls condemnation "unconditional. The
-	// node is leaving with or without our consent", and a group that published
-	// NodeDraining: True, condemned nothing and hung kubectl drain forever
-	// would be the hang §1 of that design opens by describing.
-	//
-	// The counter-argument is real, and is answered rather than left implicit:
-	// a group whose Network is broken cannot build replacements, so condemning
-	// means running below capacity. That is accepted. The group was already in
-	// that state; its players are evicted off that node regardless of what the
-	// group thinks; and moving them to a fallback group beats holding them on
-	// a node that is going away. It is the same direction already settled for
-	// the create-backoff case: a group in create-backoff condemns without
-	// replacing, for the same reason.
-	//
-	// The group's type is not part of this flag, and that is the second half of
-	// the same rule. The Network gates sizing of either kind, because neither
-	// kind can render a pod without one; the type selects *which* rule sizes
-	// the group — the spare-slot rule for an ephemeral group, spec.replicas for
-	// a persistent one — and size() branches on it internally. A persistent
-	// group's servers are condemned on the way through either way: a
-	// departing node takes a server regardless of what kind of server it is.
-	// And not only networkUsable. A group whose claim -- spec.extraPlugins or
-	// one named by spec.mounts -- cannot be mounted must not create servers
-	// either: every pod would sit Pending on a volume that will not attach,
-	// and the group would look like a scheduling problem rather than a spec
-	// one. Setting the condition without this would decorate the group and
-	// change nothing it does.
+	// The rule for other steps: whatever keeps the eviction API off an occupied
+	// pod, or moves players off a departing node, does not depend on the Network.
+	// So the PodDisruptionBudget and condemnation run on every pass, and size()
+	// branches on mayResize internally. Condemning without being able to rebuild
+	// means running below capacity; that is accepted, the node evicts the players
+	// regardless.
 	mayResize := networkUsable && volumesOK && schedulingOK && !foreignConfigMap
 
-	// Gated the same as sizing, on mayResize rather than a check of its own:
-	// BuildServerPod reads net.Spec.Defaults, and when the Network was never
-	// found net is the zero value, so a hash computed from it would not
-	// describe what the group renders once a real Network is usable. The
-	// found-but-not-accepted case does not strictly need this -- that net
-	// already carries the real spec -- but splitting it out would need its own
-	// branch on networkFound for a case sizing itself does not distinguish
-	// either, and reusing mayResize costs nothing: it self-heals the same way
-	// sizing does, on the next pass.
-	//
-	// Computed once per pass rather than once per server either way: a create
-	// loop that asked BuildServerPod once per server would render the same pod
-	// repeatedly for one identical answer. serverConfigValues is the one
-	// construction of the config document (see its own comment);
-	// DesiredServerHash is the digest of it plus the pod.
+	// Gated on mayResize: with no Network found, net is the zero value and the
+	// hash would not describe what the group renders later. Computed once per pass,
+	// not per server.
 	var podHash string
 	if mayResize {
 		configValues, err := serverConfigValues(group)
@@ -391,22 +274,16 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, err
 		}
 
-		// Adoption runs before sizing, for both group kinds since 7a: a server
-		// whose spec.podHash is still empty predates the field (ServerSpec.
-		// PodHash's doc comment is what says an empty value means adopt rather
-		// than stale), and this is the pass that gives it the current hash so
-		// a later comparison has one to compare against. It orders no takedown
-		// of its own -- staleSpec adopts a hashless view rather than nominating
-		// it -- so the stamp is the whole effect here.
+		// Adoption stamps the current hash on servers that predate spec.podHash;
+		// staleSpec never nominates a hashless view, so this orders no takedown.
 		if err := r.adoptServers(ctx, group, servers, podHash); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
 
-	// The streak belongs to the attempt -- what this group's servers start
-	// with, see attemptKey -- and is reset when that moves, by nothing else.
-	// lastFailureAt survives the reset: it is the watermark that keeps the
-	// previous attempt's corpse from being counted into the new streak.
+	// The streak belongs to the attempt (see attemptKey) and is reset only when
+	// that moves. lastFailureAt survives the reset, so the previous attempt's
+	// corpse is not counted into the new streak.
 	var lastFailure time.Time
 	if group.Status.LastFailureAt != nil {
 		lastFailure = group.Status.LastFailureAt.Time
@@ -447,23 +324,10 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		streakKey = currentKey
 	}
 	group.Status.FailureStreakKey = streakKey
-	// Only written when this pass actually counted something. CountFailures
-	// returns the timestamp it counted from unchanged when it counted nothing,
-	// including when a success reset the streak to zero — so what stays on the
-	// status is the watermark of the newest failure already counted, which is
-	// what keeps the count idempotent across a five-second resync. Clearing it
-	// on a reset would be the opposite of durable: the next pass would count
-	// from the zero time and every retained corpse again with it. Moving it
-	// forward to the success instead would be durable, but it would write a
-	// time at which nothing failed into a status field an operator reads as
-	// lastFailureAt. The residual edge — a corpse older than a success that has
-	// since left the views being counted once more — is bounded by how many
-	// corpses the group can be holding at all, and that number differs by
-	// type. For an ephemeral group it is what pruneFailed retains, which is
-	// one. pruneFailed does not run for a persistent group: there each corpse
-	// keeps its ordinal until its own failed retention elapses and the Server
-	// controller removes it, so the bound is one per ordinal, up to
-	// spec.replicas.
+	// Only written when this pass counted something: it is the watermark that
+	// keeps the count idempotent across resyncs. Clearing it on a reset would
+	// recount every retained corpse, and moving it to the success would publish a
+	// time at which nothing failed as lastFailureAt.
 	if !newestFailure.IsZero() {
 		stamped := metav1.NewTime(newestFailure)
 		group.Status.LastFailureAt = &stamped
@@ -474,19 +338,8 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		Now:                 r.Clock(),
 	})
 
-	// The NodeDraining condition, with what stops this group rebuilding what
-	// it is about to condemn.
-	//
-	// Condemnation is not gated on either of these -- deliberately, and the
-	// ruling holds: the players on a departing node are evicted off it
-	// whatever this group decides, so moving them to a fallback beats being
-	// kicked with nowhere chosen. What the ruling costs is capacity that
-	// cannot be rebuilt, and until now that cost was readable only by putting
-	// two conditions together.
-	//
-	// The Network is named first when both apply: it is the unbounded one, and
-	// a backoff window that will lift on its own is not the thing to report to
-	// somebody who has an unbounded wait as well.
+	// The NodeDraining condition, with what stops this group rebuilding what it
+	// condemns. The Network is named first: it is the unbounded wait.
 	blocked := blockedReplacement{}
 	switch {
 	case !networkUsable:
@@ -502,14 +355,8 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	meta.SetStatusCondition(&group.Status.Conditions,
 		drainingConditionBlocked(drainingNodes, blocked))
 
-	// Live boosts. Computed here rather than inside size() because two things
-	// read it: the sizing rule, and the status field that explains the number
-	// to whoever is looking at the group.
-	//
-	// A failed list is nought and a log line, not an error: a group that
-	// cannot read its boosts must still hold its declared floor, and refusing
-	// to size at all would turn a transient read failure into a group that
-	// stops replacing dead servers. The next pass tries again.
+	// A failed boost list sizes on the declared floor alone rather than failing
+	// the pass, so dead servers are still replaced.
 	var boost int32
 	boostList := &spawneryv1alpha1.ScaleBoostList{}
 	if err := r.List(ctx, boostList, client.InNamespace(group.Namespace)); err != nil {
@@ -548,11 +395,8 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			limited.Status = metav1.ConditionTrue
 			limited.Reason = spawneryv1alpha1.ReasonMaxReplicasReached
 			if decision.ColdStartBlocked {
-				// The cold-start-refused case: Wanted and Create are both 0,
-				// so the ordinary-shortfall message below would tell the
-				// operator nothing is needed — the opposite of the truth.
-				// The group is at its ceiling and the changeover cannot
-				// begin; raising maxReplicas by one is the way out.
+				// Wanted and Create are both 0 here, so the shortfall message would say
+				// nothing is needed.
 				limited.Message = fmt.Sprintf(
 					"changeover cannot begin: the group is already at maxReplicas %d; raise it by at least 1 to start the new generation",
 					group.Spec.Scaling.MaxReplicas)
@@ -568,15 +412,10 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			}
 		}
 		if !sized {
-			// Nothing was decided this pass, so the False above is the absence
-			// of a verdict rather than one. Saying "free slots cover the spare"
-			// here would assert something no code checked, and an all-clear
-			// event would announce it.
+			// Nothing was decided, so False is not a verdict.
 			limited.Message = "scaling is not being decided: the group's network is not usable"
 		}
-		// The event goes on the flank only. SetStatusCondition moves
-		// lastTransitionTime just on a change of status, so comparing across
-		// the call is what tells a transition from a resync.
+		// The event goes on the flank only.
 		was := meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionScalingLimited)
 		meta.SetStatusCondition(&group.Status.Conditions, limited)
 		if sized && decision.Limited != was {
@@ -588,30 +427,11 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	// StorageResize is the counterpart to ScalingLimited above for the group
-	// types that keep claims, persistent and on-demand: each condition
-	// belongs to the group type whose question it answers, and an ephemeral
-	// group has no claim for this one to be about -- group.Spec.Storage is
-	// not set on an ephemeral group, and growClaim in
-	// the Server controller is skipped outright for an ephemeral one, so
-	// every view's ResizeError here would read "" for an ephemeral group
-	// regardless.
-	//
-	// Nothing here talks to a claim directly: storageResizeCondition only
-	// reads ResizeError off the views collectViews already built, the same
-	// separation ResizePending's own comment describes. growClaim and its
-	// neighbour resizeConditionError, in the Server controller, are the ones
-	// that decided what each server's ResizeError says.
+	// StorageResize only for group types that keep claims.
 	if !group.IsEphemeral() {
 		resize := storageResizeCondition(views)
-		// The event goes on the flank only, the rule ScalingLimited above
-		// and BackingOff/Degraded below both follow. What differs here is
-		// which value is the interesting one to flank on: True is the
-		// healthy default for this condition, the reverse of those three, so
-		// what is compared is refusal (Status == False) rather than health —
-		// a group publishing this condition for the first time while every
-		// claim already matches its spec stays quiet instead of announcing
-		// an all-clear nobody asked about.
+		// Flanked on refusal rather than health: True is this condition's healthy
+		// default, and a first publish with every claim in step stays quiet.
 		wasRefused := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionStorageResize) != nil &&
 			!meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionStorageResize)
 		meta.SetStatusCondition(&group.Status.Conditions, resize)
@@ -626,45 +446,9 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	// BackingOff and Degraded belong to a group of either type, and the line
-	// between them and ScalingLimited above is what kind of question each
-	// answers. ScalingLimited is about capacity the players need: free slots
-	// against spec.scaling.spareSlots, and the maxReplicas ceiling that can
-	// stop the group covering them. A persistent group has no such question --
-	// its size is spec.replicas, a number nobody's play session moves -- so
-	// the condition stays inside the block above, where a reader looking for
-	// it will find it beside the rule it reports on.
-	//
-	// These two are about failures, and either kind of group can have those.
-	// The backoff already gated a persistent group's creates -- size() runs
-	// its CreateOrdinals loop under the same backoff.MayCreate as the
-	// ephemeral count -- so without them a persistent group backs off and
-	// gives up in silence, with nothing on its status saying why nothing is
-	// happening.
-	//
-	// Its likeliest failure is a claim that
-	// never binds, which no replacement can fix, because the world is on that
-	// volume and a rebuilt ordinal would only run at the same one. It does
-	// rebuild, slowly: nothing on the group's side removes a persistent server
-	// for having failed -- pruneFailed is ephemeral-only and
-	// DecidePersistentSize holds an ordinal in any phase, so the removals that
-	// do exist here are about other things, a lower spec.replicas or a
-	// departing node -- but the Server controller's failed-retention path
-	// takes the corpse away eventually, and the ordinal is created again on
-	// the next pass. So the attempts are spaced by spec.failedRetentionSeconds,
-	// an hour at the CRD default, against backoff windows of at most 160s
-	// before the threshold: at that default the waiting half of the backoff
-	// never delays an attempt, and what it contributes is the end of them --
-	// GaveUp at the threshold, after which the group stalls and waits for a
-	// human. Without these two conditions the verdict would be the part nobody
-	// could see: status.consecutiveFailures is counted for either type and
-	// would climb, but a number is not a verdict, and the phase would read
-	// Pending throughout, exactly like a slow start. With them the group says
-	// which of the two it is doing, and the give-up reaches derivePhase as
-	// Degraded -- which is the whole of what they do for a persistent group,
-	// and the whole of why they were lifted out.
-	//
-	// Both are built false-by-default and flipped, like ScalingLimited above.
+	// BackingOff and Degraded apply to every group type, unlike ScalingLimited:
+	// the backoff gates a persistent group's creates too, and without these it
+	// would give up in silence, its phase reading Pending like a slow start.
 	backingOff := metav1.Condition{
 		Type:    spawneryv1alpha1.ConditionBackingOff,
 		Status:  metav1.ConditionFalse,
@@ -684,24 +468,10 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		degraded.Reason = spawneryv1alpha1.ReasonConfigMapNotOurs
 		degraded.Message = foreignConfigMapMessage(group.Namespace, name)
 		backingOff.Message = "backoff is not being decided: the group cannot write its own configuration"
-	// Before !sized, deliberately.
-	//
-	// Both messages are true of a group that has given up while its Network is
-	// also dead. They are not equally useful. The Network's unusability is
-	// transient and already has a condition of its own — Accepted: False says
-	// it, which is what the !sized case's own comment observes — so putting it
-	// here as well spends the only two conditions that can carry the give-up
-	// on a fact that is reported elsewhere anyway. And giving up is terminal:
-	// it needs a spec edit, so an operator who reads only "the group's network
-	// is not usable", fixes the Network and walks away has been told something
-	// true and left with a group that will still create nothing.
-	//
-	// The count that produces GaveUp is computed from the views before sized
-	// is known and does not depend on the Network at all, so saying it here is
-	// not a guess about a pass that decided nothing.
+	// Before !sized: giving up needs a spec edit, the Network already has its
+	// own Accepted condition, and GaveUp does not depend on the Network.
 	case backoff.GaveUp:
-		// No pending retry, so BackingOff is false — but an all-clear
-		// reason here would be a lie, so it carries the real one.
+		// BackingOff is false with no pending retry, but carries the real reason.
 		backingOff.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
 		backingOff.Message = fmt.Sprintf(
 			"not retrying: %d rounds of server starts failed in a row; a change to what the servers start "+
@@ -712,13 +482,8 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		degraded.Reason = spawneryv1alpha1.ReasonCrashLoopBackoff
 		degraded.Message = backingOff.Message
 	case !sized:
-		// Nothing was decided this pass, so the False above is the
-		// absence of a verdict rather than one — the same reasoning
-		// ScalingLimited's own !sized case gives above. The counting two
-		// blocks up runs whether or not the Network is usable, so
-		// without this case a group with a dead Network would advertise
-		// a wait it is not serving, beside an Accepted: False that
-		// already explains the same standstill differently.
+		// Nothing was decided, as in ScalingLimited's !sized case; the failure
+		// count above runs regardless of the Network.
 		backingOff.Message = "backoff is not being decided: the group's network is not usable"
 		degraded.Message = "backoff is not being decided: the group's network is not usable"
 	case backoff.RetryAfter > 0:
@@ -728,12 +493,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			"%d round(s) of server starts failed in a row; next attempt in %s",
 			group.Status.ConsecutiveFailures, backoff.RetryAfter.Round(time.Second))
 	default:
-		// Nothing has failed this streak. Only reachable with a non-nil
-		// LastFailureAt when a past failure's watermark is still stuck
-		// on the status (the residual edge Task 1 and Task 4 both
-		// accepted) — a genuinely clean history leaves it nil, which the
-		// !newestFailure.IsZero() guard above is what keeps true: drop
-		// that guard and this renders the zero time instead.
+		// A non-nil LastFailureAt here is a past failure's watermark.
 		if group.Status.LastFailureAt != nil {
 			backingOff.Message = fmt.Sprintf(
 				"no server has failed to start recently (last failure at %s)",
@@ -741,9 +501,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		}
 	}
 
-	// The event goes on the flank only, for the reason the
-	// ScalingLimited block gives: a five-second resync would otherwise
-	// announce the same wait over and over for its whole duration.
+	// The events go on the flank only.
 	wasBackingOff := meta.IsStatusConditionTrue(group.Status.Conditions,
 		spawneryv1alpha1.ConditionBackingOff)
 	wasDegraded := meta.IsStatusConditionTrue(group.Status.Conditions,
@@ -785,28 +543,19 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	group.Status.ReadyReplicas = totals.ReadyReplicas
 	group.Status.OnlinePlayers = totals.OnlinePlayers
 	group.Status.FreeSlots = totals.FreeSlots
-	// Published whether or not there is one, so a reader can tell "no boost"
-	// from an operator that does not know the word.
 	group.Status.BoostedReplicas = boost
 	group.Status.ObservedGeneration = group.Generation
 	group.Status.Phase = derivePhase(group, totals)
-	// After derivePhase and independent of it: the two answer different
-	// questions and neither is allowed to move the other. See
-	// ConditionProgressing and reportProgressing.
-	// Only while the extra server is not being built: the pass that creates it
-	// reads views from before the create, which would show no server starting.
+	// Independent of derivePhase; see ConditionProgressing. The floor is only
+	// reported while the extra server is not being built: the creating pass reads
+	// views from before the create.
 	var floor FloorReport
 	if decision.FloorHeld && (decision.FloorBlocked || (decision.Create > 0 && !backoff.MayCreate)) {
 		floor = FloorReport{Joinable: decision.Joinable, Min: group.UpdateMinAvailable()}
 	}
 	reportProgressing(group, views, podHash, wait, floor)
-	// This group's own answer about the forwarding secret. Unlike the proxy
-	// side, this controller works in Servers and holds no pods, so it costs a
-	// list of its own -- label-scoped to this group, over the manager's warm
-	// cache. A failure leaves the condition exactly as the last successful
-	// pass left it and does not fail the pass: this is a report about a
-	// rotation, and losing the rest of the status to it would trade a
-	// five-second-stale report for no report at all.
+	// A failed list leaves the rotation condition as it was rather than failing
+	// the pass.
 	if pods, err := r.groupPods(ctx, group); err != nil {
 		log.FromContext(ctx).Error(err, "listing this group's pods for the rotation report",
 			"group", group.Name, "namespace", group.Namespace)
@@ -817,9 +566,8 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	return ctrl.Result{RequeueAfter: requeue}, r.Status().Update(ctx, group)
 }
 
-// networkNotAcceptedMessage explains why a Network that exists is still not
-// usable, quoting its own Accepted condition when one has been published so
-// an operator reading the group does not also have to go look at the Network.
+// networkNotAcceptedMessage quotes the Network's own Accepted condition when
+// one has been published.
 func networkNotAcceptedMessage(network *spawneryv1alpha1.Network) string {
 	if cond := meta.FindStatusCondition(network.Status.Conditions, spawneryv1alpha1.ConditionAccepted); cond != nil {
 		return fmt.Sprintf("network %q is not accepted (%s): %s", network.Name, cond.Reason, cond.Message)
@@ -829,13 +577,9 @@ func networkNotAcceptedMessage(network *spawneryv1alpha1.Network) string {
 
 // ofAttempt narrows the views to the servers started with podHash, for an
 // ephemeral group's failure count only: a previous spec's server going Ready
-// says nothing about this one. A server with no hash yet is adopted into the
-// current one on this same pass (adoptServers), so it counts as current.
-//
-// The capacity arithmetic stays hash- and generation-blind. ScalingInputs
-// carries the reason: a filter there makes every running server stop counting
-// the instant the spec changes, and the group orders a full replacement set.
-// This filter can only hold a create back, never order one.
+// says nothing about this one. A hashless server is adopted on this pass, so
+// it counts as current. Unlike a filter in the capacity arithmetic, this can
+// only hold a create back.
 func ofAttempt(views []ServerView, podHash string) []ServerView {
 	if podHash == "" {
 		return views
@@ -880,23 +624,10 @@ func hashOfAttempt(key string) string {
 	return hash
 }
 
-// size brings the group to the size its own rule asks for and reports that
-// decision, so Reconcile can publish the part of it that belongs on the
-// status. Which rule that is follows from the group's type: the spare-slot
-// rule of DecideSize for an ephemeral group, the number in spec.replicas by
-// way of DecidePersistentSize for a persistent one. It also condemns the
-// servers a departing node has claimed, and that half runs whether or not the
-// group may resize.
-//
-// mayResize is false when the group's Network is unusable, which stops the
-// group deciding a size of either kind and does not stop a node leaving. See
-// the rule at the call site for why those are different questions. A nil
-// spec.scaling on an ephemeral group is a second way to have no size to
-// decide, and it lands in the same place for the same reason.
-//
-// The returned decision carries nothing but Condemn whenever no rule decided a
-// size, so a caller publishing ScalingLimited from it says "nothing was
-// decided" rather than a verdict nothing computed.
+// size brings the group to the size its rule asks for (DecideSize for an
+// ephemeral group, DecidePersistentSize for a persistent one) and condemns the
+// servers on departing nodes, whether or not mayResize allows sizing. Without
+// a sizing decision the result carries only Condemn.
 func (r *ServerGroupReconciler) size(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -912,10 +643,8 @@ func (r *ServerGroupReconciler) size(
 	logger := log.FromContext(ctx)
 	key := group.Namespace + "/" + group.Name
 
-	// Before the switch below and outside every one of its branches: the
-	// reservations are what keep condemned() from naming the same server twice
-	// across two passes, so a group that only ever condemns still has to
-	// observe them and still has to read them.
+	// Outside the switch: the reservations keep condemned() from naming a server
+	// twice across passes, even when no size is decided.
 	r.Expectations.observe(key, views)
 	pendingCreates, pendingDeletes, pendingRetires := r.Expectations.pending(key)
 
@@ -925,9 +654,6 @@ func (r *ServerGroupReconciler) size(
 	self := serverChangeoverSelf(group, "")
 	switch {
 	case !mayResize:
-		// No size is decided, and the condemnation attached below is the whole
-		// of what this function does on this path: every loop under it is fed
-		// by a field no rule filled in.
 		if was != spawneryv1alpha1.ChangeoverWaiting {
 			group.Status.Changeover = was
 		}
@@ -967,15 +693,8 @@ func (r *ServerGroupReconciler) size(
 			}
 		}
 	case group.IsOnDemand():
-		// No size is decided and none can be: the members of this group exist
-		// because somebody asked for them by name, and every rule below
-		// computes "how many", which for this group is a question with no
-		// answer rather than one whose answer is zero. Falling through to the
-		// persistent path would read spec.replicas -- nil here -- as zero
-		// servers wanted; the only thing that would then keep it from
-		// condemning every world running is DecidePersistentSize skipping the
-		// views that carry no spec.ordinal, which is a rule about adopted
-		// persistent servers and no promise made to this type.
+		// No size can be decided: members exist because somebody asked for them
+		// by name. The persistent path would read the nil spec.replicas as zero.
 	default:
 		own := ownPersistentChangeover(views, podHash, pendingDeletes, group.DesiredReplicas(), was)
 		self.State = own
@@ -996,51 +715,21 @@ func (r *ServerGroupReconciler) size(
 		}
 	}
 
-	// Condemnation is attached here, once, for every path out of the switch
-	// above rather than by each branch remembering to do it. DecideSize
-	// attaches it too, and condemned() reads nothing but the two fields handed
-	// to it here, so for that branch this assigns the same names a second
-	// time; the persistent rule and the two paths that decide no size have no
-	// attachment of their own, and this is theirs. Two neighbouring branches
-	// that must each remember one step is the shape where one of them
-	// eventually does not.
+	// Attached here for every path out of the switch, rather than by each
+	// branch; DecideSize's own attachment yields the same names.
 	decision.Condemn = condemned(ScalingInputs{Views: views, PendingDeletes: pendingDeletes})
 
-	// The backoff gate is on execution, not on the decision. DecideSize keeps
-	// computing what the group needs, so Limited and ColdStartBlocked go on
-	// telling the truth about the shortfall while the backoff separately says
-	// the group is waiting — two facts an operator needs to see apart. It also
-	// means no create is reserved on a pass where the gate refused every
-	// attempt. (The deletes, condemnations and retirements below reserve their
-	// own removals whatever the gate said, because the gate does not reach
-	// them.)
-	//
-	// That is narrower than "a reservation implies an object was created", and
-	// the difference is worth stating because the sentence above is the one a
-	// future reader would otherwise cite for the wider claim.
-	// createPersistentServer returns the name on AlreadyExists as well, and the
-	// loop below reserves it just the same: a reservation's job is to stop the
-	// next pass asking for the same name again, not to record what this pass
-	// made.
-	//
-	// Creation is the only thing the backoff gates. The deletes, condemnations
-	// and retirements below run whatever it decided: they touch players, and
-	// must not wait on an unrelated failure. The Network gate above is a
-	// different question with a different answer, settled at the call site.
-	//
-	// Two loops under one gate, because the two rules ask for creation in the
-	// two different currencies they decide in: a count for the ephemeral rule,
-	// which builds interchangeable servers, and a list of ordinals for the
-	// persistent one, which builds identities. At most one of them is ever
-	// non-empty -- the switch above ran one branch, and neither rule fills the
-	// other's field -- and neither loop needs to know that.
+	// The backoff gates execution, not the decision, so Limited and
+	// ColdStartBlocked still report the shortfall while it waits. It gates only
+	// creation: deletes, condemnations and retirements touch players and must not
+	// wait on an unrelated failure. createPersistentServer also returns the name
+	// on AlreadyExists, and that is reserved too: a reservation stops the next
+	// pass asking for the same name.
 	clearOrdinalBlocked(group)
 	if backoff.MayCreate {
 		taken := takenNumbers(views, r.Expectations.pendingNumbers(key))
 		for i := int32(0); i < decision.Create; i++ {
-			// Added to the set as well as passed, so the second create of one
-			// pass does not repeat the first one's number: the reservation
-			// below only helps the next pass.
+			// Added to the set so the next create of this pass gets a new number.
 			number := NextNumber(taken)
 			taken[number] = true
 			name, err := r.createServer(ctx, group, podHash, number)
@@ -1054,28 +743,19 @@ func (r *ServerGroupReconciler) size(
 			if err != nil {
 				return decision, err
 			}
-			// Zero and not the ordinal: this loop's numbers come from
-			// DecidePersistentSize, which reads them off the views and needs
-			// no reservation of its own. Reserving one here would put a
-			// persistent group's ordinal 0 into a set whose zero means "no
-			// number".
+			// Zero, not the ordinal: zero means "no number" in that set, and
+			// DecidePersistentSize reads ordinals off the views.
 			r.Expectations.expectCreated(key, name, 0)
 		}
 	}
-	// After the creates, and deliberately so: reportSquatter may have set this
-	// same condition while they ran, and a duplicated ordinal outranks a name
-	// somebody else is holding. A squatter is a create that has not happened;
-	// a duplicate is two pods that may already be contending for one
-	// ReadWriteOnce volume, and it is the one an operator has to see first.
+	// After the creates, overriding reportSquatter's condition: a duplicated
+	// ordinal may already be two pods contending for one ReadWriteOnce volume.
 	reportDuplicateOrdinals(group, decision.Conflicts)
 
 	if int32(len(decision.Delete)) < decision.Surplus {
 		logger.Info("fewer free servers than the surplus, trying again later",
 			"group", group.Name, "surplus", decision.Surplus, "free", len(decision.Delete))
 	}
-	// DeleteReason distinguishes the persistent rule's occasions for the
-	// event trail; the ephemeral rule leaves it empty and falls back to the
-	// reason it always used.
 	deleteReason := decision.DeleteReason
 	if deleteReason == "" {
 		deleteReason = "ServerRemoved"
@@ -1087,10 +767,6 @@ func (r *ServerGroupReconciler) size(
 		}
 		r.Expectations.expectDeleted(key, name)
 	}
-	// Ungated by the backoff, like the deletes and retirements around it and
-	// for the same reason: this touches players and must not wait on an
-	// unrelated failure. It is ungated by the Network too, because Condemn is
-	// attached above whether or not any rule decided a size.
 	if err := r.condemn(ctx, group, servers, key, decision.Condemn); err != nil {
 		return decision, err
 	}
@@ -1103,37 +779,14 @@ func (r *ServerGroupReconciler) size(
 	return decision, nil
 }
 
-// condemn removes the named servers and reserves each removal, one delete per
-// server on a node that is going away.
+// condemn removes the named servers, one delete per server on a node that is
+// going away, and reserves each removal.
 //
-// A method of its own because the occasion it names is not the one the
-// deletes beside it in size() name — a node leaving rather than a size
-// decision — and the event it emits says so. Reserved after the delete,
-// matching size()'s other removal loops.
-//
-// # It is not throttled, and a persistent group's one-ordinal rule does not
-// reach it
-//
-// The persistent sizing design states "at most one ordinal of a persistent
-// group is down at a time, whatever the reason", and the last three words
-// claim more than this does. Every server on a departing node goes in one
-// pass, so a node holding two ordinals takes both. Gate A is not bypassed —
-// a condemned view reads as leaving(), so DecidePersistentSize declines to
-// nominate anything that pass — but an ordinal it nominated on an earlier
-// pass can still be draining when this lands, so three ordinals of one group
-// can be out at once.
-//
-// That is the intended behaviour rather than a gap in it. Draining one server
-// at a time would make kubectl drain wait out drain.timeoutSeconds once per
-// occupied server instead of once for the node, and a node that is leaving
-// takes its pods with it whether or not this operator moved their players
-// first.
-//
-// The group's PodDisruptionBudget bounds a different thing and is worth not
-// confusing with this one. Sized to the occupied pods, it refuses the
-// eviction API an occupied pod, so somebody else's drain cannot disconnect
-// players out from under this condemnation. It does not bound these deletes,
-// which never go through eviction.
+// It is not throttled: every server on a departing node goes in one pass, so
+// a persistent group can have more than one ordinal down at once. Draining
+// one at a time would make kubectl drain wait drain.timeoutSeconds per
+// occupied server, and the node takes its pods regardless. The
+// PodDisruptionBudget does not bound these deletes, which bypass eviction.
 func (r *ServerGroupReconciler) condemn(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -1152,25 +805,9 @@ func (r *ServerGroupReconciler) condemn(
 }
 
 // storageResizeCondition reports whether any server's claim has a failed
-// resize: a patch of this operator's own that the API server refused, or a
-// resize from any requester that the storage driver failed. A patch another
-// controller had refused is not visible here. False carries the message
-// the offending server's own status already worked out
-// -- growClaim's synchronous rejection, or resizeConditionError's read of
-// the claim's ControllerResizeError/NodeResizeError condition -- taken from
-// the lowest-ordinal view that has one, deterministically rather than by
-// which one collectViews happens to have listed first: collectViews makes no
-// ordering promise, so with two unhealthy claims "the first one found" could
-// alternate between reconciles and leave an operator watching the condition
-// flap between two messages instead of reading one steady signal. Lowest
-// ordinal is not a claim that ordinal's cause is any more urgent than the
-// other's -- it is only the tie-break that stays put.
-//
-// Deliberately not folded into Degraded. Design §4's point stands regardless
-// of which of the two failure shapes produced the message: a storage class
-// that refuses to grow and a group whose servers will not start are
-// different problems with different remedies, and derivePhase must not read
-// this condition as if it were.
+// resize, with the message of the lowest-ordinal one so the condition does not
+// flap between two. Kept out of Degraded: a storage class that refuses to grow
+// is not a group whose servers will not start.
 func storageResizeCondition(views []ServerView) metav1.Condition {
 	cond := metav1.Condition{
 		Type:    spawneryv1alpha1.ConditionStorageResize,
@@ -1197,12 +834,7 @@ func storageResizeCondition(views []ServerView) metav1.Condition {
 	return cond
 }
 
-// ordinalBefore reports whether a's ordinal sorts before b's, for
-// storageResizeCondition's tie-break. A nil ordinal does occur among a
-// persistent group's views -- an adopted or hand-made object need not carry
-// spec.ordinal, which is what DecidePersistentSize's nil-ordinal rule is
-// about -- and this has nothing to compare it against, so it sorts last
-// rather than panicking on the dereference.
+// ordinalBefore sorts a nil ordinal (an adopted or hand-made object) last.
 func ordinalBefore(a, b *ServerView) bool {
 	switch {
 	case a.Ordinal == nil:
@@ -1219,32 +851,16 @@ func derivePhase(group *spawneryv1alpha1.ServerGroup, totals GroupTotals) string
 	if meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
 		return "Degraded"
 	}
-	// No `&& ReadyReplicas > 0`. A group asked for nothing and running nothing
-	// has exactly what it was asked for, and the extra clause made that state
-	// report Pending forever -- the truth about every field except the phase.
-	//
-	// It matters because zero is a deliberate operator action rather than an
-	// edge: `spec.replicas: 0` is the accepted way to park a persistent group
-	// and keep its claims, since deleting the group would leave the claims
-	// behind but take the ordinals' Server objects with it.
-	//
-	// Dropping the clause changes exactly one state. A group short of its
-	// target still fails `ReadyReplicas >= DesiredReplicas()` -- zero ready
-	// against five wanted is not suddenly Ready -- so the only pair the clause
-	// was deciding was zero against zero.
+	// Zero against zero is Ready: spec.replicas: 0 is how a persistent group
+	// is parked with its claims kept.
 	if totals.ReadyReplicas >= group.DesiredReplicas() {
 		return string(phase.Ready)
 	}
 	return string(phase.Pending)
 }
 
-// groupPods lists this group's server pods.
-//
-// Terminating pods are kept, unlike ProxyGroupReconciler.pods which drops
-// them: the only caller is the rotation report, and forwardingStamps already
-// drops exactly the pods that report has no business counting -- one on its
-// way out, and one whose process is finished. Filtering here as well would put
-// that rule in two places.
+// groupPods lists this group's server pods, terminating ones included:
+// forwardingStamps, in the only caller, already drops them.
 func (r *ServerGroupReconciler) groupPods(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -1257,40 +873,12 @@ func (r *ServerGroupReconciler) groupPods(
 	return list.Items, nil
 }
 
-// reportProgressing says whether the group has arrived where it decided to be.
-//
-// derivePhase above answers a different question and keeps answering it: Ready
-// there means the group is serving, true as soon as one server is up, which is
-// what a printed column should say. Two states make the gap visible. An
-// ephemeral group runs above spec.scaling.minReplicas to cover spareSlots, and
-// DesiredReplicas() is only that floor -- so a group DecideSize took to five
-// satisfies the phase with one server ready. And GroupTotals.ReadyReplicas
-// counts every generation, unlike FreeSlots beside it, so a group whose new
-// servers are all still starting is Ready on the strength of the old ones.
-//
-// Outstanding is counted two ways because they are two different waits, and an
-// operator acts on them differently: a server of the current generation that
-// has not come up yet is this group starting, and a server of an earlier one
-// still present is this group replacing. Both mean "not arrived"; only the
-// first is fixed by waiting.
-//
-// One pass behind on a scale-up, and deliberately not fixed here: the views
-// this reads are collected before the creates of the same pass, so a server
-// just ordered is first counted by the next one. Every other field on this
-// status has the same lag for the same reason, and closing it for one of them
-// would mean a second List that says nothing the five-second resync does not.
-//
-// Draining, Terminating and Failed servers of the current generation are not
-// counted. The first two are being shed on purpose -- a scale-down has arrived,
-// it is just tidying -- and a Failed one is replaced by a Pending one that this
-// counts on the next pass, with Degraded saying meanwhile what went wrong.
-// podHash is the group's desired render digest. It replaced
-// metadata.generation here in 7a for the reason AggregateGroup gives: a
-// generation moves on every field of the spec, so a capacity edit made every
-// running server "of an earlier generation" and this condition announced a
-// replacement that was not happening. An empty podHash compares nothing, so a
-// pass without a usable Network reports no replacement rather than a phantom
-// one.
+// reportProgressing says whether the group has arrived where it decided to be,
+// which derivePhase does not: an ephemeral group runs above its floor, and
+// ReadyReplicas counts old-spec servers. A current-spec server not yet up is
+// the group starting; an old-spec one still present is the group replacing.
+// One pass behind on a scale-up, like the rest of the status. Draining,
+// Terminating and Failed current servers are not counted.
 // FloorReport is a changeover held at spec.update.minAvailable; the zero value
 // is none.
 type FloorReport struct {
@@ -1299,43 +887,18 @@ type FloorReport struct {
 
 func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, podHash string, wait ChangeoverWait, floor FloorReport) {
 	var starting, older int32
-	// A retiree that will never retire. spec.retire is the update budget's one
-	// signal (selectRetirement), and it survives the server failing -- so a
-	// server the group patched spec.retire onto and that then failed holds a
-	// maxUnavailable slot for its whole failedRetentionSeconds, an hour by
-	// default. Until this said so there was no condition, no event and nothing
-	// else telling an operator why no further server was retiring: the
-	// changeover simply stopped, looking exactly like one that had finished.
-	//
-	// Reached by a real path rather than a hypothetical one. phase.Decide
-	// tests a readiness loss before the retirement, deliberately, so a server
-	// that loses readiness between the patch and the next reconcile goes to
-	// Starting rather than Retiring while spec.retire stays true; if it never
-	// recovers, StartupDeadlineReached fails it there.
-	//
-	// Named and not counted, because the remedy is per server -- delete it and
-	// the slot comes back at once -- and a count would leave an operator
-	// listing every server to find which.
-	//
-	// It stays empty for an on-demand group without an exception of its own:
-	// spec.retire is the update budget's signal, and no budget reaches a member
-	// nothing ever retires.
+	// A failed server that carries spec.retire holds a maxUnavailable slot for
+	// its whole failed retention, and the changeover stops looking finished.
+	// Reached when a readiness loss beats the retirement in phase.Decide. Named,
+	// because the remedy is deleting that server.
 	var stuck []string
 	for _, v := range views {
 		if v.Retire && v.Phase == phase.Failed {
 			stuck = append(stuck, v.Name)
 		}
-		// An on-demand member of an earlier spec is not a replacement in
-		// flight: nothing rolls, so an image bump reaches a world the next time
-		// its owner starts it, and until then carrying the older render is the
-		// group's ordinary and permanent state. Counting it as older would hold
-		// this condition True for as long as somebody keeps playing, which
-		// teaches whoever watches Progressing to stop reading it. So the phase
-		// is the whole question for this type: a member is coming up or it is
-		// not, and the count below sees it either way rather than skipping it
-		// here for carrying a hash nothing will replace.
-		// A failed server was replaced when it failed; it stays only for
-		// diagnosis, so it is nothing this update still waits for.
+		// An on-demand member of an earlier spec is not a replacement in flight:
+		// nothing rolls it, so counting it would hold the condition True forever.
+		// A failed server was replaced when it failed.
 		if !group.IsOnDemand() && staleSpec(v, podHash) && !v.Hold && v.Phase != phase.Failed {
 			older++
 			continue
@@ -1352,10 +915,8 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, 
 		condition.Status = metav1.ConditionTrue
 		condition.Reason = wait.Reason
 		condition.Message = wait.Message
-	// Before the two counts below, because it is the answer to the question
-	// they raise. A group in this state reports older > 0 for as long as the
-	// retention window lasts and says "still being replaced", which is true
-	// and useless: nothing is being replaced and nothing will be.
+	// Before the counts: older > 0 would say "still being replaced" while
+	// nothing is.
 	case len(stuck) > 0:
 		condition.Status = metav1.ConditionTrue
 		condition.Reason = spawneryv1alpha1.ReasonRetireeStuck
@@ -1386,10 +947,7 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, 
 		condition.Status = metav1.ConditionFalse
 		condition.Reason = spawneryv1alpha1.ReasonAtDesiredState
 		condition.Message = "every server is of the group's current spec and ready"
-		// The loop above declines to ask whether an on-demand member carries
-		// the current spec, so this line must not answer it either. It is what
-		// an admin reads right after an image bump has not reached a running
-		// world, and the sentence above would tell them it had.
+		// The loop never asked whether on-demand members carry the current spec.
 		if group.IsOnDemand() {
 			condition.Message = "no member is starting; each carries the spec it started with"
 		}
@@ -1424,8 +982,7 @@ func (r *ServerGroupReconciler) collectViews(
 		}
 		byName[srv.Name] = srv
 
-		// The live count comes from the registry, not from the throttled
-		// status: the control loop must decide on fresh data.
+		// The registry, not the throttled status.
 		pod, podFound := r.podFor(ctx, srv)
 		snap := r.Agents.Lookup(podUID(pod, podFound))
 		players, slots := clampReport(snap.Players, snap.Slots, group.Spec.MaxPlayers)
@@ -1444,48 +1001,22 @@ func (r *ServerGroupReconciler) collectViews(
 			Playable: playableSeats(snap.PlayableSlots, group.Spec.PlayableSlots, slots),
 			EmptyFor: snap.EmptyFor,
 			Stale:    snap.PlayersStale,
-			// Read from the status, never guessed from the phase: a server that
-			// lost its probe is in Starting with its players still connected.
+			// From the status, never guessed from the phase.
 			WasRegistered: srv.Status.WasRegistered,
-			// And what they have right now, which is a different question and
-			// the one capacity depends on -- see AggregateGroup.
+			// What the proxies have now, which capacity depends on.
 			Registered: srv.Status.Registered,
-			// AcceptingJoins is true for a pod the registry has never heard
-			// from, so after an operator restart every door reads open until
-			// its agent restates it on the next stream.
-			JoinsClosed: !snap.AcceptingJoins,
-			// A pod that once existed and is now gone took its sessions with it,
-			// exactly like one that reached a terminal state.
+			// AcceptingJoins is true for a pod the registry has never heard from,
+			// so after an operator restart every door reads open until restated.
+			JoinsClosed:  !snap.AcceptingJoins,
 			SessionsGone: srv.Status.PodName != "" && (!podFound || podTerminal(pod)),
 			Generation:   srv.Spec.GroupGeneration,
 			PodHash:      srv.Spec.PodHash,
 			Retire:       srv.Spec.Retire,
 			Hold:         srv.Spec.Hold,
 			CreatedAt:    srv.CreationTimestamp.Time,
-			// podFound is required, and it is what makes pod safe to
-			// dereference here. It is false on all three of podFor's routes: no
-			// status.podName, a Get that failed, and a pod already carrying a
-			// deletion timestamp. None of the three is condemned, but not for
-			// one reason — two of them and then a third.
-			//
-			// For two of them there is no pod to make the claim about, and
-			// condemnation is a claim about the node a live pod is sitting on.
-			// A server with no status.podName has no pod at all. One whose pod
-			// already carries a deletion timestamp is worth stating plainly,
-			// because a drain is the likeliest thing to have put that
-			// timestamp there — the eviction may well be this very node's
-			// doing — but the removal is under way either way, and
-			// re-condemning it would only reserve a second delete for a server
-			// that is going.
-			//
-			// The failed Get is the different one, and it is not the same
-			// sentence at a discount: a live pod on a departing node may exist
-			// and simply be unreadable, so this is a claim we decline to make
-			// rather than one with no subject. Declining is the same choice
-			// nodeDeparting makes when it cannot read a Node, for the same
-			// reason it gives — a group must not be emptied on the strength of
-			// a cache miss — and it costs at most a delay, because the next
-			// pass asks again.
+			// Without a readable live pod there is nothing to condemn: no pod, or one
+			// already being removed. A failed Get declines too, as nodeDeparting does
+			// for an unreadable Node; the next pass asks again.
 			Condemned:     podFound && nodeDeparting(ctx, r.Client, pod.Spec.NodeName, r.DrainTaintKeys),
 			ResizePending: srv.Status.StorageResizePending,
 			ResizeError:   srv.Status.StorageResizeError,
@@ -1508,9 +1039,8 @@ func (r *ServerGroupReconciler) collectViews(
 }
 
 // podFor resolves the pod of a server. An unresolvable pod yields found=false,
-// whose registry key is empty and whose snapshot is "unknown, therefore stale"
-// — the conservative answer. A pod already carrying a deletion timestamp counts
-// as gone, the same rule the Server controller applies.
+// whose snapshot is "unknown, therefore stale". A terminating pod counts as
+// gone, as in the Server controller.
 func (r *ServerGroupReconciler) podFor(ctx context.Context, srv *spawneryv1alpha1.Server) (*corev1.Pod, bool) {
 	if srv.Status.PodName == "" {
 		return nil, false
@@ -1526,9 +1056,8 @@ func (r *ServerGroupReconciler) podFor(ctx context.Context, srv *spawneryv1alpha
 	return pod, true
 }
 
-// newServer builds the Server object both create paths write. Everything a
-// server of this group carries is here except the two things that tell the
-// kinds apart: where the name came from, and spec.ordinal.
+// newServer builds the Server object both create paths write, short of the
+// name and spec.ordinal.
 func (r *ServerGroupReconciler) newServer(
 	group *spawneryv1alpha1.ServerGroup,
 	name string,
@@ -1556,9 +1085,7 @@ func (r *ServerGroupReconciler) newServer(
 	return srv, nil
 }
 
-// createServer creates one interchangeable server of an ephemeral group, under
-// a name with a random suffix because it has no identity to preserve, and with
-// the number a person will read it by.
+// createServer creates one interchangeable server of an ephemeral group.
 func (r *ServerGroupReconciler) createServer(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -1578,9 +1105,9 @@ func (r *ServerGroupReconciler) createServer(
 	return srv.Name, nil
 }
 
-// createPersistentServer creates the server holding one ordinal. Unlike
-// createServer's random suffix, this name is derived and stable: it is what
-// makes the claim name stable, which is what makes the world survive.
+// createPersistentServer creates the server holding one ordinal, under a
+// derived name: a stable name makes the claim name stable, which keeps the
+// world.
 func (r *ServerGroupReconciler) createPersistentServer(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -1592,30 +1119,16 @@ func (r *ServerGroupReconciler) createPersistentServer(
 		return "", err
 	}
 	srv.Spec.Ordinal = &ordinal
-	// The same number, so the one a person reads agrees with the name this
-	// server already has: survival-0 reads as Survival-0. It leaves persistent
-	// numbers starting at 0 where ephemeral ones start at 1, and agreeing with
-	// the name is worth more than agreeing with the other kind.
+	// Agreeing with the name (survival-0) is worth persistent numbers starting
+	// at 0 where ephemeral ones start at 1.
 	srv.Spec.Number = ordinal
 	if err := r.Create(ctx, srv); err != nil {
-		// A name this reconciler derives can already be taken, which a random
-		// one effectively cannot: the cache that DecidePersistentSize read may
-		// simply not have shown the server this same reconciler created a
-		// moment ago. The object is already what this call wanted, so the
-		// caller reserves it as it would any other create -- returning the
-		// error instead would fail the whole reconcile, status and PDB with
-		// it, for as long as the collision lasts: a pass or two while a cache
-		// catches up, and without end for an object that holds the name
-		// without holding the ordinal. No event: nothing was created here.
+		// A derived name can already be taken, usually by this reconciler's own
+		// create that the cache has not shown yet. Failing would stop the status
+		// and PDB too.
 		if !apierrors.IsAlreadyExists(err) {
 			return "", err
 		}
-		// Which of the two causes this is, since they need opposite answers.
-		// A cache catching up resolves itself in a pass or two and deserves
-		// the silence it has always had. A squatter never resolves, and used
-		// to get the same silence: the retry ran at the resync cadence
-		// forever with nothing on the group saying why the ordinal stayed
-		// missing.
 		return srv.Name, r.reportSquatter(ctx, group, srv.Name, ordinal)
 	}
 	r.Recorder.Eventf(group, nil, corev1.EventTypeNormal, "ServerCreated", actionCreateServer,
@@ -1624,20 +1137,10 @@ func (r *ServerGroupReconciler) createPersistentServer(
 }
 
 // reportSquatter decides whether an AlreadyExists on a derived ordinal name is
-// a cache catching up or an object that will hold the name forever, and says so
-// on the group when it is the second.
-//
-// The test is spec.ordinal, the same field DecidePersistentSize reads. An
-// object holding the name *with* the ordinal this pass wanted is this
-// reconciler's own creation seen through a cache that has not caught up, which
-// is transient by construction. Anything else -- a Server without the field, a
-// Server carrying a different ordinal, or a read that fails -- cannot become a
-// member of the group on its own, so the ordinal stays missing until a person
-// removes the object.
-//
-// It returns no error for the collision itself: the group's other work, its
-// status and its PodDisruptionBudget, should not stop because one ordinal is
-// blocked. The condition is the report.
+// a cache catching up (the object carries the wanted spec.ordinal) or an object
+// that will hold the name until a person removes it, and says so on the group
+// in the second case. The collision itself is no error: one blocked ordinal
+// must not stop the status and PDB.
 func (r *ServerGroupReconciler) reportSquatter(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -1648,8 +1151,6 @@ func (r *ServerGroupReconciler) reportSquatter(
 	err := r.Get(ctx, types.NamespacedName{Namespace: group.Namespace, Name: name}, existing)
 	switch {
 	case apierrors.IsNotFound(err):
-		// Gone between the failed create and this read: nothing holds the name
-		// now, so the next pass creates it.
 		return nil
 	case err != nil:
 		return err
@@ -1675,15 +1176,9 @@ func (r *ServerGroupReconciler) reportSquatter(
 }
 
 // reportDuplicateOrdinals publishes what DecidePersistentSize refused to act
-// on, and does nothing when there is nothing to report -- so it never
-// overwrites clearOrdinalBlocked's False, and never a squatter's True either,
-// on a group that has no duplicate.
-//
-// The message names every colliding server, because the remedy is a choice
-// between them and a person cannot make it without their names. It does not
-// suggest which to delete: the operator has no way to tell which claim holds
-// the world anybody cares about, and guessing on a group's status would be
-// worse than saying nothing.
+// on, and does nothing without a duplicate. It names every colliding server
+// but suggests none to delete: the operator cannot tell which claim holds the
+// world anybody cares about.
 func reportDuplicateOrdinals(group *spawneryv1alpha1.ServerGroup, conflicts []OrdinalConflict) {
 	if len(conflicts) == 0 {
 		return
@@ -1705,15 +1200,8 @@ func reportDuplicateOrdinals(group *spawneryv1alpha1.ServerGroup, conflicts []Or
 	})
 }
 
-// clearOrdinalBlocked publishes the condition's False side.
-//
-// Called on every pass before the creates, so a True set by reportSquatter or
-// reportDuplicateOrdinals is this pass's own finding rather than one that
-// latched. A condition that can only go True is a condition that stops meaning
-// anything the first time it fires.
-//
-// Its message covers both of the condition's occasions, because a reader who
-// sees the False side has no way to know which of them it is the negation of.
+// clearOrdinalBlocked runs every pass before the creates, so a True is this
+// pass's own finding rather than one that latched.
 func clearOrdinalBlocked(group *spawneryv1alpha1.ServerGroup) {
 	meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
 		Type:    spawneryv1alpha1.ConditionOrdinalBlocked,
@@ -1733,14 +1221,10 @@ func (r *ServerGroupReconciler) deleteServer(
 	if !ok {
 		return nil
 	}
-	// Already asked for. A Server keeps its phase while it drains, so it can be
-	// nominated again on the next pass; repeating the call would emit the same
-	// event every resync for the whole drain.
+	// Already asked for; repeating would emit the event every resync.
 	if !srv.DeletionTimestamp.IsZero() {
 		return nil
 	}
-	// Deleting the object is the request; the Server controller's finalizer
-	// runs the drain before the object actually goes away.
 	if err := r.Delete(ctx, srv); err != nil && !apierrors.IsNotFound(err) {
 		return err
 	}
@@ -1748,11 +1232,8 @@ func (r *ServerGroupReconciler) deleteServer(
 	return nil
 }
 
-// retireServer asks one server to enter soft drain.
-//
-// A patch rather than an update: the group holds a cached copy and the Server
-// controller writes status on the same object, so a full update here would
-// race it for no reason.
+// retireServer asks one server to enter soft drain, by patch: the Server
+// controller writes status on the same object.
 func (r *ServerGroupReconciler) retireServer(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -1763,9 +1244,7 @@ func (r *ServerGroupReconciler) retireServer(
 	if !ok {
 		return nil
 	}
-	// Already asked. The nomination reads the cache, which lags the patch by
-	// a reconcile or two, so without this the same server collects the same
-	// event every resync for the whole of its retirement.
+	// Already asked; the cache lags the patch by a reconcile or two.
 	if srv.Spec.Retire {
 		return nil
 	}
@@ -1779,14 +1258,9 @@ func (r *ServerGroupReconciler) retireServer(
 	return nil
 }
 
-// adoptServers stamps the freshly computed render hash onto every server whose
-// spec.podHash is still empty: one created before this field existed, or --
-// for an ephemeral group -- before 7a gave the field a reader on this side.
-//
-// It covered persistent groups only until 7a. That was correct while nothing
-// read the field for an ephemeral group, and became a hole the moment
-// staleSpec did: a hashless view is adopted on every pass, so a server that is
-// never stamped is never stale, and no image change would ever replace it.
+// adoptServers stamps the current render hash onto every server whose
+// spec.podHash is still empty. A hashless view is never stale, so an unstamped
+// server would never be replaced.
 func (r *ServerGroupReconciler) adoptServers(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -1794,23 +1268,12 @@ func (r *ServerGroupReconciler) adoptServers(
 	podHash string,
 ) error {
 	for _, srv := range servers {
-		// Already adopted. Guards the same cache-lag window retireServer's own
-		// guard does, above: without it, a server this pass (or an earlier one)
-		// already patched, but not yet visible through the cache this List
-		// read, would be patched again.
 		if srv.Spec.PodHash != "" {
 			continue
 		}
-		// Adopted rather than nominated as stale, and the cost is worth
-		// stating. Stamping the current hash onto a server that predates the
-		// field means one spec edit can be missed: an edit landing inside this
-		// same reconcile is adopted along with the old pod instead of
-		// triggering a rebuild. The alternative is worse by a wide margin --
-		// nominating every hashless server as stale would restart every
-		// persistent world in the installation on the first reconcile after
-		// the upgrade -- and the cost is bounded by the next edit, which
-		// computes a hash that no longer matches. It is a one-time window per
-		// server, closing for good the first time this runs.
+		// Adopted rather than stale, which would restart every persistent world
+		// on upgrade. The cost: a spec edit landing in this same reconcile is
+		// adopted too, until the next edit.
 		patch := client.MergeFrom(srv.DeepCopy())
 		srv.Spec.PodHash = podHash
 		if err := r.Patch(ctx, srv, patch); err != nil {
@@ -1821,9 +1284,8 @@ func (r *ServerGroupReconciler) adoptServers(
 }
 
 // pruneFailed keeps the number of retained failures per group at
-// maxRetainedFailures. It does not depend on the Network, so it runs even when
-// that cannot be resolved: a group whose Network was deleted is exactly the one
-// that will pile failures up.
+// maxRetainedFailures. Not gated on the Network: a group whose Network was
+// deleted is exactly the one that piles failures up.
 func (r *ServerGroupReconciler) pruneFailed(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -1837,8 +1299,6 @@ func (r *ServerGroupReconciler) pruneFailed(
 	log.FromContext(ctx).Info("pruning retained failures past the cap",
 		"group", group.Name, "pruned", len(names), "kept", maxRetainedFailures)
 	for _, name := range names {
-		// The Server controller still drains it first if it turns out to have
-		// players on it; this only asks for the removal.
 		if err := r.deleteServer(ctx, group, servers, name, "FailedServerPruned",
 			"removing failed server %s, only the newest generation's oldest failure is kept for diagnosis"); err != nil {
 			return err
@@ -1848,36 +1308,15 @@ func (r *ServerGroupReconciler) pruneFailed(
 }
 
 // reconcilePDB keeps the group's PodDisruptionBudget in step with the number
-// of occupied pods.
+// of occupied pods. Without a scale subresource, Kubernetes allows neither
+// maxUnavailable nor percentages, so minAvailable is absolute.
 //
-// For pods without a controller carrying a scale subresource, Kubernetes
-// allows neither maxUnavailable nor percentages in a PDB. The absolute number
-// of occupied pods is the only formulation that works — and it makes the
-// eviction API refuse to evict any of them.
+// A PDB left at the bare group.Name by an older installation is neither
+// renamed nor deleted here.
 //
-// Named through podspec.GroupPDBName rather than the bare group.Name -- see
-// that function's doc comment for why a ServerGroup and a same-named
-// ProxyGroup collide over it. An installation that predates that name strands
-// whatever PodDisruptionBudget sat at the bare group.Name: it stays owned by
-// this ServerGroup, keeps whatever minAvailable it last had, and goes on
-// blocking evictions of whatever pods it still selects, because nothing here
-// renames or deletes it.
-//
-// The selector pins podspec.LabelRole as well as the group, and that term is
-// load-bearing rather than tidiness. minAvailable is counted from
-// occupiedPods(views), which sees this group's *servers* and nothing else. A
-// selector without the role term matches on managed-by, group and occupied,
-// and a ProxyGroup may share this group's name in this namespace — the very
-// case GroupPDBName exists for. Since proxy pods carry
-// podspec.LabelOccupied too, such a selector matches the
-// occupied proxies of the same-named ProxyGroup as well: currentHealthy
-// counts the ready ones among them and minAvailable counts none of them, so
-// disruptionsAllowed goes positive, and the eviction API can spend every one
-// of those disruptions on an occupied *server* pod, disconnecting its
-// players. The role term is what keeps the pods the selector matches and the
-// pods minAvailable is counted over one and the same set. See isOccupied
-// (candidates.go) for the two-sides-must-agree requirement this term is the
-// third participant in.
+// The LabelRole term matters: proxy pods of a same-named ProxyGroup carry the
+// occupied label too, and matching them would let the eviction API spend their
+// disruptions on occupied server pods. See isOccupied.
 func (r *ServerGroupReconciler) reconcilePDB(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -1907,23 +1346,10 @@ func (r *ServerGroupReconciler) reconcilePDB(
 	return err
 }
 
-// reconcileConfigMap keeps the group's rendered ConfigMap — design section
-// 5.4's one ConfigMap per group — in step with the fields spec.maxPlayers
-// exposes to a user. It carries only that: online-mode, the forwarding mode
-// and the ports are operationally critical and live in internal/render's
-// critical layer and nowhere else, so there is exactly one place that can be
-// wrong about any of them.
-//
-// It marshals a render.Values document under podspec.ConfigValuesKey, the
-// same key BuildServerPod projects into ConfigDir, and it carries
-// podspec.LabelManagedBy for the reason podspec.GroupConfigMapName and
-// Bootstrapper.ensureConfigMap both document: cmd/spawnery-operator narrows
-// the manager's cache for ConfigMaps to that label, so an unlabelled one this
-// reconciler just wrote would be invisible to it on the very next Get.
-// serverConfigValues is the config document a server group renders, and the
-// single place it is built. reconcileConfigMap writes it to the ConfigMap and
-// DesiredServerHash digests it; two constructions of the same document would
-// drift, and the failure that drift produces is an update that never fires.
+// serverConfigValues is the config document a server group renders, built in
+// one place for reconcileConfigMap and DesiredServerHash: two constructions
+// would drift, and an update would never fire. It carries only spec.maxPlayers;
+// the critical settings live in internal/render's critical layer.
 func serverConfigValues(group *spawneryv1alpha1.ServerGroup) ([]byte, error) {
 	maxPlayers := group.Spec.MaxPlayers
 	data, err := yaml.Marshal(render.Values{MaxPlayers: &maxPlayers})
@@ -1942,18 +1368,9 @@ func (r *ServerGroupReconciler) reconcileConfigMap(ctx context.Context, group *s
 		podspec.GroupConfigMapName(group.Name, podspec.RoleServer), data)
 }
 
-// groupsOfNetwork maps a Network event onto the ServerGroups in its namespace that
-// name it.
-//
-// Namespace-scoped and filtered by NetworkRef rather than enqueueing every
-// group: one-network-per-namespace means the filter is nearly always a
-// formality, but a namespace holding a loser as well as a winner is exactly
-// the state this repository's own duplicate-network rule creates, and a group
-// pointed at the loser has no business being woken by the winner.
-//
-// A List error returns nothing rather than failing. This shortens a wait that
-// the resync would end anyway, so losing it costs latency and never
-// correctness.
+// groupsOfNetwork maps a Network event onto the ServerGroups in its namespace
+// that name it; a group pointed at a losing duplicate Network is not woken by
+// the winner. A List error only costs latency, the resync follows.
 func (r *ServerGroupReconciler) groupsOfNetwork(ctx context.Context, obj client.Object) []reconcile.Request {
 	list := &spawneryv1alpha1.ServerGroupList{}
 	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace())); err != nil {
@@ -1972,31 +1389,18 @@ func (r *ServerGroupReconciler) groupsOfNetwork(ctx context.Context, obj client.
 	return out
 }
 
-// groupsOnNode maps a Node event onto the ServerGroups with pods on that node.
+// groupsOnNode maps a Node event onto the ServerGroups with pods on that node,
+// so a cordon is answered before an eviction in the same second.
 //
-// The five-second resync would find a cordoned node on its own; the watch is
-// what makes the answer immediate, and an eviction issued in the same second
-// as the cordon is exactly the race this exists for.
-//
-// It lists this operator's pods and filters by node rather than asking for a
-// spec.nodeName field index. An index would have to be registered once and
-// shared by two controllers -- registering it twice fails at manager start --
-// and the population it would serve is this operator's own pods, which is
-// small. A label-scoped list over a warm cache is cheaper than that
-// coordination is worth.
+// A label-scoped list instead of a spec.nodeName index: an index would have to
+// be registered once and shared by two controllers, for a small population.
 func (r *ServerGroupReconciler) groupsOnNode(ctx context.Context, obj client.Object) []reconcile.Request {
 	pods := &corev1.PodList{}
 	if err := r.List(ctx, pods, client.MatchingLabels{
 		podspec.LabelManagedBy: podspec.ManagedByValue,
 		podspec.LabelRole:      podspec.RoleServer,
 	}); err != nil {
-		// Enqueue nothing rather than guess. A map function has no way to
-		// return an error and no queue of its own to retry from, so dropping
-		// the event is the only option here; the five-second resync is the
-		// fallback, and it reaches the same conclusion from collectViews. That
-		// costs this cordon its immediacy, which is the whole point of the
-		// watch, so it is logged rather than swallowed — the same rule
-		// nodeDeparting follows when it cannot read a node.
+		// A map function cannot return an error; the resync is the fallback.
 		log.FromContext(ctx).V(1).Info("listing server pods for a node event failed, "+
 			"leaving this cordon to the resync", "node", obj.GetName(), "error", err)
 		return nil
@@ -2024,9 +1428,6 @@ func (r *ServerGroupReconciler) groupsOnNode(ctx context.Context, obj client.Obj
 
 // SetupWithManager registers the controller.
 func (r *ServerGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// A construction site that forgets this would otherwise panic inside a
-	// reconcile, in a goroutine, minutes after start — the same failure mode
-	// SetupAll refuses a nil Bootstrapper for.
 	if r.Expectations == nil {
 		r.Expectations = newExpectations(r.Clock)
 	}
@@ -2034,19 +1435,12 @@ func (r *ServerGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		For(&spawneryv1alpha1.ServerGroup{}).
 		Owns(&spawneryv1alpha1.Server{}).
 		Owns(&policyv1.PodDisruptionBudget{}).
-		// Owns and not Watches: a boost carries an owner reference to its
-		// group, so the group is woken by one appearing or being swept without
-		// a mapping function of its own. Without this a boost would take up to
-		// a resync to do anything, and a command that seemed to do nothing for
-		// thirty seconds is a command somebody types twice.
+		// A boost carries an owner reference to its group.
 		Owns(&spawneryv1alpha1.ScaleBoost{}).
 		Owns(&corev1.ConfigMap{}).
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.groupsOnNode)).
-		// A group refused because its Network is missing or unaccepted has no
-		// way of hearing that the Network came back: it is not an owner, and
-		// nothing about the group itself changes when the Network does. It
-		// waited out the resync: recovery measured at roughly ninety seconds
-		// under 4b, two requeues stacked, and this watch removes the second.
+		// A group refused for its Network is no owner of it and would otherwise
+		// wait out the resync.
 		Watches(&spawneryv1alpha1.Network{},
 			handler.EnqueueRequestsFromMapFunc(r.groupsOfNetwork)).
 		Named("servergroup").

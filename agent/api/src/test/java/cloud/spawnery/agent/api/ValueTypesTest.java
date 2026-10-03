@@ -33,10 +33,7 @@ class ValueTypesTest {
         var a = new ServerInfo("lobby-a3f9", "lobby", ServerPhase.READY, 12, 100, true, "running", Map.of("map", "arena"), "pod-1", 1);
         var b = new ServerInfo("lobby-a3f9", "lobby", ServerPhase.READY, 12, 100, true, "running", Map.of("map", "arena"), "pod-1", 1);
         assertEquals(a, b);
-        // Set.copyOf and not Set.of: the latter *throws* on a duplicate, so it
-        // would have proved the equality by accident rather than asserted it,
-        // and would have failed just as loudly if the records were unequal for
-        // some other reason.
+        // Set.copyOf and not Set.of, which throws on a duplicate.
         assertEquals(1, Set.copyOf(List.of(a, b)).size());
     }
 
@@ -46,9 +43,6 @@ class ValueTypesTest {
         assertTrue(p.server().isEmpty());
     }
 
-    // A record with a null component is a record that hands every caller an
-    // NPE at some unrelated line later. The compact constructors refuse it at
-    // the point of construction, where the stack trace still names the cause.
     @Test
     void aNullComponentIsRefusedWhereItIsBuilt() {
         assertThrows(NullPointerException.class,
@@ -59,8 +53,6 @@ class ValueTypesTest {
                 () -> new Group(null, Group.Kind.EPHEMERAL, 1, 1, 0, 100, Map.of(), null));
     }
 
-    // A group nobody gave a display name is displayed by its own name, and a
-    // plugin never has to check which of the two it got.
     @Test
     void aGroupWithoutADisplayNameIsDisplayedByItsName() {
         assertEquals("lobby",
@@ -71,9 +63,6 @@ class ValueTypesTest {
                 new Group("bingo-team", Group.Kind.EPHEMERAL, 1, 1, 0, 100, Map.of(), "Bingo-Team").displayName());
     }
 
-    // An unknown phase is not an error and must not throw: the operator may
-    // publish a phase this jar predates, and a plugin that crashed on one
-    // would break on an operator upgrade it had nothing to do with.
     @Test
     void anUnknownPhaseBecomesUnknownRatherThanAnException() {
         assertEquals(ServerPhase.UNKNOWN, ServerPhase.fromWire("SomethingLaterInvented"));
@@ -81,9 +70,6 @@ class ValueTypesTest {
         assertEquals(ServerPhase.FINISHED, ServerPhase.fromWire("Finished"));
     }
 
-    // freeSlots is never negative: a report can show more players than slots
-    // while a group's maxPlayers is being lowered, and a plugin dividing by it
-    // or sizing a list from it should not meet a negative number.
     @Test
     void freeSlotsNeverGoesBelowZero() {
         var over = new ServerInfo("lobby-a3f9", "lobby", ServerPhase.READY, 120, 100, true, "", Map.of(), "", 0);

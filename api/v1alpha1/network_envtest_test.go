@@ -107,9 +107,8 @@ func TestNetworkRequiresForwardingSecretRef(t *testing.T) {
 	}
 }
 
-// The status field has to survive a round trip through a real API server, not
-// only through the Go type: a field missing from the generated CRD schema is
-// pruned on write and the operator would re-detect the same rotation forever.
+// A field missing from the generated CRD schema is pruned on write, and the
+// operator would re-detect the same rotation forever.
 func TestNetworkStatusCarriesTheForwardingSecretHash(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -137,10 +136,8 @@ func TestNetworkStatusCarriesTheForwardingSecretHash(t *testing.T) {
 	}
 }
 
-// The recorded digest reaches a pod label unread (internal/podspec/server.go,
-// internal/podspec/proxy.go), and a label value the API server rejects fails
-// every pod Create for the network. The schema is where that is stopped, so
-// the check belongs against a real API server rather than against the Go type.
+// The recorded digest reaches a pod label unchecked, so an illegal value
+// would fail every pod Create for the network.
 func TestNetworkStatusRejectsAMalformedForwardingSecretHash(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -154,9 +151,6 @@ func TestNetworkStatusRejectsAMalformedForwardingSecretHash(t *testing.T) {
 		{name: "illegal in a label value", hash: "not a label value", wantReject: true},
 		{name: "uppercase is not what ForwardingHash emits", hash: "0123456789ABCDEF", wantReject: true},
 		{name: "a digest", hash: "0123456789abcdef"},
-		// The operator's own writes are covered by omitempty, but another
-		// client may send an explicit empty string, and clearing the field is
-		// not what the pattern is there to stop.
 		{name: "explicitly empty", hash: ""},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

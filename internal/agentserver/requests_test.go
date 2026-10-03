@@ -38,11 +38,6 @@ import (
 	"github.com/spawnery/spawnery/internal/netstate"
 )
 
-// One test per bound, and each asserting the reason rather than merely that
-// something was refused. A single "it was refused" test passes when the wrong
-// bound fired, and a bound that cannot be shown to fire on its own might be
-// dead behind another.
-
 func networkWith(players []*agentpb.RosterEntry, servers []*agentpb.ServerState) *agentpb.NetworkState {
 	return &agentpb.NetworkState{Players: players, Servers: servers}
 }
@@ -155,18 +150,12 @@ func connectFixture(t *testing.T) (
 }
 
 func TestAConnectResolvesAgainstThePictureOfWhoAsked(t *testing.T) {
-	// A proxy routes to a private server and a backend is not shown one, so a
-	// backend that names one is refused. Both halves matter: without the
-	// second, naming a target is a way to reach what the backend's plugins
-	// were deliberately not shown.
 	ask, named, proxy, backend := connectFixture(t)
 
 	if got := ask(proxy, named("private-servers-c0ffee")); !got.GetConnect().GetOrdered() {
 		t.Errorf("proxy's response = %+v, want the move ordered", got)
 	}
 
-	// Refused and not NOT_FOUND: the server is running, and a caller told it
-	// does not exist would go looking for a fault that is not there.
 	got := ask(backend, named("private-servers-c0ffee"))
 	if got.GetError().GetReason() != agentpb.RequestError_REFUSED {
 		t.Errorf("backend naming a private server: response = %+v, want REFUSED", got)
@@ -176,9 +165,6 @@ func TestAConnectResolvesAgainstThePictureOfWhoAsked(t *testing.T) {
 			got.GetError().GetMessage())
 	}
 
-	// Everything else the backend's picture lacks stays NOT_FOUND. Each case
-	// is one way the refusal above could leak onto a name that is not a
-	// private server, and none of them may confirm that anything exists.
 	for name, target := range map[string]*agentpb.ConnectRequest{
 		"a server that does not exist":        named("private-servers-nobody"),
 		"a group that does not exist":         {Target: &agentpb.ConnectRequest_Group{Group: "nobody"}},
@@ -193,12 +179,8 @@ func TestAConnectResolvesAgainstThePictureOfWhoAsked(t *testing.T) {
 }
 
 func TestAPrivateServerNotYetRunningIsStillAddressedThroughAProxy(t *testing.T) {
-	// No proxy can route to it yet either, so "use a proxy" is only true with
-	// the rest of the sentence, and the message has to carry it.
 	ask, named, proxy, backend := connectFixture(t)
 
-	// The refusal is for a backend. A proxy that cannot route to it yet is
-	// told what any caller is told about a server it cannot route to.
 	if got := ask(proxy, named("private-servers-d00d")); got.GetError().GetReason() != agentpb.RequestError_NOT_FOUND {
 		t.Errorf("proxy naming a private server not yet registered: response = %+v, want NOT_FOUND", got)
 	}
@@ -215,10 +197,6 @@ func TestAPrivateServerNotYetRunningIsStillAddressedThroughAProxy(t *testing.T) 
 }
 
 func TestAGroupTargetNeverOpensAPrivateServer(t *testing.T) {
-	// Naming a group leaves the member to the operator, which picks the one
-	// with the most room. For an on-demand group that is somebody's own world,
-	// and a proxy is shown the members, so it would resolve to one. Both kinds
-	// of session are refused.
 	ask, _, proxy, backend := connectFixture(t)
 	onDemand := &agentpb.ConnectRequest{Target: &agentpb.ConnectRequest_Group{Group: "private-servers"}}
 
@@ -234,8 +212,6 @@ func TestAGroupTargetNeverOpensAPrivateServer(t *testing.T) {
 		}
 	}
 
-	// The refusal is for the one type. An ordinary group still resolves to the
-	// member with room.
 	got := ask(proxy, &agentpb.ConnectRequest{Target: &agentpb.ConnectRequest_Group{Group: "lobby"}})
 	if !got.GetConnect().GetOrdered() || got.GetConnect().GetTarget() != "lobby-c" {
 		t.Errorf("proxy naming an ordinary group: response = %+v, want a move to lobby-c", got)
@@ -243,9 +219,6 @@ func TestAGroupTargetNeverOpensAPrivateServer(t *testing.T) {
 }
 
 func TestAnUnregisteredTargetIsRefusedEvenThoughItExists(t *testing.T) {
-	// A server the proxies cannot route to is a server a move would put the
-	// player nowhere. Registered and not the phase, for the reason
-	// ServerState's own comment gives.
 	state := networkWith(nil,
 		[]*agentpb.ServerState{{Name: "lobby-a", Group: "lobby", Registered: false}},
 	)
@@ -301,9 +274,6 @@ func TestRequestsPastTheBurstAreRefused(t *testing.T) {
 }
 
 func TestOnePodsBurstIsNotAnothersOnesBudget(t *testing.T) {
-	// The bound is per pod. Sharing one bucket would let a compromised pod
-	// silence every other agent in the fleet, which is the failure milestone
-	// 2a's promise is about.
 	now := time.Unix(1000, 0)
 	l := newRequestLimiter(func() time.Time { return now })
 
@@ -353,9 +323,6 @@ func TestRefilledBucketsAreSweptOnceTheMapIsFull(t *testing.T) {
 	}
 }
 
-// One test per bound here too, and each names the bound it broke. A single
-// "it was refused" test passes when the wrong bound fired.
-
 func announcement(state string, attributes map[string]string) *agentpb.AnnounceRequest {
 	return &agentpb.AnnounceRequest{State: state, Attributes: attributes}
 }
@@ -365,7 +332,6 @@ func TestAnAnnouncementWithinItsBoundsIsAccepted(t *testing.T) {
 		map[string]string{"map": "arena"})); !ok {
 		t.Errorf("an ordinary announcement was refused: %s", message)
 	}
-	// And the empty one, which is how a server takes its description back.
 	if _, ok := announcementRefusal(announcement("", nil)); !ok {
 		t.Error("clearing a description was refused")
 	}
@@ -378,9 +344,6 @@ func TestAStateLongerThanTheOperatorCarriesIsRefused(t *testing.T) {
 	if ok {
 		t.Fatal("an oversized state was accepted")
 	}
-	// The number is in the message because the caller is a plugin author
-	// reading a log line, and a bound they have to go and look up is one they
-	// will guess at instead.
 	if !strings.Contains(message, "64") {
 		t.Errorf("refusal = %q, want it to name the bound", message)
 	}
@@ -409,29 +372,21 @@ func TestAnAttributeNameOrValueBeyondTheBoundIsRefused(t *testing.T) {
 	if ok {
 		t.Fatal("an oversized attribute value was accepted")
 	}
-	// Named, because a plugin publishing eight attributes needs to know which.
 	if !strings.Contains(message, `"map"`) {
 		t.Errorf("refusal = %q, want it to name the attribute", message)
 	}
 }
 
 func TestAnAttributeWithNoNameIsRefused(t *testing.T) {
-	// Not a bound but a shape: nothing can ask for an attribute that has no
-	// name, so storing one would cost a reader nothing but confusion.
 	if _, ok := announcementRefusal(announcement("", map[string]string{"": "v"})); ok {
 		t.Error("a nameless attribute was accepted")
 	}
 }
 
 func TestAnAnnouncementIsStoredUnderTheIdentitysOwnName(t *testing.T) {
-	// The name comes from the pod's authenticated identity and the message has
-	// no field for one, which is what keeps this the only verb here that
-	// cannot describe somebody else.
 	registry := agent.New(time.Now, time.Second, time.Now())
 	registry.Connect("pod-a", agent.RoleServer)
-	// Built by hand rather than by New, which insists on the fleets and the
-	// certificates a real listener needs. This verb reaches none of them: it
-	// reads the identity, checks the bounds and writes to the registry.
+	// Not New, which needs the fleets and certificates this verb never reaches.
 	s := &Server{opts: Options{Agents: registry, Proxies: stubFleet{}}, requestRate: newRequestLimiter(time.Now)}
 
 	response := s.answerCloudRequest(context.Background(), logr.Discard(),
@@ -453,9 +408,6 @@ func TestAnAnnouncementIsStoredUnderTheIdentitysOwnName(t *testing.T) {
 }
 
 func TestAProxyAnnouncementIsRefusedRatherThanDropped(t *testing.T) {
-	// A network's picture has a record per server and none per proxy. Storing
-	// it silently would leave a plugin author watching for a description that
-	// was never going to appear.
 	registry := agent.New(time.Now, time.Second, time.Now())
 	registry.Connect("proxy-a", agent.RoleProxy)
 	s := &Server{opts: Options{Agents: registry, Proxies: stubFleet{}}, requestRate: newRequestLimiter(time.Now)}
@@ -476,9 +428,6 @@ func TestAProxyAnnouncementIsRefusedRatherThanDropped(t *testing.T) {
 }
 
 func TestAServerClosesItsOwnDoorAndNobodyElses(t *testing.T) {
-	// The narrowest verb on this channel: it names nothing, so the only server
-	// it can reach is the one that asked. Retire is bounded by a namespace;
-	// this is bounded by a pod.
 	registry := agent.New(time.Now, time.Second, time.Now())
 	registry.Connect("pod-a", agent.RoleServer)
 	registry.Connect("pod-b", agent.RoleServer)
@@ -544,11 +493,6 @@ func TestADoorThatMovesReachesTheProxiesAtOnce(t *testing.T) {
 }
 
 func TestAServerSaysItsRoundIsOver(t *testing.T) {
-	// The door and the round travel in one message, and until here nothing
-	// checked that the second field is read at all: every other test of this
-	// path sends the door alone, and the end-to-end one calls
-	// ReportAcceptJoins directly. Reading GetAccept twice would pass all of
-	// them.
 	registry := agent.New(time.Now, time.Second, time.Now())
 	registry.Connect("pod-a", agent.RoleServer)
 	s := &Server{opts: Options{Agents: registry, Proxies: stubFleet{}}, requestRate: newRequestLimiter(time.Now)}
@@ -590,12 +534,6 @@ func TestAProxyIsRefusedADoor(t *testing.T) {
 	}
 }
 
-// A nil spec.maxInstances is refused rather than read as unlimited.
-//
-// The CRD requires the field for this type, so nothing reaching the API
-// server gets here -- but the field is required precisely because a ceiling
-// nobody chose is one nobody thought about, and the other reading of a nil
-// would start members for exactly that group without bound.
 func TestStartRefusesAnOnDemandGroupWithNoCeiling(t *testing.T) {
 	scheme := runtime.NewScheme()
 	_ = corev1.AddToScheme(scheme)
@@ -615,15 +553,12 @@ func TestStartRefusesAnOnDemandGroupWithNoCeiling(t *testing.T) {
 	if !errors.Is(err, ErrNoCeiling) {
 		t.Fatalf("err = %v, want ErrNoCeiling: an unbounded group started a member", err)
 	}
-	// And nothing was created on the way to the refusal.
 	var srv spawneryv1alpha1.Server
 	if err := w.Client.Get(context.Background(),
 		client.ObjectKey{Namespace: "ns", Name: "private-servers-c0ffee"}, &srv); err == nil {
 		t.Fatal("the member of an unbounded group was created anyway")
 	}
 
-	// The caller is told which of the two it is: this group was never
-	// bounded, rather than being full.
 	s := &Server{opts: Options{Writer: w}, requestRate: newRequestLimiter(time.Now)}
 	resp := s.answerStartServer(context.Background(), logr.Discard(),
 		grpcauth.Identity{Namespace: "ns", PodName: "gateway-0", PodUID: "proxy-a", Role: agent.RoleProxy},

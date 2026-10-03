@@ -6,58 +6,26 @@ import (
 	"github.com/spawnery/spawnery/internal/phase"
 )
 
-// The backoff's four numbers. They are constants rather than CRD fields
-// because the master design does not ask for configurability, nobody has
-// asked for it, and a knob nobody turns is a knob somebody turns wrongly.
-// Adding a field later is cheap; removing one is not.
+// Constants rather than CRD fields: adding a field later is cheap, removing
+// one is not.
 const (
-	// backoffBase is the wait after the first failure. Short enough that a
-	// single unlucky start costs the group seconds, not minutes.
-	backoffBase = 10 * time.Second
-	// backoffFactor is how much each further failure multiplies the wait.
+	backoffBase   = 10 * time.Second
 	backoffFactor = 2
-	// backoffCap bounds the doubling. It is NOT reached at backoffGiveUpAt:
-	// the largest wait before the group gives up is 160s. It exists so that
-	// raising backoffGiveUpAt — the one of these numbers somebody might
-	// plausibly want larger — cannot produce an unbounded wait.
+	// Not reached at backoffGiveUpAt (the largest wait is 160s); it keeps a
+	// raised backoffGiveUpAt from producing an unbounded wait.
 	backoffCap = 5 * time.Minute
-	// backoffGiveUpAt is how many consecutive failures end the attempts. Six
-	// gives one free attempt and five retries over roughly five minutes of
-	// waiting; against a container that takes about ninety seconds to exhaust
-	// its restarts, the whole run is about fourteen minutes. Long enough to
-	// ride out a transient cluster problem, short enough not to spend an hour
-	// confirming a broken image.
+	// One free attempt and five retries over about five minutes of waiting.
 	backoffGiveUpAt int32 = 6
 )
 
-// CountFailures folds this pass's views into the group's running count of
-// consecutive failed *rounds*, and returns the newest failure timestamp it
-// counted.
+// CountFailures counts consecutive failed rounds (not servers) and returns the
+// newest failure timestamp counted. The window runs from failedAt, not now, or
+// every pass would extend it.
 //
-// Rounds rather than servers: see the comment on the counting loop below for
-// why, and for what it does not change.
-//
-// A round counts once, identified by at least one server's status.failedAt
-// being newer than the newest one already counted. That test is what makes the count
-// idempotent: without it a five-second resync would re-count the same corpse
-// forever. The window also runs from failedAt rather than from now, because
-// stamping the observation would extend the window on every pass and the
-// backoff would never expire.
-//
-// The streak breaks on a success *since* the last counted failure, not on any
-// server being Ready. The weaker rule reads well and is wrong: a group with
-// one healthy server and one that crash-loops — a bad node, a resource request
-// only some nodes satisfy — would hold its count at zero forever and hammer
-// indefinitely. A Failed server carries no ReadySince (the Server controller
-// clears it on the way out of Ready), so a corpse can never look like the
-// success that ends its own streak.
-//
-// requiredOrdinals selects which group that last rule is stated for. Zero
-// means ephemeral, where servers are interchangeable and any success ends the
-// streak. Above zero it is spec.replicas of a persistent group, where each
-// ordinal owns a world of its own: the streak breaks only when every required
-// ordinal has a ready server, so a healthy sibling can no longer stand in for
-// a broken one and clear its count.
+// The streak breaks on a success since the last counted failure, not on any
+// server being Ready; otherwise one healthy server would mask a crash-looping
+// sibling forever. requiredOrdinals is 0 for ephemeral groups (any success
+// counts) and spec.replicas for persistent ones (every ordinal must be ready).
 func CountFailures(views []ServerView, prev int32, since time.Time, requiredOrdinals int32) (int32, time.Time) {
 	var lastSuccess time.Time
 	if requiredOrdinals == 0 {
@@ -67,9 +35,6 @@ func CountFailures(views []ServerView, prev int32, since time.Time, requiredOrdi
 			}
 		}
 	} else {
-		// Which ordinals have a ready server, and each one's newest ReadySince.
-		// Presence is what the gate below reads; the timestamps are what it
-		// takes the maximum of.
 		ready := make(map[int32]time.Time, len(views))
 		for _, v := range views {
 			if v.Ordinal == nil || v.Phase != phase.Ready {
@@ -79,18 +44,11 @@ func CountFailures(views []ServerView, prev int32, since time.Time, requiredOrdi
 				ready[*v.Ordinal] = v.ReadySince
 			}
 		}
-		// Two questions with different answers. *Whether* the group recovered:
-		// every required ordinal has a ready server, which is what stops a
-		// healthy sibling standing in for a broken one. *When* it recovered:
-		// the latest of their ReadySince values, because that is when the last
-		// of them came back. The earliest would be wrong -- an ordinal that
-		// stays ready through the whole episode never advances its ReadySince,
-		// so it would pin this to a time before the failure and no recovery
-		// could ever break the streak.
+		// The latest ReadySince, not the earliest: an ordinal that stayed ready
+		// throughout would pin the earliest before the failure.
 		for ordinal := int32(0); ordinal < requiredOrdinals; ordinal++ {
 			at, ok := ready[ordinal]
 			if !ok {
-				// Broken, being rebuilt, or not created yet: not recovered.
 				lastSuccess = time.Time{}
 				break
 			}
@@ -102,30 +60,11 @@ func CountFailures(views []ServerView, prev int32, since time.Time, requiredOrdi
 
 	count, from := prev, since
 	if lastSuccess.After(since) {
-		// Failures older than that success belong to the streak it ended, not
-		// to a new one, so the count restarts and only failures after it are
-		// counted below.
 		count, from = 0, lastSuccess
 	}
 
-	// One per *round*, not one per corpse.
-	//
-	// Counting servers spent the budget in ceil(backoffGiveUpAt / floor)
-	// rounds, because size() creates the whole shortfall in one pass: three
-	// attempts at minReplicas 2, two at 3, and exactly one at 6 or above. A
-	// transient scheduler, registry or quota problem that failed a whole
-	// floor's worth of servers at once therefore took a large group straight
-	// to a terminal give-up that only a spec edit clears, however briefly the
-	// problem lasted.
-	//
-	// At minReplicas 1 nothing changes -- one server fails per round, so
-	// rounds and servers are the same number -- which is the schedule design
-	// §3.6 and §5 narrate: one free attempt and five growing waits.
-	//
-	// A pass counts at most one round however many corpses it sees. Two passes
-	// that each see new failures are two rounds, which is the conservative
-	// reading when one creation round fails in two batches: the operator
-	// observed twice.
+	// One per round, not per corpse: size() creates the whole shortfall at once,
+	// so counting servers would let one transient failure exhaust a large group.
 	newest := since
 	sawNewFailure := false
 	for _, v := range views {
@@ -143,34 +82,23 @@ func CountFailures(views []ServerView, prev int32, since time.Time, requiredOrdi
 	return count, newest
 }
 
-// BackoffInputs is what the retry decision needs.
 type BackoffInputs struct {
-	// ConsecutiveFailures is the count CountFailures produced.
 	ConsecutiveFailures int32
-	// LastFailureAt is the newest counted failure. The window runs from here.
-	LastFailureAt time.Time
-	// Now is the reconciler's clock.
-	Now time.Time
+	LastFailureAt       time.Time
+	Now                 time.Time
 }
 
-// BackoffDecision is what the group may do about creating this pass.
 type BackoffDecision struct {
-	// MayCreate is false while a window is open and false once the group has
-	// given up. Deletions, retirements and drains are never gated by it.
+	// Deletions, retirements and drains are never gated by it.
 	MayCreate bool
-	// GaveUp is true past the threshold. Nothing is created until what the
-	// servers start with changes (see attemptKey).
-	GaveUp bool
-	// RetryAfter is how long until the window closes, for the condition's
-	// message. Zero when MayCreate or GaveUp.
+	// Cleared only when what the servers start with changes (see attemptKey).
+	GaveUp     bool
 	RetryAfter time.Duration
 }
 
-// DecideBackoff turns the count into permission to create.
 func DecideBackoff(in BackoffInputs) BackoffDecision {
 	if in.ConsecutiveFailures >= backoffGiveUpAt {
-		// Terminal until the spec changes. An elapsed window must not
-		// resurrect it, which is why this is tested before the window below.
+		// Before the window check, so an elapsed window cannot resurrect it.
 		return BackoffDecision{GaveUp: true}
 	}
 	if in.ConsecutiveFailures == 0 {
@@ -183,12 +111,7 @@ func DecideBackoff(in BackoffInputs) BackoffDecision {
 	return BackoffDecision{RetryAfter: ready.Sub(in.Now)}
 }
 
-// backoffDelay is the window after n consecutive failures.
-//
-// Multiplied in a loop with the cap checked each time rather than computed as
-// base * factor^(n-1): a large n would overflow the exponent long before it
-// reached anything meaningful, and the cap makes every step past it identical
-// anyway.
+// A loop rather than base * factor^(n-1), which overflows for large n.
 func backoffDelay(n int32) time.Duration {
 	d := backoffBase
 	for i := int32(1); i < n; i++ {

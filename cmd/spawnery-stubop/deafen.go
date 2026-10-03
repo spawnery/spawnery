@@ -22,36 +22,16 @@ import (
 	"sync/atomic"
 )
 
-// deafness is the fourth thing this stub can do to an agent, and the only one
-// the agent cannot be told about: at a chosen moment every connection goes
-// silent without being closed. Nothing is written, nothing that arrives is
-// delivered upward, and no FIN and no RST ever reach the agent.
+// deafness makes every connection go silent at a chosen moment without being
+// closed: nothing is written, nothing that arrives is delivered upward, and no
+// FIN or RST reaches the agent.
 //
-// # What this reproduces, and what it does not
-//
-// It is the shape of a peer that is gone without the transport having noticed,
-// which TCP takes minutes to conclude on a default Linux. It is not the same
-// fault, though. A real black hole drops packets, so
-// the agent's own TCP gets no acknowledgements either and eventually gives up
-// on its own; here the stub's kernel goes on acknowledging, so nothing under
-// the agent will ever end the wait. That makes this the harsher half of the
-// pair and the honest one to test a keepalive against: if the ping is what
-// ends the wait, it is the only thing that can.
-//
-// The two other ways the stub can go quiet are different states and are not
-// this one. --mute-after is an operator that accepts a stream and never
-// answers it, which SessionLoop.awaitAnswer already has a clock for. Killing
-// the stub closes its sockets, which the agent sees at once. This is the state
-// with no clock on either side, and OperatorChannel's keepalive is what this
-// exists to exercise.
-//
-// One inbound frame may still be processed after deafness begins: a Read
-// already parked in the kernel returns whatever arrives next before the check
-// below is reached again. It changes nothing the agent can observe, because
-// every write out is discarded from the same instant.
+// Unlike a real black hole, the stub's kernel goes on acknowledging, so the
+// agent's TCP never gives up either: only OperatorChannel's keepalive can end
+// the wait, which is what this exercises. One inbound frame already parked in
+// a Read may still be processed after it begins.
 type deafness struct{ on atomic.Bool }
 
-// listener wraps inner so that every connection it hands out honours d.
 func (d *deafness) listener(inner net.Listener) net.Listener {
 	return &deafListener{Listener: inner, deafness: d}
 }
@@ -76,9 +56,8 @@ type deafConn struct {
 	once     sync.Once
 }
 
-// Read blocks for the life of the connection once deafness has begun, which is
-// what makes this a black hole rather than an error: an error would break the
-// stream, and a broken stream is the one thing the agent already handles.
+// Read blocks for the life of the connection once deafness has begun; an error
+// would break the stream, which the agent already handles.
 func (c *deafConn) Read(p []byte) (int, error) {
 	if c.deafness.on.Load() {
 		<-c.closed
@@ -87,9 +66,7 @@ func (c *deafConn) Read(p []byte) (int, error) {
 	return c.Conn.Read(p)
 }
 
-// Write reports success and sends nothing. The server's HTTP/2 layer goes on
-// believing it answered -- a ping acknowledgement included, which is precisely
-// what the agent is waiting for.
+// Write reports success and sends nothing, ping acknowledgements included.
 func (c *deafConn) Write(p []byte) (int, error) {
 	if c.deafness.on.Load() {
 		return len(p), nil

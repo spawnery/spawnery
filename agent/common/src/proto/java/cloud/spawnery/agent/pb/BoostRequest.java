@@ -9,14 +9,8 @@ package cloud.spawnery.agent.pb;
  * <pre>
  * BoostRequest asks for extra capacity on a group, for a while.
  *
- * It carries no namespace, for the reason RetireRequest carries none.
- *
- * **A duration and not an instant.** The agent and the operator do not share a
- * clock, and an absolute expiry from a pod whose clock is minutes fast would
- * create a boost that ends early or late by exactly that error -- silently,
- * since nothing on either side can see the difference. A duration is
- * interpreted against the operator's own clock, which is the clock the scaler
- * then reads.
+ * A duration and not an instant, because the agent's clock is not the
+ * operator's; the operator measures it on its own.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.BoostRequest}
@@ -116,8 +110,7 @@ private static final long serialVersionUID = 0L;
   private long durationSeconds_ = 0L;
   /**
    * <pre>
-   * Zero means the operator's default. The operator also bounds the maximum;
-   * see its own answer for what it refuses and why.
+   * Zero means the operator's default. The operator also bounds the maximum.
    * </pre>
    *
    * <code>int64 duration_seconds = 3;</code>
@@ -315,14 +308,8 @@ private static final long serialVersionUID = 0L;
    * <pre>
    * BoostRequest asks for extra capacity on a group, for a while.
    *
-   * It carries no namespace, for the reason RetireRequest carries none.
-   *
-   * **A duration and not an instant.** The agent and the operator do not share a
-   * clock, and an absolute expiry from a pod whose clock is minutes fast would
-   * create a boost that ends early or late by exactly that error -- silently,
-   * since nothing on either side can see the difference. A duration is
-   * interpreted against the operator's own clock, which is the clock the scaler
-   * then reads.
+   * A duration and not an instant, because the agent's clock is not the
+   * operator's; the operator measures it on its own.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.BoostRequest}
@@ -593,8 +580,7 @@ private static final long serialVersionUID = 0L;
     private long durationSeconds_ ;
     /**
      * <pre>
-     * Zero means the operator's default. The operator also bounds the maximum;
-     * see its own answer for what it refuses and why.
+     * Zero means the operator's default. The operator also bounds the maximum.
      * </pre>
      *
      * <code>int64 duration_seconds = 3;</code>
@@ -606,8 +592,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * Zero means the operator's default. The operator also bounds the maximum;
-     * see its own answer for what it refuses and why.
+     * Zero means the operator's default. The operator also bounds the maximum.
      * </pre>
      *
      * <code>int64 duration_seconds = 3;</code>
@@ -623,8 +608,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * Zero means the operator's default. The operator also bounds the maximum;
-     * see its own answer for what it refuses and why.
+     * Zero means the operator's default. The operator also bounds the maximum.
      * </pre>
      *
      * <code>int64 duration_seconds = 3;</code>

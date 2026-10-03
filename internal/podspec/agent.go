@@ -16,33 +16,17 @@ limitations under the License.
 
 package podspec
 
-// These names are shared between the operator's gRPC authenticator
-// (internal/grpcauth), which turns an agent's bearer token into a pod
-// identity, and the pod specs this package builds, which is what puts the
-// matching ServiceAccount and CA bundle onto every managed pod in the first
-// place. They live here rather than in grpcauth because grpcauth already
-// imports podspec for LabelRole; putting them in grpcauth would create an
-// import cycle.
+// Shared with internal/grpcauth, which already imports podspec; defining them
+// there would create an import cycle.
 const (
-	// AgentTokenAudience is the audience every agent's projected service
-	// account token must carry. TokenReview refuses tokens without it.
-	AgentTokenAudience = "spawnery-operator"
-	// ServerServiceAccountName is the identity of every Paper agent pod.
+	// AgentTokenAudience is the audience TokenReview requires on agent tokens.
+	AgentTokenAudience       = "spawnery-operator"
 	ServerServiceAccountName = "spawnery-server"
-	// ProxyServiceAccountName is the identity of every Velocity agent pod.
-	ProxyServiceAccountName = "spawnery-proxy"
-	// CAConfigMapName holds the CA certificate agents use to verify the
-	// operator's gRPC endpoint.
-	CAConfigMapName = "spawnery-ca"
-	// CAConfigMapKey is the data key of CAConfigMapName.
-	CAConfigMapKey = "ca.crt"
-	// AgentServiceName is the Service in front of the operator's gRPC
-	// endpoint. It is the single source of the certificate's SANs and of the
-	// address the agents dial, so the two cannot drift apart — and a drift
-	// between them shows up as a TLS error in a game server pod, far from its
-	// cause. The Service manifest in config/deploy/service.yaml is the third
-	// place the name appears; internal/rbacaudit asserts it against this
-	// constant, because renaming the Service alone would break every dial and
-	// every SAN with a fully green test suite.
+	ProxyServiceAccountName  = "spawnery-proxy"
+	CAConfigMapName          = "spawnery-ca"
+	CAConfigMapKey           = "ca.crt"
+	// AgentServiceName is the single source of the certificate's SANs and of the
+	// address agents dial. internal/rbacaudit checks config/deploy/service.yaml
+	// against it.
 	AgentServiceName = "spawnery-operator"
 )

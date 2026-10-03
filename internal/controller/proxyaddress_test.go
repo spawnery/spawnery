@@ -11,11 +11,8 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// readyProxyPod builds a pod the way the kubelet leaves one: Running, on a
-// node, Ready. hostPort is what podspec.BuildProxyPod puts on the container
-// under the HostPort strategy and leaves at zero under every other one
-// (internal/podspec/proxy.go:227-229), which is the fact the fabrication case
-// below turns on.
+// readyProxyPod builds a Running, Ready pod on a node. podspec sets hostPort
+// only under the HostPort strategy; the fabrication case turns on that.
 func readyProxyPod(hostIP string, hostPort int32) corev1.Pod {
 	return corev1.Pod{
 		Spec: corev1.PodSpec{Containers: []corev1.Container{{
@@ -42,8 +39,6 @@ func notReadyProxyPod(hostIP string, hostPort int32) corev1.Pod {
 	return pod
 }
 
-// nodePortService is what reconcileService leaves behind for a NodePort
-// group: one port, named, with the node port the API server allocated.
 func nodePortService(nodePort int32) *corev1.Service {
 	return &corev1.Service{
 		ObjectMeta: metav1.ObjectMeta{Name: "gateway"},
@@ -115,8 +110,8 @@ func TestProxyAddressPublishesOnlyWhatIsObservablyRealised(t *testing.T) {
 			name: "NodePort reads the Service and not the spec",
 			spec: nodePort,
 			pods: []corev1.Pod{readyProxyPod("192.168.1.10", 0)},
-			// The spec asks for 30765; the API server allocated 31000. The
-			// allocation is what a client can dial.
+			// The spec asks for 30765; the allocated 31000 is what a client
+			// can dial.
 			svc:  nodePortService(31000),
 			want: "192.168.1.10:31000",
 			why:  "the allocation wins over the request",
@@ -138,13 +133,9 @@ func TestProxyAddressPublishesOnlyWhatIsObservablyRealised(t *testing.T) {
 			why:  "HostPort creates no Service, so the pod is the whole evidence",
 		},
 		{
-			// THE FABRICATION CASE. This is the one that fails before the
-			// change. The spec has been switched to HostPort; the pods still
-			// running are the NodePort generation, whose containers carry
-			// HostPort == 0. Before this change proxyAddress took their HostIP
-			// and appended the spec's 25565, publishing an address whose host
-			// is real, whose port is real, and which no process on that node
-			// is listening on.
+			// Spec switched to HostPort while only the NodePort generation
+			// (HostPort 0) is ready: HostIP plus 25565 is an address nothing
+			// listens on.
 			name: "HostPort publishes nothing while only the old strategy's pods are ready",
 			spec: hostPort,
 			pods: []corev1.Pod{readyProxyPod("192.168.1.10", 0)},
@@ -153,12 +144,8 @@ func TestProxyAddressPublishesOnlyWhatIsObservablyRealised(t *testing.T) {
 			why:  "no pod in existence binds 25565 on that node",
 		},
 		{
-			// The CRD makes this unreachable -- HostPortSpec.Port is required
-			// with Minimum=1 -- so the only caller that can produce it is a
-			// test like this one. Without the guard, zero matches every pod
-			// declaring no host port, which is every pod of every other
-			// strategy, and the helper would hand back a node address for
-			// `host:0`: the exact inversion of its purpose.
+			// Unreachable through the CRD (Minimum=1), but zero would match
+			// every pod of every other strategy.
 			name: "HostPort with a zero port publishes nothing rather than host:0",
 			spec: spawneryv1alpha1.ExposeSpec{
 				Type:     spawneryv1alpha1.ExposeHostPort,
@@ -226,12 +213,8 @@ func TestProxyAddressPublishesOnlyWhatIsObservablyRealised(t *testing.T) {
 			why:  "test/e2e/expose_test.go rests on exactly this",
 		},
 		{
-			// The readiness gate has to be stated for this strategy rather
-			// than inherited: a LoadBalancer's address comes from the Service,
-			// which knows nothing about readiness, so without the gate
-			// status.address would point somewhere the moment a load balancer
-			// answered -- including for a group whose every pod is in
-			// ImagePullBackOff.
+			// A LoadBalancer's address comes from the Service, which knows
+			// nothing about readiness.
 			name: "LoadBalancer with an assigned address but no ready proxy",
 			spec: loadBalancer,
 			pods: []corev1.Pod{notReadyProxyPod("192.168.1.10", 0)},
@@ -240,11 +223,6 @@ func TestProxyAddressPublishesOnlyWhatIsObservablyRealised(t *testing.T) {
 			why:  "an assigned address is not a serving proxy",
 		},
 		{
-			// Same shape one strategy over, and the one test/e2e/expose_test.go
-			// names as its backing: it asserts nothing about the ClusterIP
-			// group's address, because no image resolves there and asserting an
-			// empty string would be asserting the image tag rather than the
-			// strategy.
 			name: "ClusterIP publishes nothing until a proxy is ready",
 			spec: clusterIP,
 			pods: []corev1.Pod{notReadyProxyPod("192.168.1.10", 0)},

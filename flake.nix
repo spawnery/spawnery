@@ -11,8 +11,6 @@
     {
       devShells = forAllSystems (pkgs:
         let
-          # Linux: the nixpkgs packages, as before. envtest wants exactly
-          # these three binaries in one directory.
           envtestFromNixpkgs = pkgs.runCommand "envtest-assets" { } ''
             mkdir -p $out
             ln -s ${pkgs.kubernetes}/bin/kube-apiserver $out/kube-apiserver
@@ -20,18 +18,9 @@
             ln -s ${pkgs.kubectl}/bin/kubectl           $out/kubectl
           '';
 
-          # Darwin: nixpkgs does not build kube-apiserver there. The
-          # controller-tools project publishes prebuilt binaries for
-          # darwin/arm64; the hash is checked in, and the download only
-          # happens when the derivation is built. The reverse does not
-          # hold for Linux: those prebuilt binaries are dynamically linked
-          # against glibc and would need autoPatchelfHook.
-          #
-          # The two halves drift on their own. A new Kubernetes version
-          # arriving through the nixpkgs channel moves the Linux path and
-          # leaves envtestVersion below exactly where it was, so the two
-          # development environments run different kube-apiserver versions
-          # against the same suite with nothing saying so. Bump both together.
+          # Darwin: nixpkgs does not build kube-apiserver there, so upstream's
+          # prebuilt binaries (Linux ones would need autoPatchelfHook). The Linux
+          # side follows nixpkgs' Kubernetes; bump envtestVersion along with it.
           envtestVersion = "1.36.2";
           envtestFromUpstream = pkgs.stdenvNoCC.mkDerivation {
             pname = "envtest-assets";
@@ -68,74 +57,33 @@
               kubernetes-helm
               kind
               k3d
-              # hack/publish.sh copies each image archive straight from the Nix
-              # store to the registry. A local container store in between would
-              # publish whatever a stale `podman load` left behind rather than
-              # what the flake describes.
+              # hack/publish.sh copies image archives straight from the Nix store; a
+              # local container store in between could publish a stale image.
               skopeo
-              # hack/publish-api.sh assembles one archive out of what Gradle
-              # laid out, because the Central Portal takes a bundle rather than
-              # a Maven deploy. `jar` from the JDK could make the same file and
-              # would need a flag to stop it inventing a manifest -- a line the
-              # next reader has to decode, to save a package this small.
+              # For hack/publish-api.sh's Central Portal bundle; `jar` would add a manifest.
               zip
-              # And gpg, because hack/publish-api.sh signs with it rather than
-              # with Gradle's signing plugin. Measured, on a real key: that
-              # plugin reads a key through a bundled Bouncy Castle and answers
-              # "Could not read PGP secret key" for keys recent GnuPG versions
-              # write by default -- a failure in the middle of a build log,
-              # about a format the person who made the key never chose. The
-              # tool that wrote the key is the one that can read it.
+              # hack/publish-api.sh signs with gpg: Gradle's signing plugin cannot read
+              # keys in the format recent GnuPG writes by default.
               gnupg
-              # Both of these are pinned a second time, by version, in
-              # agent/common/build.gradle.kts -- and only this half moves when
-              # nixpkgs does. `protobuf` here is protoc, whose X.Y the
-              # `protobuf-java` artifact tracks one for one (protoc 35.1 <->
-              # protobuf-java 4.35.1); `protoc-gen-grpc-java` here is the
-              # generator whose output the `io.grpc:grpc-*` artifacts have to
-              # match, currently 1.83.1. A `nix flake update` followed by
-              # `make proto` can therefore regenerate stubs that demand a
-              # runtime the build does not resolve, and the symptom
-              # (`compileProtoJava`: cannot find symbol, or a
-              # ProtobufRuntimeVersionException at class init) appears nowhere
-              # near this line. After a flake update, read both new versions
-              # from the repository root and move the literals in
-              # agent/common/build.gradle.kts's dependencies block to match.
-              # protoc answers for itself:
-              #
-              #   nix develop -c protoc --version
-              #
-              # The generator plugin takes no option at all, so it is read off
-              # the pinned nixpkgs instead:
-              #
-              #   nix eval --raw --impure --expr '(builtins.getFlake (toString ./.)).inputs.nixpkgs.legacyPackages.${builtins.currentSystem}.protoc-gen-grpc-java.version'
-              #
-              # Nothing enforces this but flake.lock. See docs/reference/known-issues.md.
+              # protoc and protoc-gen-grpc-java are pinned again in
+              # agent/common/build.gradle.kts (protobuf-java tracks protoc's X.Y,
+              # io.grpc:grpc-* the generator's version); only this half moves with
+              # nixpkgs. hack/toolchain-pins-agree.sh fails when they drift.
               protobuf
               protoc-gen-go
               protoc-gen-go-grpc
               protoc-gen-grpc-java
               gradle
-              # The documentation site. mkdocs --strict is the link checker,
-              # so this is a test dependency and not only a build one.
+              # mkdocs --strict is the link checker, so this is a test dependency too.
               python3Packages.mkdocs
               python3Packages.mkdocs-material
               python3Packages.mkdocs-mermaid2-plugin
-              # Explicit, not incidental: python3 and pyyaml are reachable
-              # through mkdocs's own closure today, and hack/crd-docs.sh would
-              # start failing on a mkdocs bump that dropped them, naming
-              # neither cause.
+              # hack/crd-docs.sh needs these; that mkdocs's closure carries them is incidental.
               python3
               python3Packages.pyyaml
               jdk21_headless
-              # hack/agent-test.sh asserts on the stub operator's event stream.
               jq
-              # Test-only and shipped in no image (see the package below), but
-              # test/e2e/tutorial_test.go runs it as a real subprocess against
-              # a real proxy rather than importing internal/mcjoin, the way a
-              # person following the tutorial runs it themselves -- so it
-              # needs to be on the dev shell's PATH rather than built inside
-              # the test.
+              # test/e2e/tutorial_test.go runs it as a subprocess, as a tutorial reader would.
               self.packages.${pkgs.system}.spawnery-join
             ];
 
@@ -151,437 +99,38 @@
 
           velocity = pkgs.callPackage ./nix/velocity.nix { };
 
-          # Purpur, the fork this project's backend image is moving to. It
-          # takes Paper's Mojang jar rather than pinning a second copy: both
-          # are the same Minecraft version, there is only one such object, and
-          # paperclip verifies it against its own download-context before
-          # patching -- so a pair that ever drifts fails the build instead of
-          # patching against the wrong original. See nix/purpur.nix.
+          # Takes Paper's Mojang jar; paperclip verifies it before patching, so a
+          # pair that drifts fails the build.
           purpur = pkgs.callPackage ./nix/purpur.nix {
             inherit (paper) mojangJar;
           };
 
-          # The previous Minecraft version, still built beside the current one
-          # so a network can move on its own schedule. Removed as a pair with
-          # the two images below that carry them.
+          # The previous Minecraft version, built beside the current one so a
+          # network can move on its own schedule.
           paper-26-2 = pkgs.callPackage ./nix/paper-26.2.nix { };
           purpur-26-2 = pkgs.callPackage ./nix/purpur-26.2.nix {
             inherit (paper-26-2) mojangJar;
           };
 
-          # Extracted while paper-image was the only consumer; velocity-image
-          # will be the second (see nix/oci-common.nix for why that timing
-          # matters).
           oci-common = pkgs.callPackage ./nix/oci-common.nix { };
 
-          # The Paper image's Java runtime, jlink'd to the modules Paper and
-          # the agent actually resolve. Its own file because the list is
-          # measured rather than chosen, and that measurement is what a Paper
-          # bump has to repeat.
           paper-jre = pkgs.callPackage ./nix/paper-jre.nix { };
 
-          # Velocity's counterpart. Separate because the classpaths are, and
-          # each list is a measurement over its own.
           velocity-jre = pkgs.callPackage ./nix/velocity-jre.nix { };
 
-          # The one place this version is written down. It reaches both the
-          # plugin's paper-plugin.yml (which the agent reports to the
-          # operator as Hello.version) and the image tag, so the two can
-          # never drift apart the way the agent derivation's and
-          # paper-image.nix's separate defaults once could.
-          #
-          # **0.2.10 moves this and only this**, which is a third mode the
-          # separation had not yet been put through: nothing under agent/
-          # changed, but image/entrypoint.sh did, and that ships inside the
-          # game images rather than in the operator. So the two game tags move
-          # and operatorVersion stands -- the mirror of 0.2.6 and 0.2.8, where
-          # it stood and the operator moved.
-          #
-          # The sequence so far, and none of it is a miscount: 0.2.5, 0.2.7,
-          # 0.2.9, 0.2.10, 0.2.12, 0.2.13, 0.2.15. 0.2.6, 0.2.8, 0.2.11 and
-          # 0.2.14 built no game image, so
-          # ghcr.io/spawnery/paper:26.2-0.2.6, -0.2.8, -0.2.11 and -0.2.14
-          # simply do not exist, and each gap records a release that carried no
-          # jar. 0.2.14's gap is the widest of them: its whole content was the
-          # chart's own publication route.
-          #
-          # **0.2.15 moves this for the reason 0.2.10 did and one more.**
-          # image/entrypoint.sh changed again -- it now takes the server jar
-          # from SPAWNERY_SERVER_JAR -- so both game images differ. And a third
-          # game image joins them: ghcr.io/spawnery/purpur, which shares this
-          # number because it ships the same agent jar and is tagged the same
-          # way.
-          #
-          # 0.2.16 moves it for a reason worth naming, because it is not the
-          # obvious one: nothing under agent/ or image/ changed. internal/render
-          # did, and that package is compiled into spawnery-config, which ships
-          # in all three game images. A change to what the renderer accepts is
-          # a change to those images even when the agent is byte-identical.
-          #
-          # A Paper or Purpur build that moves without this number moving would
-          # collide, which is what makes a bump obligatory when the images
-          # really do change rather than tidy.
-          #
-          # 0.2.17 is both halves of that at once. nix/paper-jre.nix gains
-          # java.net.http, so the Paper and Purpur images run a different
-          # runtime than 0.2.16 did -- and agent/ changed too: a renewal is no
-          # longer reported as a stream failure. Either alone would oblige this
-          # number; the operator is untouched, so operatorVersion below is not.
-          #
-          # 0.2.18 moves it again, and this time the other number with it: the
-          # agents gained a verb. A server can publish a short state and a few
-          # attributes, every agent reads them back out of the network picture,
-          # and `/cloud info` prints what a server says about itself -- so the
-          # jar inside the game images is a different jar.
-          #
-          # 0.2.19 moves it for the same kind of reason: the agents gained a
-          # second verb -- a server can close its own door to new players and
-          # open it again -- and a group's attributes reach a plugin through
-          # the same jar.
-          #
-          # 0.2.20 moves it because a value the plugin API hands out gained a
-          # component: a server now says which run of it this is.
-          #
-          # **0.2.21 moves this and nothing else, and the images it names are
-          # identical to 0.2.20's.** What the release publishes is an artefact
-          # that has never been published before: cloud.spawnery:spawnery-api,
-          # whose coordinate takes its version from this number. The same shape
-          # as 0.2.14, whose whole content was the chart's publication path.
-          #
-          # The two game images are pushed again under the new tag because they
-          # are built from this number; the operator is not, and hack/publish.sh
-          # refuses its unchanged tag on its own. Republishing two identical
-          # images is the cost of having one number for the agent artefacts,
-          # and it is smaller than giving the API a version of its own that
-          # nothing else would keep in step.
-          #
-          # 0.2.22 exists because 0.2.21 did not do the one thing it was for.
-          # hack/publish-api.sh read DRY_RUN as a presence rather than as a
-          # value, and the workflow passes 0 for "really publish" -- so the
-          # tagged release rehearsed, reported success and uploaded nothing.
-          # The images this names are identical to 0.2.20's and 0.2.21's for
-          # the third time, which is the price of the mistake and not of the
-          # design.
-          #
-          # 0.2.23 moves it because a value the plugin API hands out gained a
-          # component again: a group now carries the name a person gave it.
-          #
-          # 0.2.24 moves it for the images alone and not for the API: both
-          # entrypoint scripts gained a block that copies a spec.extraFiles
-          # claim into the working directory, and refuses a source carrying a
-          # path the renderer or extraPlugins owns. That ships in the game
-          # images and nowhere else.
-          #
-          # 0.2.25 moves it because the published API gained a method: a
-          # plugin can hold its server back from readiness until it has
-          # finished starting, and the agent honours that at the ready probe.
-          #
-          # 0.2.26 moves it alone: the agent completes names and signs its
-          # feed, and the operator binary is untouched -- what it gained is a
-          # test that reads the agent's source.
-          #
-          # 0.2.27 moves it because the published API gained a component
-          # again: a server carries the number its group handed it, so a
-          # plugin can render "Hub-2".
-          #
-          # 0.2.28 moves it because the published API gains a method:
-          # SpawneryApi.endRound() lets a plugin say its round is over, and
-          # that is a class in cloud.spawnery:spawnery-api, versioned off this
-          # number rather than operatorVersion.
-          #
-          # 0.2.29 moves it alone, like 0.2.26: the agent's feed gives
-          # FinishedRetentionElapsed the sign its twin RetentionElapsed has
-          # had all along, and nothing in the operator binary changes. The
-          # published API is identical to 0.2.28's and is republished under
-          # this number for the reason the 0.2.21 paragraph gives.
-          #
-          # 0.2.30 moves it because the images changed: both entrypoints read
-          # the image's own directory under the reserved prefix
-          # (SPAWNERY_PAPER_HOME, SPAWNERY_VELOCITY_HOME), so spec.env can no
-          # longer point a server at another jar, and spawnery-config writes
-          # server.properties in Properties syntax, so a trailing backslash in
-          # an overlay value no longer swallows the next key. The published
-          # API is identical to 0.2.29's and is republished under this number
-          # for the reason the 0.2.21 paragraph gives.
-          #
-          # 0.2.34 moves it because the images changed: an extraFiles claim
-          # may not carry eula.txt, the chmod after a copy walks with find
-          # -xdev and stops at a mount, and the images carry findutils for
-          # it -- coreutils has no find, and the script tests run with the
-          # host's. The published API is identical to 0.2.30's and is
-          # republished under this number for the reason the 0.2.21
-          # paragraph gives.
-          #
-          # 0.3.0 moves it because the agents changed: every pod now registers
-          # a LuckPerms context calculator reporting its own name, group,
-          # network and platform, so a permission rule can name a place. A
-          # minor step and not a patch -- a pod behaves differently where it
-          # did nothing before. The published API is identical to 0.2.34's and
-          # is republished under this number for the reason the 0.2.21
-          # paragraph gives.
-          #
-          # 0.4.0 moves it because the entrypoints changed: a claim that carries
-          # a path a read-only spec.mounts entry already holds under /data is
-          # refused at start with a message naming both, instead of dying on a
-          # bare cp. The published API is identical to 0.3.0's and is
-          # republished under this number for the reason the 0.2.21 paragraph
-          # gives.
-          #
-          # 0.5.0 moves it because the agents changed: SpawneryApi gains
-          # startServer and stopServer, a server's network picture no longer
-          # carries the private servers of an on-demand group -- a backend
-          # sees none, a proxy sees all -- and Group.Kind gains ON_DEMAND. A
-          # minor step: two methods are added to the published API, which is
-          # otherwise the one 0.4.0 published, and it is republished under
-          # this number for the reason the 0.2.21 paragraph gives.
-          #
-          # 0.8.0 moves it because the agents changed: SpawneryApi gains
-          # unretire, proxies() and proxy(name), ServerInfo gains held(), and
-          # /cloud gains unretire and shows proxies. The proto gains the
-          # messages for both; an older operator answers unretire as unknown.
-          #
-          # 0.9.0 moves it because the agents changed: the Paper agent reports
-          # its TPS and MSPT, SpawneryApi gains status() and status(target)
-          # with four records, and /cloud gains status under the new
-          # spawnery.cloud.status. An older operator answers status as unknown.
-          #
-          # 0.10.0 moves it because the agents changed: every /cloud answer is
-          # laid out in sections with bars, one-line answers carry ✔ or ✘, and
-          # ServerInfo, ProxyInfo and InstanceStatus gain node(), each keeping
-          # its previous constructor.
-          #
-          # 0.11.0 moves it because the entrypoints changed: with
-          # SPAWNERY_SUBSTITUTION_PREFIX set, spawnery-config --substitute fills
-          # the copied plugins' and files' placeholders from the environment
-          # before the JVM starts. The published API is unchanged.
-          #
-          # 0.12.0 moves it because the images changed: Minecraft 26.3, on
-          # Paper 26.3, Purpur 26.3 and Velocity 4.2.0, with the 26.2 Paper and
-          # Purpur images built beside them for the transition, and the
-          # renderer writes white-list=false unless an overlay asks for it. The
-          # published API is unchanged.
-          #
-          # 0.13.0 moves it because the API and the agents changed:
-          # SpawneryApi.playableSlots(int), carried on every report, and
-          # ServerInfo and InstanceStatus gain playableSlots(), each keeping
-          # its previous constructor. /cloud shows playable seats beside the
-          # limit.
-          #
-          # 0.14.0 moves it because the API and the agents changed:
-          # SpawneryApi.deleteServer(group, key); the Paper agent refuses a
-          # login past the playable slots when the group enforces them; both
-          # agents report their JVM heap.
-          #
-          # 0.15.0 moves it because the Velocity agent and the renderer
-          # changed: a leaving proxy transfers its players when the group sets
-          # spec.update.transfer, and velocity.toml carries accepts-transfers.
-          #
-          # 0.16.0 moves it because the Paper entrypoint changed: with
-          # spec.storage.keep set, spawnery-config --prune clears the claim
-          # before rendering.
-          #
-          # 0.16.1 moves it alone: the Paper entrypoint refuses a source
-          # before the prune, and the prune no longer refuses what a source
-          # ships whole. The operator is untouched.
+          # The agent and game-image version: it reaches paper-plugin.yml (reported
+          # to the operator as Hello.version), the game image tags and
+          # cloud.spawnery:spawnery-api. It moves, taking the release's number,
+          # whenever anything under agent/, image/, internal/render or the JRE
+          # derivations changes; a Paper or Purpur bump without it would collide
+          # with a published tag. Gaps are releases that built no game image.
           imageVersion = "0.16.1";
 
-          # The operator's own version, deliberately not imageVersion.
-          # imageVersion above is the *agent* version -- it reaches the
-          # plugin's paper-plugin.yml and is reported to the operator as
-          # Hello.version -- and hanging the operator's tag off it would mean a
-          # fix in the reconciler claiming a new agent version, and an agent
-          # release renaming an unchanged operator image.
-          #
-          # 0.2.6 was the first release to exercise that separation in the
-          # direction it was built for: a reconciler change alone, with this
-          # number moving and imageVersion standing still. 0.2.8 was the same
-          # case. 0.2.7 and 0.2.9 move both, because both changed the operator
-          # and the agents together -- 0.2.9 brings plugins from a volume on
-          # this side and colour on the other.
-          #
-          # 0.2.10 did not move this -- its whole change was
-          # image/entrypoint.sh, which nix/operator-image.nix does not
-          # reference -- so **this number now has a gap too**, exactly as
-          # imageVersion does: spawnery-operator:0.2.10 does not exist, and the
-          # gap is the honest record of a release that built no operator.
-          #
-          # 0.2.11 moved it alone: the change was inside internal/controller and
-          # nothing under agent/ or image/ was different. 0.2.12 moved both --
-          # the chat feed's format is a Network field the operator carries and
-          # the agents read.
-          #
-          # **0.2.13 does not move this.** Its change is in the shipped jars
-          # (command replies wear the network's format) plus a comment on a CRD
-          # field. A comment does not reach the compiled binary, so the
-          # operator image is byte-identical and hack/publish.sh correctly
-          # refuses to overwrite a tag a cluster has already pulled.
-          #
-          # 0.2.14 did not move it either -- it published the chart and nothing
-          # else. **0.2.15 does**, and it is the first release since 0.2.9 to
-          # move all three numbers at once: two new CRD fields the reconcilers
-          # actually read (spec.env, and a claim source on spec.mounts), an
-          # entrypoint that takes its jar from a variable, and a third game
-          # image.
-          #
-          # 0.2.16 moves all three again: paper-world-defaults.yml became a
-          # configOverlay key (internal/render, so the game images) and a mount
-          # under /data/config is now refused (internal/podspec, so the
-          # operator).
-          #
-          # 0.2.17 stood still here, for the reason the note above gives.
-          # **0.2.18 moves it**: the announcement an agent sends is answered in
-          # internal/agentserver, held in internal/agent and published by
-          # internal/netstate. That is a reconciler-side change of the same
-          # kind as any other, and it is why this release moves all three
-          # numbers rather than only the images'.
-          #
-          # 0.2.19 moves all three again, and this one reaches further into the
-          # operator than 0.2.18 did: the phase machine learns a door that
-          # deregisters without moving a phase, the scaler stops counting seats
-          # on a server no proxy will route to, and two group kinds gain a spec
-          # field. **Unlike 0.2.18 the CRDs really change** -- an optional map
-          # on ServerGroup and ProxyGroup -- so every object that exists
-          # validates unchanged and the chart carries a new schema.
-          #
-          # 0.2.20 moves all three once more, and it is the smallest of the
-          # three moves: the reconciler records which pod is behind a server
-          # and netstate carries it onward. A status field, so the CRDs change
-          # again -- and a status field is one the operator fills in, so no
-          # object anybody wrote needs anything.
-          #
-          # 0.2.23 moves it with the images: netstate carries a group's display
-          # name into the picture, and the CRDs gain the spec field it comes
-          # from. A spec field this time, but an optional one -- no object
-          # anybody wrote needs anything.
-          #
-          # 0.2.24 moves it with the images again, and this one asks something
-          # of an installation for the first time in a while. The CRDs gain an
-          # optional spec.extraFiles on both group kinds, which needs nothing
-          # from anybody -- but --allow-plugin-volumes has been narrowed to the
-          # field it names, and a claim-backed spec.mounts now needs
-          # --allow-mount-volumes. An installation using one and not setting
-          # the other gets Accepted=False with MountVolumesDisabled.
-          # docs/guides/upgrading.md carries the note.
-          #
-          # 0.2.25 moves it for a decision, not a schema: the ready gate no
-          # longer registers a server whose agent has already closed its door.
-          #
-          # Release v0.2.27 moved it to 0.2.26, not 0.2.27, and that is the
-          # outlier and not a second rule. The rule since 0.2.14 is that a
-          # component takes the release's number when it moves, gaps and all;
-          # that release counted up by one instead, so the operator image
-          # v0.2.27 published is tagged 0.2.26. 0.2.28 follows the rule again.
-          #
-          # 0.2.28 moves it: the phase machine gains Finished, a server that
-          # says its round is over is replaced without costing its group a
-          # failure, and accept=false narrows to mean only "stop counting
-          # seats" rather than "stop routing too". docs/guides/upgrading.md carries
-          # the note, because that narrowing reaches agents built before this
-          # release as well.
-          #
-          # 0.2.30 moves it for the first time since 0.2.28, with the deep
-          # review of 2026-09-07 behind it: scale-down reads the same door as
-          # scale-up, so a group with servers in a round no longer deletes its
-          # only joinable server; the agent channel bounds what a proxy may
-          # report and clamps the mirrored count; proxy pods gain the fsGroup
-          # their writable claims need, which moves DesiredProxyHash and rolls
-          # every proxy once; and NodeDraining names the refusal that applies.
-          # The CRDs change in description text only. docs/guides/upgrading.md
-          # carries the proxy roll.
-          #
-          # 0.2.31 moves it alone, for what 0.2.30's rollout showed: for the
-          # seconds after an operator starts every server reads dropped and
-          # stale, and the door rule 0.2.30 added credited those nothing, so
-          # every ephemeral group built a second server on every restart.
-          # The rule now asks for fresh counts. No image, no CRD line moves.
-          #
-          # 0.2.32 moves it alone, for the other thing 0.2.30's rollout showed:
-          # every operator restart took every server out of Ready for fifteen
-          # seconds, because an unknown pod's stream was measured as down
-          # since process start -- leader election alone took 19 s -- and
-          # against a grace meant for one server going quiet, not a fleet
-          # dialling back in. The clock starts when agents can reach the
-          # operator, and the fleet gets the 45 s the proxy side already had.
-          #
-          # 0.2.33 moves it with the chart, and the CRDs really change for
-          # the first time since 0.2.28: Network gains spec.scheduling,
-          # optional, 53 added lines in config/crd/ and none removed -- a
-          # group's tolerations, node selectors, affinity and host port now
-          # need the Network's permission, and absent the field nothing is
-          # allowed. The operator also writes an egress policy per
-          # ProxyGroup, keeps the budget and a departing node ahead of the
-          # ConfigMap and claim gates, and bounds every send in a session
-          # loop. docs/guides/upgrading.md carries the two notes. No image moves.
-          #
-          # 0.4.0 moves it with the chart and the images. A ServerGroup's
-          # failure streak is reset when what its servers start with moves --
-          # the pod hash, the configOverlay ConfigMap, the new
-          # spawnery.cloud/retry annotation -- and no longer by a capacity or
-          # attributes edit. One optional status field, failureStreakKey, is
-          # added to the CRD. The pod hash is untouched, so nothing rolls.
-          #
-          # 0.5.0 moves it with the chart and the images. ServerGroup gains a
-          # third type, OnDemand, and with it spec.maxInstances and
-          # Server.spec.key on the CRDs: a member is a Server named
-          # <group>-<key>, asked for over the agent channel and stopped the
-          # same way, with a claim of its own that nothing here deletes. The
-          # controller sweeps a member whose run has ended, and the network
-          # picture is now built per audience. A group without the new type
-          # is unchanged and no server rolls.
-          #
-          # 0.6.0 moves it with the chart. A Network may cap how many of its
-          # groups change over at once (spec.update.maxConcurrentChangeovers):
-          # a group that must wait gets no cold start or surge pod until a
-          # place is free, and every group publishes status.changeover. Unset,
-          # nothing changes and no server rolls. The images do not move.
-          #
-          # 0.7.0 moves it with the chart. An ephemeral group may keep a floor
-          # of joinable servers through a changeover (spec.update.minAvailable),
-          # building one extra server at a time, and may replace only stale
-          # servers that are empty (spec.update.strategy WhenEmpty), holding
-          # no changeover place while it waits on players. Unset, nothing
-          # changes and no server rolls. The images do not move.
-          #
-          # 0.8.0 moves it with the chart and the images. A server whose round
-          # ended shuts down as Finished; unretire takes a retirement back and
-          # holds the server; proxies are in the network picture and the feed,
-          # can be retired by name, and drain without disconnecting unless
-          # their node leaves, their count goes unreadable, or the new
-          # ProxyGroup spec.update.maxStaleSeconds passes.
-          #
-          # 0.9.0 moves it with the chart and the images. The operator keeps
-          # each server's reported TPS and MSPT in memory and answers the
-          # agents' status request with a network's usage from metrics.k8s.io,
-          # which it may now list. Nothing rolls.
-          #
-          # 0.10.0 moves it with the chart and the images: the network picture
-          # and the status answer carry the node each server and proxy pod runs
-          # on. Nothing rolls.
-          #
-          # 0.11.0 moves it with the chart and the images: extraPlugins and
-          # extraFiles take an image as their source, mounted as an image
-          # volume, and spec.substitution passes its prefix to the entrypoint.
-          # Nothing rolls.
-          #
-          # 0.13.0 moves it with the chart and the images: spec.playableSlots
-          # and a plugin's runtime figure decide the free seats the group
-          # scales on, reports and routes a connect by. Nothing rolls.
-          #
-          # 0.14.0 moves it with the chart and the images: DeleteServer for
-          # on-demand worlds, enforcePlayableSlots in the group state, the
-          # network metrics, and a failed server's late pod is stopped.
-          #
-          # 0.15.0 moves it with the chart and the images: changeover stages,
-          # blue/green proxy rolls, the wider Deferred, and the transfer opt-in
-          # with door state pushed to the proxies.
-          #
-          # 0.16.0 moves it with the chart and the images: storage.keep reaches
-          # the pod, a spec change the operator has not reconciled holds later
-          # changeover stages, and a refused proxy group observes its spec.
-          #
-          # 0.17.0 moves it with the chart: storage.size may be lowered for
-          # claims created afterwards, storage.annotations reach each data
-          # claim, and a refused claim create is reported on the Server.
+          # The operator's version, separate from imageVersion so a reconciler fix
+          # does not claim a new agent and an agent release does not rename an
+          # unchanged operator image. It moves, taking the release's number, when
+          # the operator binary changes (a comment does not). Gaps are releases
+          # that built no operator; hack/publish.sh refuses an existing tag.
           operatorVersion = "0.17.0";
 
           spawnery-slp = pkgs.buildGoModule {
@@ -595,9 +144,7 @@
             ldflags = [ "-s" "-w" ];
           };
 
-          # Test-only, and deliberately not referenced by nix/paper-image.nix:
-          # the operator's counterpart has no business inside a server image.
-          # hack/agent-test.sh runs it on the host.
+          # Test-only and deliberately in no image; hack/agent-test.sh runs it on the host.
           spawnery-stubop = pkgs.buildGoModule {
             pname = "spawnery-stubop";
             version = "0.2.0";
@@ -607,12 +154,8 @@
             env.CGO_ENABLED = 0;
           };
 
-          # Test-only for the same reason as spawnery-stubop, and likewise in
-          # no image: it is the automated half of milestone 3's success
-          # criterion, run from a developer machine or the evidence runbook
-          # against a proxy's NodePort. An image that carried a tool for
-          # logging in as an arbitrary player would be handing an attacker
-          # one.
+          # Test-only and in no image: an image carrying a tool that logs in as an
+          # arbitrary player would hand an attacker one.
           spawnery-join = pkgs.buildGoModule {
             pname = "spawnery-join";
             version = "0.2.0";
@@ -622,9 +165,6 @@
             env.CGO_ENABLED = 0;
           };
 
-          # Baked into both the Paper and Velocity images; it writes the
-          # configuration each JVM actually reads, before the JVM starts. See
-          # internal/render and cmd/spawnery-config.
           spawnery-config = pkgs.buildGoModule {
             pname = "spawnery-config";
             version = "0.1.0";
@@ -636,18 +176,10 @@
             ldflags = [ "-s" "-w" ];
           };
 
-          # `paper` and `velocity` stay explicit arguments even though neither
-          # is part of the version string: pkgs.callPackage fills arguments
-          # from pkgs only, and both are local let bindings. What they are for
-          # is the postPatch symlinks that hand Gradle each platform's API.
           agents = pkgs.callPackage ./nix/agents.nix {
             inherit paper velocity imageVersion;
           };
 
-          # The operator itself, packaged so an image can be built from it.
-          # `make build` still exists for the local loop; this is the same
-          # binary produced reproducibly, which is what nix/operator-image.nix
-          # and hack/publish.sh need.
           spawnery-operator = pkgs.buildGoModule {
             pname = "spawnery-operator";
             version = operatorVersion;
@@ -665,53 +197,31 @@
 
           agent-api-javadoc = pkgs.callPackage ./nix/agent-api-javadoc.nix { };
 
-          # mermaid-js, docs-fonts and agent-api-javadoc are local let
-          # bindings, not pkgs attributes, so callPackage cannot fill them and
-          # all three are passed explicitly.
           docs-site = pkgs.callPackage ./nix/docs-site.nix { inherit mermaid-js docs-fonts agent-api-javadoc; };
         in
         {
-          # Architecture-independent (it is jars), so this stays available on
-          # every system.
+          # Exposed on every system (they are jars) so a version bump can repeat
+          # the measurements by hand: jdeps for the JRE module lists, and the one
+          # above paperGlobalDefault in internal/render/paper_test.go.
           paper-repo = paper.repo;
-          # Exposed for the same reason paper-repo is: nix/purpur-jre.nix's
-          # module list is a jdeps measurement over exactly these jars, and a
-          # Purpur bump has to be able to repeat it.
           purpur-repo = purpur.repo;
-          # The paperclip launcher, exposed for the same reason velocity-jar
-          # is: it is what a human runs by hand to measure something out of
-          # the pinned build. The command that uses it is recorded above
-          # paperGlobalDefault in internal/render/paper_test.go, which
-          # regenerates internal/render/testdata/paper-global.default.yml.
           paper-jar = paper.paperJar;
           velocity-jar = velocity.jar;
 
           inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents spawnery-operator mermaid-js docs-fonts agent-api-javadoc docs-site;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
-          # dockerTools.buildLayeredImage packs the host's binaries under a
-          # fixed "amd64" label (see nix/paper-image.nix); it does not
-          # cross-compile. Restricting the attribute to x86_64-linux here,
-          # rather than building it everywhere and hoping the label is
-          # accurate, is what keeps that label true: on every other system the
-          # attribute is simply absent, so `nix build .#paper-image` fails
-          # with "does not provide attribute" instead of quietly producing a
-          # mislabelled image. `nix flake show` and `nix develop` stay
-          # unaffected elsewhere.
+          # buildLayeredImage does not cross-compile but labels its output amd64,
+          # so the images exist only where that label is true.
           paper-image = pkgs.callPackage ./nix/paper-image.nix {
             inherit paper spawnery-slp spawnery-config agents imageVersion oci-common paper-jre;
           };
 
-          # The backend image this project is moving to. It shares
-          # image/entrypoint.sh, the agent, both helper binaries and paper-jre
-          # with the image above -- the module list was re-measured over
-          # Purpur's own classpath and came out identical, see
-          # nix/purpur-image.nix -- so what actually differs is the jar.
           purpur-image = pkgs.callPackage ./nix/purpur-image.nix {
             inherit purpur spawnery-slp spawnery-config agents imageVersion oci-common paper-jre;
           };
 
-          # The same images over the 26.2 pins, with the same agent jar: its
-          # paper-plugin.yml asks for api-version 26.2, which both versions load.
+          # The same images over the 26.2 pins and the same agent jar: its
+          # api-version 26.2 loads on both.
           paper-image-26-2 = pkgs.callPackage ./nix/paper-image.nix {
             paper = paper-26-2;
             inherit spawnery-slp spawnery-config agents imageVersion oci-common paper-jre;
@@ -721,16 +231,11 @@
             inherit spawnery-slp spawnery-config agents imageVersion oci-common paper-jre;
           };
 
-          # No spawnery-slp: a proxy's readiness is the agent's ready port,
-          # not a server list ping, so the image needs no pinger. The agent
-          # itself now ships -- it is the thing that binds that port.
+          # No spawnery-slp: a proxy's readiness is the agent's ready port.
           velocity-image = pkgs.callPackage ./nix/velocity-image.nix {
             inherit velocity spawnery-config agents imageVersion oci-common velocity-jre;
           };
 
-          # Restricted to x86_64-linux for the same reason the two game images
-          # are, and the reason is in their comment above: buildLayeredImage
-          # does not cross-compile but labels its output amd64 regardless.
           operator-image = pkgs.callPackage ./nix/operator-image.nix {
             inherit spawnery-operator operatorVersion oci-common;
           };

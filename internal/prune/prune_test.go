@@ -77,7 +77,6 @@ func left(t *testing.T, dir string) []string {
 	return out
 }
 
-// noMounts writes an empty mount table.
 func noMounts(t *testing.T) string {
 	t.Helper()
 	p := filepath.Join(t.TempDir(), "mountinfo")

@@ -7,12 +7,8 @@ package cloud.spawnery.agent.pb;
 
 /**
  * <pre>
- * RetireResult says the server is now retiring.
- *
- * It has no "was it already retiring" field on purpose: that case is a
- * RequestError with REFUSED, because an operator that answers "done" to the
- * second person to type the command teaches both of them that the command did
- * nothing the first time.
+ * RetireResult says the server is now retiring. A server that was already
+ * retiring is answered with REFUSED instead.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.RetireResult}
@@ -63,8 +59,7 @@ private static final long serialVersionUID = 0L;
   private volatile java.lang.Object server_ = "";
   /**
    * <pre>
-   * The server that is now retiring, echoed so a caller that asked by a name
-   * it built from a string sees what the operator matched.
+   * The server that is now retiring, as the operator matched it.
    * </pre>
    *
    * <code>string server = 1;</code>
@@ -85,8 +80,7 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * The server that is now retiring, echoed so a caller that asked by a name
-   * it built from a string sees what the operator matched.
+   * The server that is now retiring, as the operator matched it.
    * </pre>
    *
    * <code>string server = 1;</code>
@@ -269,12 +263,8 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * RetireResult says the server is now retiring.
-   *
-   * It has no "was it already retiring" field on purpose: that case is a
-   * RequestError with REFUSED, because an operator that answers "done" to the
-   * second person to type the command teaches both of them that the command did
-   * nothing the first time.
+   * RetireResult says the server is now retiring. A server that was already
+   * retiring is answered with REFUSED instead.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.RetireResult}
@@ -417,8 +407,7 @@ private static final long serialVersionUID = 0L;
     private java.lang.Object server_ = "";
     /**
      * <pre>
-     * The server that is now retiring, echoed so a caller that asked by a name
-     * it built from a string sees what the operator matched.
+     * The server that is now retiring, as the operator matched it.
      * </pre>
      *
      * <code>string server = 1;</code>
@@ -438,8 +427,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The server that is now retiring, echoed so a caller that asked by a name
-     * it built from a string sees what the operator matched.
+     * The server that is now retiring, as the operator matched it.
      * </pre>
      *
      * <code>string server = 1;</code>
@@ -460,8 +448,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The server that is now retiring, echoed so a caller that asked by a name
-     * it built from a string sees what the operator matched.
+     * The server that is now retiring, as the operator matched it.
      * </pre>
      *
      * <code>string server = 1;</code>
@@ -478,8 +465,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The server that is now retiring, echoed so a caller that asked by a name
-     * it built from a string sees what the operator matched.
+     * The server that is now retiring, as the operator matched it.
      * </pre>
      *
      * <code>string server = 1;</code>
@@ -493,8 +479,7 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The server that is now retiring, echoed so a caller that asked by a name
-     * it built from a string sees what the operator matched.
+     * The server that is now retiring, as the operator matched it.
      * </pre>
      *
      * <code>string server = 1;</code>

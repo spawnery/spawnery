@@ -75,8 +75,6 @@ class CloudCommandTest {
         setOf(PERMISSION_READ, PERMISSION_RETIRE, PERMISSION_SCALE, PERMISSION_EVENTS, PERMISSION_STATUS)
     private val asked = mutableListOf<String>()
 
-    // An Int as the source, which is the cheapest way to say that the tree
-    // does not care what a source is.
     private val adapter = object : SourceAdapter<Int> {
         override fun hasPermission(source: Int, permission: String): Boolean {
             asked += permission
@@ -90,26 +88,14 @@ class CloudCommandTest {
         override fun playerId(source: Int): UUID? = sourcePlayer
     }
 
-    /**
-     * Who is typing. Null is the console, which is a real case rather than a
-     * gap -- `/cloud events` is the one branch that has to tell them apart.
-     */
+    /** Null is the console. */
     private var sourcePlayer: UUID? = UUID.nameUUIDFromBytes("admin".toByteArray())
 
-    /** The opt-out state the tree writes into. */
     private val feed = FeedState()
 
-    /**
-     * The line's shape. Bare by default, so every assertion in this file about
-     * *wording* stays about wording rather than about the wrapper -- the
-     * wrapper has its own tests below.
-     */
+    /** Bare, so assertions about wording are not about the wrapper. */
     private var format = Feed.MESSAGE_TOKEN
 
-    // A connector whose wire the test holds: requests land in `requested`,
-    // and the test answers them the way the operator would. Nothing here fakes
-    // SpawneryApi itself -- the real MirrorApi and the real CloudConnector are
-    // under test, and only the socket is replaced.
     private val requested = mutableListOf<CloudRequest>()
     private val requests = Requests(timeoutMillis = 1_000, clock = System::currentTimeMillis)
     private val connector = CloudConnector(requests) { request -> requested += request }
@@ -131,7 +117,6 @@ class CloudCommandTest {
         return dispatcher.execute(command, 0)
     }
 
-    /** Answers the one request outstanding, as the operator would. */
     private fun answer(build: CloudResponse.Builder.() -> Unit) {
         val id = requested.single().id
         connector.answer(CloudResponse.newBuilder().setId(id).apply(build).build())
@@ -139,9 +124,6 @@ class CloudCommandTest {
 
     @Test
     fun `command output wears the network's own format`() {
-        // The complaint this answers: the event feed followed the network's
-        // format and command replies did not, so one plugin spoke in two
-        // voices.
         format = "<gray>PREFIX</gray> ${Feed.MESSAGE_TOKEN}"
 
         run("cloud list")
@@ -153,9 +135,6 @@ class CloudCommandTest {
 
     @Test
     fun `every reply wears it, not only the first`() {
-        // `/cloud start` says three things, and a wrapper applied at one call
-        // site out of eighteen would look like a bug in the command rather
-        // than a missing wrapper.
         format = "<gray>PREFIX</gray> ${Feed.MESSAGE_TOKEN}"
 
         run("cloud start lobby 2")
@@ -174,9 +153,7 @@ class CloudCommandTest {
 
     @Test
     fun `a blank format still says something`() {
-        // Blank is what an operator older than the field sends. Reading it as
-        // "print nothing" would silence the command on exactly the upgrade
-        // that introduces the field.
+        // Blank is what an operator older than the field sends.
         format = ""
 
         run("cloud list")
@@ -199,9 +176,7 @@ class CloudCommandTest {
 
     @Test
     fun `a source without the permission cannot see the command at all`() {
-        // Brigadier's requires makes the branch invisible rather than refused,
-        // which is the platforms' own convention: somebody without it gets
-        // "unknown command" and not a lecture.
+        // Brigadier's requires hides the branch rather than refusing it.
         permissions = emptySet()
 
         assertFailsWith<CommandSyntaxException> { run("cloud list") }
@@ -214,16 +189,12 @@ class CloudCommandTest {
 
         val line = sent.first()
         assertTrue(line.contains("lobby-a") && line.contains("READY"), line)
-        // Registered and not the phase: the two disagree during a drain, and
-        // this is the one that answers "can I send somebody there".
+        // Registration and phase disagree during a drain.
         assertTrue(line.contains("taking joins"), line)
     }
 
     @Test
     fun `a server that says what it is doing has it in the line, marked as its own word`() {
-        // Everything else on that line is the operator's account. An admin
-        // reading one where the two disagree -- Ready, and the game on it
-        // saying it has ended -- has to be able to tell which is which.
         val described = NetworkState.newBuilder(aNetwork()).also { builder ->
             builder.setServers(
                 0,
@@ -239,8 +210,6 @@ class CloudCommandTest {
 
     @Test
     fun `a server that has said nothing gets no fragment rather than an empty one`() {
-        // An empty ", says " would read as a server that had gone quiet, which
-        // is a different thing from one that has never spoken.
         run("cloud info lobby-a")
 
         assertTrue(sent.none { plain(it).contains("Says") }, "$sent")
@@ -248,24 +217,17 @@ class CloudCommandTest {
 
     @Test
     fun `taking joins and not taking joins are told apart by colour, not only by words`() {
-        // The one field in this tree where colour earns its place rather than
-        // decorating. "Can I send somebody there" is the question, and this
-        // field is the answer -- it disagrees with the phase during a drain,
-        // so somebody scanning a list needs to see it without reading it.
         run("cloud info lobby-a")
 
         val line = sent.first()
         assertTrue(line.contains("<green>taking joins</green>"), line)
-        // And the words still say it, for anyone whose client shows no colour
-        // and for the console's log.
         assertTrue(plain(line).contains("taking joins"), plain(line))
     }
 
     @Test
     fun `an operator message carrying a tag reaches chat as text`() {
-        // The operator's refusals are free text and reach chat verbatim. One
-        // containing a `<` would otherwise be eaten by the parser -- or make
-        // it throw inside a network callback, which costs the session.
+        // An unescaped `<` would be eaten by the parser, or make it throw
+        // inside a network callback, which costs the session.
         run("cloud retire lobby-a")
 
         answer {
@@ -291,8 +253,6 @@ class CloudCommandTest {
 
     @Test
     fun `info about something absent names what was asked for`() {
-        // The failure mode this replaces: an empty line that leaves an admin
-        // unsure whether they mistyped or the thing is gone.
         run("cloud info nothing-here")
 
         assertTrue(sent.single().contains("nothing-here"), "the answer did not name it: $sent")
@@ -300,9 +260,7 @@ class CloudCommandTest {
 
     @Test
     fun `the tree asks the platform for nothing but the permissions it declares`() {
-        // The structural claim, asserted. A tree that reached for anything
-        // else could not have been written against this adapter, so what this
-        // really guards is the adapter staying two methods.
+        // What this really guards is SourceAdapter staying two methods.
         run("cloud list")
         run("cloud info lobby-a")
         run("cloud retire lobby-a")
@@ -321,16 +279,12 @@ class CloudCommandTest {
         run("cloud retire lobby-a")
 
         assertEquals("lobby-a", requested.single().retire.server)
-        // Nothing said yet: the answer has not arrived, and the command must
-        // not have claimed anything on the strength of having asked.
         assertTrue(sent.isEmpty(), "the command answered before the operator did: $sent")
 
         answer { setRetire(RetireResult.newBuilder().setServer("lobby-a")) }
 
         val line = sent.single()
         assertTrue(line.contains("lobby-a") && line.contains("retiring"), line)
-        // The sentence that stops an admin thinking they disconnected
-        // everybody. Without it "retire" reads as "stop".
         assertTrue(line.contains("nobody is kicked"), "the output did not say what retiring does: $line")
     }
 
@@ -348,19 +302,14 @@ class CloudCommandTest {
 
         val line = plain(sent.single())
         assertTrue(line.contains("already retiring"), "the operator's reason was lost: $line")
-        // And the plumbing is not in it. A CompletionStage wraps failures, and
-        // "java.util.concurrent.CompletionException: ..." in a chat line tells
-        // an admin nothing they can act on.
         assertFalse(line.contains("CompletionException"), "the future's wrapper reached chat: $line")
         assertTrue(line.startsWith("✘ could not retire"), "a refusal was worded as a success: $line")
     }
 
     @Test
     fun `an agent with no session says so instead of throwing at the platform`() {
-        // The dormant seam throws when asked to send. Brigadier would turn a
-        // throw out of executes into "an internal error occurred", which tells
-        // an admin nothing; the stage carries it instead, and the source is
-        // told.
+        // The dormant seam throws; Brigadier would turn a throw out of executes
+        // into "an internal error occurred".
         val dormant = MirrorApi(
             NetworkMirror().also { it.apply(aNetwork()) },
             object : ProxySelf {
@@ -394,10 +343,6 @@ class CloudCommandTest {
             )
         }
 
-        // Section 5.3's three sentences. The second and third are not
-        // optional: without them the command looks like a permanent change,
-        // and an admin who never learns otherwise types it again every week
-        // instead of editing the file once.
         assertEquals(3, sent.size, "the three lines section 5.3 requires: $sent")
         assertTrue(sent[0].contains("+2 servers") && sent[0].contains("20:00"), sent[0])
         assertTrue(sent[1].contains("not a spec change"), sent[1])
@@ -407,20 +352,14 @@ class CloudCommandTest {
 
     @Test
     fun `start without a count asks for one`() {
-        // A person typing in a hurry means "one more". Refusing them for a
-        // missing argument would be pedantry at the moment they are busiest.
         run("cloud start lobby")
 
         assertEquals(1, requested.single().boost.replicas)
-        // And no duration, so the operator picks its own default rather than
-        // this agent inventing one on a clock the operator does not share.
         assertEquals(0L, requested.single().boost.durationSeconds)
     }
 
     @Test
     fun `an unreadable duration is named rather than silently defaulted`() {
-        // Treating "2hh" as the default hour is how somebody comes to believe
-        // they set a length they did not.
         run("cloud start lobby 2 for 2hh")
 
         assertTrue(requested.isEmpty(), "an unreadable duration still reached the operator: $requested")
@@ -440,8 +379,6 @@ class CloudCommandTest {
 
     @Test
     fun `stopping a group with no boosts says so plainly`() {
-        // Not dressed up as a success: an admin who expected boosts has to
-        // learn there were none, because what they do next depends on it.
         run("cloud stop lobby")
 
         answer { setStopBoost(StopBoostResult.newBuilder().setRemoved(0)) }
@@ -469,8 +406,6 @@ class CloudCommandTest {
 
     @Test
     fun `events off tells the player it lasts for this session only`() {
-        // The sentence section 5.5 asks for. A setting that quietly comes back
-        // after a rejoin is a setting people report as a bug.
         run("cloud events off")
 
         val line = sent.single()
@@ -492,8 +427,7 @@ class CloudCommandTest {
 
     @Test
     fun `one player's opt-out is not another's`() {
-        // The state is keyed by player, and a single boolean would have passed
-        // every other test here while silencing the whole server.
+        // A single boolean would have passed every other test here.
         val other = UUID.nameUUIDFromBytes("someone-else".toByteArray())
         run("cloud events off")
 
@@ -503,9 +437,6 @@ class CloudCommandTest {
 
     @Test
     fun `the console is told it cannot opt out rather than silently failing`() {
-        // playerId is null for a console. Without this the command would
-        // appear to work and change nothing, which is the worst of the three
-        // possible behaviours.
         sourcePlayer = null
 
         run("cloud events off")
@@ -522,9 +453,6 @@ class CloudCommandTest {
 
     @Test
     fun `holding only events still opens the root`() {
-        // A root that demanded any of the other three would hide the whole
-        // tree from somebody granted only this one, and hide it in the worst
-        // way: the command would look as though it does not exist.
         permissions = setOf(PERMISSION_EVENTS)
 
         run("cloud events off")
@@ -534,12 +462,8 @@ class CloudCommandTest {
 
     @Test
     fun `a wrapped failure is unwrapped before it reaches chat`() {
-        // Not reachable through MirrorApi, which fails its own future and so
-        // delivers the cause directly -- but SpawneryApi returns a
-        // CompletionStage, and any implementation that derives one (a
-        // thenApply, a handle) delivers a CompletionException instead. The
-        // command is written against the interface, so this is the case the
-        // interface allows and the one implementation happens not to produce.
+        // MirrorApi delivers the cause directly, but an implementation that
+        // derives its stage (thenApply, handle) delivers a CompletionException.
         val wrapping = object : SpawneryApi by api() {
             override fun retire(server: String): java.util.concurrent.CompletionStage<Void> {
                 val failed = java.util.concurrent.CompletableFuture<Void>()
@@ -558,8 +482,6 @@ class CloudCommandTest {
 
     @Test
     fun `retire is invisible without its own permission even to a reader`() {
-        // The split PERMISSION_RETIRE exists for: reading where people are is
-        // what a moderator gets, and changing the fleet is not.
         permissions = setOf(PERMISSION_READ)
 
         assertFailsWith<CommandSyntaxException> { run("cloud retire lobby-a") }
@@ -568,9 +490,6 @@ class CloudCommandTest {
 
     @Test
     fun `holding only retire still opens the root`() {
-        // A root gated on PERMISSION_READ would hide the whole tree from
-        // somebody granted only PERMISSION_RETIRE, and hide it in the worst
-        // way: the command would look as though it does not exist.
         permissions = setOf(PERMISSION_RETIRE)
 
         run("cloud retire lobby-a")
@@ -580,8 +499,6 @@ class CloudCommandTest {
 
     @Test
     fun `holding only retire still cannot read`() {
-        // The other half of the same claim: widening the root must not have
-        // widened a branch.
         permissions = setOf(PERMISSION_RETIRE)
 
         assertFailsWith<CommandSyntaxException> { run("cloud list") }
@@ -1015,8 +932,6 @@ class CloudCompletionTest {
 
     @Test
     fun `retire offers servers and no group`() {
-        // A group is not a thing that retires, so offering one would be
-        // offering a refusal.
         val offered = completions("cloud retire ")
         assertEquals(listOf("bingo-x", "lobby-a"), offered.sorted())
     }

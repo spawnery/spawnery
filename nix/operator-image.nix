@@ -1,17 +1,6 @@
-# The operator image.
-#
-# Unlike the two game images this one carries no runtime, no shell and no
-# writable directory: the operator is a single static binary that talks to the
-# API server and writes nothing to disk. It therefore takes from oci-common
-# only the identity -- the numeric user and its passwd/group entries, so all
-# three images run as the same uid and runAsNonRoot has an entry to resolve --
-# and builds its own frame.
-#
-# oci-common.layeredImage is deliberately not used: it creates /data and /tmp,
-# chmods them, and sets WorkingDir=/data. That is a game server's shape. An
-# operator running with readOnlyRootFilesystem and no state would carry two
-# directories nothing reads, and hack/operator-image-test.sh fails if one
-# appears.
+# The operator image: a static binary, no shell, no writable directory. It
+# takes only the identity from oci-common, not layeredImage, whose /data and
+# /tmp hack/operator-image-test.sh refuses.
 { dockerTools
 , spawnery-operator
 , operatorVersion
@@ -22,8 +11,7 @@ dockerTools.buildLayeredImage {
   name = "ghcr.io/spawnery/spawnery-operator";
   tag = operatorVersion;
 
-  # A label, not a cross-compile, exactly as in nix/oci-common.nix: it is only
-  # true because flake.nix exposes this attribute on x86_64-linux alone.
+  # A label, not a cross-compile; see nix/oci-common.nix.
   architecture = "amd64";
 
   contents = [

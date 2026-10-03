@@ -5,17 +5,11 @@ import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * The two facts the agent reports, held where both the Bukkit main thread and
- * the network thread can reach them.
+ * Written on the main thread, read from gRPC callbacks, which must not call
+ * Bukkit.getOnlinePlayers() themselves.
  *
- * The main thread writes through [sample] and [markReady]; the network side
- * only reads. No Bukkit call happens from a gRPC callback, because
- * Bukkit.getOnlinePlayers() is not thread-safe.
- *
- * There is deliberately no way to clear [ready]. Hello{ready:false} cannot
- * lower a readiness the operator's registry has already recorded (see
- * docs/reference/known-issues.md), so representing that state here would only invite
- * code that tries to express it.
+ * Nothing clears [ready]: Hello{ready:false} cannot lower a readiness the
+ * operator has already recorded.
  */
 class ServerState {
     private val readyFlag = AtomicBoolean(false)

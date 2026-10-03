@@ -9,19 +9,9 @@ package cloud.spawnery.agent.pb;
  * <pre>
  * EventInterest says whether this agent has anybody to show events to.
  *
- * **A state and not a subscription.** Every message carries the whole answer,
- * so a reconnect needs no catch-up and the operator remembers nothing across
- * the make-before-break renewal that briefly runs two streams -- which is the
- * same reason CloudRequest ids are not remembered either.
- *
- * The agent sends one whenever the answer changes: an administrator holding
- * the permission joined or left, or somebody typed `/cloud events off`. It
- * sends one on every new stream regardless, because the operator's answer for
- * a session it has never seen is "no".
- *
- * It is an optimisation and not a bound. An agent that lied and asked for
- * events would receive events about its own namespace, which it can already
- * see in its NetworkState.
+ * A state, not a subscription. The agent sends it whenever the answer
+ * changes and on every new stream, since the operator's answer for a session
+ * it has not heard from is "no".
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.EventInterest}
@@ -243,19 +233,9 @@ private static final long serialVersionUID = 0L;
    * <pre>
    * EventInterest says whether this agent has anybody to show events to.
    *
-   * **A state and not a subscription.** Every message carries the whole answer,
-   * so a reconnect needs no catch-up and the operator remembers nothing across
-   * the make-before-break renewal that briefly runs two streams -- which is the
-   * same reason CloudRequest ids are not remembered either.
-   *
-   * The agent sends one whenever the answer changes: an administrator holding
-   * the permission joined or left, or somebody typed `/cloud events off`. It
-   * sends one on every new stream regardless, because the operator's answer for
-   * a session it has never seen is "no".
-   *
-   * It is an optimisation and not a bound. An agent that lied and asked for
-   * events would receive events about its own namespace, which it can already
-   * see in its NetworkState.
+   * A state, not a subscription. The agent sends it whenever the answer
+   * changes and on every new stream, since the operator's answer for a session
+   * it has not heard from is "no".
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.EventInterest}

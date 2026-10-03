@@ -21,8 +21,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
 )
 
-// AuthFailures counts refused streams. Without it a misconfigured agent is
-// invisible outside the log.
 var AuthFailures = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "spawnery_agent_auth_failures_total",
@@ -31,9 +29,6 @@ var AuthFailures = prometheus.NewCounterVec(
 	[]string{"role"},
 )
 
-// ReviewCacheHits and ReviewCacheMisses make the cache visible. Milestone 6a
-// established that a mechanism reporting nothing is indistinguishable from an
-// absent one, and a cache nobody can see cannot be shown to be working.
 var (
 	ReviewCacheHits = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "spawnery_agent_token_review_cache_hits_total",
@@ -45,8 +40,6 @@ var (
 	})
 )
 
-// RateLimited counts token checks refused by the per-peer rate limit, so a
-// throttled peer is visible rather than just quietly slower.
 var RateLimited = prometheus.NewCounter(prometheus.CounterOpts{
 	Name: "spawnery_agent_rate_limited_total",
 	Help: "Token checks refused by the per-peer rate limit.",

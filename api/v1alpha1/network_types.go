@@ -24,21 +24,11 @@ type NetworkSpec struct {
 	// ForwardingSecretRef names the Secret holding the Velocity modern
 	// forwarding secret under the key "secret".
 	//
-	// Generate the value at random. Do not choose it the way a password is
-	// chosen, because a guess against this one is cheap to test offline: the
-	// operator stamps every pod with an eight-byte salted digest of it in the
-	// spawnery.cloud/forwarding-hash label, and a pod label is readable by
-	// anyone with pod read access in the namespace -- a far commoner grant
-	// than read access to the Secret. The salt forces the work to be redone
-	// per network and makes precomputed tables worthless across
-	// installations; it does nothing against a guess aimed at one particular
-	// network. A random secret is not guessable this way and a memorable one
-	// is.
-	//
-	// What the secret buys whoever guesses it: a backend runs
-	// online-mode=false and trusts whatever completes the modern-forwarding
-	// handshake, so it is the whole of the authentication between the proxy
-	// and the servers behind it.
+	// Generate the value at random. Every pod carries a salted eight-byte
+	// digest of it in the spawnery.cloud/forwarding-hash label, readable by
+	// anyone who can read pods, so a memorable secret can be guessed offline.
+	// It is the whole of the authentication between the proxy and the
+	// backends.
 	ForwardingSecretRef ObjectRef `json:"forwardingSecretRef"`
 
 	// Defaults are inherited by all groups of this network.
@@ -48,11 +38,7 @@ type NetworkSpec struct {
 	// Scheduling is what this network's groups may ask of the scheduler.
 	//
 	// Absent, nothing is allowed: a group that sets spec.scheduling, or a
-	// proxy group exposed by HostPort, is not accepted. Tolerations, node
-	// selectors and affinity reach beyond the namespace -- onto a
-	// control-plane node, a cordoned one, or beside a workload somebody
-	// else runs -- and the namespace is the boundary a group author is
-	// held to; this field is where the Network's owner widens it.
+	// proxy group exposed by HostPort, is not accepted.
 	// +optional
 	Scheduling *SchedulingPolicy `json:"scheduling,omitempty"`
 
@@ -138,24 +124,11 @@ type NetworkStatus struct {
 
 	// ForwardingSecretHash is podspec.ForwardingHash over this network's
 	// forwarding secret as the operator last read it. The pod builders stamp
-	// it onto every pod they create (podspec.LabelForwardingHash), which is
-	// how a rotation becomes visible: a pod whose stamp differs is running on
-	// the previous secret.
+	// it onto every pod they create (podspec.LabelForwardingHash); a pod whose
+	// stamp differs is running on the previous secret. A read failure leaves
+	// the previous value in place.
 	//
-	// Written only after a successful read. A read failure leaves the previous
-	// value in place, because clearing it would leave every pod created during
-	// the failure unstamped, and an unstamped pod is one the operator can say
-	// nothing about afterwards.
-	//
-	// The pattern is where a malformed value is stopped, and it is why the
-	// builders copy this string into a pod label without checking it.
-	// Sixteen lowercase hex digits is what podspec.ForwardingHash emits, and
-	// it is a legal label value; a longer or otherwise illegal one fails every
-	// pod Create for this network with a 422, and those reconciles return
-	// before writing status, so nothing on the group says why. The empty
-	// branch is for another client: omitempty covers the operator's own
-	// writes, and an explicit "" clears the field rather than putting a bad
-	// value into a label.
+	// The pattern guards the pod label it is copied into unchecked.
 	// +optional
 	// +kubebuilder:validation:Pattern=`^([a-f0-9]{16})?$`
 	ForwardingSecretHash string `json:"forwardingSecretHash,omitempty"`

@@ -10,13 +10,9 @@ package cloud.spawnery.agent.pb;
  * DeleteServerRequest deletes a member of an OnDemand group for good: its
  * server, if one is running, and its world.
  *
- * Group and key rather than a server name, because a stopped member has no
- * server any more and its world is what the caller wants gone.
- *
- * A running member is stopped as StopServerRequest stops one -- its players
- * are moved through the proxies within the group's drain timeout -- and its
- * claim is deleted at once; Kubernetes keeps the claim until the pod no
- * longer uses it. The answer comes when both deletions are accepted.
+ * A running member is stopped as StopServerRequest stops one, and its claim is
+ * deleted at once; Kubernetes keeps the claim until the pod no longer uses it.
+ * The answer comes when both deletions are accepted.
  *
  * NOT_FOUND for a group this network does not have, and for a key with
  * neither a server nor a world; REFUSED for a group that is not OnDemand, a
@@ -320,13 +316,9 @@ private static final long serialVersionUID = 0L;
    * DeleteServerRequest deletes a member of an OnDemand group for good: its
    * server, if one is running, and its world.
    *
-   * Group and key rather than a server name, because a stopped member has no
-   * server any more and its world is what the caller wants gone.
-   *
-   * A running member is stopped as StopServerRequest stops one -- its players
-   * are moved through the proxies within the group's drain timeout -- and its
-   * claim is deleted at once; Kubernetes keeps the claim until the pod no
-   * longer uses it. The answer comes when both deletions are accepted.
+   * A running member is stopped as StopServerRequest stops one, and its claim is
+   * deleted at once; Kubernetes keeps the claim until the pod no longer uses it.
+   * The answer comes when both deletions are accepted.
    *
    * NOT_FOUND for a group this network does not have, and for a key with
    * neither a server nor a world; REFUSED for a group that is not OnDemand, a

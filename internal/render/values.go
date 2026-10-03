@@ -15,75 +15,43 @@ limitations under the License.
 */
 
 // Package render turns the operator's rendered configuration into the files
-// Paper and Velocity actually read.
-//
-// It exists as a package rather than as code inside cmd/ for the same reason
-// internal/slp does: the interesting part is a pure function of its inputs,
-// and a table test is a far better way to find out whether online-mode came
-// out right than starting a container.
+// Paper and Velocity read.
 package render
 
 import "fmt"
 
-// Values is the neutral document the operator renders into a ConfigMap. It is
-// deliberately neither target's dialect: the operator stays out of the
-// business of TOML and YAML, and adding a field later is one CRD field and one
-// line in a flavour.
-//
-// Every field is a pointer because absent and zero are different answers, and
-// the difference decides whether a server starts. See RequireMaxPlayers.
+// Values is the neutral document the operator renders into a ConfigMap. Fields
+// are pointers because absent and zero are different answers.
 type Values struct {
-	// MaxPlayers is a backend's player capacity. The Paper agent reports it to
-	// the operator as slots, and the operator scales on that number.
-	MaxPlayers *int32 `yaml:"maxPlayers,omitempty" json:"maxPlayers,omitempty"`
-	// PlayerLimit is a proxy's player capacity.
-	PlayerLimit *int32 `yaml:"playerLimit,omitempty" json:"playerLimit,omitempty"`
-	// Motd is what a player sees in the server list.
-	Motd *string `yaml:"motd,omitempty" json:"motd,omitempty"`
-	// OnlineMode is whether a proxy authenticates players with Mojang. It is
-	// the proxy's own setting and has no backend counterpart here: a Paper
-	// server rendered by this package is always online-mode=false, because the
-	// proxy in front of it is what authenticates. See RequireOnlineMode.
+	// MaxPlayers is reported by the Paper agent as slots, which the operator
+	// scales on.
+	MaxPlayers  *int32  `yaml:"maxPlayers,omitempty" json:"maxPlayers,omitempty"`
+	PlayerLimit *int32  `yaml:"playerLimit,omitempty" json:"playerLimit,omitempty"`
+	Motd        *string `yaml:"motd,omitempty" json:"motd,omitempty"`
+	// OnlineMode is the proxy's setting; a Paper server is always
+	// online-mode=false.
 	OnlineMode *bool `yaml:"onlineMode,omitempty" json:"onlineMode,omitempty"`
-	// AcceptsTransfers is a plain bool because absent and false mean the same
-	// here, and omitting false keeps the config.yaml of a group without
-	// transfer, and with it the group's pod hash, as it was.
+	// AcceptsTransfers omits false, so a group without transfer keeps its
+	// config.yaml and pod hash.
 	AcceptsTransfers bool `yaml:"acceptsTransfers,omitempty" json:"acceptsTransfers,omitempty"`
 }
 
-// RequireMaxPlayers refuses a backend that does not know its own capacity.
-//
-// Starting with the upstream default of 20 while the group promises 100 makes
-// the operator plan against capacity the server can never honour: it will keep
-// sending players to a server that is already full. This refusal lived in
-// image/entrypoint.sh against an environment variable until milestone 3b; it
-// moved here rather than disappearing.
+// RequireMaxPlayers refuses a backend without its capacity: the upstream
+// default of 20 would have the operator plan against slots the server
+// cannot honour.
 func (v Values) RequireMaxPlayers() error {
 	return requirePositive("maxPlayers", v.MaxPlayers)
 }
 
-// RequirePlayerLimit refuses a proxy that does not know its own capacity. The
-// agent reports it as slots, and internal/agent.Registry.ReportPlayers rejects
-// any report where players exceed slots — so a zero limit would not just be
-// unset capacity, it would make the proxy silently discard every player count
-// it ever sends: a metric that reads zero while players are connected.
+// RequirePlayerLimit refuses a zero limit, which would make the registry
+// discard every player count the proxy sends.
 func (v Values) RequirePlayerLimit() error {
 	return requirePositive("playerLimit", v.PlayerLimit)
 }
 
-// RequireOnlineMode refuses a proxy that does not say whether it authenticates
-// players.
-//
-// Guessing is what this package will not do, and this is the field where
-// guessing is least acceptable in either direction. Defaulting to true would
-// override an operator who deliberately set false and produce a proxy nobody
-// can join with an offline client, with nothing on the object saying why.
-// Defaulting to false would silently open the whole network to anyone claiming
-// any name — the exact failure ProxyGroup.spec.config.onlineMode exists to keep
-// visible. The operator always writes the key (see
-// internal/controller.proxyConfigValues), and the CRD defaults it to true, so
-// the only way to arrive here nil is a config.yaml written by something other
-// than this operator; that is worth a refusal that names the key.
+// RequireOnlineMode refuses to guess in either direction: true would lock out
+// a deliberately offline network, false would open one to any name. The
+// operator always writes the key, so nil means a config.yaml from elsewhere.
 func (v Values) RequireOnlineMode() error {
 	if v.OnlineMode == nil {
 		return fmt.Errorf("config.yaml: onlineMode is not set")
@@ -91,9 +59,6 @@ func (v Values) RequireOnlineMode() error {
 	return nil
 }
 
-// requirePositive is the check RequireMaxPlayers and RequirePlayerLimit share.
-// The two callers differ only in which field and key name they refuse on; the
-// reason each refusal matters belongs on the exported method, not here.
 func requirePositive(key string, n *int32) error {
 	if n == nil {
 		return fmt.Errorf("config.yaml: %s is not set", key)

@@ -47,16 +47,14 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// bringUpReady creates a fresh server and walks it all the way into phase
-// Ready, returning the pod UID the agent registry is keyed on.
+// bringUpReady returns the pod UID the agent registry is keyed on.
 func bringUpReady(t *testing.T, f *fixture, name string) string {
 	t.Helper()
 	f.createServer(name)
 	return bringUpNamed(t, f, name)
 }
 
-// driveToFailed flaps the server past MaxReadinessLosses so it ends up in phase
-// Failed with its players still connected, and returns once it is there.
+// driveToFailed flaps the server past MaxReadinessLosses, leaving its players connected.
 func driveToFailed(t *testing.T, f *fixture, name string) {
 	t.Helper()
 	for i := int32(0); i < phase.MaxReadinessLosses; i++ {
@@ -73,10 +71,7 @@ func driveToFailed(t *testing.T, f *fixture, name string) {
 	}
 }
 
-// setPodFailed fakes the other thing a kubelet does: the process is down for
-// good and the pod will not run again. The readiness condition is left exactly
-// as it was, because a kubelet does not tidy it up either — the occupied label
-// must not depend on that.
+// setPodFailed leaves the readiness condition as it was, as a kubelet does.
 func (f *fixture) setPodFailed(name string) {
 	f.t.Helper()
 	pod, ok := f.pod(name)
@@ -89,11 +84,8 @@ func (f *fixture) setPodFailed(name string) {
 	}
 }
 
-// setPodCrashLooping fakes a pod whose Minecraft container cannot stay up.
-// The pod phase stays Running, which is what separates this case from
-// PodFailed: the API server waves an eviction of a Failed or Succeeded pod
-// through without consulting any PodDisruptionBudget, so only a crash-looping
-// pod can show what the budget actually does to a drain.
+// The pod stays Running: the API server evicts a Failed pod without consulting any
+// PodDisruptionBudget, so only a crash-looping pod shows what the budget does to a drain.
 func (f *fixture) setPodCrashLooping(name string) {
 	f.t.Helper()
 	pod, ok := f.pod(name)
@@ -117,7 +109,6 @@ func (f *fixture) setPodCrashLooping(name string) {
 	}
 }
 
-// pods lists every pod in the fixture namespace that still exists.
 func (f *fixture) pods() []corev1.Pod {
 	f.t.Helper()
 	list := &corev1.PodList{}
@@ -128,9 +119,7 @@ func (f *fixture) pods() []corev1.Pod {
 }
 
 func TestTheRoundEndIsStampedWhileTheServerStillRuns(t *testing.T) {
-	// The stamp is what survives an operator restart. Taking it only when the
-	// pod is already terminal would lose the distinction to the restart this
-	// field exists for.
+	// The stamp survives an operator restart, so it must be taken before the pod is terminal.
 	srv := &spawneryv1alpha1.Server{}
 	snap := agent.Snapshot{Known: true, Connected: true, RoundEnded: true}
 
@@ -149,26 +138,7 @@ func TestTheRoundEndIsStampedWhileTheServerStillRuns(t *testing.T) {
 	}
 }
 
-// TestServerFailedStraightFromReadyClearsReadySince pins the cross-file
-// invariant CountFailures states and depends on: "A Failed server carries no
-// ReadySince (the Server controller clears it on the way out of Ready), so a
-// corpse can never look like the success that ends its own streak"
-// (backoff.go). Break the clearing and a group's failure streak resets on its
-// own corpse, so the count never climbs past 1 for a server that was Ready and
-// then died — and the whole per-group backoff stops bounding anything.
-//
-// It has to go through the terminal-pod transition rather than the flapping
-// one. Every other fixture in this package reaches Failed via Starting, and
-// entering Starting clears readySince on its own, so a test built that way
-// passes with `case phase.Failed: srv.Status.ReadySince = nil` deleted.
-// phase.Decide's PodTerminal
-// branch goes Ready -> Failed in one step and touches no other clearing, so
-// only the Failed arm of the status switch can be what empties the field here.
-//
-// Its counting-side companion is
-// TestCountFailuresTakesASuccessFromAnyPhaseAndWhyThatIsSafe in
-// backoff_test.go, which shows what a corpse that kept its readySince does to
-// a streak.
+// Ready -> Failed directly: entering Starting would clear readySince on its own.
 func TestServerFailedStraightFromReadyClearsReadySince(t *testing.T) {
 	f := newFixture(t)
 	bringUpReady(t, f, "lobby-x7k2")
@@ -176,7 +146,6 @@ func TestServerFailedStraightFromReadyClearsReadySince(t *testing.T) {
 		t.Fatal("status.readySince was not stamped at Ready; the clearing below would prove nothing")
 	}
 
-	// The kubelet's other verdict: the process is down for good.
 	f.setPodFailed("lobby-x7k2")
 	f.reconcile("lobby-x7k2")
 
@@ -196,12 +165,7 @@ func TestServerFailedStraightFromReadyClearsReadySince(t *testing.T) {
 	}
 }
 
-// TestLongLivedReadyServerSurvivesAReadinessBlip is the regression test for the
-// stale startup deadline. status.startedAt is written once at pod creation and
-// never refreshed, so StartupDeadlineReached is true for every server older than
-// the deadline. Before the fix, one probe blip on a server that had been serving
-// for hours put it in Starting and the very next reconcile failed it — and the
-// Failed retention then deleted its pod with everyone still on board.
+// status.startedAt is never refreshed, so a blip on a long-running server must not fail it.
 func TestLongLivedReadyServerSurvivesAReadinessBlip(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -219,15 +183,13 @@ func TestLongLivedReadyServerSurvivesAReadinessBlip(t *testing.T) {
 		t.Fatalf("phase = %q after two hours of healthy service, want Ready", got)
 	}
 
-	// One probe blip.
 	f.setPodRunning("lobby-x7k2", false)
 	f.reconcile("lobby-x7k2")
 	blipped := f.server("lobby-x7k2")
 	if got := blipped.Status.Phase; got != string(phase.Starting) {
 		t.Fatalf("phase = %q after the blip, want Starting", got)
 	}
-	// The mechanism that makes this safe: entering Starting re-arms the
-	// startup deadline, so the recovery attempt gets a full window.
+	// Entering Starting re-arms the startup deadline.
 	if blipped.Status.StartedAt == nil || !blipped.Status.StartedAt.Time.Equal(f.clock.Now()) {
 		var got any
 		if blipped.Status.StartedAt != nil {
@@ -237,8 +199,6 @@ func TestLongLivedReadyServerSurvivesAReadinessBlip(t *testing.T) {
 			got, f.clock.Now().UTC())
 	}
 
-	// The reconcile that used to fail it: still Starting, still past the
-	// startup deadline, but this server was playable once.
 	f.reconcile("lobby-x7k2")
 	srv := f.server("lobby-x7k2")
 	if srv.Status.Phase == string(phase.Failed) {
@@ -248,7 +208,6 @@ func TestLongLivedReadyServerSurvivesAReadinessBlip(t *testing.T) {
 		t.Fatalf("phase = %q, want Starting", srv.Status.Phase)
 	}
 
-	// And it recovers.
 	f.setPodRunning("lobby-x7k2", true)
 	f.reconcile("lobby-x7k2")
 	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Ready) {
@@ -259,15 +218,11 @@ func TestLongLivedReadyServerSurvivesAReadinessBlip(t *testing.T) {
 	}
 }
 
-// TestServerThatNeverBecomesPlayableFailsAtTheDeadline is the other side of the
-// re-armed startup deadline: a server that was never playable must still be
-// failed when the deadline passes, exactly as before.
 func TestServerThatNeverBecomesPlayableFailsAtTheDeadline(t *testing.T) {
 	f := newFixture(t)
 	f.createServer("lobby-x7k2")
 	f.reconcile("lobby-x7k2")
 
-	// The pod runs but its probe never turns green.
 	f.setPodRunning("lobby-x7k2", false)
 	f.reconcile("lobby-x7k2")
 	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Starting) {
@@ -285,8 +240,7 @@ func TestServerThatNeverBecomesPlayableFailsAtTheDeadline(t *testing.T) {
 	}
 }
 
-// failLateStarter creates a server whose pod runs but stays unready past the
-// startup deadline, so it is Failed with its pod still running.
+// failLateStarter leaves the server Failed with its pod still running.
 func failLateStarter(t *testing.T, f *fixture, name string) {
 	t.Helper()
 	f.createServer(name)
@@ -305,7 +259,6 @@ func TestAFailedServersLatePodIsStoppedOnceItsGroupHasAReadyServer(t *testing.T)
 	failLateStarter(t, f, "lobby-late")
 	bringUpReady(t, f, "lobby-good")
 
-	// The late pod comes up after all.
 	f.setPodRunning("lobby-late", true)
 	f.reconcile("lobby-late")
 
@@ -329,14 +282,7 @@ func TestAFailedServersLatePodStaysWhileItsGroupHasNoReadyServer(t *testing.T) {
 	}
 }
 
-// TestServerThatCannotRecoverIsFailedAndDrained is the zombie the first attempt
-// at the startup-deadline fix created. Exempting a once-registered server from
-// the deadline meant a server that fell out of Ready with a permanently red
-// probe was never failed at all: the flap counter cannot catch it either,
-// because losses are only counted on a Ready -> Starting transition that a
-// permanently red probe never produces again. Its players sat on a server that
-// fails its own health check, forever. Re-arming the clock instead of exempting
-// the server fails it one deadline after the fall-back, and drains it.
+// The flap counter never sees a permanently red probe, so only the re-armed deadline fails it.
 func TestServerThatCannotRecoverIsFailedAndDrained(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -349,7 +295,6 @@ func TestServerThatCannotRecoverIsFailedAndDrained(t *testing.T) {
 	}
 	f.reconcile("lobby-x7k2")
 
-	// The probe goes red and never comes back.
 	f.setPodRunning("lobby-x7k2", false)
 	f.reconcile("lobby-x7k2")
 	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Starting) {
@@ -379,13 +324,7 @@ func TestServerThatCannotRecoverIsFailedAndDrained(t *testing.T) {
 	}
 }
 
-// TestZombieIsCaughtUnderAContinuousReconcileLoop drives the reconciler the way
-// the operator actually runs it — once per resync interval — instead of jumping
-// the clock and reconciling once. That difference is the whole point: the
-// startup deadline is re-armed only on *entry* into Starting, and a re-arm on
-// every pass would push the deadline out forever under a real loop while
-// leaving a single-reconcile test perfectly green. The zombie would be back,
-// with its players still on board.
+// The deadline is re-armed only on entry into Starting; re-arming every pass would push it out forever.
 func TestZombieIsCaughtUnderAContinuousReconcileLoop(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -394,7 +333,6 @@ func TestZombieIsCaughtUnderAContinuousReconcileLoop(t *testing.T) {
 	}
 	f.reconcile("lobby-x7k2")
 
-	// The probe goes red and never comes back.
 	f.setPodRunning("lobby-x7k2", false)
 
 	const ticks = 200 // 200 * 5s resync is far past the 5 minute deadline
@@ -428,9 +366,6 @@ func TestZombieIsCaughtUnderAContinuousReconcileLoop(t *testing.T) {
 	}
 }
 
-// TestFailedServerDrainsBeforeItsPodIsDeleted covers the second half of the
-// same hole: a server can reach Failed with its sessions untouched, and the
-// retention path must not delete that pod without moving the players off first.
 func TestFailedServerDrainsBeforeItsPodIsDeleted(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -452,10 +387,7 @@ func TestFailedServerDrainsBeforeItsPodIsDeleted(t *testing.T) {
 		t.Fatal("pod of a failed server deleted while players were online")
 	}
 
-	// While the drain runs the pod is kept, the drain clock is not pushed out by
-	// the repeated decisions, and the command is not re-broadcast on every pass
-	// — the Failed branch returns StartDrain each time, but the real registrar
-	// fans out to every proxy.
+	// The real registrar fans out to every proxy, so the command must not be re-broadcast each pass.
 	drainStarted := srv.Status.DrainStartedAt.DeepCopy()
 	for i := 0; i < 3; i++ {
 		f.clock.Advance(10 * time.Second)
@@ -475,7 +407,6 @@ func TestFailedServerDrainsBeforeItsPodIsDeleted(t *testing.T) {
 			f.registrar.drained)
 	}
 
-	// Once it runs empty and the retention has passed, it goes.
 	f.clock.Advance(2 * time.Hour)
 	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
@@ -486,12 +417,7 @@ func TestFailedServerDrainsBeforeItsPodIsDeleted(t *testing.T) {
 	}
 }
 
-// TestFailedServerIsCleanedUpOnceItsDrainDeadlinePasses documents the escape
-// hatch deliberately: the drain of a failed server is bounded, so one stuck
-// player cannot pin a broken server forever. The group's drain timeout is 60s
-// and its failed retention an hour, so by the time the retention elapses the
-// drain deadline has always passed — this is the intended end of that path,
-// not an accident.
+// With a 60s drain timeout and an hour's retention, the drain deadline has always passed by then.
 func TestFailedServerIsCleanedUpOnceItsDrainDeadlinePasses(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -501,7 +427,6 @@ func TestFailedServerIsCleanedUpOnceItsDrainDeadlinePasses(t *testing.T) {
 	f.reconcile("lobby-x7k2")
 	driveToFailed(t, f, "lobby-x7k2")
 
-	// Past both the drain deadline and the retention, with players still on.
 	f.clock.Advance(2 * time.Hour)
 	if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
@@ -516,8 +441,6 @@ func TestFailedServerIsCleanedUpOnceItsDrainDeadlinePasses(t *testing.T) {
 	}
 }
 
-// TestDeletingAFailedServerDrainsThenReleasesIt pins that a Failed server
-// honours a deletion request: it drains first and releases its finalizer after.
 func TestDeletingAFailedServerDrainsThenReleasesIt(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -538,11 +461,7 @@ func TestDeletingAFailedServerDrainsThenReleasesIt(t *testing.T) {
 		t.Error("deleting a failed server issued no drain")
 	}
 
-	// This is the window where the Failed branch really does return StartDrain
-	// on every single pass: occupied, once registered, deletion pending, drain
-	// deadline not yet reached. The clock stays put so the state holds. The
-	// command must still go out exactly once — the real registrar broadcasts to
-	// every proxy, and this loop would otherwise be eleven fan-outs.
+	// The Failed branch returns StartDrain on every pass here; the command must still go out once.
 	for i := 0; i < 10; i++ {
 		f.reconcile("lobby-x7k2")
 	}
@@ -554,12 +473,7 @@ func TestDeletingAFailedServerDrainsThenReleasesIt(t *testing.T) {
 		t.Fatal("pod deleted while players were still online — core invariant broken")
 	}
 
-	// The clock moves before the post-drain report, which is the honest order
-	// rather than a fixture detail: the operator stamps the drain and sends
-	// DrainPlayers, and the agent's next periodic report is an interval later.
-	// A report sharing an instant with the drain decision cannot happen, and
-	// Occupied refuses one -- a count taken before the question cannot answer
-	// it. See CountPredatesDrain.
+	// A report sharing an instant with the drain decision cannot answer it; see CountPredatesDrain.
 	f.clock.Advance(2 * time.Second)
 	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
@@ -576,11 +490,6 @@ func TestDeletingAFailedServerDrainsThenReleasesIt(t *testing.T) {
 	}
 }
 
-// TestServerOutlivingItsGroupStillDrainsAndReleasesItself pins that a missing
-// ServerGroup does not freeze the controller. Before the fix both the group and
-// the network lookup returned before the finalizer, the drain and the label
-// sync, so such a Server kept its pod and its finalizer forever and the orphan
-// sweep of Task 11 would deadlock on it.
 func TestServerOutlivingItsGroupStillDrainsAndReleasesItself(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -604,7 +513,6 @@ func TestServerOutlivingItsGroupStillDrainsAndReleasesItself(t *testing.T) {
 		t.Fatal("pod dropped when the group disappeared")
 	}
 
-	// It must still drain and still let go.
 	if err := f.c.Delete(f.ctx, srv); err != nil {
 		t.Fatalf("delete Server: %v", err)
 	}
@@ -616,12 +524,7 @@ func TestServerOutlivingItsGroupStillDrainsAndReleasesItself(t *testing.T) {
 		t.Fatal("pod deleted while players were online — core invariant broken")
 	}
 
-	// The clock moves before the post-drain report, which is the honest order
-	// rather than a fixture detail: the operator stamps the drain and sends
-	// DrainPlayers, and the agent's next periodic report is an interval later.
-	// A report sharing an instant with the drain decision cannot happen, and
-	// Occupied refuses one -- a count taken before the question cannot answer
-	// it. See CountPredatesDrain.
+	// A report sharing an instant with the drain decision cannot answer it; see CountPredatesDrain.
 	f.clock.Advance(2 * time.Second)
 	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
@@ -638,15 +541,6 @@ func TestServerOutlivingItsGroupStillDrainsAndReleasesItself(t *testing.T) {
 	}
 }
 
-// TestAPersistentServerDrainsAndReleasesItself pins that a group's type bounds
-// nothing about its servers' lifecycle. It was written while the Server
-// controller refused to build a pod for a persistent group, to prove that the
-// refusal was not an early return skipping the finalizer, the drain and the
-// release — a Server that could never be deleted is the same deadlock as one
-// whose group is gone. The refusal is gone as of this milestone; the ordering
-// it was deliberately placed after is not, and neither is what that ordering
-// protects, so the walk stays and the pod now comes from the controller
-// itself rather than being stood in for.
 func TestAPersistentServerDrainsAndReleasesItself(t *testing.T) {
 	f := newFixture(t)
 	f.createPersistentGroup(t, "survival", 1)
@@ -680,7 +574,6 @@ func TestAPersistentServerDrainsAndReleasesItself(t *testing.T) {
 		t.Fatalf("phase = %q, want Ready", got)
 	}
 
-	// The point of the whole test: it must still drain and still let go.
 	if err := f.c.Delete(f.ctx, f.server("survival-0")); err != nil {
 		t.Fatalf("delete Server: %v", err)
 	}
@@ -695,12 +588,7 @@ func TestAPersistentServerDrainsAndReleasesItself(t *testing.T) {
 		t.Fatal("pod deleted while 5 players were online — core invariant broken")
 	}
 
-	// The clock moves before the post-drain report, which is the honest order
-	// rather than a fixture detail: the operator stamps the drain and sends
-	// DrainPlayers, and the agent's next periodic report is an interval later.
-	// A report sharing an instant with the drain decision cannot happen, and
-	// Occupied refuses one -- a count taken before the question cannot answer
-	// it. See CountPredatesDrain.
+	// A report sharing an instant with the drain decision cannot answer it; see CountPredatesDrain.
 	f.clock.Advance(2 * time.Second)
 	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
@@ -716,21 +604,13 @@ func TestAPersistentServerDrainsAndReleasesItself(t *testing.T) {
 		t.Fatalf("finalizer never released on a persistent-group server: %v", err)
 	}
 
-	// And the world is still there once everything that referenced it has
-	// gone. TestDeletingAPersistentServerLeavesItsClaim asks the same question
-	// one reconcile after the deletion; this asks it after the object itself
-	// has been released, which is the state a recreated ordinal actually
-	// arrives in.
+	// Asked after the object is released, the state a recreated ordinal arrives in.
 	if f.claim("survival-0-data") == nil {
 		t.Error("the claim went with the server it outlived; the world is gone")
 	}
 }
 
-// TestPodIsAdoptedAfterALostStatusWrite covers a crash between Create(pod) and
-// the status update. fetchPod falls back to the server name and finds the pod,
-// so without adoption the creation branch is skipped forever while podName and
-// startedAt stay empty — the startup deadline could never fire and PodLost
-// could never be detected.
+// Without adoption podName and startedAt stay empty, so neither the deadline nor PodLost could fire.
 func TestPodIsAdoptedAfterALostStatusWrite(t *testing.T) {
 	f := newFixture(t)
 	f.createServer("lobby-x7k2")
@@ -742,7 +622,6 @@ func TestPodIsAdoptedAfterALostStatusWrite(t *testing.T) {
 	}
 	originalUID := pod.UID
 
-	// Simulate the lost write: the pod exists, the status does not know it.
 	srv := f.server("lobby-x7k2")
 	srv.Status.PodName = ""
 	srv.Status.StartedAt = nil
@@ -767,9 +646,6 @@ func TestPodIsAdoptedAfterALostStatusWrite(t *testing.T) {
 	}
 }
 
-// TestForeignPodWithTheSameNameIsNotAdopted is the other half of adoption: the
-// owner reference has to be verified, or a Server would take charge of a
-// workload it never created.
 func TestForeignPodWithTheSameNameIsNotAdopted(t *testing.T) {
 	f := newFixture(t)
 	f.createServer("lobby-x7k2")
@@ -869,7 +745,6 @@ func TestReadyGateNeedsBothSignals(t *testing.T) {
 	pod, _ := f.pod("lobby-x7k2")
 	uid := string(pod.UID)
 
-	// Only the probe is green.
 	f.setPodRunning("lobby-x7k2", true)
 	f.reconcile("lobby-x7k2")
 	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Starting) {
@@ -879,7 +754,6 @@ func TestReadyGateNeedsBothSignals(t *testing.T) {
 		t.Errorf("registered = %v, want no registration before the agent is ready", f.registrar.registered)
 	}
 
-	// Now the agent as well.
 	f.agents.Connect(uid, agent.RoleServer)
 	f.agents.MarkReady(uid)
 	f.reconcile("lobby-x7k2")
@@ -980,22 +854,7 @@ func TestStalePlayerCountKeepsThePodOccupied(t *testing.T) {
 	}
 }
 
-// TestPodThatCrashedWithPlayersOnItLosesTheOccupiedLabel is the regression test
-// for the half of the terminal-pod exemption that was missing. The exemption
-// only ever sat inside the stale disjunct, and snap.Players > 0 is evaluated
-// first and wins — so it only helped a pod whose last reported count was zero,
-// which is exactly the case the original test happened to build.
-//
-// Nothing tells the agent registry to forget a pod, so a server that crashed
-// with seven players on it goes on reporting seven for as long as the Server
-// object is retained. The dead pod therefore kept spawnery.cloud/occupied=true,
-// the group's PodDisruptionBudget kept minAvailable at 1 with currentHealthy at
-// 0, and kubectl drain on that node never finished — for the whole failed
-// retention, an hour by default.
-//
-// The count is deliberately re-reported fresh on every pass here: staleness is
-// not what this is about. A terminal pod has no sessions, whatever the last
-// count said, because they went down with the process.
+// Nothing tells the agent registry to forget a pod, so a crashed pod keeps reporting its last count.
 func TestPodThatCrashedWithPlayersOnItLosesTheOccupiedLabel(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -1013,15 +872,12 @@ func TestPodThatCrashedWithPlayersOnItLosesTheOccupiedLabel(t *testing.T) {
 			pod.Labels[podspec.LabelOccupied])
 	}
 
-	// The pod dies with all seven still on it.
 	f.setPodFailed("lobby-x7k2")
 	f.reconcile("lobby-x7k2")
 	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Failed) {
 		t.Fatalf("phase = %q after the pod reached PodFailed, want Failed", got)
 	}
 
-	// It is retained for diagnosis, and for that whole window the label must
-	// stay off however often the registry repeats its last count.
 	for i := 0; i < 60; i++ {
 		if err := f.agents.ReportPlayers(uid, 7, 100); err != nil {
 			t.Fatalf("ReportPlayers: %v", err)
@@ -1041,22 +897,13 @@ func TestPodThatCrashedWithPlayersOnItLosesTheOccupiedLabel(t *testing.T) {
 	}
 }
 
-// TestOccupiedLabelNeedsTheServerToHaveBeenRegistered pins the half of the
-// label rule that had no test of its own. A count we cannot trust hides players
-// only on a server the proxies actually route to; a server that never got that
-// far has nobody on it, unreadable count or not.
-//
-// Without this, dropping status.wasRegistered from the rule left the whole
-// suite green on the label side — every server that failed to come up would
-// have been labelled occupied and pinned the group's budget, and the mirror
-// check in ServerView.Occupied was the only thing catching the same mistake.
+// An untrusted count hides players only on a server the proxies route to.
 func TestOccupiedLabelNeedsTheServerToHaveBeenRegistered(t *testing.T) {
 	f := newFixture(t)
 	f.createServer("lobby-x7k2")
 	f.reconcile("lobby-x7k2")
 
-	// The pod runs but the probe never turns green and no agent ever connects,
-	// so the registry knows nothing about it: unknown means stale.
+	// No green probe and no agent: the registry knows nothing, so the count is stale.
 	f.setPodRunning("lobby-x7k2", false)
 	f.reconcile("lobby-x7k2")
 
@@ -1091,18 +938,7 @@ func TestOccupiedLabelNeedsTheServerToHaveBeenRegistered(t *testing.T) {
 	}
 }
 
-// TestFinalizerIsWrittenBeforeTheFirstStatusWrite pins the ordering that
-// ensureFinalizer exists to express. Update returns the persisted object, and
-// because status is a subresource the API server does not take the status from
-// us — controller-runtime writes the persisted, on a first reconcile empty,
-// status back over the object in memory. Any condition set before that call is
-// silently dropped, and the Status().Update at the end of applyDecision then
-// persists a Server that never had it.
-//
-// A Server whose group does not exist is the cheapest case that writes a
-// condition on its very first reconcile, which is also the only reconcile on
-// which the finalizer is added. Move a status write ahead of ensureFinalizer
-// and the Accepted condition below disappears.
+// Update writes the persisted, still empty status back over the object, dropping any condition set before ensureFinalizer.
 func TestFinalizerIsWrittenBeforeTheFirstStatusWrite(t *testing.T) {
 	f := newFixture(t)
 
@@ -1144,7 +980,6 @@ func TestDeletionDrainsBeforeThePodIsDeleted(t *testing.T) {
 		t.Fatalf("delete Server: %v", err)
 	}
 
-	// First reconcile after deletion: drain starts, pod survives.
 	f.reconcile("lobby-x7k2")
 	srv = f.server("lobby-x7k2")
 	if srv.Status.Phase != string(phase.Draining) {
@@ -1160,17 +995,13 @@ func TestDeletionDrainsBeforeThePodIsDeleted(t *testing.T) {
 		t.Fatal("pod deleted while players were online — core invariant broken")
 	}
 
-	// Players keep it alive.
 	f.clock.Advance(time.Second)
 	f.reconcile("lobby-x7k2")
 	if _, ok := f.pod("lobby-x7k2"); !ok {
 		t.Fatal("pod deleted while players were online — core invariant broken")
 	}
 
-	// Now the server runs empty. The clock moves first, for the reason the
-	// other drain tests state: a count taken before the drain -- or within the
-	// second the API server truncates the drain stamp into -- cannot say
-	// whether the drain has finished. See CountPredatesDrain.
+	// A count taken before the drain cannot say whether it finished; see CountPredatesDrain.
 	f.clock.Advance(2 * time.Second)
 	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
@@ -1180,7 +1011,6 @@ func TestDeletionDrainsBeforeThePodIsDeleted(t *testing.T) {
 		t.Fatal("pod still there after the drain finished")
 	}
 
-	// The finalizer goes once the pod is gone.
 	f.reconcile("lobby-x7k2")
 	err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby-x7k2", Namespace: f.ns}, &spawneryv1alpha1.Server{})
 	if !apierrors.IsNotFound(err) {
@@ -1188,11 +1018,7 @@ func TestDeletionDrainsBeforeThePodIsDeleted(t *testing.T) {
 	}
 }
 
-// TestDeletionAfterAReadinessLossStillDrains covers the case the phase alone
-// cannot describe: the server reached Ready, was registered, then lost a ready
-// signal and fell back to Starting — deregistered, but with its players still
-// connected, because deregistering only stops new joins. Deleting it now must
-// drain, not terminate.
+// Deregistering only stops new joins, so a once-registered Starting server still has players.
 func TestDeletionAfterAReadinessLossStillDrains(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -1279,9 +1105,7 @@ func TestDrainTimeoutTerminatesLoudly(t *testing.T) {
 	}
 }
 
-// TestCrashLoopingOnlyLooksAtTheMinecraftContainer pins the scope of the
-// crash-loop check: PodTerminal aborts a running drain, so a crash-looping
-// sidecar must never be able to cut short the drain of a healthy server.
+// PodTerminal aborts a running drain, so a crash-looping sidecar must not cut one short.
 func TestCrashLoopingOnlyLooksAtTheMinecraftContainer(t *testing.T) {
 	backoff := corev1.ContainerState{
 		Waiting: &corev1.ContainerStateWaiting{Reason: "CrashLoopBackOff"},
@@ -1308,10 +1132,7 @@ func TestCrashLoopingOnlyLooksAtTheMinecraftContainer(t *testing.T) {
 	}
 }
 
-// denyingCreator refuses every create the way an admission webhook, a
-// ResourceQuota on ConfigMaps or a policy in a customer namespace refuses the
-// bootstrap's writes: permanently, and not because of anything the operator
-// could wait out.
+// denyingCreator refuses every create permanently, as an admission webhook or quota would.
 type denyingCreator struct {
 	client.Client
 }
@@ -1323,23 +1144,11 @@ func (denyingCreator) Create(context.Context, client.Object, ...client.CreateOpt
 		errors.New("denied by an admission policy"))
 }
 
-// A namespace the operator is not allowed to bootstrap is not a passing phase.
-// The waiting-for-the-first-certificate case clears itself within seconds, but
-// a refused write does not, and nothing else in this reconciler would ever say
-// so: status.startedAt is only written once a pod exists, so
-// StartupDeadlineReached can never fire and the Server can never fail out.
-// Without a condition and an event, every Server in such a namespace sits in
-// Pending forever with a log line as its only trace.
+// status.startedAt needs a pod, so without a condition such a Server would sit in Pending silently.
 func TestReconcileReportsANamespaceItCannotBootstrap(t *testing.T) {
 	f := newFixture(t)
 
-	// newFixture's own Network reconcile already bootstrapped this namespace
-	// (that is this task's whole point), so the CA ConfigMap and both
-	// ServiceAccounts are already here. Remove them, or the denying
-	// Bootstrapper below has nothing left to deny: CreateOrUpdate finds the
-	// ConfigMap present and unchanged and never calls Create, and
-	// ensureServiceAccounts's Get-then-Create finds each ServiceAccount
-	// already there and never calls Create either.
+	// newFixture already bootstrapped the namespace; without removing these the denying Bootstrapper never calls Create.
 	if err := f.c.Delete(f.ctx, &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: podspec.CAConfigMapName, Namespace: f.ns},
 	}); err != nil {
@@ -1386,8 +1195,6 @@ func TestReconcileReportsANamespaceItCannotBootstrap(t *testing.T) {
 		t.Errorf("events = %q, want one naming %s", recorded, ReasonNamespaceNotBootstrapped)
 	}
 
-	// The condition is a report, not a verdict: once the obstacle is gone the
-	// next resync creates the pod, with no restart and no manual step.
 	f.reconc.Bootstrap = &Bootstrapper{
 		Client: f.c, Reader: f.c,
 		CA: func() []byte { return []byte("test-ca") },
@@ -1402,25 +1209,8 @@ func TestReconcileReportsANamespaceItCannotBootstrap(t *testing.T) {
 	}
 }
 
-// While the registrar was a no-op this window was harmless. With a real one it
-// is not: if the status write is lost while players are already joining, a
-// deletion in that window takes the branch "never registered, terminate
-// immediately, no drain" and throws them out instead of moving them.
-//
-// The assertion is deliberately made from inside Register, against the API
-// server rather than against the in-memory object: what matters is that the
-// intent was durable before the proxies heard anything, and only a read-back
-// can tell the difference.
-//
-// The read-back also carries the Accepted condition, set earlier in this same
-// reconcile. That is not the regression guard against downgrading this
-// mid-reconcile write to a non-status Update (see ensureFinalizer) — by the
-// time d.Register runs here, Accepted has already been durable for two
-// reconciles courtesy of bringUpReady, so these assertions would pass
-// whichever kind of Update wrote it; wasDurable above is what actually catches
-// that regression. What the assertion here, and the one on the Accepted
-// condition after the server settles below, catch independently is a status
-// struct replaced wholesale inside a legitimate status call.
+// A deletion before wasRegistered is durable would terminate without draining, so it is read back
+// from the API server inside Register.
 func TestWasRegisteredIsDurableBeforeTheProxiesAreTold(t *testing.T) {
 	f := newFixture(t)
 
@@ -1454,13 +1244,7 @@ func TestWasRegisteredIsDurableBeforeTheProxiesAreTold(t *testing.T) {
 	}
 }
 
-// status.registered must not be left true with no registration behind it
-// looking like a success: the reconcile has to fail so the next pass tries
-// again. status.wasRegistered is the opposite case: it is deliberately left
-// true even though this registration failed, because it is the fail-safe
-// that forces a later deletion to drain rather than terminate outright, and a
-// failed attempt does not undo the fact that the proxies may already have
-// been told about an earlier one.
+// wasRegistered stays true after a failed Register: the proxies may have been told about an earlier one.
 func TestAFailedRegisterFailsTheReconcile(t *testing.T) {
 	f := newFixture(t)
 	f.registrar.onRegister = func(*spawneryv1alpha1.Server) error {
@@ -1500,11 +1284,7 @@ func TestAFailedRegisterFailsTheReconcile(t *testing.T) {
 	}
 }
 
-// TestServerRetireFieldsRoundTripThroughTheAPIServer exists to catch the
-// specific mistake of editing the Go type and forgetting make manifests: the
-// API server silently drops unknown fields, so a Go-only change round-trips
-// as zero. Only a round trip through a real API server catches that, which is
-// why this is here and not a struct test.
+// The API server silently drops unknown fields, so only a real round trip catches a missed make manifests.
 func TestServerRetireFieldsRoundTripThroughTheAPIServer(t *testing.T) {
 	f := newFixture(t)
 	ctx := f.ctx
@@ -1539,11 +1319,6 @@ func TestServerRetireFieldsRoundTripThroughTheAPIServer(t *testing.T) {
 	}
 }
 
-// TestRetiringServerStampsItsClockAndDeregisters proves the server side of
-// Task 7's ask: a Server patched with spec.retire moves to phase Retiring,
-// stamps status.retiringSince so maxStaleSeconds has something to measure
-// from, and comes off the proxies so it stops taking joins — without moving
-// the players already on it.
 func TestRetiringServerStampsItsClockAndDeregisters(t *testing.T) {
 	f := newFixture(t)
 	bringUpReady(t, f, "a") // registered with the proxies
@@ -1567,8 +1342,7 @@ func TestRetiringServerStampsItsClockAndDeregisters(t *testing.T) {
 	}
 }
 
-// retiringFor builds a Server that has been sitting in phase Retiring for d,
-// for the collectInputs unit tests below.
+// retiringFor builds a Server that has been Retiring for d.
 func retiringFor(d time.Duration) *spawneryv1alpha1.Server {
 	since := metav1.NewTime(time.Now().Add(-d))
 	return &spawneryv1alpha1.Server{
@@ -1579,8 +1353,6 @@ func retiringFor(d time.Duration) *spawneryv1alpha1.Server {
 	}
 }
 
-// groupWithMaxStale builds a ServerGroup configured with the given
-// maxStaleSeconds, for the collectInputs unit tests below.
 func groupWithMaxStale(seconds int32) *spawneryv1alpha1.ServerGroup {
 	return &spawneryv1alpha1.ServerGroup{
 		Spec: spawneryv1alpha1.ServerGroupSpec{
@@ -1589,11 +1361,7 @@ func groupWithMaxStale(seconds int32) *spawneryv1alpha1.ServerGroup {
 	}
 }
 
-// collectInputsReconciler is the minimal ServerReconciler collectInputs
-// needs: a Clock and an Agents registry, since collectInputs looks up the
-// agent snapshot unconditionally. It carries no client, so it only works
-// against Server/ServerGroup values built in memory, not ones read from
-// envtest.
+// collectInputsReconciler has no client, so it only works against objects built in memory.
 func collectInputsReconciler(clock func() time.Time) *ServerReconciler {
 	return &ServerReconciler{
 		Clock:  clock,
@@ -1602,8 +1370,7 @@ func collectInputsReconciler(clock func() time.Time) *ServerReconciler {
 }
 
 func TestMaxStaleZeroNeverForcesADrain(t *testing.T) {
-	// The default. A retiring server with players waits indefinitely, which
-	// is the promise the whole feature makes.
+	// The default: a retiring server with players waits indefinitely.
 	in := collectInputsReconciler(time.Now).
 		collectInputs(retiringFor(time.Hour*24), groupWithMaxStale(0), nil, false, false)
 	if in.MaxStaleReached {
@@ -1619,15 +1386,7 @@ func TestMaxStaleFiresOnceTheWaitExceedsIt(t *testing.T) {
 	}
 }
 
-// TestRetiringSinceSurvivesRepeatedReconciles is the wiring counterpart to
-// TestRetiringServerStampsItsClockAndDeregisters, which only reconciles once.
-// status.retiringSince is stamped with the same guarded-once pattern as
-// DrainStartedAt and FailedAt (see TestFailedServerDrainsBeforeItsPodIsDeleted),
-// and that guard is exactly what maxStaleSeconds depends on: if it were
-// re-stamped on every pass, the deadline measured from it would never arrive.
-// This drives a real server through several reconciles with the clock moving
-// between them and pins the timestamp as identical throughout, not merely
-// non-nil.
+// Re-stamping retiringSince on every pass would keep the maxStaleSeconds deadline from ever arriving.
 func TestRetiringSinceSurvivesRepeatedReconciles(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -1652,9 +1411,7 @@ func TestRetiringSinceSurvivesRepeatedReconciles(t *testing.T) {
 	}
 	retiringSince := got.Status.RetiringSince.DeepCopy()
 
-	// The group's default Update is unset (MaxStaleSeconds 0, "never"), so
-	// nothing here should push the server out of Retiring — the point is
-	// purely whether the timestamp itself holds still.
+	// MaxStaleSeconds is 0 here, so only the timestamp is under test.
 	for i := 0; i < 3; i++ {
 		f.clock.Advance(10 * time.Second)
 		if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
@@ -1672,14 +1429,7 @@ func TestRetiringSinceSurvivesRepeatedReconciles(t *testing.T) {
 	}
 }
 
-// TestMaxStaleSecondsEscalatesARetiringServerToDraining drives a Server
-// through the real machine — collectInputs, phase.Decide and applyDecision
-// together, not collectInputs called directly as
-// TestMaxStaleFiresOnceTheWaitExceedsIt does — to confirm a configured
-// maxStaleSeconds actually forces a stale Retiring server into Draining, with
-// the players still on it: the escalation must go through the drain path
-// (phase.Retiring's MaxStaleReached branch sets StartDrain), never straight to
-// Terminating.
+// The escalation must go through the drain path, never straight to Terminating.
 func TestMaxStaleSecondsEscalatesARetiringServerToDraining(t *testing.T) {
 	f := newFixture(t)
 	f.group.Spec.Update = &spawneryv1alpha1.UpdateSpec{MaxStaleSeconds: 30}
@@ -1703,8 +1453,6 @@ func TestMaxStaleSecondsEscalatesARetiringServerToDraining(t *testing.T) {
 		t.Fatalf("phase = %q after retire, want Retiring", got)
 	}
 
-	// Advance past the 30s window in several passes, the same shape as
-	// TestDrainTimeoutTerminatesLoudly's thirteen reconciles past a deadline.
 	for i := 0; i < 4; i++ {
 		f.clock.Advance(10 * time.Second)
 		if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
@@ -1728,19 +1476,9 @@ func TestMaxStaleSecondsEscalatesARetiringServerToDraining(t *testing.T) {
 	}
 }
 
-// TestMaxStaleZeroLeavesARetiringServerAloneIndefinitely is the complement of
-// TestMaxStaleSecondsEscalatesARetiringServerToDraining: the same clock
-// advance, but with maxStaleSeconds at 0 ("never"), must never push the
-// server out of Retiring. This is the case that actually protects players —
-// a group that never configured a stale window must not have one inferred
-// for it — so it gets its own fixture and its own server rather than reusing
-// the one that proved the positive case, which would leave the zero path
-// resting on inference instead of its own assertion.
 func TestMaxStaleZeroLeavesARetiringServerAloneIndefinitely(t *testing.T) {
 	f := newFixture(t)
-	// f.group's default Update is unset, i.e. MaxStaleSeconds 0 — made
-	// explicit here so the zero case doesn't quietly depend on the fixture's
-	// default staying zero.
+	// Explicit so the zero case does not depend on the fixture's default.
 	f.group.Spec.Update = &spawneryv1alpha1.UpdateSpec{MaxStaleSeconds: 0}
 	if err := f.c.Update(f.ctx, f.group); err != nil {
 		t.Fatalf("update ServerGroup: %v", err)
@@ -1762,7 +1500,6 @@ func TestMaxStaleZeroLeavesARetiringServerAloneIndefinitely(t *testing.T) {
 		t.Fatalf("phase = %q after retire, want Retiring", got)
 	}
 
-	// Same clock advance as the escalating case above.
 	for i := 0; i < 4; i++ {
 		f.clock.Advance(10 * time.Second)
 		if err := f.agents.ReportPlayers(uid, 6, 100); err != nil {
@@ -1786,18 +1523,8 @@ func TestMaxStaleZeroLeavesARetiringServerAloneIndefinitely(t *testing.T) {
 	}
 }
 
-// createPersistentServer adds the Server holding one ordinal of a persistent
-// group, the way ServerGroupReconciler.createPersistentServer builds it: the
-// derived name, spec.ordinal filled in, the three labels newServer stamps, and
-// the group as its *controller* rather than merely an owner. It lets a test
-// drive the Server controller alone, without the group controller in the
-// picture.
-//
-// Controller: true is the part that would be easy to leave off and is not
-// decoration. metav1.IsControlledBy is what the Server controller's adoption
-// path asks about a pod, and a fixture that builds ownership a second way is a
-// fixture that can make a controller look right about a shape production never
-// hands it.
+// createPersistentServer builds the Server as ServerGroupReconciler.createPersistentServer does.
+// Controller: true matters: the adoption path asks metav1.IsControlledBy.
 func (f *fixture) createPersistentServer(t *testing.T, group string, ordinal int32) *spawneryv1alpha1.Server {
 	t.Helper()
 	owner := &spawneryv1alpha1.ServerGroup{}
@@ -1834,19 +1561,8 @@ func (f *fixture) createPersistentServer(t *testing.T, group string, ordinal int
 	return srv
 }
 
-// claim reads a PersistentVolumeClaim by name and returns nil when there is
-// none, rather than failing the test the way f.server does. Absence is exactly
-// what the assertions below have to be able to ask about.
-//
-// A claim carrying a deletion timestamp counts as gone, the same rule f.pod
-// applies to a pod and for a sharper reason: the API server's
-// StorageObjectInUseProtection admission plugin puts a pvc-protection
-// finalizer on every claim at creation, and no controller runs in envtest to
-// take it off again. A deleted claim therefore stays readable for the rest of
-// the test, and without this rule "the claim is still here" would be true of a
-// world somebody had just asked to be destroyed — verified by mutation: a
-// Delete added to the Server controller's deletion path is invisible to
-// TestDeletingAPersistentServerLeavesItsClaim without it.
+// claim returns nil for an absent claim, and one with a deletion timestamp counts as absent:
+// envtest never clears the pvc-protection finalizer.
 func (f *fixture) claim(name string) *corev1.PersistentVolumeClaim {
 	f.t.Helper()
 	pvc := &corev1.PersistentVolumeClaim{}
@@ -1859,31 +1575,8 @@ func (f *fixture) claim(name string) *corev1.PersistentVolumeClaim {
 	return pvc
 }
 
-// TestAPersistentServerGetsItsClaimBeforeItsPod pins the order master design
-// 6.1 asks for, and the retention that makes a world survive.
-//
-// envtest runs no provisioner, so the claim never reaches Bound and the pod
-// never runs. No test in this file asserts either — they assert the objects,
-// which is all this layer can honestly show.
-//
-// The order in the name is the weakest of the three, and saying so here is
-// cheaper than a reader finding out: both objects exist by the time a
-// reconcile returns, so what these assertions actually catch is a claim that
-// is never created at all, or a pod that is not. Swapping the two Creates
-// round was mutation-tested and passes this test unchanged.
-//
-// Not pinned is not the same as unpinnable, and the difference is worth being
-// precise about. A client.Client decorator recording the order of Create calls
-// would pin it — recordingRegistrar.onRegister in suite_test.go is this
-// fixture's existing instance of that technique, for an ordering that likewise
-// "cannot be seen from outside the call". It is left undone because the
-// consequence of a swap is soft rather than because the tool is missing: both
-// objects land in the same reconcile, the API server does not check that a
-// pod's claim exists, and a pod whose claim is not there yet is merely
-// unschedulable — the scheduler retries it, and the claim arrives
-// microseconds later. Add the decorator on the day something between the two
-// Creates can return early with the pod already made; today nothing between
-// them can.
+// envtest runs no provisioner, so the claim never binds and the pod never runs.
+// Swapping the two Creates passes this test; it catches a missing claim or pod.
 func TestAPersistentServerGetsItsClaimBeforeItsPod(t *testing.T) {
 	f := newFixture(t)
 	f.createPersistentGroup(t, "survival", 1)
@@ -1903,12 +1596,7 @@ func TestAPersistentServerGetsItsClaimBeforeItsPod(t *testing.T) {
 	}
 }
 
-// retirePodTheWayAKubeletWould removes a pod object that is only carrying a
-// deletion timestamp, which is the last step of a termination and the one step
-// envtest cannot take on its own: with no kubelet, a pod that was bound to a
-// node keeps its timestamp and answers Get for the rest of the test. A force
-// delete does what the kubelet's confirmation would, once holdPodOnDelete's
-// finalizer is gone.
+// With no kubelet a bound pod keeps its deletion timestamp; a force delete stands in for the kubelet's confirmation.
 func (f *fixture) retirePodTheWayAKubeletWould(t *testing.T, pod *corev1.Pod) {
 	t.Helper()
 	current := &corev1.Pod{}
@@ -1927,15 +1615,7 @@ func (f *fixture) retirePodTheWayAKubeletWould(t *testing.T, pod *corev1.Pod) {
 
 const testPodHold = "spawnery.cloud/test-hold"
 
-// holdPodOnDelete keeps a pod in the API server once it is deleted, the way a
-// bound pod waits for a kubelet that never answers.
-//
-// Binding alone does not guarantee that. Under load the API server has been
-// seen to decide a delete's grace period on the pod as it was before the
-// binding, pick 0 for an unscheduled pod, and remove it outright; the audit
-// log showed a DeleteOptions without gracePeriodSeconds answered with
-// deletionGracePeriodSeconds 0 on a pod bound a millisecond earlier, about
-// once in 2,700 runs with 16 to 24 test binaries in parallel.
+// Binding alone is not enough: under load the API server occasionally deletes a just-bound pod with grace period 0.
 func (f *fixture) holdPodOnDelete(t *testing.T, pod *corev1.Pod) {
 	t.Helper()
 	current := &corev1.Pod{}
@@ -1948,23 +1628,8 @@ func (f *fixture) holdPodOnDelete(t *testing.T, pod *corev1.Pod) {
 	}
 }
 
-// recreateOrdinalOverATerminatingPod builds the state finding 1 of the
-// whole-branch review is about: a persistent ordinal whose Server object has
-// been replaced while the pod of the previous one is still terminating.
-//
-// It is a persistent group's state in practice: the name is derived from the
-// ordinal and reused across every generation of the Server object, so the
-// group's replacement meets its predecessor's pod under the identical name.
-//
-// The pod is bound to a node before it is deleted: the API server
-// force-deletes an *unscheduled* pod outright, because no kubelet owes it a
-// confirmation. Once a pod is bound it waits for one, and envtest runs no
-// kubelet to send it — so the deleted pod keeps its deletion timestamp for the
-// rest of the test, which is what a node gone NotReady looks like on a real
-// cluster. holdPodOnDelete makes that hold every time rather than almost
-// every time.
-//
-// It returns the terminating pod so a test can finish the termination.
+// recreateOrdinalOverATerminatingPod replaces an ordinal's Server while its predecessor's pod is
+// still terminating, and returns that pod. The API server force-deletes an unscheduled pod, so it is bound first.
 func recreateOrdinalOverATerminatingPod(t *testing.T, f *fixture) *corev1.Pod {
 	t.Helper()
 	f.createPersistentGroup(t, "survival", 1)
@@ -1999,19 +1664,8 @@ func recreateOrdinalOverATerminatingPod(t *testing.T, f *fixture) *corev1.Pod {
 	return pod
 }
 
-// TestARecreatedOrdinalWaitsForItsPredecessorsPod pins the first step of a
-// cycle nothing inside this operator bounds. What ends it from outside is the
-// pod finishing termination — a grace period ordinarily, and never, on a node
-// that has gone away.
-//
-// Creating into a name the API server still holds gets AlreadyExists on the
-// pod, which the create block tolerates — so the controller would record
-// status.podName and emit PodCreated for a pod it did not create, and the next
-// pass would read that pod as lost and delete this Server. The group rebuilds
-// the ordinal, and round it goes at the five-second resync: nothing reaches
-// Failed, so consecutiveFailures never moves and neither BackingOff nor
-// Degraded ever fires. A fresh Server with an empty status.podName cannot raise
-// PodLost, which is why waiting is the whole fix.
+// A create into a name still held gets AlreadyExists; recording that pod would read it as lost
+// and delete this Server, in a loop no failure count sees.
 func TestARecreatedOrdinalWaitsForItsPredecessorsPod(t *testing.T) {
 	f := newFixture(t)
 	recreateOrdinalOverATerminatingPod(t, f)
@@ -2031,8 +1685,6 @@ func TestARecreatedOrdinalWaitsForItsPredecessorsPod(t *testing.T) {
 	}
 }
 
-// describePods lists every pod in the fixture's namespace with the two fields
-// that decide this test, for a failure message rather than for an assertion.
 func describePods(f *fixture) string {
 	pods := &corev1.PodList{}
 	if err := f.c.List(f.ctx, pods, client.InNamespace(f.ns)); err != nil {
@@ -2053,12 +1705,7 @@ func describePods(f *fixture) string {
 	return strings.Join(out, "; ")
 }
 
-// podUnderNameIsStill answers whether the pod holding a name is still the one
-// with this UID.
-//
-// The UID and not the name: the ordinal's pod name is reused across
-// generations, so a pod called survival-0 is present both while the
-// predecessor lingers and once the successor exists.
+// The pod name is reused across generations, so only the UID tells them apart.
 func podUnderNameIsStill(f *fixture, name string, uid types.UID) bool {
 	pod := &corev1.Pod{}
 	if err := f.c.Get(f.ctx, types.NamespacedName{Namespace: f.ns, Name: name}, pod); err != nil {
@@ -2067,14 +1714,7 @@ func podUnderNameIsStill(f *fixture, name string, uid types.UID) bool {
 	return pod.UID == uid
 }
 
-// TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone is the other half:
-// the wait ends by itself, and ends with a pod this controller really did
-// create. Without it the fix above would be indistinguishable from a Server
-// that never gets a pod at all.
-//
-// Its podName assertion has failed once, unexplained; docs/reference/known-issues.md
-// carries what is known, and the failure prints what a second occurrence
-// needs.
+// Its podName assertion has failed once, unexplained; see docs/reference/known-issues.md.
 func TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone(t *testing.T) {
 	f := newFixture(t)
 	terminating := recreateOrdinalOverATerminatingPod(t, f)
@@ -2100,44 +1740,15 @@ func TestARecreatedOrdinalCreatesItsPodOnceThePredecessorIsGone(t *testing.T) {
 	if _, ok := f.pod("survival-0"); !ok {
 		t.Error("no pod once the name was free")
 	}
-	// The wait clears rather than sticking: the switch at the top of Reconcile
-	// sets Accepted back to True on every pass that resolves the group and the
-	// network, and this is what says the block above did not park a reason on
-	// the object that outlives what it described.
+	// Accepted must clear rather than keep a reason that outlived the wait.
 	accepted := meta.FindStatusCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
 	if accepted == nil || accepted.Status != metav1.ConditionTrue {
 		t.Errorf("Accepted = %+v once the pod was created, want True: the wait has to clear", accepted)
 	}
 }
 
-// TestAnExistingClaimIsLeftExactlyAsItIs pins design §3.3's second property,
-// "created, never updated", which until this test was pinned by nothing: no
-// test put a claim in the way that disagreed with spec.storage, so replacing
-// the claim Create in server_controller.go with the controllerutil.CreateOrUpdate
-// this same package uses six times over left the suite green.
-//
-// It is what stands between 5b and a world that has been resized or
-// reconfigured underneath the group. A claim already carrying a size, a class
-// or an access mode other than the one spec.storage asks for is the ordinary
-// case rather than a corruption — a world grown by hand, or created under an
-// earlier spec — and 5a's answer is to leave it alone and let 5b decide what
-// growth means. An update would at best be rejected by the API server (a PVC's
-// storageClassName and accessModes are immutable, and its size may not shrink)
-// and at worst succeed.
-//
-// resourceVersion is the assertion that makes "byte-identical" mean it: any
-// write at all moves it, including one that lands the same values, and a
-// CreateOrUpdate that rewrote only the labels was mutation-tested and fails
-// exactly this line and no other.
-//
-// The three field assertions under it cannot fail while that one holds, and
-// saying so is cheaper than a reader assuming otherwise: the API server
-// forbids changing the spec of an existing claim, bar a bound claim's resource
-// request and its volumeAttributesClassName, and envtest binds nothing — so a
-// write that reached these
-// fields would be rejected and fail the reconcile before any assertion ran —
-// which is what the full CreateOrUpdate mutation did. They are here to say
-// what byte-identical is protecting, in the terms 5b will change.
+// resourceVersion catches any write; the field assertions cannot fail while it holds and
+// say what it protects.
 func TestAnExistingClaimIsLeftExactlyAsItIs(t *testing.T) {
 	f := newFixture(t)
 	f.createPersistentGroup(t, "survival", 1)
@@ -2190,27 +1801,8 @@ func TestAnExistingClaimIsLeftExactlyAsItIs(t *testing.T) {
 	}
 }
 
-// TestGrowingStorageSizePatchesTheClaim pins the one write this operator makes
-// to a claim it otherwise only creates: growing spec.storage.size reaches it,
-// and only that one field.
-//
-// The reconcile that has to notice the growth runs against a server whose
-// pod already exists, which is the ordinary case for a persistent server
-// that has been up for a while — createPod is false by then, so nothing in
-// the pod-creation path would ever see the new size. growClaim runs on every
-// pass for exactly that reason.
-//
-// envtest runs no CSI driver and no external-resizer, and its API server
-// enforces the same resize admission a real cluster does: a claim's
-// spec.resources.requests is only mutable once the claim is Bound, and only
-// against a StorageClass with allowVolumeExpansion. Both are faked here the
-// same way setPodRunning fakes the kubelet elsewhere in this file — the
-// StorageClass is real (creating one needs no controller behind it), but
-// nothing ever binds the claim to a volume, so its Bound status is written
-// by hand rather than earned. Without the fake bind, r.Patch in growClaim
-// fails with envtest's real "only dynamically provisioned pvc can be resized"
-// error, the same as it would against a claim nobody's storage class ever
-// bound.
+// growClaim runs every pass, since nothing in pod creation runs once the pod exists.
+// envtest resizes only a Bound claim, and nothing binds one, so the bind is faked by hand.
 func TestGrowingStorageSizePatchesTheClaim(t *testing.T) {
 	f := newFixture(t)
 	class := &storagev1.StorageClass{
@@ -2222,9 +1814,7 @@ func TestGrowingStorageSizePatchesTheClaim(t *testing.T) {
 		t.Fatalf("create StorageClass: %v", err)
 	}
 
-	// storage.storageClassName is immutable once set (CEL rule on
-	// ServerGroupSpec), so it has to be there at creation -- built by hand
-	// rather than through createPersistentGroup for that one reason.
+	// storageClassName is immutable once set, so the group is built by hand with it.
 	replicas := int32(1)
 	group := &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "survival", Namespace: f.ns},
@@ -2277,17 +1867,7 @@ func TestGrowingStorageSizePatchesTheClaim(t *testing.T) {
 	}
 }
 
-// TestAResizePendingClaimMarksItsServer pins the reaction, not the trigger.
-//
-// envtest runs no CSI driver and no external-resizer, so nothing in this
-// suite can make FileSystemResizePending appear on its own — the condition
-// is written onto the claim's status by hand, the same way growClaim's test
-// fake-binds a claim envtest's real provisioners never would. That is the
-// honest way to test this: the operator's job is to read the condition and
-// mirror it, not to produce it. What this test does NOT prove is that a real
-// CSI driver ever sets the condition, or that restarting the pod actually
-// makes the filesystem follow — both are outside this operator's reach and
-// outside envtest's.
+// envtest runs no CSI driver, so FileSystemResizePending is written by hand; this tests the reaction only.
 func TestAResizePendingClaimMarksItsServer(t *testing.T) {
 	f := newFixture(t)
 	f.createPersistentGroup(t, "survival", 1)
@@ -2313,12 +1893,6 @@ func TestAResizePendingClaimMarksItsServer(t *testing.T) {
 	}
 }
 
-// TestAClaimLargerThanTheSpecIsLeftAlone is a regression guard, not a new
-// property: it already passed before growClaim existed, because 5a never
-// wrote to a claim at all, and it has to go on passing now that growClaim
-// does. A claim someone grew by hand is not the operator's to shrink:
-// want.Cmp(have) <= 0 in growClaim is what leaves it alone, and the API
-// server would refuse a PVC shrink anyway, even if growClaim tried.
 func TestAClaimLargerThanTheSpecIsLeftAlone(t *testing.T) {
 	f := newFixture(t)
 	f.createPersistentGroup(t, "survival", 1) // 10Gi, per the fixture.
@@ -2358,34 +1932,14 @@ func TestAClaimLargerThanTheSpecIsLeftAlone(t *testing.T) {
 	if got := after.Spec.Resources.Requests[corev1.ResourceStorage]; got.Cmp(resource.MustParse("50Gi")) != 0 {
 		t.Errorf("claim requests %s; want the 50Gi it already had", got.String())
 	}
-	// Left alone means no patch was attempted, not that one was attempted and
-	// refused. Narrowing growClaim's guard from want.Cmp(have) <= 0 to == 0
-	// makes it patch this claim downward; the API refuses that, the claim is
-	// unchanged, and both assertions above still hold -- so this is what tells
-	// the two apart.
+	// Narrowing the guard to == 0 would attempt a refused shrink and still pass the assertions above.
 	if srv := f.server("survival-0"); srv.Status.StorageResizeError != "" {
 		t.Errorf("storageResizeError = %q, want empty; nothing should have been sent to this claim",
 			srv.Status.StorageResizeError)
 	}
 }
 
-// TestARecreatedOrdinalMountsTheClaimItLeft is the second half of design §6's
-// headline case: deleting a Server leaves its claim standing, **and the same
-// ordinal picks it up again**.
-//
-// The recreation goes through the same helper as the two tests above rather
-// than around it, because the ordinal cannot pick anything up until its
-// predecessor's pod has finished.
-//
-// What "picks it up again" has to mean at this layer is that the claim that
-// was there is still there, and is the one the new pod mounts. A claim deleted
-// and remade under the same name shows up here as
-// an *absent* claim rather than a changed one, and that is worth stating: the
-// pvc-protection finalizer envtest never clears means a deleted claim cannot
-// leave, so the remake gets AlreadyExists and f.claim — which counts a
-// deletion timestamp as gone — reports nothing. The "no claim" assertion is
-// therefore the one that catches a stray Delete on this path -- mutation-tested
-// with a Delete added to the finalizer-release branch.
+// A deleted and remade claim reads as absent, because envtest never clears pvc-protection.
 func TestARecreatedOrdinalMountsTheClaimItLeft(t *testing.T) {
 	f := newFixture(t)
 	f.createPersistentGroup(t, "survival", 1)
@@ -2427,9 +1981,7 @@ func TestARecreatedOrdinalMountsTheClaimItLeft(t *testing.T) {
 	}
 }
 
-// claimsMounted is the claim names a pod's volumes are backed by. It reads the
-// pod rather than trusting BuildServerPod, because the question here is what
-// the ordinal actually came back onto.
+// claimsMounted reads the pod rather than trusting BuildServerPod.
 func claimsMounted(pod *corev1.Pod) []string {
 	var names []string
 	for _, v := range pod.Spec.Volumes {
@@ -2440,22 +1992,8 @@ func claimsMounted(pod *corev1.Pod) []string {
 	return names
 }
 
-// TestDeletingAPersistentServerLeavesItsClaim is the property persistent
-// storage turns on.
-//
-// What it catches is a Delete on the claim from the Server controller's
-// deletion path. It cannot catch an owner reference: envtest runs no garbage
-// collector, so an owned claim survives its owner here exactly as an unowned
-// one does — which is why the ownerReferences assertion sits in
-// TestAPersistentServerGetsItsClaimBeforeItsPod and is checked on the object
-// rather than through a deletion.
-//
-// It takes two reconciles, and the second is not a belt-and-braces repeat. The
-// first sees the pod still there and only asks for its deletion; the branch
-// that releases the finalizer and lets the object go needs the pod already
-// gone, so it runs on the second. A Delete added to that branch was invisible
-// to the single-reconcile version of this test — mutation-tested — while the
-// object it destroyed was the world.
+// envtest runs no garbage collector, so this cannot catch an owner reference.
+// The second reconcile is the one that releases the finalizer.
 func TestDeletingAPersistentServerLeavesItsClaim(t *testing.T) {
 	f := newFixture(t)
 	f.createPersistentGroup(t, "survival", 1)
@@ -2479,10 +2017,7 @@ func TestDeletingAPersistentServerLeavesItsClaim(t *testing.T) {
 	}
 }
 
-// refusingPodCreator refuses to create pods and creates everything else
-// normally. The reconcile under test also writes a CA ConfigMap, two
-// ServiceAccounts and — for a persistent group — a PVC, and a client that
-// refused all of those would stop the pass long before it reached the pod.
+// refusingPodCreator refuses only pods: the pass writes a ConfigMap, ServiceAccounts and a PVC first.
 type refusingPodCreator struct {
 	client.Client
 	err error
@@ -2495,15 +2030,7 @@ func (r refusingPodCreator) Create(ctx context.Context, obj client.Object, opts 
 	return r.Client.Create(ctx, obj, opts...)
 }
 
-// A pod the API server refuses leaves a Server that never got one, sitting in
-// Pending and occupying its group's slot.
-//
-// Returning the error alone leaves nothing on the object: status.podName stays
-// empty, so the pod-lost path never applies; status.startedAt is only written
-// beside a pod that exists, so StartupDeadlineReached can never fire; and the
-// Server sits there for as long as the refusal stands with a log line as its
-// only trace — the same silence TestReconcileReportsANamespaceItCannot
-// Bootstrap closed for the branch one call earlier.
+// Returning the error alone leaves no podName and no startedAt, so no deadline would ever fire.
 func TestReconcileReportsAPodTheAPIServerRefused(t *testing.T) {
 	f := newFixture(t)
 	rec := newRecorder()
@@ -2516,9 +2043,7 @@ func TestReconcileReportsAPodTheAPIServerRefused(t *testing.T) {
 	}
 
 	f.createServer("lobby-r4t9")
-	// Fatals if the reconcile returns an error, which is half the point: a
-	// refusal the namespace's policy causes is not something to retry with
-	// backoff and no report.
+	// f.reconcile fatals on error: a policy refusal is reported, not retried.
 	f.reconcile("lobby-r4t9")
 
 	if _, ok := f.pod("lobby-r4t9"); ok {
@@ -2546,8 +2071,6 @@ func TestReconcileReportsAPodTheAPIServerRefused(t *testing.T) {
 		t.Errorf("events = %q, want one naming %s", recorded, ReasonServerPodRejected)
 	}
 
-	// A report, not a verdict: the resync requeue recovers on its own once the
-	// namespace's policy stops refusing.
 	f.reconc.Client = f.c
 	f.reconcile("lobby-r4t9")
 	if _, ok := f.pod("lobby-r4t9"); !ok {
@@ -2560,12 +2083,7 @@ func TestReconcileReportsAPodTheAPIServerRefused(t *testing.T) {
 	}
 }
 
-// fallbackGroup is what a Server runs on when its own group is gone, and it
-// used to stamp Ephemeral on every one of them — milestone 5's last open
-// precondition. A unit test rather than an envtest because the type is what is
-// under test, and the one branch it decides in Reconcile (!IsEphemeral) reaches
-// only calls that are no-ops without a storage spec: driving it through the API
-// server would prove the no-ops, not the type.
+// A unit test: through the API server it would prove only no-ops.
 func TestTheFallbackGroupTakesItsTypeFromTheOrdinal(t *testing.T) {
 	ephemeral := &spawneryv1alpha1.Server{
 		ObjectMeta: metav1.ObjectMeta{Name: "lobby-x7k2", Namespace: "minecraft"},
@@ -2589,16 +2107,12 @@ func TestTheFallbackGroupTakesItsTypeFromTheOrdinal(t *testing.T) {
 			got.Spec.Type)
 	}
 
-	// Ordinal 0 is the one that matters: a value check rather than a nil check
-	// would read the first ordinal of every persistent group as ephemeral, and
-	// ordinal 0 is the one that exists in every persistent group there is.
+	// Ordinal 0 exists in every persistent group, so a value check would misread it.
 	if got := fallbackGroup(persistent); *persistent.Spec.Ordinal != 0 ||
 		got.Spec.Type != spawneryv1alpha1.ServerGroupPersistent {
 		t.Errorf("ordinal 0 read as ephemeral: %q", got.Spec.Type)
 	}
 
-	// The timings do not move with the type, which is what the precondition
-	// this closes actually claimed they did.
 	if a, b := fallbackGroup(ephemeral), fallbackGroup(persistent); a.DrainTimeout() != b.DrainTimeout() ||
 		a.FailedRetention() != b.FailedRetention() || a.UpdateMaxStale() != b.UpdateMaxStale() {
 		t.Errorf("the fallback timings differ by type: ephemeral %v/%v/%v, persistent %v/%v/%v",
@@ -2625,11 +2139,7 @@ func TestTheFallbackGroupOfAnOnDemandMemberIsOnDemand(t *testing.T) {
 	}
 }
 
-// Every group type, and the marker that identifies a Server of it without
-// its group. fallbackGroup must read each marker back as its own type, so a
-// type whose marker it ignores fails here rather than reading as Ephemeral.
-// The table is written by hand: a type added to the enum needs its row added
-// here.
+// The table is hand-written: a type added to the enum needs its row here.
 func TestTheFallbackGroupCoversEveryType(t *testing.T) {
 	marker := map[spawneryv1alpha1.ServerGroupType]func(*spawneryv1alpha1.Server){
 		spawneryv1alpha1.ServerGroupEphemeral:  func(*spawneryv1alpha1.Server) {},
@@ -2648,19 +2158,7 @@ func TestTheFallbackGroupCoversEveryType(t *testing.T) {
 	}
 }
 
-// The other half of a refused pod: after the report comes the reclaim.
-//
-// A Server whose pod the API server refuses has an empty status.podName, so
-// PodLost never applies, and a status.startedAt written only beside a pod
-// would leave it with no clock at all, sitting in Pending and occupying its
-// group's slot for as long as the refusal stood. It fails instead at a
-// deadline derived from the group: drain.timeoutSeconds plus the startup
-// deadline.
-//
-// The middle step is the one worth having. Between the startup deadline and
-// the creation deadline the server must stay Pending and must not be reported
-// as "did not become ready in time": it never had a pod, so it never failed to
-// become ready, and the remedy is at whatever refused the create.
+// Between the startup and creation deadlines it must stay Pending: it never had a pod, so it never failed to become ready.
 func TestAServerWhosePodIsNeverCreatedFailsAtItsOwnDeadline(t *testing.T) {
 	f := newFixture(t)
 	f.reconc.Recorder = newRecorder()
@@ -2697,8 +2195,7 @@ func TestAServerWhosePodIsNeverCreatedFailsAtItsOwnDeadline(t *testing.T) {
 		t.Errorf("Ready = %+v, want any reason but %s", c, phase.ReasonStartupTimeout)
 	}
 
-	// Past the creation deadline: drain.timeoutSeconds plus the startup
-	// deadline, measured from the pass that accepted the Server.
+	// Past the creation deadline: drain timeout plus startup deadline.
 	f.clock.Advance(f.group.DrainTimeout() + time.Second)
 	f.reconcile("lobby-q8n4")
 	srv = f.server("lobby-q8n4")
@@ -2712,25 +2209,13 @@ func TestAServerWhosePodIsNeverCreatedFailsAtItsOwnDeadline(t *testing.T) {
 	}
 }
 
-// The creation deadline must not run while the pod's *name* is held by another
-// pod, and this is the case that made it matter.
-//
-// An ordinal waiting on a predecessor whose node has gone NotReady waits
-// without a bound — the API server keeps the pod object until a kubelet
-// confirms the kill, and there is no kubelet. Failing the Server there makes
-// the situation worse rather than better: the replacement is derived from the
-// same ordinal name and meets the same pod, a Failed server holds its ordinal
-// in DecidePersistentSize's held map, and pruneFailed does not run for a
-// persistent group — so the object stays for its full failedRetentionSeconds,
-// an hour by default, even after somebody force-deletes the stuck pod. Before
-// the deadline existed this Server recovered the moment the name came free.
+// Failing a Server waiting on a NotReady node's pod would hold the ordinal for the full failedRetentionSeconds.
 func TestAnOrdinalWaitingOnItsPredecessorIsNotFailedForHavingNoPod(t *testing.T) {
 	f := newFixture(t)
 	recreateOrdinalOverATerminatingPod(t, f)
 
 	f.reconcile("survival-0")
-	// Far past any bound derived from this group: the point is that the clock
-	// does not run here at all, not that it runs slowly.
+	// The clock must not run here at all.
 	f.clock.Advance(2 * time.Hour)
 	f.reconcile("survival-0")
 
@@ -2747,28 +2232,16 @@ func TestAnOrdinalWaitingOnItsPredecessorIsNotFailedForHavingNoPod(t *testing.T)
 	}
 }
 
-// TestAServerDeletedUnderAPassDoesNotSurfaceAsAnError drives the race the
-// recreate path produces: this controller deletes the Server itself, and a
-// reconcile holding a cached copy from just before that delete then writes to
-// an object the API server no longer has.
-//
-// Unwrapped, that NotFound reaches controller-runtime as an `error` with a
-// stacktrace on a path where nothing is wrong -- the replacement Server is
-// already being built. The reconcile must report the
-// disappearance as done, because there is nothing left for it to accomplish
-// and the requeued pass already handles the absence at the top of Reconcile.
+// The requeued pass handles the absence, so NotFound here is done, not an error.
 func TestAServerDeletedUnderAPassDoesNotSurfaceAsAnError(t *testing.T) {
 	f := newFixture(t)
 	srv := f.createServer("lobby-race")
 
-	// The copy a pass is holding, taken before the object goes away.
 	held := srv.DeepCopy()
 
 	if err := f.c.Delete(f.ctx, srv); err != nil {
 		t.Fatalf("delete Server: %v", err)
 	}
-	// The finalizer this fixture's servers carry keeps the object until it is
-	// released, so release it and let the delete land for real.
 	held2 := &spawneryv1alpha1.Server{}
 	if err := f.c.Get(f.ctx, client.ObjectKeyFromObject(srv), held2); err == nil {
 		held2.Finalizers = nil
@@ -2780,9 +2253,6 @@ func TestAServerDeletedUnderAPassDoesNotSurfaceAsAnError(t *testing.T) {
 		t.Fatalf("the Server is still there, so this test would prove nothing: %v", err)
 	}
 
-	// Exactly what a mid-pass write does: a status update against the stale
-	// copy. The bare call is what used to escape; persistedServer is what the
-	// reconcile now goes through.
 	bare := f.reconc.Status().Update(f.ctx, held)
 	if !apierrors.IsNotFound(bare) {
 		t.Fatalf("the write did not produce NotFound (%v), so the guard below is "+
@@ -2794,25 +2264,13 @@ func TestAServerDeletedUnderAPassDoesNotSurfaceAsAnError(t *testing.T) {
 	}
 }
 
-// TestAnArrivingPlayerKeepsTheDrainingPodAlive is the operator's half of the
-// drain gap, driven end to end through the reconciler.
-//
-// The backend reports zero, freshly, and it is telling the truth: a player
-// still completing the configuration phase is counted by neither the backend
-// nor the proxy's own player list -- Velocity calls
-// VelocityRegisteredServer.addPlayer only from
-// BackendPlaySessionHandler.activated(), the play phase. So this is exactly
-// the state in which a `kubectl delete` takes the pod out from under somebody,
-// and the proxy's attachment report is the only thing that can say
-// otherwise.
+// Velocity counts a player only in the play phase, so the backend's fresh zero misses one still configuring.
 func TestAnArrivingPlayerKeepsTheDrainingPodAlive(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
-	// The backend is genuinely empty as far as it can tell.
 	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
 	}
-	// A proxy of the same namespace says one player is on their way to it.
 	proxyUID := "gateway-pod-uid"
 	f.agents.Connect(proxyUID, agent.RoleProxy)
 	if err := f.agents.ReportBackends(proxyUID, f.ns, map[string]int32{"lobby-x7k2": 1}); err != nil {
@@ -2832,12 +2290,7 @@ func TestAnArrivingPlayerKeepsTheDrainingPodAlive(t *testing.T) {
 		t.Fatal("the pod was deleted with a player arriving on it, which is the whole defect")
 	}
 
-	// The player lands and leaves; the proxy says so, and only then does the
-	// pod go. This is what keeps the fix from being a permanent hold.
-	//
-	// Past the truncation slack as well as the drain stamp: metav1.Time keeps
-	// whole seconds, so the threshold is the stamp plus one, and a report has
-	// to clear both to be about the right moment.
+	// metav1.Time keeps whole seconds, so a report must clear the stamp plus one.
 	f.clock.Advance(2 * time.Second)
 	if err := f.agents.ReportBackends(proxyUID, f.ns, map[string]int32{}); err != nil {
 		t.Fatalf("ReportBackends: %v", err)
@@ -2851,21 +2304,14 @@ func TestAnArrivingPlayerKeepsTheDrainingPodAlive(t *testing.T) {
 	}
 }
 
-// TestAProxyThatCannotReportBackendsDoesNotHoldEveryServer is the property
-// that lets a fleet upgrade in any order, driven where it would actually bite.
-//
-// An agent too old to send the report says nothing, and reading that as "this
-// proxy may be hiding players" would hold every server in the installation
-// occupied for as long as one un-upgraded proxy ran -- no drain would ever
-// finish anywhere. Silent and old are different states.
+// An agent too old to report backends must not hold every server occupied.
 func TestAProxyThatCannotReportBackendsDoesNotHoldEveryServer(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
 	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
 	}
-	// A proxy that reports players like any agent and knows nothing about
-	// backends, which is exactly what a pre-0.2.3 Velocity agent is.
+	// What a pre-0.2.3 Velocity agent is: it reports players and knows nothing about backends.
 	oldProxy := "old-gateway-uid"
 	f.agents.Connect(oldProxy, agent.RoleProxy)
 	if err := f.agents.ReportPlayers(oldProxy, 5, 500); err != nil {
@@ -2877,9 +2323,7 @@ func TestAProxyThatCannotReportBackendsDoesNotHoldEveryServer(t *testing.T) {
 		t.Fatalf("delete Server: %v", err)
 	}
 	f.reconcile("lobby-x7k2")
-	// Past the drain stamp and its truncation slack, then a fresh count: what
-	// this test is about is the *proxy*, so the backend's own count must not
-	// be the thing holding the pod.
+	// Past the drain stamp with a fresh count, so only the proxy could hold the pod.
 	f.clock.Advance(2 * time.Second)
 	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
 		t.Fatalf("second ReportPlayers: %v", err)
@@ -2891,24 +2335,14 @@ func TestAProxyThatCannotReportBackendsDoesNotHoldEveryServer(t *testing.T) {
 	}
 }
 
-// TestADrainWaitsForACountTakenAfterItStarted is the deepest form of the drain
-// gap, and the one that predates every other fix for it.
-//
-// Occupied() trusted a number that could be older than the drain itself. A
-// count taken four seconds ago is perfectly fresh, and says nothing whatever
-// about a player who joined three seconds ago -- so a server that had been
-// reported empty just before the drain began was deleted on the strength of
-// it. Freshness was the only test; recency was never asked.
+// A fresh count taken before the drain says nothing about a player who joined since.
 func TestADrainWaitsForACountTakenAfterItStarted(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
-	// Reported empty, and genuinely fresh.
 	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
 		t.Fatalf("ReportPlayers: %v", err)
 	}
 
-	// The drain begins after that report, which is the ordinary order of
-	// events: the operator decides on state it has already read.
 	f.clock.Advance(time.Second)
 	srv := f.server("lobby-x7k2")
 	if err := f.c.Delete(f.ctx, srv); err != nil {
@@ -2919,17 +2353,12 @@ func TestADrainWaitsForACountTakenAfterItStarted(t *testing.T) {
 		t.Fatalf("phase = %q, want Draining", got)
 	}
 
-	// The pod stays, on a count that is fresh and about the wrong moment.
 	f.clock.Advance(time.Second)
 	f.reconcile("lobby-x7k2")
 	if _, ok := f.pod("lobby-x7k2"); !ok {
 		t.Fatal("the pod went on a count taken before the drain began")
 	}
 
-	// The agent reports again, now answering the question that was asked, and
-	// only then does the pod go. This is the whole cost of the rule: one
-	// report interval added to a drain, plus the second metav1.Time truncates
-	// the drain stamp into.
 	f.clock.Advance(2 * time.Second)
 	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
 		t.Fatalf("second ReportPlayers: %v", err)
@@ -2940,12 +2369,6 @@ func TestADrainWaitsForACountTakenAfterItStarted(t *testing.T) {
 	}
 }
 
-// TestTheDrainDeadlineStillEndsAWaitNobodyCanSatisfy is the bound under the
-// rule above, and the reason it cannot wedge a drain for ever.
-//
-// A server whose agent is gone never reports again, so its count predates the
-// drain permanently. That is correct -- nobody can say whether players are on
-// it -- and it is exactly the state spec.drain.timeoutSeconds exists to end.
 func TestTheDrainDeadlineStillEndsAWaitNobodyCanSatisfy(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -2959,7 +2382,6 @@ func TestTheDrainDeadlineStillEndsAWaitNobodyCanSatisfy(t *testing.T) {
 		t.Fatalf("delete Server: %v", err)
 	}
 	f.reconcile("lobby-x7k2")
-	// The agent goes and never speaks again.
 	f.agents.Disconnect(uid)
 
 	f.clock.Advance(2 * time.Second)
@@ -2968,8 +2390,6 @@ func TestTheDrainDeadlineStillEndsAWaitNobodyCanSatisfy(t *testing.T) {
 		t.Fatal("the pod went before the deadline, so this test would prove nothing about it")
 	}
 
-	// Past spec.drain.timeoutSeconds the deadline takes it whatever anybody
-	// can or cannot say.
 	f.clock.Advance(2 * time.Minute)
 	f.reconcile("lobby-x7k2")
 	if _, ok := f.pod("lobby-x7k2"); ok {
@@ -2977,10 +2397,7 @@ func TestTheDrainDeadlineStillEndsAWaitNobodyCanSatisfy(t *testing.T) {
 	}
 }
 
-// TestADeadBackendIsDrainedBeforeVelocityKicksItsPlayers drives the whole
-// thing through the reconciler, in the state a hard-powered-off node produces:
-// the stream still reads as connected, because no FIN and no RST ever arrived,
-// and the reports have stopped.
+// A hard-powered-off node: the stream still reads connected, and the reports have stopped.
 func TestADeadBackendIsDrainedBeforeVelocityKicksItsPlayers(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -2992,8 +2409,6 @@ func TestADeadBackendIsDrainedBeforeVelocityKicksItsPlayers(t *testing.T) {
 		t.Fatalf("phase = %q, want Ready", got)
 	}
 
-	// The node dies. Nothing calls Disconnect, because nothing told the
-	// operator anything -- that is the whole point of this state.
 	f.clock.Advance(30 * time.Second)
 	f.reconcile("lobby-x7k2")
 
@@ -3004,16 +2419,13 @@ func TestADeadBackendIsDrainedBeforeVelocityKicksItsPlayers(t *testing.T) {
 	if srv.Status.Registered {
 		t.Error("it is still registered with the proxies")
 	}
-	// The half the entry was about: those players are on a socket that will
-	// never answer, and Velocity disconnects them outright when its read
-	// timeout fires, with no event any plugin can catch.
+	// Velocity kicks those players outright when its read timeout fires.
 	if len(f.registrar.drained) != 1 {
 		t.Errorf("drained = %v, want one drain command before the read timeout", f.registrar.drained)
 	}
 }
 
-// TestALiveAgentThatKeepsReportingIsLeftAlone is the negative that matters
-// most, because this rule runs against every Ready server on every pass.
+// This rule runs against every Ready server on every pass.
 func TestALiveAgentThatKeepsReportingIsLeftAlone(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -3034,15 +2446,7 @@ func TestALiveAgentThatKeepsReportingIsLeftAlone(t *testing.T) {
 	}
 }
 
-// TestAServerRecordsWhichPodItIsRunning pins the identity a reader compares to
-// tell one run of a server from the next one under the same name.
-//
-// The name cannot answer that and for a persistent server it never will: its
-// name is the identity of its world and survives every restart. So the status
-// carries the pod's UID, and it carries it from wherever the pod is *seen* --
-// a Create that came back AlreadyExists hands back an object with no UID on
-// it, and a field written only on the happy path is empty in exactly the case
-// somebody is investigating.
+// A Create that returned AlreadyExists has no UID, so the UID is taken wherever the pod is seen.
 func TestAServerRecordsWhichPodItIsRunning(t *testing.T) {
 	f := newFixture(t)
 	bringUpReady(t, f, "lobby-x7k2")
@@ -3061,16 +2465,7 @@ func TestAServerRecordsWhichPodItIsRunning(t *testing.T) {
 	}
 }
 
-// The fallback group's whole contract is that it carries the CRD's defaults,
-// and the way it breaks is silent: a new timing field gets a marker in the API
-// types, nothing here is touched, and a Server whose group is gone runs that
-// field on Go's zero value. That is what happened to
-// spec.finishedRetentionSeconds, whose default is 300 and whose zero deletes a
-// Finished server the moment it is seen.
-//
-// So the defaults are read out of the API source rather than repeated here.
-// Repeating them would pass the day the next field is added, which is the day
-// it needs to fail.
+// Defaults are read from the API source, so a new field fails here rather than running on Go's zero value.
 func TestTheFallbackGroupCarriesEveryCrdDefault(t *testing.T) {
 	src, err := os.ReadFile("../../api/v1alpha1/servergroup_types.go")
 	if err != nil {
@@ -3139,11 +2534,7 @@ func TestTheFallbackGroupCarriesEveryCrdDefault(t *testing.T) {
 	}
 }
 
-// The scaler reads a clamped view of what a pod reports; the status used to
-// carry the raw one, and netstate hands the status to every agent and to the
-// connect router, which picks a group's target by slots minus players. One
-// backend reporting an absurd capacity won every group-targeted move in its
-// namespace.
+// netstate hands the status to the connect router, so a raw absurd capacity would win every move.
 func TestTheMirroredCountIsClampedToTheGroupsCapacity(t *testing.T) {
 	r := &ServerReconciler{PlayerStatusInterval: time.Minute}
 	srv := &spawneryv1alpha1.Server{}
@@ -3153,9 +2544,7 @@ func TestTheMirroredCountIsClampedToTheGroupsCapacity(t *testing.T) {
 		t.Errorf("status.slots = %d, want the group's 80", srv.Status.Slots)
 	}
 
-	// A server whose group is gone reconciles against fallbackGroup, which
-	// has no maxPlayers; clampReport would floor that to 1 and rewrite a
-	// server with fifteen players as 1/1 for as long as the object lives.
+	// fallbackGroup has no maxPlayers, and clampReport would floor that to 1.
 	gone := &spawneryv1alpha1.Server{}
 	r.mirrorPlayerCount(gone, agent.Snapshot{Known: true, Players: 15, Slots: 20}, 0, nil,
 		metav1.NewTime(time.Now()))

@@ -1,23 +1,10 @@
 #!/usr/bin/env bash
-# Nine cases for hack/publish-chart.sh. None of them reaches a registry.
+# Nine cases for hack/publish-chart.sh. None of them reaches a registry: the
+# existence check goes through CHART_INSPECT_CMD. Cases needing a different
+# HEAD copy the script into a throwaway repository, where it finds its root
+# from BASH_SOURCE.
 #
-# The existence check goes through CHART_INSPECT_CMD -- the seam that script's
-# header documents -- because the three answers that matter ("it is there",
-# "it is not there", "I could not tell") cannot be summoned to order from
-# ghcr.io, and a test that needed a token to distinguish them would not run
-# where the rest of `make` does. Everything else is real: `git archive`, `helm
-# package` and the packaged tarball are the ones a release would produce.
-#
-# Five cases run against this repository. The other four need a HEAD that this
-# repository does not have and must not be given -- a committed image.digest,
-# a Chart.yaml at some other version -- so they build a throwaway git
-# repository, copy the script under test into it, and run it there. The script
-# finds its own repository root from BASH_SOURCE, so a copy in a fixture's
-# hack/ directory is the real script operating on the fixture's HEAD, not a
-# reimplementation of it.
-#
-# Requires: helm and git, both in the dev shell. No network and no token.
-# Run it with `make publish-chart-test`.
+# Requires: helm and git. No network and no token.
 set -euo pipefail
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -35,9 +22,7 @@ fail() {
 	failures=$((failures + 1))
 }
 
-# The three answers a registry can give, as commands. Each is handed the
-# docker:// reference the script built, and ignores it: what is under test is
-# how the script reads the answer, not how it phrased the question.
+# The three answers a registry can give, as commands.
 absent="$workdir/inspect-absent.sh"
 cat >"$absent" <<'STUB'
 #!/usr/bin/env bash
@@ -58,19 +43,10 @@ exit 1
 STUB
 chmod +x "$absent" "$present" "$unreadable"
 
-# The version this repository's chart is at, read the way the script reads it
-# -- from HEAD, not from the working tree. Every case below that runs against
-# this repository asserts on it rather than on a number written here, so a
-# chart version bump does not turn this file red. Reading it off disk instead
-# does turn it red, on exactly the commit that bumps the version and before it
-# is committed, which is how this line was wrong for one run.
+# From HEAD, as the script reads it, so an uncommitted bump does not break this.
 chart_version="$(git show HEAD:charts/spawnery/Chart.yaml \
 	| grep -E '^version:' | head -1 | awk '{print $2}')"
 
-# Builds a git repository containing hack/publish-chart.sh and charts/spawnery
-# as this repository has them at HEAD, and commits it. Callers then edit and
-# re-commit whatever the case is about. `git -c` rather than `git config`:
-# the identity is a property of this one command and is not written anywhere.
 make_fixture() {
 	local dir="$1"
 	mkdir -p "$dir/hack"
@@ -113,9 +89,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# Not knowing is not the same as it not being there. This is the case a
-# `write:packages`-only token produces, and reading it as "absent" would
-# silently defeat the refusal above.
+# Not knowing is not the same as it not being there (a write:packages-only token).
 status=0
 out="$(CHART_INSPECT_CMD="$unreadable" "$sut" 2>&1)" || status=$?
 if [ "$status" -eq 1 ] && [[ "$out" == *"cannot tell whether"* ]]; then
@@ -135,16 +109,10 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# The chart is packaged from HEAD, not from the working tree. This is the
-# property that lets release.yml run this after hack/publish.sh, which
-# rewrites values.yaml's image.digest in place on the runner: a working tree
-# carrying a digest must not put one in the artefact.
+# The chart is packaged from HEAD, not from the working tree.
 #
-# A `helm` earlier on PATH copies the directory `helm package` was handed and
-# then execs the real one, so the packaging still happens for real and what is
-# asserted is the source the script chose. A copy and not the path: the script
-# packages out of its own mktemp directory and removes it on the way out, so by
-# the time this file could read the path it names, there is nothing there.
+# The helm stub copies what it was handed: the script removes its own mktemp
+# directory on the way out.
 fixture="$workdir/from-head"
 make_fixture "$fixture"
 sed -i -E 's|^([[:space:]]*digest:[[:space:]]*)""|\1"sha256:'"$(printf 'a%.0s' {1..64})"'"|' \
@@ -152,9 +120,7 @@ sed -i -E 's|^([[:space:]]*digest:[[:space:]]*)""|\1"sha256:'"$(printf 'a%.0s' {
 if ! grep -qE '^[[:space:]]*digest:[[:space:]]*"sha256:a+"' "$fixture/charts/spawnery/values.yaml"; then
 	fail "fixture setup: the working tree's values.yaml was not given a digest"
 fi
-# The same fixture answers the other half of the question: the version the
-# artefact is named after has to come from HEAD too. Uncommitted here, so a
-# script reading Chart.yaml off disk would publish 7.7.7.
+# Uncommitted, so a script reading Chart.yaml off disk would publish 7.7.7.
 sed -i -E 's|^version: .*|version: 7.7.7|' "$fixture/charts/spawnery/Chart.yaml"
 
 real_helm="$(command -v helm)"
@@ -186,10 +152,7 @@ else
 fi
 
 # ---------------------------------------------------------------------------
-# A *committed* digest is the case nothing else in this repository catches:
-# rbacaudit's TestTheOperatorImageIsNotAMutableTag returns early when one is
-# set rather than failing, so this refusal is the only thing standing between
-# a committed digest and every installation pinned to it.
+# A committed digest refuses.
 fixture="$workdir/committed-digest"
 make_fixture "$fixture"
 sed -i -E 's|^([[:space:]]*digest:[[:space:]]*)""|\1"sha256:'"$(printf 'b%.0s' {1..64})"'"|' \

@@ -22,10 +22,8 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
-// EffectiveScheduling is what a pod of the group gets: the group's own
-// scheduling, or the network default where the group sets none. A group's
-// scheduling replaces the default wholesale rather than merging with it;
-// merging would make it impossible to drop an inherited nodeSelector.
+// EffectiveScheduling: a group's scheduling replaces the network default
+// wholesale, so an inherited nodeSelector can be dropped.
 func EffectiveScheduling(net *spawneryv1alpha1.Network, own *spawneryv1alpha1.Scheduling) *spawneryv1alpha1.Scheduling {
 	if own != nil {
 		return own
@@ -36,13 +34,9 @@ func EffectiveScheduling(net *spawneryv1alpha1.Network, own *spawneryv1alpha1.Sc
 	return nil
 }
 
-// SchedulingRefusal reports whether the effective scheduling stays within
-// what the network allows, and names the first thing that does not.
-//
-// The message names the key and the Network field that would allow it,
-// because the person reading it is a group author who can write neither the
-// taint nor the Network, and "not allowed" without the field sends them to
-// look through the wrong object.
+// SchedulingRefusal names the first key outside what the network allows and
+// the Network field that would allow it, since the group author can change
+// neither.
 func SchedulingRefusal(
 	network *spawneryv1alpha1.Network,
 	scheduling *spawneryv1alpha1.Scheduling,
@@ -118,8 +112,6 @@ func SchedulingRefusal(
 	return "", true
 }
 
-// HostPortRefusal reports whether a HostPort proxy's port lies in the
-// network's range.
 func HostPortRefusal(network *spawneryv1alpha1.Network, port int32) (string, bool) {
 	policy := network.Spec.Scheduling
 	if policy == nil || policy.HostPortRange == nil {

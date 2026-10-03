@@ -27,49 +27,19 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/log"
 )
 
-// Reviewer creates SelfSubjectAccessReviews. It is
-// kubernetes.Interface.AuthorizationV1().SelfSubjectAccessReviews(), narrowed
-// so a test can substitute one without a cluster.
+// Reviewer is the SelfSubjectAccessReviews client, narrowed so a test can
+// substitute one.
 type Reviewer interface {
 	Create(ctx context.Context, review *authorizationv1.SelfSubjectAccessReview,
 		opts metav1.CreateOptions) (*authorizationv1.SelfSubjectAccessReview, error)
 }
 
-// Verify asks the API server, in the operator's own identity, whether each of
-// these permissions is actually granted, and returns the ones that are not.
-//
-// # Why this exists at all, when there is already an audit
-//
-// The audit in this package compares the required table against the generated
-// ClusterRole: two files, checked against each other at build time. It proves
-// the manifest says what the code needs, and it cannot prove that the manifest
-// reached the cluster, that it was applied whole, that the RoleBinding names
-// the right ServiceAccount, or that nobody has edited it since.
-//
-// Nothing else notices when it did not, and that is the point. A permission
-// reached only through the manager's cache is claimed by a *watch*, and a
-// watch that cannot start is retried silently forever -- no log line, no 403
-// in the client metrics, no restart, because the request the API server would
-// have denied is never made in a form anything reports. The operator sits
-// there looking healthy and reconciling nothing.
-//
-// A SelfSubjectAccessReview asks the authorizer the question directly rather
-// than waiting for a request to be refused, so it sees the cache-backed verbs
-// exactly as well as the others. It needs no permission of its own: the
-// system:basic-user ClusterRole grants it to every authenticated identity, and
-// that binding is part of every conforming cluster.
-//
-// # What it does not answer
-//
-// Whether the operator needs a permission at all -- that is the required
-// table's job, maintained by hand.
-//
-// It also answers only for the moment it is asked, which is why Checker below
-// asks again on an interval rather than once at startup.
-//
-// namespace scopes the review. Pass the operator's own namespace for
-// RequiredNamespaced and the empty string for RequiredCluster, where an empty
-// namespace means "at cluster scope" to the authorizer.
+// Verify asks the API server, in the operator's own identity, which of these
+// permissions are not granted. The file audit cannot prove the manifest
+// reached the cluster intact, and a cache-backed watch that is forbidden
+// retries silently forever while the operator looks healthy. Every
+// authenticated identity may create these reviews (system:basic-user). An
+// empty namespace means cluster scope.
 func Verify(ctx context.Context, reviewer Reviewer, required []Permission, namespace string) ([]Permission, error) {
 	var denied []Permission
 	for _, p := range required {
@@ -86,10 +56,8 @@ func Verify(ctx context.Context, reviewer Reviewer, required []Permission, names
 		}
 		answer, err := reviewer.Create(ctx, review, metav1.CreateOptions{})
 		if err != nil {
-			// The whole check fails rather than the one permission being
-			// counted as denied. An API server that cannot answer a review is
-			// not evidence that a verb is missing, and reporting 74 phantom
-			// denials would bury the real ones on the day there are any.
+			// Fail the whole check: an API server that cannot answer is no evidence of a
+			// missing verb, and dozens of phantom denials would bury real ones.
 			return nil, fmt.Errorf("self subject access review for %s: %w", p.Key(), err)
 		}
 		if !answer.Status.Allowed {
@@ -99,12 +67,8 @@ func Verify(ctx context.Context, reviewer Reviewer, required []Permission, names
 	return denied, nil
 }
 
-// DeniedMessage renders what Verify returned for a log line, naming each
-// permission and the call site that needs it.
-//
-// The call sites are the reason this is worth more than a list of verbs: an
-// administrator looking at "networks: list is missing" has to go and find out
-// what breaks, and Permission.Why already says.
+// DeniedMessage names each permission with its Why, so an administrator
+// sees what breaks.
 func DeniedMessage(denied []Permission) string {
 	out := ""
 	for i, p := range denied {
@@ -119,36 +83,19 @@ func DeniedMessage(denied []Permission) string {
 	return out
 }
 
-// DefaultCheckInterval is how often Checker asks again.
-//
-// The whole check is one SelfSubjectAccessReview per table entry, which reads
-// as expensive and is not: a review is an in-memory authorizer lookup with no
-// etcd behind it, and this operator runs with the client-side rate limiter off
-// -- controller-runtime sets QPS to -1 in GetConfig and leaves the pacing to
-// the API server's own priority and fairness. Turning the limiter back on
-// turns the whole check from milliseconds into seconds, which is a different
-// trade and worth knowing before making it.
-//
-// What sets the interval is not the cost but what is being watched: a
-// permission changes when a person changes it, so a check that notices within
-// ten minutes notices as well as one that notices within ten seconds, and the
-// alert on spawnery_permissions_missing needs the gauge no fresher than that.
+// DefaultCheckInterval is set by how fast permissions change (by hand), not by
+// cost: a review is an in-memory authorizer lookup, and the client-side rate
+// limiter is off (controller-runtime sets QPS to -1).
 const DefaultCheckInterval = 10 * time.Minute
 
-// Scope is one required table and the namespace to ask about it in.
 type Scope struct {
 	// What names the scope in the log and in the metric's label.
-	What string
-	// Required is the table to check.
+	What     string
 	Required []Permission
-	// Namespace scopes the review. Empty means cluster scope, which is what
-	// the authorizer reads an empty namespace as.
+	// Namespace is empty for cluster scope.
 	Namespace string
 }
 
-// DefaultScopes is the pair the operator checks: everything RequiredCluster
-// asks for at cluster scope, and everything RequiredNamespaced asks for in the
-// operator's own namespace.
 func DefaultScopes(operatorNamespace string) []Scope {
 	return []Scope{
 		{What: "cluster-scoped", Required: RequiredCluster},
@@ -156,43 +103,26 @@ func DefaultScopes(operatorNamespace string) []Scope {
 	}
 }
 
-// Checker runs Verify on an interval and reports what changed.
-//
-// Startup was where this began, and startup catches the commonest failure by
-// far: an installation that was never right. What it could not catch is a
-// permission revoked while the operator runs -- an administrator tightening a
-// ClusterRole, a GitOps sync reverting a hand-applied binding, an aggregated
-// role losing a rule -- which lands the operator reconciling nothing on the
-// paths that need the verb, logging nothing, restarting never, and reporting
-// healthy throughout.
+// Checker runs Verify on an interval, to catch a permission revoked while the
+// operator runs, which otherwise fails silently.
 type Checker struct {
-	// Reviewer creates the reviews. The operator's own clientset.
 	Reviewer Reviewer
 	// Scopes is what to check, usually DefaultScopes.
 	Scopes []Scope
-	// Interval is how often to check again. Zero means DefaultCheckInterval;
-	// negative means check once and stop, which is what this did before it
-	// could do anything else.
+	// Interval: zero means DefaultCheckInterval; negative means check once.
 	Interval time.Duration
 
-	// reported is the last message logged per scope, so a state that has not
-	// changed is not logged again. Only Start touches it.
+	// reported is the last message logged per scope. Only Start touches it.
 	reported map[string]string
 }
 
-// NeedLeaderElection is false on purpose. A non-leader answering these
-// questions gets the same answers -- the identity is the process's, not the
-// lease's -- and an installation whose RBAC is wrong should say so on every
-// replica, because the replica that says nothing is the one somebody is
-// looking at.
+// Every replica checks: the identity is the process's, not the lease's, and
+// the replica somebody is looking at should say so.
 func (c *Checker) NeedLeaderElection() bool { return false }
 
-// Start checks now and then every Interval until ctx ends.
-//
-// It never returns an error, which is a decision rather than an omission: a
-// missing permission may be one this cluster's paths never take, and stopping
-// the manager over a table maintained by hand would turn a degradation into an
-// outage. Loud is the point, not fatal.
+// Start never returns an error: a missing permission may be on a path this
+// cluster never takes, and stopping the manager would turn a degradation into
+// an outage.
 func (c *Checker) Start(ctx context.Context) error {
 	logger := log.FromContext(ctx).WithName("permissions")
 	c.reported = make(map[string]string, len(c.Scopes))
@@ -217,26 +147,19 @@ func (c *Checker) Start(ctx context.Context) error {
 	}
 }
 
-// checkAll runs one round over every scope.
 func (c *Checker) checkAll(ctx context.Context, logger logr.Logger) {
 	for _, scope := range c.Scopes {
 		denied, err := Verify(ctx, c.Reviewer, scope.Required, scope.Namespace)
 		if err != nil {
-			// Reported and carried, and the gauge is left where it was. An API
-			// server that cannot answer a review says nothing about what this
-			// operator may do, so neither zeroing the gauge nor filling it
-			// with 73 phantom denials would be true.
+			// The gauge is left where it was: a failed review says nothing about what the
+			// operator may do.
 			logger.Error(err, "could not check the operator's own permissions", "scope", scope.What)
 			continue
 		}
 		PermissionsMissing.WithLabelValues(scope.What).Set(float64(len(denied)))
 
-		// Asymmetric on purpose. A denial repeats at every check, because a
-		// broken installation should be noisy in a log somebody tails hours
-		// later and six lines an hour is not a flood. A grant is logged only
-		// when it is news -- at the first check, and again when a denial has
-		// been repaired -- because a healthy operator saying so every ten
-		// minutes for a year is how a log stops being read.
+		// A denial is logged at every check; a grant only when it is news, so a
+		// healthy operator does not flood the log.
 		message := DeniedMessage(denied)
 		if len(denied) > 0 {
 			logger.Error(nil,
@@ -248,7 +171,6 @@ func (c *Checker) checkAll(ctx context.Context, logger logr.Logger) {
 		previous, checked := c.reported[scope.What]
 		switch {
 		case checked && previous == "":
-			// Granted last time and granted now. Nothing is news.
 		case checked:
 			logger.Info("the permissions the operator was missing are granted again",
 				"scope", scope.What, "were", previous)

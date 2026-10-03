@@ -22,16 +22,9 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
-// Every variable an entrypoint reads from its environment has to carry the
-// prefix a group's spec.env may not set. The CRD rule reserves SPAWNERY_ and
-// the scripts used to read PAPER_HOME and VELOCITY_HOME beside it, which
-// decide the jar that runs and where the operator's agent jar is taken from;
-// a group could set either through spec.env and the reservation protected
-// nothing.
+// A variable spec.env could set would let a group choose the jar that runs.
 func TestEveryVariableTheEntrypointsReadIsReserved(t *testing.T) {
-	// `${NAME:-default}` is the one form the scripts use to read their
-	// environment. Variables the script assigns itself and then expands are
-	// not matched, and are not the concern.
+	// `${NAME:-default}` is the one form the scripts use to read their environment.
 	read := regexp.MustCompile(`\$\{([A-Z_][A-Z0-9_]*):-`)
 	for _, script := range []string{"entrypoint.sh", "velocity-entrypoint.sh"} {
 		raw, err := os.ReadFile(script)

@@ -16,9 +16,6 @@ class PlayersTest {
         assertEquals("somebody", ref.username)
     }
 
-    // Every fixture written before uuid existed passes none, and none of them
-    // is about identity. A default derived from the username keeps them
-    // compiling and keeps two different fakes from colliding on one UUID.
     @Test
     fun `a fake without an explicit uuid still has a distinct one`() {
         val players = FakePlayers(listOf(FakePlayer("alice"), FakePlayer("bob")))

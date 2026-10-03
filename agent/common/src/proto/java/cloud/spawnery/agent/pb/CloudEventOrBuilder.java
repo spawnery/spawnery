@@ -13,10 +13,7 @@ public interface CloudEventOrBuilder extends
   /**
    * <pre>
    * The operator's own reason, in UpperCamelCase -- ReadyGatePassed,
-   * PodRejected. A string and not an enum, for the reason NetworkState.phase
-   * is a string: the operator's vocabulary gains values, and an agent older
-   * than a value must show it rather than fail to parse the message it
-   * arrived in.
+   * PodRejected. A string, not an enum, because the vocabulary grows.
    * </pre>
    *
    * <code>string kind = 1;</code>
@@ -26,10 +23,7 @@ public interface CloudEventOrBuilder extends
   /**
    * <pre>
    * The operator's own reason, in UpperCamelCase -- ReadyGatePassed,
-   * PodRejected. A string and not an enum, for the reason NetworkState.phase
-   * is a string: the operator's vocabulary gains values, and an agent older
-   * than a value must show it rather than fail to parse the message it
-   * arrived in.
+   * PodRejected. A string, not an enum, because the vocabulary grows.
    * </pre>
    *
    * <code>string kind = 1;</code>
@@ -63,8 +57,7 @@ public interface CloudEventOrBuilder extends
   /**
    * <pre>
    * The group the subject belongs to, and the subject itself when the subject
-   * is a group. Never empty, so that collapsing by group needs no special
-   * case for the events that are about one.
+   * is a group. Never empty.
    * </pre>
    *
    * <code>string group = 3;</code>
@@ -74,8 +67,7 @@ public interface CloudEventOrBuilder extends
   /**
    * <pre>
    * The group the subject belongs to, and the subject itself when the subject
-   * is a group. Never empty, so that collapsing by group needs no special
-   * case for the events that are about one.
+   * is a group. Never empty.
    * </pre>
    *
    * <code>string group = 3;</code>
@@ -86,9 +78,7 @@ public interface CloudEventOrBuilder extends
 
   /**
    * <pre>
-   * One sentence for a person. The operator's own words, carried verbatim, so
-   * that rewording them in an agent cannot make the chat disagree with
-   * kubectl about the same fact.
+   * One sentence for a person, the operator's own words, verbatim.
    * </pre>
    *
    * <code>string message = 4;</code>
@@ -97,9 +87,7 @@ public interface CloudEventOrBuilder extends
   java.lang.String getMessage();
   /**
    * <pre>
-   * One sentence for a person. The operator's own words, carried verbatim, so
-   * that rewording them in an agent cannot make the chat disagree with
-   * kubectl about the same fact.
+   * One sentence for a person, the operator's own words, verbatim.
    * </pre>
    *
    * <code>string message = 4;</code>

@@ -23,24 +23,10 @@ import (
 	"github.com/spawnery/spawnery/internal/phase"
 )
 
-// sweepOnDemand removes the members of an on-demand group whose run is over.
-//
-// Two phases and two answers. Finished means the server said its round was
-// over and then its pod stopped -- a player closing their own world -- and
-// there is nothing about it left to keep: the world is on its claim, which
-// this operator never deletes, while the object holds the one name its owner
-// needs in order to start again. Failed is not swept here: a world that broke
-// is one somebody has to be able to look at, and pruneFailed already keeps
-// the newest of them and no more. What stops a corpse from blocking a restart
-// is the start request, which replaces a terminal member of the key it was
-// asked for.
-//
-// A node that is leaving takes a member with it, and that removal is not this
-// one: size() condemns every server on a departing node whatever its type or
-// phase, because one left there loses its pod when the node goes and drops its
-// players where a condemnation moves them through the proxies first. Nothing
-// recreates it and nothing has to -- the world is on its claim, so the key is
-// free and its owner starts it again the way they started it the first time.
+// sweepOnDemand removes Finished members only: the world is on its claim and
+// the name is free for a restart. Failed members stay for inspection
+// (pruneFailed bounds them), and a start request replaces a terminal member of
+// its key.
 func (r *ServerGroupReconciler) sweepOnDemand(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,

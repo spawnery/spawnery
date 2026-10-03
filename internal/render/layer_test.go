@@ -18,8 +18,6 @@ package render
 
 import "testing"
 
-// The order is the whole contract: rendered defaults lose to the user, and
-// both lose to the fields an operator cannot be allowed to break.
 func TestLayerAppliesThreeSourcesInOrder(t *testing.T) {
 	got := Layer(
 		map[string]string{"motd": "default", "max-players": "20", "difficulty": "peaceful"},
@@ -33,14 +31,11 @@ func TestLayerAppliesThreeSourcesInOrder(t *testing.T) {
 	if got["max-players"] != "20" {
 		t.Errorf("max-players = %q, want the default to survive an overlay that does not mention it", got["max-players"])
 	}
-	// The one that matters: a user who writes online-mode=true into their
-	// overlay is asking for a backend anyone can join. They do not get it.
 	if got["online-mode"] != "false" {
 		t.Errorf("online-mode = %q, want the critical layer to win", got["online-mode"])
 	}
-	// difficulty appears in base and critical but not overlay: the only way
-	// to tell critical-over-base apart from critical-over-overlay, which the
-	// online-mode assertion above cannot distinguish on its own.
+	// Only a key in base and critical but not overlay distinguishes
+	// critical-over-base from critical-over-overlay.
 	if got["difficulty"] != "hard" {
 		t.Errorf("difficulty = %q, want the critical layer to outrank the base directly, not just transitively through the overlay", got["difficulty"])
 	}

@@ -1,26 +1,13 @@
 #!/usr/bin/env bash
-# Refuses a documentation page that has grown past the size its rewrite
-# landed on.
+# Refuses a documentation page that has grown past its word ceiling.
 #
-# The six pages below were 25,829 words on 2026-09-17 and 10,740 after
-# docs/superpowers/specs/2026-09-17-docs-shortening-design.md. They had grown
-# there once already, which is why a check exists at all rather than a note
-# saying to keep them short.
-#
-# A ceiling is not a judgement about a page: it is roughly 12% above what its
-# rewrite measured, so a paragraph with something to say fits without a
-# fight. Three pages in this same rewrite finished within seven words of an
-# earlier, tighter ceiling, and one of them dropped a sentence worth keeping
-# to get there -- that is the failure this headroom exists to prevent.
-# Raising a ceiling is a line here and a sentence in the commit saying what
-# the page gained. Generated pages are deliberately absent -- their length is
-# their sources' business.
+# Each ceiling is roughly 12% above the page's length after the 2026-09-17
+# rewrite, so a paragraph with something to say still fits. Generated pages
+# are absent: their length is their sources' business.
 #
 # Usage: hack/docs-length.sh [--page FILE:CEILING]...
 #
-# With no --page, checks the table below. --page is for
-# hack/docs-length-test.sh, which has to drive a failure this tree does not
-# carry.
+# With no --page, checks the table below.
 #
 # Exit status: 0 every page is at or under its ceiling, 1 one is over or a
 # named file does not exist.

@@ -35,10 +35,8 @@ func claimMount(name, claim string) spawneryv1alpha1.Mount {
 }
 
 func TestMountsWithNoClaimNeverTouchStorage(t *testing.T) {
-	// The common case by a wide margin, and the one that must not start
-	// costing an API call: a group whose mounts are all ConfigMaps and
-	// Secrets. The reader holds nothing, so a Get of any kind would fail the
-	// check and this test.
+	// ConfigMap and Secret mounts must cost no API call: the reader holds
+	// nothing, so any Get would fail the check.
 	mounts := []spawneryv1alpha1.Mount{
 		{Name: "motd", MountPath: "/data/motd", ConfigMap: &corev1.ConfigMapVolumeSource{}},
 		{Name: "token", MountPath: "/data/token", Secret: &corev1.SecretVolumeSource{}},
@@ -49,10 +47,8 @@ func TestMountsWithNoClaimNeverTouchStorage(t *testing.T) {
 }
 
 func TestAClaimMountNeedsTheFlag(t *testing.T) {
-	// The claim exists and is perfectly good. It must still be refused, and
-	// the message must send somebody to the operator's arguments rather than
-	// to their storage -- and, since this task, to the mount flag rather than
-	// the plugin one, because each field now has its own switch.
+	// A good claim is still refused; the remedy is the mount flag, not the
+	// storage.
 	c := pluginReader(t, pluginClaim("worlds", corev1.ReadWriteMany))
 
 	reason, message, ok := checkMountClaims(context.Background(), c, "minecraft",
@@ -70,18 +66,14 @@ func TestAClaimMountNeedsTheFlag(t *testing.T) {
 	if strings.Contains(message, "--allow-plugin-volumes") {
 		t.Errorf("message = %q, still sends somebody to the plugin flag", message)
 	}
-	// And the mount, so that a group with eleven of them says which one.
 	if !strings.Contains(message, "worlds") {
 		t.Errorf("message = %q, want it to name the mount", message)
 	}
 }
 
 func TestAClaimMountNeedsItsOwnFlagAndNotThePluginOne(t *testing.T) {
-	// --allow-plugin-volumes used to gate this too. It no longer does: the
-	// flag names extraPlugins and now governs only that. Reached through
-	// checkGroupVolumes, which is what the controllers actually call, rather
-	// than checkMountClaims directly, so the wiring between the flag and the
-	// third bool is what is under test here.
+	// Through checkGroupVolumes, so the flag's wiring is under test;
+	// --allow-plugin-volumes governs only extraPlugins.
 	c := pluginReader(t, pluginClaim("worlds", corev1.ReadWriteMany))
 	mounts := []spawneryv1alpha1.Mount{claimMount("worlds", "worlds")}
 
@@ -122,9 +114,8 @@ func TestAReadWriteManyClaimMountIsAccepted(t *testing.T) {
 }
 
 func TestAReadWriteOnceClaimMountIsRefusedAndSaysWhy(t *testing.T) {
-	// Same failure spec.extraPlugins guards against, reached through the other
-	// field: the second pod of the group sits Pending on a scheduling error
-	// about volume affinity, with nothing naming the claim.
+	// Otherwise the second pod sits Pending on volume affinity, and nothing
+	// names the claim.
 	c := pluginReader(t, pluginClaim("worlds", corev1.ReadWriteOnce))
 
 	reason, message, ok := checkMountClaims(context.Background(), c, "minecraft",
@@ -157,10 +148,8 @@ func TestAMissingClaimMountIsRefused(t *testing.T) {
 }
 
 func TestTheFirstBrokenClaimMountIsTheOneReported(t *testing.T) {
-	// Two broken mounts, and the message names the first. Asserted rather than
-	// left to chance because the alternative -- a message naming whichever the
-	// map iteration reached -- would make the condition flap between two
-	// sentences on a group nobody had touched.
+	// Naming whichever mount map iteration reached would make the condition
+	// flap.
 	c := pluginReader(t, pluginClaim("second", corev1.ReadWriteOnce))
 	mounts := []spawneryv1alpha1.Mount{
 		claimMount("first", "missing"),
@@ -177,10 +166,7 @@ func TestTheFirstBrokenClaimMountIsTheOneReported(t *testing.T) {
 }
 
 func TestBothVolumeFieldsAreCheckedTogether(t *testing.T) {
-	// checkGroupVolumes is what the controllers call, and a group can set
-	// either field or both. Without this, adding spec.mounts would have left
-	// the claim it names unchecked on every path that only asked about
-	// extraPlugins -- which is exactly the shape of the bug this closes.
+	// A group can set either field or both; every claim must be checked.
 	c := pluginReader(t, pluginClaim("plugins", corev1.ReadWriteMany))
 
 	reason, _, ok := checkGroupVolumes(context.Background(), c, "minecraft",
@@ -195,8 +181,7 @@ func TestBothVolumeFieldsAreCheckedTogether(t *testing.T) {
 		t.Errorf("reason = %q, want the mount's own reason rather than the plugin one", reason)
 	}
 
-	// And the other way round: extraPlugins is asked first, so its reason wins
-	// when both are wrong.
+	// extraPlugins is asked first, so its reason wins when both are wrong.
 	reason, _, ok = checkGroupVolumes(context.Background(), c, "minecraft",
 		&spawneryv1alpha1.ExtraPlugins{ClaimName: "missing"}, nil,
 		[]spawneryv1alpha1.Mount{claimMount("worlds", "missing")},

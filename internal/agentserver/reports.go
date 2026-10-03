@@ -19,35 +19,20 @@ import (
 	"github.com/spawnery/spawnery/internal/agentpb"
 )
 
-// The bounds on what a proxy may report about the players it holds.
-//
-// A roster is not answered and forgotten: every entry is copied into the
-// network picture and carried to every agent in the namespace on every
-// resync, and grpc-java refuses an inbound message above 4 MiB by default. So
-// the figure that matters is the whole namespace's roster at once. One entry
-// at these bounds is 36 + 64 + 128 bytes plus framing, about 230; a real one
-// -- a dashed UUID, a sixteen-character name, a short server name -- is about
-// 70. 2048 entries are then 470 KB at the bounds and 140 KB as measured, so
-// the fan-out stays under grpc-java's limit for eight proxies reporting the
-// worst case and for twenty-eight reporting real players. A proxy holding
-// more than 2048 players is not something this operator has met.
+// Every roster entry is fanned out to every agent in the namespace, and
+// grpc-java refuses inbound messages above 4 MiB: 2048 entries at these
+// bounds are about 470 KB, so eight worst-case proxies still fit.
 const (
 	RosterMaxEntries      = 2048
 	RosterMaxUUIDLength   = 36
 	RosterMaxNameLength   = 64
 	RosterMaxServerLength = 128
 
-	// BackendsMaxEntries bounds the per-server player counts a proxy sends
-	// beside its roster. One entry per backend the proxy knows, so a namespace
-	// of two thousand servers is the ceiling, and the same fan-out argument
-	// applies: the counts reach every agent's network picture.
+	// One entry per backend the proxy knows; the same fan-out bound applies.
 	BackendsMaxEntries    = 2048
 	BackendsMaxNameLength = RosterMaxServerLength
 )
 
-// rosterRefusal reports whether a roster is within its bounds, and says which
-// one it broke when it is not. The shape of announcementRefusal, for the same
-// reader: an agent author reading one log line.
 func rosterRefusal(roster *agentpb.PlayerRoster) (string, bool) {
 	players := roster.GetPlayers()
 	if len(players) > RosterMaxEntries {
@@ -71,7 +56,6 @@ func rosterRefusal(roster *agentpb.PlayerRoster) (string, bool) {
 	return "", true
 }
 
-// backendsRefusal is rosterRefusal for the per-backend counts.
 func backendsRefusal(backends map[string]int32) (string, bool) {
 	if len(backends) > BackendsMaxEntries {
 		return fmt.Sprintf("that report names %d backends and the operator carries at most %d",

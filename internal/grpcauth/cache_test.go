@@ -52,9 +52,6 @@ func TestReviewCacheServesAPositiveAnswerUntilItExpires(t *testing.T) {
 	}
 }
 
-// A cached "no" heals faster than a cached "yes" on purpose: a rejection that
-// was wrong -- clock skew, a token checked before its ServiceAccount existed --
-// should not stick, while a cached "yes" is what removes the API server load.
 func TestReviewCacheForgetsANegativeAnswerSooner(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	c := NewReviewCache(func() time.Time { return now })
@@ -75,10 +72,6 @@ func TestReviewCacheForgetsANegativeAnswerSooner(t *testing.T) {
 	}
 }
 
-// The whole point of the split in Authenticate: an outage must not be cached,
-// or it outlives itself. internal/grpcauth already distinguishes the two, and
-// the interceptor already maps this one to codes.Unavailable so an agent backs
-// off rather than concluding its credentials are wrong.
 func TestReviewCacheRefusesToStoreAnOutage(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	c := NewReviewCache(func() time.Time { return now })
@@ -90,13 +83,8 @@ func TestReviewCacheRefusesToStoreAnOutage(t *testing.T) {
 	}
 }
 
-// The operator must not hold bearer tokens in a map.
-//
-// "Not the raw token" is not enough to assert: a cacheKey returning
-// token + "!" satisfies it while still holding every byte of the credential.
-// So this pins the key to the SHA-256 digest, recomputed here from the
-// standard library rather than by calling cacheKey, which would move with the
-// code under test and prove nothing.
+// The key is pinned to a SHA-256 digest recomputed here rather than via
+// cacheKey: "not the raw token" would also pass for token+"!".
 func TestReviewCacheDoesNotKeepTheTokenItself(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	c := NewReviewCache(func() time.Time { return now })
@@ -120,15 +108,8 @@ func TestReviewCacheDoesNotKeepTheTokenItself(t *testing.T) {
 	}
 }
 
-// maxCacheEntries is a hard bound, and this is the assertion that can tell
-// that apart from the thing it used to be.
-//
-// The earlier version of this test stored maxCacheEntries+1 entries at one
-// frozen instant, then advanced the clock past PositiveTTL and stored one
-// more -- so its length check ran against a map that the expiry sweep had
-// just emptied. It was green for a cache that bounded nothing. Here the clock
-// never moves, so nothing ever expires, and the only way to stay under the
-// bound is to drop a live entry to make room.
+// The clock never moves, so nothing expires and the only way to stay under
+// the bound is to drop a live entry.
 func TestReviewCacheHoldsItsBoundWithNothingExpired(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	c := NewReviewCache(func() time.Time { return now })
@@ -144,8 +125,7 @@ func TestReviewCacheHoldsItsBoundWithNothingExpired(t *testing.T) {
 	}
 }
 
-// The cheap sweep still has to happen, and to come first: dropping a live
-// entry when a dead one would do costs a TokenReview for nothing.
+// Dropping a live entry when a dead one would do costs a TokenReview.
 func TestReviewCacheSweepsExpiredEntriesFirst(t *testing.T) {
 	now := time.Date(2026, 8, 17, 12, 0, 0, 0, time.UTC)
 	c := NewReviewCache(func() time.Time { return now })

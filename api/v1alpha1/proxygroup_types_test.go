@@ -14,11 +14,7 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package v1alpha1, not v1alpha1_test: DrainTimeout's default is asserted
-// against defaultProxyDrainTimeout itself, not a duplicated literal, so a
-// future edit to the constant cannot silently drift out of step with what
-// this test checks. That needs the unexported constant, which only a test in
-// the same package can reach.
+// Package v1alpha1, not v1alpha1_test, to reach defaultProxyDrainTimeout.
 package v1alpha1
 
 import (
@@ -28,9 +24,6 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-// TestDrainTimeoutDefaultsWhenTheFieldIsAbsent proves the accessor, not just
-// the field: spec.drain is +optional, so a ProxyGroup that never set it must
-// still get a bounded drain rather than an unbounded one.
 func TestDrainTimeoutDefaultsWhenTheFieldIsAbsent(t *testing.T) {
 	g := &ProxyGroup{}
 	if got := g.DrainTimeout(); got != defaultProxyDrainTimeout {
@@ -38,9 +31,6 @@ func TestDrainTimeoutDefaultsWhenTheFieldIsAbsent(t *testing.T) {
 	}
 }
 
-// TestDrainTimeoutHonorsAnExplicitValue proves the field is actually read,
-// not merely present: a test that only checked the default would stay green
-// even if DrainTimeout ignored spec.drain entirely.
 func TestDrainTimeoutHonorsAnExplicitValue(t *testing.T) {
 	g := &ProxyGroup{Spec: ProxyGroupSpec{Drain: &DrainSpec{TimeoutSeconds: 45}}}
 	if got, want := g.DrainTimeout(), 45*time.Second; got != want {

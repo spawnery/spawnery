@@ -7,12 +7,9 @@ package cloud.spawnery.agent.pb;
 
 /**
  * <pre>
- * CloudResponse answers exactly one CloudRequest.
- *
- * An answer for an id nobody is waiting on is dropped by the agent rather than
- * treated as an error: a late answer to a request that already reached its
- * deadline is ordinary, and throwing on one inside a gRPC callback would cost
- * the agent every other request it has outstanding.
+ * CloudResponse answers exactly one CloudRequest. An answer for an id nobody
+ * is waiting on is dropped by the agent: a late answer after a deadline is
+ * ordinary.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.CloudResponse}
@@ -855,12 +852,9 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * CloudResponse answers exactly one CloudRequest.
-   *
-   * An answer for an id nobody is waiting on is dropped by the agent rather than
-   * treated as an error: a late answer to a request that already reached its
-   * deadline is ordinary, and throwing on one inside a gRPC callback would cost
-   * the agent every other request it has outstanding.
+   * CloudResponse answers exactly one CloudRequest. An answer for an id nobody
+   * is waiting on is dropped by the agent: a late answer after a deadline is
+   * ordinary.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.CloudResponse}
