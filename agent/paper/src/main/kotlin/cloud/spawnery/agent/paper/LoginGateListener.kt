@@ -12,9 +12,10 @@ import org.bukkit.event.player.PlayerLoginEvent
 import org.bukkit.event.player.PlayerQuitEvent
 
 /**
- * Registered only once the group enforces: a PlayerLoginEvent listener makes
- * Paper refuse its reconfiguration API server-wide. PlayerLoginEvent is
- * deprecated, but the only login event that has the player's permissions.
+ * Registered once the group enforces playable slots or has a join rule. A
+ * PlayerLoginEvent listener makes Paper refuse its reconfiguration API
+ * server-wide. PlayerLoginEvent is deprecated, but the only login event that
+ * has the player's permissions.
  */
 @Suppress("DEPRECATION")
 class LoginGateListener(
