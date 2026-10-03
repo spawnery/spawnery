@@ -14,7 +14,7 @@ class RescueTest {
         val registry = FakeRegistry()
         val directory = ServerDirectory(registry) { _, _ -> }
         directory.apply(backends.toList())
-        return Rescue(Router(directory)) { message, _ -> logs += message }
+        return Rescue(Router(directory), { message, _ -> logs += message })
     }
 
     @Test
@@ -101,5 +101,22 @@ class RescueTest {
 
         assertNull(target)
         assertEquals(1, logs.size)
+    }
+
+    @Test
+    fun `a rescued player is not sent into a group they may not join`() {
+        val registry = FakeRegistry()
+        val directory = ServerDirectory(registry) { _, _ -> }
+        directory.apply(
+            listOf(
+                Backend("vip-1", "10.0.0.1:25565", "vip"),
+                Backend("lobby-1", "10.0.0.2:25565", "lobby"),
+            ),
+        )
+        val rescue = Rescue(Router(directory), { _, _ -> }, JoinAccess { _, _, group -> group != "vip" })
+
+        val target = rescue.target(UUID.randomUUID(), "hub-1", false, listOf("vip", "lobby"))
+
+        assertEquals("lobby-1", target?.serverInfo?.name)
     }
 }

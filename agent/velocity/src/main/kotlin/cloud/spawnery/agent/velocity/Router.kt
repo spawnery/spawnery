@@ -18,12 +18,17 @@ class Router(private val directory: ServerDirectory) {
      *   case-insensitively. [Drain] passes every draining server, [Rescue]
      *   the whole chain a player was already bounced through.
      */
-    fun choose(groups: List<String>, excluding: Collection<String> = emptySet()): RegisteredServer? {
+    fun choose(
+        groups: List<String>,
+        excluding: Collection<String> = emptySet(),
+        mayJoin: (server: String, group: String) -> Boolean = { _, _ -> true },
+    ): RegisteredServer? {
         for (group in groups) {
             val candidates = directory.inGroup(group)
                 .filter { candidate -> excluding.none { candidate.serverInfo.name.equals(it, ignoreCase = true) } }
-            // Emptiness after the exclusion, so a group the exclusion empties
-            // falls through to the next group.
+                .filter { candidate -> mayJoin(candidate.serverInfo.name, group) }
+            // Emptiness after the exclusion and the join rule, so a group either
+            // one empties falls through to the next group.
             if (candidates.isEmpty()) continue
 
             // Ties break by name, for a deterministic choice.

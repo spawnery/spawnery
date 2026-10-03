@@ -149,6 +149,50 @@ class RouterTest {
         assertEquals("hub-1", chosen?.serverInfo?.name)
     }
 
+    @Test
+    fun `a group the player may not join is skipped like an empty one`() {
+        val registry = FakeRegistry()
+        val directory = ServerDirectory(registry) { _, _ -> }
+        directory.apply(
+            listOf(
+                Backend("vip-1", "10.0.0.1:25565", "vip"),
+                Backend("lobby-1", "10.0.0.2:25565", "lobby"),
+            ),
+        )
+        val router = Router(directory)
+
+        val chosen = router.choose(listOf("vip", "lobby")) { _, group -> group != "vip" }
+
+        assertEquals("lobby-1", chosen?.serverInfo?.name)
+    }
+
+    @Test
+    fun `the predicate sees each candidate server with its group`() {
+        val registry = FakeRegistry()
+        val directory = ServerDirectory(registry) { _, _ -> }
+        directory.apply(
+            listOf(
+                Backend("vip-1", "10.0.0.1:25565", "vip"),
+                Backend("vip-2", "10.0.0.2:25565", "vip"),
+            ),
+        )
+        val router = Router(directory)
+
+        val chosen = router.choose(listOf("vip")) { server, group -> group == "vip" && server == "vip-2" }
+
+        assertEquals("vip-2", chosen?.serverInfo?.name)
+    }
+
+    @Test
+    fun `every group forbidden yields null`() {
+        val registry = FakeRegistry()
+        val directory = ServerDirectory(registry) { _, _ -> }
+        directory.apply(listOf(Backend("vip-1", "10.0.0.1:25565", "vip")))
+        val router = Router(directory)
+
+        assertNull(router.choose(listOf("vip")) { _, _ -> false })
+    }
+
     private companion object {
         fun fakeServer(registry: FakeRegistry, name: String): FakeServer =
             registry.server(name) as FakeServer

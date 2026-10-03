@@ -78,6 +78,9 @@ class ServerDirectory(
     @Synchronized
     fun names(): Set<String> = backends.values.mapTo(mutableSetOf()) { it.name }
 
+    @Synchronized
+    fun groupOf(server: String): String? = backends[server.lowercase()]?.group
+
     /**
      * Absent from the registry -> register. Present with the address
      * unchanged -> nothing. Present with a different address -> unregister

@@ -5,7 +5,9 @@ import cloud.spawnery.agent.CloudEvents
 import cloud.spawnery.agent.cloudCommand
 import cloud.spawnery.agent.Feed
 import cloud.spawnery.agent.FeedState
+import cloud.spawnery.agent.JoinRules
 import cloud.spawnery.agent.LuckPermsContexts
+import cloud.spawnery.agent.LuckPermsPermissions
 import cloud.spawnery.agent.MirrorApi
 import cloud.spawnery.agent.Requests
 import cloud.spawnery.agent.NetworkMirror
@@ -37,6 +39,7 @@ import com.velocitypowered.api.network.HandshakeIntent
 import com.velocitypowered.api.plugin.Plugin
 import com.velocitypowered.api.proxy.ProxyServer
 import com.velocitypowered.api.scheduler.ScheduledTask
+import net.kyori.adventure.text.Component
 import org.slf4j.Logger
 import java.nio.file.Files
 import java.nio.file.Path
@@ -86,6 +89,8 @@ class AgentPlugin @Inject constructor(
      */
     private var loop: SessionLoop<ProxyMessage, OperatorToProxy>? = null
     private var router: Router? = null
+    private var directory: ServerDirectory? = null
+    private var joinAccess: JoinAccess = JoinAccess.OPEN
     private var rescue: Rescue? = null
     private var drain: Drain? = null
     private var transfers: Transfers? = null
@@ -157,8 +162,8 @@ class AgentPlugin @Inject constructor(
         val directory = ServerDirectory(VelocityRegistry(proxy), ::warn)
         val players = VelocityPlayers(proxy)
         val router = Router(directory)
+        this.directory = directory
         this.router = router
-        this.rescue = Rescue(router, ::warn)
         this.fallbackGroups = env.fallbackGroups
         val state = ProxyState(env.playerLimit)
 
@@ -169,6 +174,16 @@ class AgentPlugin @Inject constructor(
             override fun group(): String = System.getenv("SPAWNERY_GROUP") ?: ""
             override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
         }
+        val access = JoinPermissions(
+            rules = mirror::joinRule,
+            network = self::network,
+            lookups = listOfNotNull(
+                LuckPermsPermissions.lookupIfPresent()?.let { f -> PermissionLookup { p, n, c -> f(p, n, c) } },
+                VelocityPermissionLookup(proxy),
+            ),
+        )
+        this.joinAccess = access
+        this.rescue = Rescue(router, ::warn, access)
         val feed = Feed(VelocityAudience(proxy), feedState, System::currentTimeMillis, format = mirror::feedFormat)
         this.feed = feed
         // No ReadinessGate: a proxy has no readiness flag to hold. See ProxyState.
@@ -188,7 +203,7 @@ class AgentPlugin @Inject constructor(
             self.group(),
         )
         startTransfers(env, self)
-        val drain = Drain(players, router, ::warn)
+        val drain = Drain(players, router, ::warn, access)
         this.drain = drain
         val role = ProxyRole(
             state = state,
@@ -298,13 +313,19 @@ class AgentPlugin @Inject constructor(
      */
     @Subscribe
     fun onChooseInitialServer(event: PlayerChooseInitialServerEvent) {
-        val arrival = transfers?.landing(event.player.uniqueId, event.player.username)
+        val player = event.player.uniqueId
+        val mayJoin = { server: String, group: String -> joinAccess.mayJoin(player, server, group) }
+        val arrival = transfers?.landing(player, event.player.username)
             ?.let { proxy.getServer(it).orElse(null) }
-        val target = arrival ?: router?.choose(fallbackGroups) ?: run {
+            ?.takeIf { server ->
+                val group = directory?.groupOf(server.serverInfo.name)
+                group == null || mayJoin(server.serverInfo.name, group)
+            }
+        val target = arrival ?: router?.choose(fallbackGroups, mayJoin = mayJoin) ?: run {
             if (router != null) {
                 logger.warn(
-                    "spawnery: no server available in $fallbackGroups for " +
-                        "'${event.player.username}'; letting the proxy refuse the connection",
+                    "spawnery: no server '${event.player.username}' may join in $fallbackGroups " +
+                        "(empty, or closed to them by a join permission); letting the proxy refuse the connection",
                 )
             }
             return
@@ -367,6 +388,24 @@ class AgentPlugin @Inject constructor(
         if (transfers.received(event.player.uniqueId, event.player.username, event.originalData)) {
             event.result = CookieReceiveEvent.ForwardResult.handled()
         }
+    }
+
+    @Subscribe
+    fun onServerPreConnectJoinRule(event: ServerPreConnectEvent) {
+        if (!event.result.isAllowed) return
+        val target = event.result.server.orElse(event.originalServer)
+        val name = target.serverInfo.name
+        val group = directory?.groupOf(name) ?: return
+        if (joinAccess.mayJoin(event.player.uniqueId, name, group)) return
+        event.result = ServerPreConnectEvent.ServerResult.denied()
+        val shown = mirror.groups().firstOrNull { it.name() == group }?.displayName()?.takeIf { it.isNotBlank() } ?: group
+        event.player.sendMessage(
+            Component.translatable()
+                .key(JoinRules.DENIED_KEY)
+                .fallback(JoinRules.DENIED_FALLBACK)
+                .arguments(Component.text(shown))
+                .build(),
+        )
     }
 
     @Subscribe(priority = Short.MIN_VALUE)
