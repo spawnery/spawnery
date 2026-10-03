@@ -24,10 +24,8 @@ import (
 )
 
 func TestNoWorldDefaultsOverlayWritesNoWorldDefaultsFile(t *testing.T) {
-	// Every installation that never sets this must get exactly the two files
-	// it got before. An unconditional empty write would overwrite whatever the
-	// server had filled in for itself on every single start -- a fresh loss
-	// per restart on a persistent group, whose /data survives.
+	// An unconditional empty write would erase what a persistent server filled
+	// in itself on every start.
 	files, err := Paper(paperValues(), "s3cret", nil)
 	if err != nil {
 		t.Fatalf("Paper: %v", err)
@@ -52,8 +50,6 @@ func TestAWorldDefaultsOverlayIsWrittenThrough(t *testing.T) {
 		t.Fatal("no world-defaults file was written for a group that named one")
 	}
 
-	// Parsed rather than string-matched: what has to arrive is the setting,
-	// not a particular serialisation of it.
 	var doc map[string]any
 	if err := yaml.Unmarshal(raw, &doc); err != nil {
 		t.Fatalf("the rendered file does not parse: %v\n%s", err, raw)
@@ -65,9 +61,6 @@ func TestAWorldDefaultsOverlayIsWrittenThrough(t *testing.T) {
 }
 
 func TestAnUndeclaredWorldDefaultsKeyIsRefused(t *testing.T) {
-	// The failure this exists to prevent, in Paper's own words: it keeps its
-	// default for the field the author meant, writes the stray key back out,
-	// and the file on disk goes on looking like the override took.
 	_, err := Paper(paperValues(), "s3cret", map[string]string{
 		"paper-world-defaults.yml": "misc:\n  disable-end-credit: true\n",
 	})
@@ -95,9 +88,7 @@ func TestAMalformedWorldDefaultsOverlayIsRefused(t *testing.T) {
 }
 
 func TestAnEmptyWorldDefaultsOverlayWritesAnEmptyFile(t *testing.T) {
-	// Setting the key to "" is a thing somebody said, and what they said is
-	// "leave this file alone". Refusing it would make the empty string the one
-	// value a ConfigMap cannot carry.
+	// An empty value means "leave this file alone", not an error.
 	files, err := Paper(paperValues(), "s3cret", map[string]string{
 		"paper-world-defaults.yml": "",
 	})
@@ -113,15 +104,7 @@ func TestAnEmptyWorldDefaultsOverlayWritesAnEmptyFile(t *testing.T) {
 	}
 }
 
-// The shapes a real CloudNET network sets, copied from coding-area.net's
-// configs repository at 4eea9fa on 2026-08-31 -- Global/Game and Hub/default.
-// They are the reason this file exists, and a declared-key tree that refused
-// either of them would have closed nothing.
-//
-// Kept as literals rather than read from that repository: it is private, it is
-// not a dependency of this one, and what is worth pinning is the *shape* an
-// overlay of this file takes in practice, which does not change when somebody
-// edits a value over there.
+// Overlay shapes a real network sets, kept as literals.
 func TestTheOverlaysARealNetworkSetsAreAccepted(t *testing.T) {
 	overlays := map[string]string{
 		"Global/Game": `_version: 31

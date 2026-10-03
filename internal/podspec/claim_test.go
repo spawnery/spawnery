@@ -27,9 +27,6 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
-// persistentGroupFixture is a Persistent ServerGroup: 20Gi on storage class
-// "longhorn", ReadWriteOnce. It builds on testGroup (server_test.go) rather
-// than duplicating its network and image fields.
 func persistentGroupFixture(t *testing.T) *spawneryv1alpha1.ServerGroup {
 	t.Helper()
 	group := testGroup()
@@ -45,8 +42,6 @@ func persistentGroupFixture(t *testing.T) *spawneryv1alpha1.ServerGroup {
 	return group
 }
 
-// serverFixture is a persistent server named name, otherwise built on
-// testServer (server_test.go).
 func serverFixture(t *testing.T, name string) *spawneryv1alpha1.Server {
 	t.Helper()
 	srv := testServer()
@@ -109,9 +104,7 @@ func TestBuildDataClaimCopiesStorageAnnotations(t *testing.T) {
 }
 
 func TestBuildDataClaimWithoutAStorageClass(t *testing.T) {
-	// storageClassName is optional: unset means the cluster's default class,
-	// and a claim carrying an empty string instead would mean "no class at
-	// all", which is a different and usually wrong thing.
+	// An empty string would mean "no class at all", not the cluster default.
 	group := persistentGroupFixture(t)
 	group.Spec.Storage.StorageClassName = nil
 	claim := BuildDataClaim(group, serverFixture(t, "survival-0"))
@@ -120,8 +113,8 @@ func TestBuildDataClaimWithoutAStorageClass(t *testing.T) {
 	}
 }
 
-// The key label is what the admission policy shipped with the chart reads to
-// let the operator delete this claim, and only this kind of claim.
+// The chart's admission policy reads this label before letting the operator
+// delete a claim.
 func TestAnOnDemandMembersClaimCarriesItsKey(t *testing.T) {
 	group := persistentGroupFixture(t)
 	group.Name = "private-servers"

@@ -22,11 +22,8 @@ import (
 	"testing"
 )
 
-// buildKeyNode picks one of a free-form level's example children as the shape
-// every user-chosen name is checked against. That is only sound if the
-// examples agree, and nothing but this says they do — a fixture where
-// packet-limiter.overrides gained a second entry with different sub-keys would
-// make the check depend on which one sorted first.
+// buildKeyNode checks user-chosen names against one example child, which is
+// only sound if all examples share a shape.
 func TestEveryFreeFormExampleHasTheSameShape(t *testing.T) {
 	for _, tc := range []struct {
 		what     string
@@ -42,8 +39,7 @@ func TestEveryFreeFormExampleHasTheSameShape(t *testing.T) {
 			if err != nil {
 				t.Fatalf("%s does not parse: %v", tc.what, err)
 			}
-			// Built without the free-form list, so every example child is
-			// still present to be compared.
+			// Built without the free-form list, so every example child is still present.
 			full := buildKeyNode(parsed, nil, "")
 			for _, free := range tc.freeForm {
 				node := nodeAt(full, free.path)
@@ -75,12 +71,7 @@ func TestEveryFreeFormExampleHasTheSameShape(t *testing.T) {
 	}
 }
 
-// Every free-form path has to name a level the fixture actually has, or the
-// check silently measures user-chosen names against a schema. mustKeyTree
-// panics on that at package load, which makes it a build failure rather than a
-// test — this asserts the same thing on the tree that was built, so the
-// failure reads as a sentence rather than as a panic in every test in the
-// package.
+// mustKeyTree panics on this at package load; this reports it as a sentence.
 func TestEveryFreeFormPathExists(t *testing.T) {
 	for _, tc := range []struct {
 		what     string
@@ -105,8 +96,6 @@ func TestEveryFreeFormPathExists(t *testing.T) {
 	}
 }
 
-// shapeOf renders a node's key structure, so two example children can be
-// compared as strings.
 func shapeOf(node *keyNode) string {
 	if node == nil || len(node.children) == 0 {
 		return "{}"

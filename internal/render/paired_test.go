@@ -21,13 +21,8 @@ import (
 	"testing"
 )
 
-// The one test whose absence would not show up as a failure anywhere else.
-//
-// Both halves look correct in isolation: a backend with online-mode=false is
-// what forwarding needs, and a proxy with online-mode=true is what
-// authentication needs. Swap them and everything still starts, every other
-// test still passes, and the network is open — anyone can connect straight to
-// a backend under any name. Only asserting both in one place says otherwise.
+// Each half looks correct alone; swapped, everything still starts and anyone
+// can join a backend under any name.
 func TestOnlineModeIsOffOnTheBackendAndOnOnTheProxy(t *testing.T) {
 	backend, err := Paper(paperValues(), "s3cret", nil)
 	if err != nil {
@@ -49,14 +44,8 @@ func TestOnlineModeIsOffOnTheBackendAndOnOnTheProxy(t *testing.T) {
 	}
 }
 
-// Three settings across two files carry the words "online mode", and only one
-// of them moves with ProxyGroup.spec.config.onlineMode. Turning the proxy's
-// off is a decision about whether players are authenticated; it says nothing
-// about whether the backends trust what the proxy forwards, because modern
-// forwarding works identically either way. A future edit that "made the two
-// agree" would hand every player an offline-mode UUID even on an
-// online-mode network and detach them from their own inventories, and no test
-// of either flavour on its own would notice.
+// paper-global.yml's proxies.velocity.online-mode does not move with the
+// proxy's; making them "agree" would give every player an offline-mode UUID.
 func TestAnOfflineModeProxyChangesNothingOnTheBackend(t *testing.T) {
 	off := false
 	v := velocityValues()

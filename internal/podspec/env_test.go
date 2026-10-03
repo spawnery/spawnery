@@ -28,9 +28,8 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// envNames is the container's env list in the order it was rendered. Order is
-// asserted rather than membership because the whole point of appending is that
-// the operator's own set stays where a reader expects it.
+// Order is asserted, not membership: appending keeps the operator's own set
+// where a reader expects it.
 func envNames(pod *corev1.Pod) []string {
 	out := make([]string, 0, len(pod.Spec.Containers[0].Env))
 	for _, e := range pod.Spec.Containers[0].Env {
@@ -56,10 +55,6 @@ func TestAGroupsEnvIsAppendedAfterTheOperatorsOwn(t *testing.T) {
 		t.Fatalf("env = %v, want %v", got, want)
 	}
 
-	// The value matters as much as the name. A group that sets a system
-	// property its plugins read and gets an empty one has a server that starts
-	// and behaves like a different group -- the failure this field exists to
-	// make impossible, arriving through the field itself.
 	for _, e := range pod.Spec.Containers[0].Env {
 		if e.Name == "JAVA_TOOL_OPTIONS" && e.Value != "-Dgame.amountOfTeams=0" {
 			t.Errorf("JAVA_TOOL_OPTIONS = %q, want the group's value", e.Value)
@@ -114,11 +109,7 @@ func TestTheTransferVariablesSitWithTheOperatorsOwn(t *testing.T) {
 }
 
 func TestAGroupWithNoEnvRendersExactlyWhatItRenderedBefore(t *testing.T) {
-	// Every installation that never touches this field must get the pod it got
-	// before, which is also what keeps the golden digests in hash_golden_test.go
-	// still for them -- a changed digest there would replace every server in
-	// every installation on the first reconcile after an upgrade, for a field
-	// nobody set.
+	// Also keeps the golden digests in hash_golden_test.go still.
 	server := envNames(build(t, nil))
 	wantServer := []string{"SPAWNERY_NETWORK", "SPAWNERY_GROUP", "SPAWNERY_SERVER", EnvOperatorEndpoint}
 	if strings.Join(server, ",") != strings.Join(wantServer, ",") {
@@ -135,11 +126,7 @@ func TestAGroupWithNoEnvRendersExactlyWhatItRenderedBefore(t *testing.T) {
 	}
 }
 
-// The two hash tests are the ones that decide whether an edit to this field
-// reaches a running fleet at all. Without them the operator would write the new
-// env into the pod it renders for comparison, find every existing server's
-// recorded hash unchanged, and leave the whole group running the old value --
-// with the ServerGroup showing the new one.
+// Without the hash moving, an edited env would never reach running servers.
 func TestEnvReachesTheServerHash(t *testing.T) {
 	net, group := testNetwork(), testGroup()
 	before, err := DesiredServerHash(net, group, nil)
@@ -156,8 +143,6 @@ func TestEnvReachesTheServerHash(t *testing.T) {
 		t.Fatalf("the digest did not move when spec.env changed (%s): every server would keep the old value", before)
 	}
 
-	// And a different value is a different digest, not merely "set versus
-	// unset". Solo and team differ by nothing but the value.
 	group.Spec.Env = []corev1.EnvVar{{Name: "JAVA_TOOL_OPTIONS", Value: "-Dgame.teamSize=3"}}
 	other, err := DesiredServerHash(net, group, nil)
 	if err != nil {
@@ -185,21 +170,9 @@ func TestEnvReachesTheProxyHash(t *testing.T) {
 	}
 }
 
-// TestTheReservedEnvPrefixMarkersMatchTheConstant reads the generated CRDs and
-// checks that every spec.env CEL rule still denies exactly the prefix
-// ReservedEnvPrefix names.
-//
-// The literal is spelled twice by necessity: a kubebuilder marker cannot
-// interpolate a Go constant, so the prefix lives once in api/v1alpha1 and once
-// in each marker. Renaming the constant would leave the markers denying the old
-// prefix, and nothing else in this repository compares them -- the operator
-// never reads the rule, and a CRD whose rule denies a prefix no pod uses
-// installs and reconciles perfectly while letting a group shadow
-// SPAWNERY_OPERATOR_ENDPOINT.
-//
-// The chart's copy is checked alongside config/crd/bases because the chart is
-// what installations actually apply. They are written by the same `make
-// manifests` run, so a divergence means somebody edited one by hand.
+// A kubebuilder marker cannot interpolate a Go constant, so the prefix is
+// spelled in each spec.env CEL rule too. The chart's copy is checked as well,
+// since that is what installations apply.
 func TestTheReservedEnvPrefixMarkersMatchTheConstant(t *testing.T) {
 	files := []string{
 		"config/crd/bases/spawnery.cloud_servergroups.yaml",
@@ -238,19 +211,15 @@ func TestTheReservedEnvPrefixMarkersMatchTheConstant(t *testing.T) {
 		}
 	}
 
-	// Four: one for ServerGroup and one for ProxyGroup in config/crd/bases,
-	// and both again in the chart's bundle. A number rather than "at least
-	// one" so that a kind losing its rule cannot hide behind the others.
+	// One per kind in config/crd/bases and in the chart; a count, so one kind
+	// losing its rule cannot hide behind the others.
 	if total != 4 {
 		t.Errorf("found %d spec.env rules across %v, want 4", total, files)
 	}
 }
 
-// envValidationRules returns the CEL rules on spec.env of a parsed CRD
-// document, across every served version. Untyped map walking rather than
-// apiextensions types: sigs.k8s.io/yaml is already a direct dependency of this
-// module and k8s.io/apiextensions-apiserver is not, and this test needs one
-// field out of the schema rather than the schema.
+// envValidationRules walks untyped maps, since k8s.io/apiextensions-apiserver
+// is not a dependency of this module.
 func envValidationRules(crd map[string]any) []string {
 	var out []string
 	spec, _ := crd["spec"].(map[string]any)

@@ -31,25 +31,16 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// operatorNamespace is where the operator itself runs, and the only namespace
-// the namespaced Role grants anything in. It is renderNamespace
-// (deploy_envtest_test.go), not the literal spawnery-system: every object this
-// file applies now comes from renderChart, which renders into renderNamespace,
-// so a Role or Deployment applied here lands there and nowhere else.
+// operatorNamespace is renderNamespace because every object here comes from
+// renderChart.
 const operatorNamespace = renderNamespace
 
-// foreignNamespace is a namespace that is not the operator's own. The
-// cluster-wide half of the permissions must answer the same there — the binding
-// is cluster-wide, so any namespace would do, and the one from the sample
-// manifest keeps the failure messages recognisable. The namespaced half must
-// answer denied there, which is what TestTheAuthorizerActuallyDenies checks.
+// foreignNamespace is not the operator's own: cluster-wide grants must hold
+// there, namespaced ones must be denied (TestTheAuthorizerActuallyDenies).
 const foreignNamespace = "minecraft"
 
-// applyDeploymentAndDeriveSubject applies the deployment manifests and returns
-// the subject the operator actually runs as, derived from the manifests rather
-// than restated. That way a binding naming the wrong role, or a deployment
-// naming the wrong ServiceAccount, shows up as denied permissions instead of
-// passing silently.
+// applyDeploymentAndDeriveSubject derives the subject from the manifests, so a
+// binding or ServiceAccount naming the wrong thing shows up as denials.
 func applyDeploymentAndDeriveSubject(t *testing.T) string {
 	t.Helper()
 
@@ -71,7 +62,6 @@ func applyDeploymentAndDeriveSubject(t *testing.T) string {
 		deploy.Namespace, deploy.Spec.Template.Spec.ServiceAccountName)
 }
 
-// allowed asks the real RBAC authorizer whether subject may do attrs.
 func allowed(t *testing.T, subject string, attrs authzv1.ResourceAttributes) (bool, string) {
 	t.Helper()
 	c, ctx := testenv.Client(t)
@@ -88,9 +78,6 @@ func allowed(t *testing.T, subject string, attrs authzv1.ResourceAttributes) (bo
 	return sar.Status.Allowed, sar.Status.Reason
 }
 
-// requireGranted asks the authorizer, one permission at a time, whether the
-// operator's ServiceAccount may do it in namespace ns. A denial here means the
-// operator would hit Forbidden in a real cluster.
 func requireGranted(t *testing.T, subject, ns string, table []rbacaudit.Permission) {
 	t.Helper()
 	if len(table) == 0 {
@@ -114,34 +101,22 @@ func requireGranted(t *testing.T, subject, ns string, table []rbacaudit.Permissi
 	}
 }
 
-// TestEveryRequiredClusterPermissionIsGranted covers the cluster-wide half,
-// checked in a namespace that is not the operator's own: what the ClusterRole
-// grants must hold everywhere, because the operator manages game servers in
-// namespaces it does not know in advance.
 func TestEveryRequiredClusterPermissionIsGranted(t *testing.T) {
 	subject := applyDeploymentAndDeriveSubject(t)
 	requireGranted(t, subject, foreignNamespace, rbacaudit.RequiredCluster)
 }
 
-// TestEveryRequiredNamespacedPermissionIsGranted covers the half the operator
-// only ever needs where it runs itself. Checked in that namespace only —
-// TestTheAuthorizerActuallyDenies is the other side of the same statement.
 func TestEveryRequiredNamespacedPermissionIsGranted(t *testing.T) {
 	subject := applyDeploymentAndDeriveSubject(t)
 	requireGranted(t, subject, operatorNamespace, rbacaudit.RequiredNamespaced)
 }
 
-// TestClusterRoleGrantsNothingExtra is the other direction: every verb the
-// role grants must appear in the table. An operator that can create pods is
-// worth keeping narrow.
 func TestClusterRoleGrantsNothingExtra(t *testing.T) {
 	role, _ := readGeneratedRoles(t)
 	assertNothingExtra(t, "clusterrole", role.Rules, rbacaudit.RequiredCluster)
 }
 
-// TestTheNamespacedRoleGrantsNothingExtra is the same direction for the
-// namespaced half. Without it a right could be moved out of RequiredCluster
-// into a Role and never be compared against a manifest again.
+// Without it a right moved into a Role would never be compared again.
 func TestTheNamespacedRoleGrantsNothingExtra(t *testing.T) {
 	_, role := readGeneratedRoles(t)
 	assertNothingExtra(t, "role", role.Rules, rbacaudit.RequiredNamespaced)
@@ -164,17 +139,9 @@ func assertNothingExtra(t *testing.T, kind string, rules []rbacv1.PolicyRule, ta
 	}
 }
 
-// TestTheAuthorizerActuallyDenies is what keeps the SubjectAccessReview
-// direction meaningful. Every other check here asserts that something is
-// allowed, so a second binding that widened the subject would leave all of them
-// green no matter what the roles say, and the file-based direction would be
-// carrying the whole promise alone.
-//
-// The probes are chosen so that a wrong answer names its own cause. Two of them
-// are rights the operator genuinely holds — in the other scope: secrets in a
-// namespace that is not its own, and a lease there. Those are what prove the
-// split actually binds where it claims to, rather than having quietly landed in
-// the ClusterRole.
+// Every other check asserts something is allowed, so a widened subject would
+// leave them all green. Two probes are rights the operator holds in the
+// other scope, proving the split binds where it claims to.
 func TestTheAuthorizerActuallyDenies(t *testing.T) {
 	subject := applyDeploymentAndDeriveSubject(t)
 
@@ -223,16 +190,11 @@ func TestTheAuthorizerActuallyDenies(t *testing.T) {
 	}
 }
 
-// readerProbeNamespace is deliberately not foreignNamespace. The Role applied
-// below grants secrets/get, which is exactly what TestTheAuthorizerActuallyDenies
-// requires to stay denied in foreignNamespace — applying it there would make
-// this suite pass or fail by test order.
+// readerProbeNamespace is not foreignNamespace, where secrets/get must stay
+// denied; sharing it would make the suite depend on test order.
 const readerProbeNamespace = "spawnery-reader-probe"
 
-// The reader Role is hand-written rather than generated from a marker, because
-// the namespace is not known until an administrator applies it. Both directions
-// of the audit therefore matter more here, not less: nothing else compares this
-// file against anything.
+// The reader Role is hand-written, so nothing else compares it to anything.
 func TestTheForwardingSecretReaderGrantsNothingExtra(t *testing.T) {
 	role, _ := readForwardingSecretReader(t)
 	assertNothingExtra(t, "forwarding-secret-reader role", role.Rules, rbacaudit.RequiredNetworkNamespace)
@@ -250,41 +212,14 @@ func TestTheForwardingSecretReaderGrantsEverythingRequired(t *testing.T) {
 	}
 }
 
-// chartDefaultNamespace is the namespace charts/spawnery/README.md's install
-// command uses, and the one config/rbac/forwarding-secret-reader.yaml's own
-// header comment says its RoleBinding subject tracks. It is deliberately not
-// renderNamespace: the reader file is applied by hand, outside the chart, and
-// promises to follow the chart's *documented default* rather than wherever a
-// particular install put the operator. Asserting it against renderNamespace
-// would demand the file track something it never claimed to.
+// chartDefaultNamespace is the chart's documented default, which the
+// hand-applied reader file promises to follow, not renderNamespace.
 const chartDefaultNamespace = "spawnery-system"
 
-// The file has to work when applied, not only when parsed: a RoleBinding whose
-// subject names the wrong ServiceAccount parses perfectly and grants nothing.
-//
-// The subject comes from the reader file's own RoleBinding, not from
-// applyDeploymentAndDeriveSubject. forwarding-secret-reader.yaml's subject
-// names its ServiceAccount and namespace as a literal in the file (spawnery-
-// operator in spawnery-system — see the file's own comments on why: kubectl
-// apply -n rewrites the Role's and RoleBinding's own metadata.namespace, never
-// a namespace field inside a subject), not wherever this package's render
-// happens to install the chart. Deriving the probe subject from the render
-// would tie this test to renderNamespace, which the file never promised to
-// track, instead of to what the file actually says.
-//
-// That derivation is why the two assertions above the probe are the ones doing
-// the work on the subject itself. A RoleBinding always grants to whatever
-// subject it names, so probing with a subject read out of that same binding
-// can only ever come back allowed — it proves the Role and the binding fit
-// each other and that get is the only verb they open, and it cannot notice a
-// misspelt ServiceAccount name or a subject namespace pointing somewhere no
-// operator runs. Those are checked separately below: the name against the
-// ServiceAccount the chart actually renders, so the two cannot drift apart
-// silently, and the namespace against chartDefaultNamespace — not against the
-// chart, since nothing the chart renders carries that string (see
-// chartDefaultNamespace's own comment), but against the same
-// documented-default prose in charts/spawnery/README.md that constant
-// restates.
+// A RoleBinding naming the wrong ServiceAccount parses and grants nothing.
+// The probe subject comes from the binding itself, so the probe can only
+// prove Role and binding fit; the subject's name and namespace are checked
+// separately against the chart's ServiceAccount and chartDefaultNamespace.
 func TestTheForwardingSecretReaderOpensExactlyOneNamespace(t *testing.T) {
 	applyForwardingSecretReader(t, readerProbeNamespace)
 	_, binding := readForwardingSecretReader(t)
@@ -332,21 +267,12 @@ func TestTheForwardingSecretReaderOpensExactlyOneNamespace(t *testing.T) {
 	}
 }
 
-// forwardingSecretReaderManifest is the repository-relative path of the
-// hand-written Role and RoleBinding an administrator applies per namespace.
-// Unlike the objects readGeneratedRoles reads, controller-gen never touches this file — nothing
-// else in the build checks it against anything, which is why both directions
-// of the audit run against it here.
+// forwardingSecretReaderManifest is hand-written and applied per namespace;
+// controller-gen never touches it.
 const forwardingSecretReaderManifest = "config/rbac/forwarding-secret-reader.yaml"
 
-// readForwardingSecretReader decodes both objects in
-// forwardingSecretReaderManifest through readMultiDocManifest
-// (deploy_envtest_test.go), of which it is the only caller. This file is read
-// off disk rather than out of the rendered chart because it is hand-applied
-// per namespace and the chart never templates it.
-// It refuses to silently drop a second object of a kind it already saw,
-// the same refusal splitRendered makes for the rendered objects — except this
-// file holds a Role and a RoleBinding rather than a ClusterRole and a Role.
+// readForwardingSecretReader reads the file off disk, since the chart never
+// templates it, and refuses a second object of a kind it already saw.
 func readForwardingSecretReader(t *testing.T) (*rbacv1.Role, *rbacv1.RoleBinding) {
 	t.Helper()
 
@@ -390,12 +316,8 @@ func readForwardingSecretReader(t *testing.T) (*rbacv1.Role, *rbacv1.RoleBinding
 	return role, binding
 }
 
-// applyForwardingSecretReader models what an administrator's
-// `kubectl apply -n <namespace>` does: it creates namespace if it does not
-// already exist, then creates the decoded Role and RoleBinding with
-// metadata.namespace set to it. Neither object in the file carries a
-// namespace of its own — kubectl -n supplies it — so proving the file works
-// applied, and not only parsed, means setting it here the same way.
+// applyForwardingSecretReader models `kubectl apply -n <namespace>`: neither
+// object carries a namespace of its own.
 func applyForwardingSecretReader(t *testing.T, namespace string) {
 	t.Helper()
 

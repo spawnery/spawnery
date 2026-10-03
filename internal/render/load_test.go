@@ -23,10 +23,6 @@ import (
 	"testing"
 )
 
-// writeFile is the fixture helper every test below shares: it creates parent
-// directories and writes content, failing the test immediately if either
-// step fails, since a fixture that cannot be built makes the rest of the
-// test meaningless.
 func writeFile(t *testing.T, path, content string) {
 	t.Helper()
 	if err := os.MkdirAll(filepath.Dir(path), 0755); err != nil {
@@ -37,10 +33,7 @@ func writeFile(t *testing.T, path, content string) {
 	}
 }
 
-// validConfig and validSecret are the two inputs every test below writes
-// unless the test is specifically about that input's absence — so each test
-// isolates the one refusal it names rather than tripping over an unrelated
-// one.
+// Every test writes both unless it is about that input's absence.
 const validConfig = "maxPlayers: 100\n"
 const validSecret = "s3cret\n"
 
@@ -63,10 +56,7 @@ func TestLoadRefusesAMissingValuesFile(t *testing.T) {
 
 func TestLoadRefusesAValuesFileThatDoesNotParse(t *testing.T) {
 	dir := t.TempDir()
-	// maxPlayers is *int32; a string scalar there is a YAML document that
-	// parses on its own but fails to convert into Values, which is the
-	// failure this test is pinned to — not a YAML syntax error, which a
-	// less careful fixture could produce by accident.
+	// Valid YAML that fails to convert into Values, not a syntax error.
 	writeFile(t, filepath.Join(dir, ValuesFile), "maxPlayers: not-a-number\n")
 	writeFile(t, filepath.Join(dir, SecretFile), validSecret)
 
@@ -103,10 +93,7 @@ func TestLoadRefusesAMissingSecretFile(t *testing.T) {
 func TestLoadRefusesAnEmptySecretFile(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ValuesFile), validConfig)
-	// Whitespace only, not literally zero bytes: Load trims before checking,
-	// so a secret file containing only a trailing newline — the shape a
-	// Secret volume mount or `echo` into a file actually produces — must
-	// refuse exactly the same way an empty file does.
+	// Whitespace only, the shape a Secret mount or `echo` produces.
 	writeFile(t, filepath.Join(dir, SecretFile), "   \n")
 
 	_, _, _, err := Load(dir)
@@ -150,8 +137,6 @@ func TestLoadRefusesAnUnreadableOverlayEntry(t *testing.T) {
 	}
 }
 
-// A missing overlay directory is not a refusal: the overlay is optional, and
-// most Servers will never have one.
 func TestLoadTreatsAMissingOverlayDirectoryAsOptional(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ValuesFile), validConfig)
@@ -166,9 +151,6 @@ func TestLoadTreatsAMissingOverlayDirectoryAsOptional(t *testing.T) {
 	}
 }
 
-// The happy path: every value Load reads reaches the caller, and the secret
-// arrives trimmed of the one trailing line terminator Velocity's own read
-// would also drop — Paper and Velocity must end up holding the same string.
 func TestLoadReadsValuesSecretAndOverlay(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ValuesFile), "maxPlayers: 100\nmotd: hello\n")
@@ -193,15 +175,8 @@ func TestLoadReadsValuesSecretAndOverlay(t *testing.T) {
 	}
 }
 
-// TestLoadAcceptsASecretWithATrailingNewline pins the case this predicate
-// exists to stop refusing: `head -c 32 /dev/urandom | base64`, the command
-// config/samples/network.yaml documents for generating this secret, emits a
-// trailing newline, and `kubectl create secret generic --from-file` carries
-// it verbatim into the mount. Velocity's own read
-// (Files.readAllLines().join("")) drops that exact terminator, so a single
-// trailing "\n" is not a divergence between Paper and Velocity — it must not
-// be refused, and the value returned must be the newline-stripped form both
-// runtimes agree on.
+// `head -c 32 /dev/urandom | base64`, as config/samples/network.yaml
+// documents, leaves a trailing newline that Velocity's own read drops too.
 func TestLoadAcceptsASecretWithATrailingNewline(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ValuesFile), validConfig)
@@ -217,9 +192,6 @@ func TestLoadAcceptsASecretWithATrailingNewline(t *testing.T) {
 	}
 }
 
-// TestLoadAcceptsASecretWithATrailingCRLF is the same case with the other
-// line terminator "\n or \r\n" names: a CRLF-saved secret file is exactly as
-// legitimate as an LF one, and readAllLines drops it the same way.
 func TestLoadAcceptsASecretWithATrailingCRLF(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ValuesFile), validConfig)
@@ -235,11 +207,8 @@ func TestLoadAcceptsASecretWithATrailingCRLF(t *testing.T) {
 	}
 }
 
-// TestLoadRefusesASecretWithLeadingSpaces carries a legal trailing newline
-// alongside the leading spaces, so a failure here can only be caused by the
-// leading spaces surviving canonicalisation — not by the newline, which
-// TestLoadAcceptsASecretWithATrailingNewline already proves is not itself a
-// refusal cause.
+// Carries a legal trailing newline too, so only the leading spaces can cause
+// the refusal.
 func TestLoadRefusesASecretWithLeadingSpaces(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ValuesFile), validConfig)
@@ -258,10 +227,6 @@ func TestLoadRefusesASecretWithLeadingSpaces(t *testing.T) {
 	}
 }
 
-// TestLoadRefusesASecretWithTrailingTabs is the same isolation as leading
-// spaces above, for the other edge and the other whitespace character:
-// tabs after the last non-space byte survive stripping one trailing line
-// terminator and must still be refused.
 func TestLoadRefusesASecretWithTrailingTabs(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ValuesFile), validConfig)
@@ -280,12 +245,8 @@ func TestLoadRefusesASecretWithTrailingTabs(t *testing.T) {
 	}
 }
 
-// TestLoadRefusesASecretWithAnInteriorNewline is the divergence the
-// canonicalisation step must still catch: a legal trailing newline is
-// stripped first, but the interior one survives that strip untouched, so
-// only the interior-line-break branch — not the whitespace branch, since
-// neither edge of "s3\ncret" carries whitespace once the trailing newline is
-// gone — can be the cause of the refusal.
+// Only the interior newline can be the cause once the trailing one is
+// stripped.
 func TestLoadRefusesASecretWithAnInteriorNewline(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ValuesFile), validConfig)
@@ -304,15 +265,9 @@ func TestLoadRefusesASecretWithAnInteriorNewline(t *testing.T) {
 	}
 }
 
-// mountConfigMapStyleOverlay lays overlayDir out the way the kubelet actually
-// lays out a mounted ConfigMap or Secret directory — the idiom
-// internal/podspec already uses for the agent CA and for a Server's own
-// mounts, not an exotic case: a hidden, timestamped directory holds the real
-// files, "..data" is a symlink to that directory, and each key is a symlink
-// through "..data" rather than a regular file. A t.TempDir() fixture of plain
-// regular files, as every other test in this file uses, never exercises that
-// shape: DirEntry.Type().IsRegular() is false for all three entry kinds, so a
-// loadOverlay that filters on it reads an empty overlay and reports no error.
+// mountConfigMapStyleOverlay lays files out the way the kubelet mounts a
+// ConfigMap: a hidden timestamped directory, a "..data" symlink to it, and
+// each key a symlink through "..data". None of these is a regular file.
 func mountConfigMapStyleOverlay(t *testing.T, overlayDir string, files map[string]string) {
 	t.Helper()
 	const dataDir = "..2024_01_01_00_00_00.000000000"
@@ -330,9 +285,6 @@ func mountConfigMapStyleOverlay(t *testing.T, overlayDir string, files map[strin
 	}
 }
 
-// The regression this task's review caught: a real kubelet-mounted overlay
-// directory is symlinks, not regular files, and loadOverlay must resolve
-// them rather than filter them out.
 func TestLoadReadsAKubeletMountedOverlay(t *testing.T) {
 	dir := t.TempDir()
 	writeFile(t, filepath.Join(dir, ValuesFile), validConfig)

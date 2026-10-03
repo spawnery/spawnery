@@ -59,10 +59,8 @@ func TestAClaimMountIsReadOnlyUnlessItSaysOtherwise(t *testing.T) {
 	if vol.PersistentVolumeClaim == nil || vol.PersistentVolumeClaim.ClaimName != "map-pool" {
 		t.Fatalf("volume source = %+v, want the named claim", vol.VolumeSource)
 	}
-	// Read-only at the volume as well as at the mount. A volume marked
-	// writable and mounted read-only still attaches read-write to the node,
-	// and the cost of that shows up as a claim that will not attach elsewhere
-	// rather than as anything about this pod.
+	// A volume marked writable but mounted read-only still attaches read-write
+	// to the node.
 	if !vol.PersistentVolumeClaim.ReadOnly {
 		t.Error("the claim is attached read-write for a mount that did not ask")
 	}
@@ -80,10 +78,6 @@ func TestAClaimMountIsReadOnlyUnlessItSaysOtherwise(t *testing.T) {
 }
 
 func TestAWritableClaimMountIsWritableAtBothEnds(t *testing.T) {
-	// The case the field exists for: one group fills a pool of generated
-	// worlds that other groups read. Writable at the mount but read-only at
-	// the volume would fail at runtime with a read-only filesystem error,
-	// which is the wrong half to get right.
 	pod := build(t, func(_ *spawneryv1alpha1.Network, g *spawneryv1alpha1.ServerGroup) {
 		g.Spec.Mounts = []spawneryv1alpha1.Mount{{
 			Name:      "pool",
@@ -108,9 +102,7 @@ func TestAWritableClaimMountIsWritableAtBothEnds(t *testing.T) {
 }
 
 func TestAConfigMapMountStaysReadOnly(t *testing.T) {
-	// Writable is a property of a claim and nothing else. The kubelet mounts a
-	// ConfigMap read-only whatever anybody writes, so the pod has to say so
-	// too rather than claiming a thing that is not true.
+	// The kubelet mounts a ConfigMap read-only regardless.
 	pod := build(t, func(_ *spawneryv1alpha1.Network, g *spawneryv1alpha1.ServerGroup) {
 		g.Spec.Mounts = []spawneryv1alpha1.Mount{{
 			Name:      "motd",
@@ -134,9 +126,6 @@ func TestAConfigMapMountStaysReadOnly(t *testing.T) {
 }
 
 func TestAClaimMountObeysTheReservedPaths(t *testing.T) {
-	// The refusals are a property of the path, not of the source. A claim
-	// arriving at /var/run/spawnery would shadow the agent's own credentials,
-	// and the server would fail to authenticate with nothing naming the mount.
 	_, err := BuildServerPod(testNetwork(), func() *spawneryv1alpha1.ServerGroup {
 		g := testGroup()
 		g.Spec.Mounts = []spawneryv1alpha1.Mount{{
@@ -156,10 +145,6 @@ func TestAClaimMountObeysTheReservedPaths(t *testing.T) {
 }
 
 func TestAProxyGroupCarriesItsOwnMounts(t *testing.T) {
-	// A ProxyGroup had no spec.mounts at all until this change, so this is the
-	// test that the field reaches a pod rather than sitting in the CRD being
-	// accepted and ignored -- which is what an unrendered spec field does, and
-	// it looks exactly like a working one from `kubectl get`.
 	group := testProxyGroup()
 	group.Spec.Mounts = []spawneryv1alpha1.Mount{{
 		Name:                  "assets",
@@ -214,10 +199,7 @@ func TestAClaimMountReachesTheHash(t *testing.T) {
 		t.Fatal("adding a claim mount did not move the digest")
 	}
 
-	// Flipping writable changes what the pod actually gets, so it has to move
-	// the digest too. It reaches the pod through two fields at once, and a
-	// digest that only saw one of them would leave a fleet mounted read-only
-	// while the spec said otherwise.
+	// Writable reaches the pod through two fields, and the digest must see both.
 	group.Spec.Mounts[0].PersistentVolumeClaim.Writable = true
 	writable, err := DesiredServerHash(net, group, nil)
 	if err != nil {
@@ -229,10 +211,7 @@ func TestAClaimMountReachesTheHash(t *testing.T) {
 }
 
 func TestASubPathMountLandsOneFile(t *testing.T) {
-	// The case it exists for: a single configuration file beside the ones the
-	// server writes itself. Without subPath the pod gets a *directory* named
-	// bukkit.yml, and what the server reports is a parse error rather than
-	// anything about a mount.
+	// Without subPath the pod gets a directory named bukkit.yml.
 	pod := build(t, func(_ *spawneryv1alpha1.Network, g *spawneryv1alpha1.ServerGroup) {
 		g.Spec.Mounts = []spawneryv1alpha1.Mount{{
 			Name:      "bukkit",
@@ -257,9 +236,7 @@ func TestASubPathMountLandsOneFile(t *testing.T) {
 }
 
 func TestAMountWithNoSubPathLeavesItEmpty(t *testing.T) {
-	// An empty subPath is the whole volume, which is what every mount written
-	// before this field existed meant. A default that was anything else would
-	// change what those mounts do.
+	// An empty subPath is the whole volume, as before the field existed.
 	pod := build(t, func(_ *spawneryv1alpha1.Network, g *spawneryv1alpha1.ServerGroup) {
 		g.Spec.Mounts = []spawneryv1alpha1.Mount{{
 			Name:      "assets",
@@ -273,9 +250,6 @@ func TestAMountWithNoSubPathLeavesItEmpty(t *testing.T) {
 }
 
 func TestSubPathReachesTheHash(t *testing.T) {
-	// Two mounts identical but for the subPath put different files in the
-	// container. A digest that could not tell them apart would leave a fleet
-	// mounting the whole directory while the spec named one file.
 	net, group := testNetwork(), testGroup()
 	group.Spec.Mounts = []spawneryv1alpha1.Mount{{
 		Name:      "files",
@@ -299,12 +273,8 @@ func TestSubPathReachesTheHash(t *testing.T) {
 
 func TestAMountInsideTheServersConfigDirectoryIsRefused(t *testing.T) {
 	// The kubelet creates a mount's parent directory root-owned and
-	// group-read-only (drwxr-sr-x 0 10001), while fsGroup with
-	// OnRootMismatch only ever touches the volume root (drwxrwsrwx). So a
-	// mount here leaves the container unable to write into the directory,
-	// and the first write it attempts is spawnery-config's own
-	// paper-global.yml: the server never starts, and the error names a file
-	// rather than a mount.
+	// group-read-only, which fsGroup with OnRootMismatch does not fix, so the
+	// server cannot write paper-global.yml and never starts.
 	for _, mountPath := range []string{
 		ServerConfigDirPath,
 		ServerConfigDirPath + "/paper-world-defaults.yml",
@@ -321,14 +291,11 @@ func TestAMountInsideTheServersConfigDirectoryIsRefused(t *testing.T) {
 			t.Errorf("a mount at %q was accepted; every server of the group would fail to start", mountPath)
 			continue
 		}
-		// The remedy, not just the refusal: somebody who wanted
-		// paper-world-defaults.yml has a field that does work.
 		if !strings.Contains(err.Error(), "configOverlay") {
 			t.Errorf("the refusal for %q does not name what to use instead: %v", mountPath, err)
 		}
 	}
 
-	// And a sibling that merely shares the prefix is still fine.
 	group := testGroup()
 	group.Spec.Mounts = []spawneryv1alpha1.Mount{{
 		Name:      "conf",
@@ -340,10 +307,6 @@ func TestAMountInsideTheServersConfigDirectoryIsRefused(t *testing.T) {
 	}
 }
 
-// The proxy pod shares MountClaim.Writable and renderUserMounts with the
-// server pod, and it used to carry no fsGroup: a claim mounted writable was
-// attached read-write and owned by root, so the proxy got EACCES while the
-// pod spec said readOnly: false.
 func TestAProxyPodCanWriteAClaimItMountsWritable(t *testing.T) {
 	group := testProxyGroup()
 	group.Spec.Mounts = []spawneryv1alpha1.Mount{{

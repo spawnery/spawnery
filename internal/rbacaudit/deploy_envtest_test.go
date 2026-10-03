@@ -58,29 +58,16 @@ func TestMain(m *testing.M) {
 	os.Exit(code)
 }
 
-// renderNamespace is the namespace renderChart renders with, and it is
-// deliberately none of the two namespaces this project otherwise uses.
-//
-// Not spawnery-system, the chart's default: a template that forgot
-// {{ .Release.Namespace }} and hard-coded the default renders byte-identically
-// there, and this whole audit would then confirm a chart that cannot move.
-// Not platform-system either, which is where hack/e2e.sh installs -- two
-// checks that can pass for the same wrong reason are one check.
+// renderNamespace is neither the chart default spawnery-system, where a
+// hard-coded namespace renders byte-identically, nor hack/e2e.sh's
+// platform-system.
 const renderNamespace = "audit-system"
 
-// TestTheChartRendersIntoTheNamespaceItIsGiven is the assertion the rest of
-// this file rests on. Everything below reads objects out of renderChart, so if
-// the chart ignored the release namespace, every one of those assertions would
-// still pass while the chart installed nowhere but its default.
+// Everything below reads renderChart's objects, so this is what proves the
+// chart honours the release namespace.
 func TestTheChartRendersIntoTheNamespaceItIsGiven(t *testing.T) {
 	rendered := renderChart(t)
 
-	// Only meaningful away from the chart's default: rendered at
-	// spawnery-system itself, a template that correctly substitutes
-	// .Release.Namespace and one that forgot it and hard-coded the default
-	// produce byte-identical output, so scanning for the literal here would
-	// report every object as broken even when nothing is. That is the whole
-	// reason renderNamespace is not spawnery-system in the first place.
 	if renderNamespace != "spawnery-system" {
 		for key, doc := range rendered {
 			if strings.Contains(string(doc), "spawnery-system") {
@@ -106,10 +93,8 @@ func TestTheChartRendersIntoTheNamespaceItIsGiven(t *testing.T) {
 	}
 }
 
-// TestTheSelectorsCarryOnlyTheFrozenPair guards the one label mistake that
-// cannot be corrected in place. A Deployment's spec.selector is immutable
-// after creation, and the Service and NetworkPolicy would stop matching the
-// pod -- which presents as a network fault rather than as a label one.
+// A Deployment's selector is immutable, and a drifted one presents as a
+// network fault.
 func TestTheSelectorsCarryOnlyTheFrozenPair(t *testing.T) {
 	want := map[string]string{
 		"app.kubernetes.io/name":      "spawnery",
@@ -142,37 +127,16 @@ func TestTheSelectorsCarryOnlyTheFrozenPair(t *testing.T) {
 	}
 }
 
-// renderedObjectKeys is every object the chart renders with default values,
-// keyed the way splitRendered keys them. It is a closed set on purpose.
-//
-// The rest of this package audits objects it names one at a time:
-// readGeneratedRoles looks up two keys, applyDeploymentAndDeriveSubject
-// applies six, and splitRendered refuses only a duplicate kind and name. A
-// template added to the chart is therefore invisible to all of them. Add
-// charts/spawnery/templates/metrics-rbac.yaml rendering a second ClusterRole
-// and a ClusterRoleBinding granting the operator's ServiceAccount
-// secrets: list cluster-wide, and nothing above would say a word:
-// TestClusterRoleGrantsNothingExtra reads only ClusterRole/spawnery-operator,
-// and TestTheAuthorizerActuallyDenies would notice the widened subject only if
-// the new binding were among the objects it applies -- which it is not,
-// because that list is fixed. An unaudited cluster-wide secrets grant would
-// ship green.
-//
-// So the list below is the gate. A new template fails this test until someone
-// adds its key here, and adding the key is the moment to decide what audits
-// it: a new binding belongs in applyDeploymentAndDeriveSubject, a new role in
-// readGeneratedRoles and the rbacaudit tables, or the object needs a reason
-// recorded here for why neither applies to it.
+// renderedObjectKeys is the closed set of objects the chart renders by
+// default. The rest of the package audits objects by name, so a new template
+// (say, a second ClusterRole) would ship unaudited; adding its key here is
+// the moment to decide what audits it.
 var renderedObjectKeys = []string{
 	"ClusterRole/spawnery-operator",
 	"ClusterRoleBinding/spawnery-operator",
 	"CustomResourceDefinition/networks.spawnery.cloud",
 	"CustomResourceDefinition/proxygroups.spawnery.cloud",
-	// A CRD, and what audits it is the same thing that audits the other four:
-	// the operator's own grants on the resource are rows in required.go, and
-	// TestTheAuthorizerActuallyDenies drives them against a real authorizer.
-	// Nothing extra is needed for the schema itself -- api/v1alpha1's own
-	// envtest installs it and round-trips an object through it.
+	// Audited like the other CRDs: its grants are rows in required.go.
 	"CustomResourceDefinition/scaleboosts.spawnery.cloud",
 	"CustomResourceDefinition/servergroups.spawnery.cloud",
 	"CustomResourceDefinition/servers.spawnery.cloud",
@@ -182,21 +146,13 @@ var renderedObjectKeys = []string{
 	"RoleBinding/spawnery-operator",
 	"Service/spawnery-operator",
 	"ServiceAccount/spawnery-operator",
-	// Audited by TestTheOperatorMayDeleteOnlyAnOnDemandWorld, which applies
-	// both and deletes claims as the operator.
+	// Audited by TestTheOperatorMayDeleteOnlyAnOnDemandWorld.
 	"ValidatingAdmissionPolicy/spawnery-world-deletion",
 	"ValidatingAdmissionPolicyBinding/spawnery-world-deletion",
 }
 
-// TestTheChartRendersExactlyTheseObjects is the audit's own completeness
-// check: not "does every object this package names render", which every other
-// test here already answers, but "does the chart render anything this package
-// has never looked at".
-//
-// Default values, because that is what renderChart uses. The one object under
-// a condition is the NetworkPolicy (.Values.networkPolicy.enabled, default
-// true); a value that switched something else off would show up here as a
-// missing key rather than silently reducing what the audit covers.
+// Default values, as renderChart uses; only the NetworkPolicy is conditional
+// (networkPolicy.enabled, default true).
 func TestTheChartRendersExactlyTheseObjects(t *testing.T) {
 	rendered := renderChart(t)
 
@@ -222,19 +178,9 @@ func TestTheChartRendersExactlyTheseObjects(t *testing.T) {
 	}
 }
 
-// renderChart runs the chart through helm once per package run and returns its
-// objects keyed "<Kind>/<name>".
-//
-// The chart is the only installation form, so the only honest thing to audit
-// is what helm produces. The subprocess is the price. helm comes from
-// the flake (flake.nix's kubernetes-helm), and nothing in this repository runs
-// outside `nix develop`, so its absence means the shell is wrong rather than
-// the tree -- which is why the failure below says that rather than reporting a
-// parse error on empty input.
-//
-// Memoised because rendering is a process spawn and eleven tests in this
-// package want the same objects. sync.Once rather than a package-level
-// initialiser so that a failure is reported against a real *testing.T.
+// renderChart runs helm once per package run (sync.Once, so a failure lands on
+// a real *testing.T). helm comes from the flake, so its absence means the
+// wrong shell.
 var (
 	renderOnce sync.Once
 	renderDocs map[string][]byte
@@ -266,10 +212,8 @@ func renderChart(t *testing.T) map[string][]byte {
 	return renderDocs
 }
 
-// splitRendered indexes helm's multi-document output by Kind and name. A
-// duplicate key is an error rather than a last-one-wins: two objects of the
-// same kind and name cannot both be installed, and silently keeping one would
-// audit an object the cluster never sees.
+// splitRendered refuses duplicate keys: keeping one would audit an object the
+// cluster never sees.
 func splitRendered(out []byte) (map[string][]byte, error) {
 	docs := map[string][]byte{}
 	reader := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(out)))
@@ -307,10 +251,8 @@ func splitRendered(out []byte) (map[string][]byte, error) {
 	}
 }
 
-// renderedManifest decodes one rendered object, strictly. sigs.k8s.io/yaml's
-// plain Unmarshal drops keys the target type does not have, so a typo like
-// `serviceAccountNam:` or `readOnlyRootFilesytem:` would decode into a zero
-// value and every assertion below would then be checking a field nobody set.
+// renderedManifest decodes strictly: sigs.k8s.io/yaml's plain Unmarshal drops
+// unknown keys, so a typo would decode to a zero value.
 func renderedManifest[T any](t *testing.T, key string, into *T) {
 	t.Helper()
 	doc, ok := renderChart(t)[key]
@@ -327,40 +269,15 @@ func renderedManifest[T any](t *testing.T, key string, into *T) {
 	}
 }
 
-// generatedClusterRoleKey and generatedRoleKey are the rendered chart's keys
-// (see renderChart, splitRendered) for the two roles the controller-gen
-// markers ask for: the cluster-wide ClusterRole and the Role scoped to the
-// operator's own namespace. readGeneratedRoles below uses these same
-// constants both to look the objects up and to name them in a "the chart
-// renders no ..." failure, so the two strings cannot drift apart the way a
-// separately hand-written diagnostic could.
-//
-// controller-gen still writes config/rbac/role.yaml, and
-// hack/chart-templates.sh (run by `make manifests`) transforms it into
-// charts/spawnery/templates/rbac.yaml before anything is installed. Auditing
-// config/rbac/role.yaml would never go near that sed, so a transform that
-// stopped applying — writing a Role whose namespace is still the literal
-// spawnery-system — would leave every assertion here green. Auditing the
-// rendered chart is what sees it. The script now carries its own
-// postcondition over the file it writes as well, which fails at `make
-// manifests` time rather than here; both are wanted, because only one of them
-// runs when somebody edits the chart by hand.
+// The rendered chart is audited rather than config/rbac/role.yaml, so a broken
+// transform in hack/chart-templates.sh is seen too.
 const (
 	generatedClusterRoleKey = "ClusterRole/spawnery-operator"
 	generatedRoleKey        = "Role/spawnery-operator"
 )
 
-// readMultiDocManifest splits a multi-document YAML manifest at rel and hands
-// each document's Kind and raw bytes to decode. Its only caller today is
-// readForwardingSecretReader (audit_envtest_test.go), for
-// config/rbac/forwarding-secret-reader.yaml — a Role and a RoleBinding in one
-// file, so a single-document decode cannot read it. readGeneratedRoles used to
-// be a second caller, over config/rbac/role.yaml, before the chart became the
-// source of truth for the generated roles; it now reads the rendered chart's
-// ClusterRole and Role directly through renderedManifest instead. decode owns
-// everything kind-specific — including its own "second one of this kind"
-// refusal and its own diagnostics — this helper only owns finding the file,
-// splitting it, and skipping blank documents.
+// readMultiDocManifest leaves everything kind-specific, including refusing a
+// second object of a kind, to decode.
 func readMultiDocManifest(t *testing.T, rel string, decode func(kind string, doc []byte)) {
 	t.Helper()
 
@@ -390,14 +307,8 @@ func readMultiDocManifest(t *testing.T, rel string, decode func(kind string, doc
 	}
 }
 
-// readGeneratedRoles decodes both halves of the generated RBAC manifest from
-// the rendered chart. It insists on finding exactly one of each.
-//
-// A missing Role means a namespace= qualifier fell off a marker and the
-// operator would hold its Secret and Lease rights everywhere. A *second*
-// object of either kind is splitRendered's refusal, enforced for every kind
-// and name the chart renders: returning one of two would leave the other
-// unaudited in both directions while every test still reported green.
+// readGeneratedRoles insists on exactly one of each. A missing Role means a
+// namespace= qualifier fell off a marker.
 func readGeneratedRoles(t *testing.T) (*rbacv1.ClusterRole, *rbacv1.Role) {
 	t.Helper()
 
@@ -426,23 +337,10 @@ func readGeneratedRoles(t *testing.T) (*rbacv1.ClusterRole, *rbacv1.Role) {
 	return &cluster, &namespaced
 }
 
-// apply creates objects that several tests in this package share. The cluster
-// scoped ones — ClusterRole and ClusterRoleBinding — outlive a single test in
-// the shared control plane, so creating them twice is normal and not a failure.
-//
-// Tolerating AlreadyExists is what makes the sharing work and is also what used
-// to hide a real hazard: a second caller asking for a *different* object under
-// a name already taken got the first one, silently, and then audited it. Every
-// test in this package exists to check a rendered ClusterRole against a table,
-// so auditing a stale one is the failure mode that matters most here and would
-// have looked exactly like success.
-//
-// So the object that is already there is now checked against the one being
-// asked for, and only for the two types where the difference changes what an
-// audit means. Deliberately not a create-or-update: several of the objects
-// here carry fields the API server assigns and forbids changing — a Service's
-// clusterIP among them — so updating generically would trade a silent staleness
-// for a noisy failure that has nothing to do with what is being tested.
+// apply tolerates AlreadyExists, since cluster-scoped objects outlive a test
+// in the shared control plane, but checks that an existing ClusterRole or Role
+// carries the rules asked for, so a stale one is never audited. Not
+// create-or-update: some objects carry immutable server-assigned fields.
 func apply(t *testing.T, objs ...client.Object) {
 	t.Helper()
 	c, ctx := testenv.Client(t)
@@ -458,11 +356,6 @@ func apply(t *testing.T, objs ...client.Object) {
 	}
 }
 
-// assertSameRules fails when a ClusterRole or Role already in the cluster
-// carries different rules from the one a test just tried to create. Anything
-// else is left alone: a namespace, a ServiceAccount and a binding carry no
-// rules, and a Deployment or Service that already exists is scenery for these
-// tests rather than their subject.
 func assertSameRules(t *testing.T, c client.Client, ctx context.Context, want client.Object) {
 	t.Helper()
 	key := client.ObjectKeyFromObject(want)
@@ -495,11 +388,8 @@ func diffRules(t *testing.T, kind, name string, want, got []rbacv1.PolicyRule) {
 		"first wins and the other silently audits it.", kind, name, got, want)
 }
 
-// TestDeployManifestsAreAcceptedAndConsistent applies the deployment manifests
-// to a real API server and checks that they refer to each other correctly.
-// A binding that names the wrong role, or a deployment that runs under the
-// wrong ServiceAccount, would leave the operator without permissions while
-// every manifest on its own still looked fine.
+// A binding naming the wrong role, or a Deployment the wrong ServiceAccount,
+// looks fine file by file.
 func TestDeployManifestsAreAcceptedAndConsistent(t *testing.T) {
 	c, ctx := testenv.Client(t)
 
@@ -515,12 +405,6 @@ func TestDeployManifestsAreAcceptedAndConsistent(t *testing.T) {
 
 	apply(t, &ns, &sa, role, &binding, &deploy)
 
-	// ns.Name is renderNamespace by construction, not read from anywhere
-	// independent, so there is nothing left to check it against here;
-	// TestTheChartRendersIntoTheNamespaceItIsGiven is what proves the chart
-	// actually renders into the namespace it is given. What still matters is
-	// that every other rendered object agrees with the namespace this test
-	// chose to apply into.
 	if sa.Namespace != ns.Name {
 		t.Errorf("serviceAccount namespace = %q, want %q", sa.Namespace, ns.Name)
 	}
@@ -554,13 +438,8 @@ func TestDeployManifestsAreAcceptedAndConsistent(t *testing.T) {
 	}
 }
 
-// TestTheRoleBindingBindsTheOperatorInItsOwnNamespace is the namespaced half of
-// TestDeployManifestsAreAcceptedAndConsistent. Nothing else reads
-// rolebinding.yaml, so a RoleRef naming a ClusterRole, a subject naming the
-// wrong ServiceAccount, or a binding sitting in a namespace other than the one
-// controller-gen put the Role in would all leave certs.Store.Ensure with
-// Forbidden on the operator's own Secret while every file on its own still
-// looked plausible.
+// Nothing else reads rolebinding.yaml; a mistake there leaves certs.Store
+// Forbidden on the operator's own Secret.
 func TestTheRoleBindingBindsTheOperatorInItsOwnNamespace(t *testing.T) {
 	ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: renderNamespace}}
 	var sa corev1.ServiceAccount
@@ -573,7 +452,7 @@ func TestTheRoleBindingBindsTheOperatorInItsOwnNamespace(t *testing.T) {
 	apply(t, &ns, role, &binding)
 
 	// The Role's namespace comes from the markers, the binding's from the
-	// manifest. If they ever drift the binding grants nothing at all.
+	// manifest.
 	if role.Namespace != ns.Name {
 		t.Errorf("the generated Role is in %q, but the operator runs in %q — the "+
 			"namespace= qualifier on the markers names the wrong namespace",
@@ -599,11 +478,7 @@ func TestTheRoleBindingBindsTheOperatorInItsOwnNamespace(t *testing.T) {
 	}
 }
 
-// TestAgentServiceReachesTheOperatorPods checks the one path nothing else
-// covers: a game server pod dials spawnery-operator.<ns>.svc:9443, and every
-// hop of that address lives in a different file. A selector that matches
-// nothing, or a targetPort naming a container port that does not exist, leaves
-// the agents with a connection refused and the operator looking healthy.
+// Every hop of the agents' dial address lives in a different file.
 func TestAgentServiceReachesTheOperatorPods(t *testing.T) {
 	ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: renderNamespace}}
 	var svc corev1.Service
@@ -613,11 +488,8 @@ func TestAgentServiceReachesTheOperatorPods(t *testing.T) {
 
 	apply(t, &ns, &svc)
 
-	// The name is the first hop, and the only one no other test touches: the
-	// operator builds both the agents' dial address and its own certificate
-	// SANs from podspec.AgentServiceName, and never compares either against
-	// the manifest. Renaming the Service here alone would leave every agent
-	// dialling a name that resolves to nothing, and the suite fully green.
+	// The operator derives the dial address and its certificate SANs from
+	// podspec.AgentServiceName and never compares them with the manifest.
 	if svc.Name != podspec.AgentServiceName {
 		t.Errorf("the Service is named %q but the operator dials and certifies %q — "+
 			"every agent would fail its TLS handshake against a name that does not resolve",
@@ -660,10 +532,8 @@ func TestAgentServiceReachesTheOperatorPods(t *testing.T) {
 		t.Errorf("the agent container port = %d, want 9443", got)
 	}
 
-	// The readiness probe is what keeps a standby out of the Service: readyz
-	// only turns green once this replica holds the leader lock, and an unready
-	// pod is not an endpoint. A probe pointing anywhere else would silently
-	// undo that.
+	// readyz turns green only on the leader, which keeps a standby out of the
+	// Service.
 	probe := container.ReadinessProbe
 	if probe == nil || probe.HTTPGet == nil {
 		t.Fatal("the operator has no HTTP readiness probe; a standby would serve as an endpoint")
@@ -673,14 +543,9 @@ func TestAgentServiceReachesTheOperatorPods(t *testing.T) {
 	}
 }
 
-// The other end of tying readiness to the leader lock, and a deadlock rather
-// than a slowdown: with one replica the default RollingUpdate resolves to
-// maxSurge 1 and maxUnavailable 0, so the new pod has to report Ready before
-// the old one is removed. Readiness now waits for the lease, and the lease is
-// held by the pod that is waiting to be removed. The rollout stops there until
-// someone deletes the old pod by hand. Recreate is the honest shape for a
-// single-replica leader-elected operator, and this test is what stops it from
-// being "improved" back.
+// With readiness tied to the leader lock, RollingUpdate (maxSurge 1,
+// maxUnavailable 0) deadlocks: the new pod waits for a lease the old pod
+// holds. Recreate is the shape for a single-replica leader-elected operator.
 func TestTheOperatorIsReplacedRatherThanRolled(t *testing.T) {
 	var deploy appsv1.Deployment
 	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
@@ -696,9 +561,6 @@ func TestTheOperatorIsReplacedRatherThanRolled(t *testing.T) {
 	}
 }
 
-// TestOperatorPodIsRestrictedCompliant guards the design decision that the
-// operator itself runs under Pod Security "restricted" — the same profile it
-// enforces on the game servers it creates.
 func TestOperatorPodIsRestrictedCompliant(t *testing.T) {
 	var deploy appsv1.Deployment
 	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
@@ -730,17 +592,9 @@ func TestOperatorPodIsRestrictedCompliant(t *testing.T) {
 	}
 }
 
-// TestTheOperatorDeploymentCarriesProductionFlags exists because
-// sigs.k8s.io/yaml is not strict, so a mistyped key in the Deployment
-// disappears silently.
-//
-// The floor on --startup-deadline is the point. These manifests are what gets
-// installed, not test scaffolding, and a server needs 24 seconds from apply to
-// ReadyGatePassed in the most favourable case there is -- an idle single-node
-// cluster, image already present, no world to read. A manifest carrying 20s
-// would fail every server on a real one.
-// hack/e2e.sh gets its short deadline by appending a second occurrence of the
-// flag, which Go's flag package resolves to the last one.
+// sigs.k8s.io/yaml is not strict, so a mistyped flag key disappears silently.
+// The --startup-deadline floor: a server needs 24 s to become ready in the
+// best case. hack/e2e.sh overrides it by repeating the flag; the last wins.
 func TestTheOperatorDeploymentCarriesProductionFlags(t *testing.T) {
 	var deploy appsv1.Deployment
 	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
@@ -764,13 +618,8 @@ func TestTheOperatorDeploymentCarriesProductionFlags(t *testing.T) {
 		"startup-deadline",
 		"metrics-bind-address",
 		"health-probe-bind-address",
-		// Added deliberately on 2026-08-29 with the flag itself. It is off by
-		// default and the chart renders it either way, so the value a cluster
-		// gets is visible in the manifest rather than implied by its absence.
+		// Off by default, but rendered either way so the value is visible.
 		"allow-plugin-volumes",
-		// Added with --allow-file-volumes (spec.extraFiles) and
-		// --allow-mount-volumes (a claim-backed spec.mounts), each its own
-		// switch and each off by default, for the same reason as above.
 		"allow-file-volumes",
 		"allow-mount-volumes",
 	}
@@ -801,12 +650,7 @@ func TestTheOperatorDeploymentCarriesProductionFlags(t *testing.T) {
 	}
 }
 
-// TestTheOperatorImageIsNotAMutableTag guards what the manifest points at. It
-// named ghcr.io/spawnery/spawnery-operator:dev until milestone 6a -- a tag
-// nothing produced, so the manifest referenced nothing at all. The master
-// design's §8 asks for digest references in shipped manifests because tags are
-// mutable; hack/publish.sh writes one in after a push, and until it has run the
-// version tag is what resolves.
+// Tags are mutable (design §8); hack/publish.sh writes a digest after a push.
 func TestTheOperatorImageIsNotAMutableTag(t *testing.T) {
 	var deploy appsv1.Deployment
 	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
@@ -834,15 +678,8 @@ func TestTheOperatorImageIsNotAMutableTag(t *testing.T) {
 			"restarts", ref, tag)
 	}
 
-	// And the tag has to be one that gets published. nix/operator-image.nix
-	// takes the image's tag straight from flake.nix's operatorVersion, so
-	// bumping that version and forgetting this line leaves the manifest
-	// pointing at a tag hack/publish.sh will never push again. Nothing else in
-	// the tree would notice: `make e2e` patches the image away before the
-	// cluster ever pulls it, and operatorVersion moves on its own schedule, so
-	// this happens while imageVersion sits still. A real digest here would
-	// make the CutPrefix above return first; until then this is the only thing
-	// keeping the tag honest.
+	// nix/operator-image.nix tags the image with flake.nix's operatorVersion, and
+	// `make e2e` patches the image away, so nothing else notices a stale tag.
 	if want := operatorVersionFromFlake(t); tag != want {
 		t.Errorf("image = %q, but flake.nix's operatorVersion is %q. "+
 			"nix/operator-image.nix tags the image with operatorVersion, so this "+
@@ -850,16 +687,9 @@ func TestTheOperatorImageIsNotAMutableTag(t *testing.T) {
 	}
 }
 
-// operatorVersionFromFlake reads the one line of flake.nix that sets
-// operatorVersion.
-//
-// Text and a regexp, and not `nix eval`: shelling out to nix from `make test`
-// would put a several-second evaluation, a network-capable tool and a
-// dependency on nix being installed at all into the commit loop, for one
-// string. The cost of reading it as text is that the regexp is coupled to the
-// line's shape -- so it fails loudly when the shape moves rather than
-// returning an empty string and passing. That is the failure mode that matters
-// here: this whole assertion exists because a value can go stale unnoticed.
+// operatorVersionFromFlake reads flake.nix as text rather than via `nix eval`,
+// which would put an evaluation into `make test`; it fails loudly when the
+// line's shape changes.
 func operatorVersionFromFlake(t *testing.T) string {
 	t.Helper()
 	raw, err := os.ReadFile(testenv.RepoPath(t, "flake.nix"))
@@ -876,20 +706,9 @@ func operatorVersionFromFlake(t *testing.T) string {
 	return string(m[1])
 }
 
-// TestTheChartAgreesWithTheFlakeAboutTheOperatorRelease pins the three places
-// that name the operator's version to each other.
-//
-// Chart.yaml's own comment says version and appVersion move independently, and
-// that is right: a chart fix touching no image is a chart bump alone. But
-// appVersion is not free -- it is the operator release the chart installs by
-// default, so it has to agree with flake.nix's operatorVersion and with the
-// tag values.yaml renders.
-//
-// What this does NOT catch is that failure's actual cause, and saying so is
-// the point: Chart.yaml's `version` is what Flux packages the artifact under,
-// so leaving it still means a changed chart never reaches a cluster. No unit
-// test can know whether the chart changed since the last release -- that is a
-// question about two commits, and .github/workflows/release.yml asks it.
+// appVersion is the operator release the chart installs by default. Whether
+// Chart.yaml's version moved since the last release is a question about two
+// commits, which .github/workflows/release.yml asks.
 func TestTheChartAgreesWithTheFlakeAboutTheOperatorRelease(t *testing.T) {
 	flakeVersion := operatorVersionFromFlake(t)
 
@@ -926,20 +745,8 @@ func TestTheChartAgreesWithTheFlakeAboutTheOperatorRelease(t *testing.T) {
 	}
 }
 
-// TestTheInstallInstructionsNameTheChartVersion holds the two READMEs to
-// charts/spawnery/Chart.yaml.
-//
-// Since v0.2.14 the chart is published to oci://ghcr.io/spawnery/charts, and
-// an OCI install needs --version: unlike a path to a checkout, the reference
-// alone does not say which chart. So both READMEs now carry a version number
-// in a copy-pasteable command, and a number in prose is exactly the thing that
-// goes stale silently. It is the same failure the sibling test above exists
-// for -- a claim nobody built -- one step further out: an install line naming
-// a version the registry has never heard of fails at the reader's terminal,
-// with nothing in this repository having gone red first.
-//
-// Read as text, like its neighbours, and deliberately not by rendering the
-// chart: what is being checked is what a person copies out of a document.
+// An OCI install needs --version, and a number in a README goes stale
+// silently. Read as text: what is checked is what a person copies.
 func TestTheInstallInstructionsNameTheChartVersion(t *testing.T) {
 	chart, err := os.ReadFile(testenv.RepoPath(t, "charts/spawnery/Chart.yaml"))
 	if err != nil {
@@ -953,9 +760,7 @@ func TestTheInstallInstructionsNameTheChartVersion(t *testing.T) {
 	}
 	want := string(m[1])
 
-	// Every --version in either README, not just the first: the chart README
-	// carries an OCI install and a from-a-checkout one, and a second install
-	// line added later must not be able to drift unnoticed behind the first.
+	// Every --version in either README, not just the first.
 	flagRe := regexp.MustCompile(`--version\s+(\S+)`)
 	for _, doc := range []string{"README.md", "charts/spawnery/README.md"} {
 		body, err := os.ReadFile(testenv.RepoPath(t, doc))
@@ -979,15 +784,8 @@ func TestTheInstallInstructionsNameTheChartVersion(t *testing.T) {
 	}
 }
 
-// TestLeaderElectionPermissionIsGranted is the regression test for a real gap:
-// leader election is on by default and locks on a Lease, but no kubebuilder
-// marker declared that permission, so the generated role never granted it and
-// the operator would have failed on startup with Forbidden.
-//
-// The right now lives in the namespaced Role, where it belongs — the lock is
-// taken in the operator's own namespace, and granting it cluster-wide would let
-// the operator lock anything anywhere. This test therefore also insists the
-// ClusterRole stays out of it.
+// The Lease right belongs in the namespaced Role; cluster-wide it would let
+// the operator lock anything anywhere.
 func TestLeaderElectionPermissionIsGranted(t *testing.T) {
 	cluster, role := readGeneratedRoles(t)
 
@@ -1026,21 +824,10 @@ func contains(haystack []string, needle string) bool {
 	return false
 }
 
-// TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods checks the one
-// shipped NetworkPolicy, and every hop of it lives in a different file.
-//
-// The mistakes it exists to catch. A podSelector copied from a managed pod's
-// labels selects nothing here — the operator pod deliberately does not carry
-// spawnery.cloud/managed-by — and a policy that selects nothing fails open,
-// which looks exactly like one that works. A peer without an empty
-// namespaceSelector would admit only pods in spawnery-system, while every
-// managed pod in the cluster dials in from its own game namespace. A
-// policyTypes line that declares Egress on a policy with no egress rules
-// default-denies the operator's own outbound traffic. And these two labels
-// exist in three places — this manifest, the Deployment, and
-// podspec.OperatorPodLabels() — of which the third builds the per-Network
-// policy's egress peer, so a drift between any two of them breaks a policy
-// nothing else would notice.
+// The operator pod deliberately lacks spawnery.cloud/managed-by, so a selector
+// copied from a managed pod selects nothing and fails open. The peer needs an
+// empty namespaceSelector, since agents dial in from every game namespace.
+// Egress in policyTypes would default-deny the operator's own traffic.
 func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
 	var policy networkingv1.NetworkPolicy
 	var deploy appsv1.Deployment
@@ -1065,19 +852,9 @@ func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
 		t.Error("an empty podSelector selects every pod in the namespace")
 	}
 
-	// podspec.OperatorPodLabels() is the third copy of these two labels, and
-	// until now nothing tied it to either of the other two. The per-Network
-	// policy's egress peer is built from it, so renaming the operator's pod
-	// labels in the Deployment would leave that peer selecting nothing —
-	// backends unable to reach the operator on an enforcing CNI — with every
-	// test in the repository green.
-	//
-	// Subset rather than equality against the Deployment's template labels: a
-	// pod may legitimately gain labels neither selector names, and a rename is
-	// caught either way. Equality against the policy's own selector, though,
-	// including the length: the loop above validates only the keys the policy
-	// declares, so a selector narrowed to one of the two labels passed it, and
-	// a narrowed selector is a widened policy.
+	// podspec.OperatorPodLabels() is the third copy of these labels and builds the
+	// per-Network egress peer. Subset of the Deployment's labels, but equal to the
+	// policy's selector, since a narrowed selector is a widened policy.
 	wantOperator := podspec.OperatorPodLabels()
 	for k, v := range wantOperator {
 		if podLabels[k] != v {
@@ -1098,12 +875,7 @@ func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
 		}
 	}
 
-	// policyTypes is not decoration and the mistake here is the mirror of the
-	// one internal/podspec's TestBuildNetworkPolicyDeclaresBothPolicyTypes
-	// guards. This policy carries ingress rules only; adding Egress with no
-	// egress rules makes the operator pod default-deny for egress, so wherever
-	// a CNI enforces it cannot reach the API server — every controller stops,
-	// at once, from a one-word manifest edit.
+	// Egress with no egress rules would cut the operator off from the API server.
 	if len(policy.Spec.PolicyTypes) != 1 ||
 		policy.Spec.PolicyTypes[0] != networkingv1.PolicyTypeIngress {
 		t.Errorf("policyTypes = %v, want [Ingress] alone — this policy has no "+
@@ -1143,24 +915,14 @@ func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
 		t.Errorf("the agent rule admits %v, want only %d", agentRule.Ports, podspec.AgentPort)
 	}
 
-	// Selecting the pod at all makes it default-deny for ingress, which covers
-	// the kubelet's probes and any metrics scrape. Both have to be admitted
-	// explicitly or the operator goes NotReady the moment this policy lands.
+	// Selecting the pod makes it default-deny for ingress, kubelet probes and
+	// metrics scrapes included.
 	if probeRule == nil {
 		t.Fatal("no peerless ingress rule: the kubelet's probe to the health " +
 			"port is denied, and the operator goes NotReady")
 	}
-	// Refused rather than modelled, for the same reason ExpandRules refuses a
-	// rule it cannot represent. IntValue() discards its Atoi error and returns
-	// 0 for a named port, so modelling `port: metrics` would report it as
-	// "admits port 0" -- harmless, since 0 is never a declared container port,
-	// but a message about a port nobody wrote. A named port is legal in a
-	// NetworkPolicy and Kubernetes
-	// resolves it against the pod's own port names; comparing it here would
-	// mean resolving it the same way, which this check does not do. A nil port
-	// is the other unmodellable shape: it admits every port on the pod, and an
-	// empty admitted set would then pass the reverse direction by having
-	// nothing to check.
+	// Named and nil ports are refused rather than modelled: IntValue() returns 0
+	// for a named port, and a nil port admits everything.
 	admitted := map[int]bool{}
 	for _, p := range probeRule.Ports {
 		switch {
@@ -1179,9 +941,7 @@ func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
 	if len(deploy.Spec.Template.Spec.Containers) != 1 {
 		t.Fatalf("got %d containers, want exactly one", len(deploy.Spec.Template.Spec.Containers))
 	}
-	// nonAgentDeclared is every container port except "agent": that one is
-	// already admitted, from a peer, by the rule above. Anything the peerless
-	// rule admits has to be one of these and nothing else.
+	// "agent" is already admitted, from a peer, by the rule above.
 	nonAgentDeclared := map[int]bool{}
 	for _, p := range deploy.Spec.Template.Spec.Containers[0].Ports {
 		if p.Name == "agent" {
@@ -1193,12 +953,8 @@ func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
 				"not admit it", p.Name, p.ContainerPort)
 		}
 	}
-	// The reverse direction matters here in a way it does not for the agent
-	// rule: this rule has no `from`, so it admits from any source in any
-	// namespace, and a stray port line here is real attack surface rather
-	// than a typo the agent rule's peer would already contain. Every port it
-	// admits must be a container port that is not "agent" -- admitting that
-	// one here too would bypass the agent rule's peer restriction entirely.
+	// This rule has no `from`, so it admits any source; a stray port is attack
+	// surface, and "agent" here would bypass its peer restriction.
 	for port := range admitted {
 		if !nonAgentDeclared[port] {
 			t.Errorf("the peerless rule admits port %d, which the container "+
@@ -1209,9 +965,6 @@ func TestTheAgentPolicySelectsTheOperatorAndAdmitsManagedPods(t *testing.T) {
 	}
 }
 
-// chartClusterScopedKinds are the kinds this chart renders that carry no
-// namespace at all. Everything else it renders is namespaced, and an object of
-// a namespaced kind with an empty namespace is exactly the failure below.
 var chartClusterScopedKinds = map[string]bool{
 	"ClusterRole":                      true,
 	"ClusterRoleBinding":               true,
@@ -1220,11 +973,8 @@ var chartClusterScopedKinds = map[string]bool{
 	"ValidatingAdmissionPolicyBinding": true,
 }
 
-// chartNamespacedObjects is every namespaced object the chart renders with the
-// optional templates switched on. Listed rather than counted so that a
-// template which stops rendering fails here instead of passing vacuously; a
-// template that is *added* fails too, which is the point — a new object with a
-// namespace nobody checked is what this test exists to stop.
+// chartNamespacedObjects is listed, not counted, so a template that stops or
+// starts rendering fails here.
 var chartNamespacedObjects = []string{
 	"Deployment/spawnery-operator",
 	"NetworkPolicy/spawnery-operator-agent",
@@ -1236,23 +986,9 @@ var chartNamespacedObjects = []string{
 	"ServiceMonitor/spawnery-operator",
 }
 
-// TestEveryRenderedObjectLandsInTheReleaseNamespace closes the entry in
-// docs/reference/known-issues.md: "`make chart-lint` does not catch a chart that renders
-// with an empty namespace."
-//
-// A typo'd `{{ .Release.Namspace }}` is not a render failure. Helm resolves an
-// unknown `.Release` field to the empty string, so `helm lint` and `helm
-// template` both exit 0 and `make chart-lint` sees nothing. The literal scan in
-// TestTheChartRendersIntoTheNamespaceItIsGiven does not see it either — an
-// empty namespace contains no "spawnery-system" to find — and that test reads
-// the namespace of two objects out of nine. What caught it was
-// TestAgentServiceReachesTheOperatorPods, incidentally, because envtest's API
-// server refuses to create a Service with an empty namespace; nothing caught it
-// for the six objects that test does not apply.
-//
-// This reads every object instead. It renders with the optional templates
-// enabled so the ServiceMonitor and the PrometheusRule are covered too: both
-// are off by default, so the ordinary render never sees them at all.
+// Helm resolves a typo like `{{ .Release.Namspace }}` to "", so lint and
+// template pass. Rendered with the optional templates on, so the
+// ServiceMonitor and PrometheusRule are covered.
 func TestEveryRenderedObjectLandsInTheReleaseNamespace(t *testing.T) {
 	chart := testenv.RepoPath(t, "charts/spawnery")
 	cmd := exec.Command("helm", "template", "spawnery", chart,
@@ -1312,9 +1048,7 @@ func TestEveryRenderedObjectLandsInTheReleaseNamespace(t *testing.T) {
 	}
 }
 
-// renderChartWith renders the chart with extra --set-json arguments, without
-// the once-per-package caching renderChart uses: these renders vary by their
-// values, so caching one would answer every caller with the first one's.
+// renderChartWith does not cache, since its renders vary by values.
 func renderChartWith(t *testing.T, setJSON ...string) map[string][]byte {
 	t.Helper()
 	args := []string{"template", "spawnery", testenv.RepoPath(t, "charts/spawnery"),
@@ -1336,8 +1070,6 @@ func renderChartWith(t *testing.T, setJSON ...string) map[string][]byte {
 	return docs
 }
 
-// helmRefuses renders with the given values and requires helm to reject them,
-// returning what it said.
 func helmRefuses(t *testing.T, setJSON string) string {
 	t.Helper()
 	cmd := exec.Command("helm", "template", "spawnery", testenv.RepoPath(t, "charts/spawnery"),
@@ -1350,11 +1082,8 @@ func helmRefuses(t *testing.T, setJSON string) string {
 	return stderr.String()
 }
 
-// TestNoReaderRoleIsRenderedByDefault pins the decision milestone 6d took: a
-// chart installed once cannot know the game namespaces somebody will create
-// later, so config/rbac/forwarding-secret-reader.yaml stays the answer for a
-// namespace nobody listed, and an ordinary install renders no Role into a
-// namespace it was never told about.
+// A chart cannot know game namespaces created later, so those still use
+// config/rbac/forwarding-secret-reader.yaml.
 func TestNoReaderRoleIsRenderedByDefault(t *testing.T) {
 	for name := range renderChart(t) {
 		if strings.Contains(name, "forwarding-secret-readers") {
@@ -1363,10 +1092,8 @@ func TestNoReaderRoleIsRenderedByDefault(t *testing.T) {
 	}
 }
 
-// TestAListedNamespaceGetsANarrowedReaderRole is the narrowing the master
-// design's §8 asks for and the hand-applied file cannot afford: by hand,
-// resourceNames costs an edit per namespace and another whenever a secret is
-// renamed, and rendered from a value it costs nothing.
+// Rendered from a value, resourceNames cost nothing, unlike in the
+// hand-applied file.
 func TestAListedNamespaceGetsANarrowedReaderRole(t *testing.T) {
 	docs := renderChartWith(t,
 		`networkNamespaces=[{"namespace":"minecraft","secrets":["velocity-forwarding-secret"]}]`)
@@ -1408,9 +1135,6 @@ func TestAListedNamespaceGetsANarrowedReaderRole(t *testing.T) {
 	if role.Namespace != "minecraft" {
 		t.Errorf("Role namespace = %q, want the listed one", role.Namespace)
 	}
-	// The audit can model this now, which is the other half of the change:
-	// until resourceNames were part of a Permission's identity, ExpandRules
-	// refused such a rule outright rather than reading it as unrestricted.
 	granted, err := rbacaudit.ExpandRules(role.Rules)
 	if err != nil {
 		t.Fatalf("ExpandRules on the narrowed Role: %v", err)
@@ -1423,9 +1147,7 @@ func TestAListedNamespaceGetsANarrowedReaderRole(t *testing.T) {
 		t.Errorf("missing=%v extra=%v, want exactly a get on that one secret", diff.Missing, diff.Extra)
 	}
 
-	// The subject's namespace is this release's, which is the second thing the
-	// hand-applied file cannot do: it hard-codes spawnery-system and has to be
-	// edited before an operator installed anywhere else can use it.
+	// The hand-applied file hard-codes spawnery-system.
 	if len(binding.Subjects) != 1 || binding.Subjects[0].Namespace != renderNamespace {
 		t.Errorf("subjects = %+v, want one in %q", binding.Subjects, renderNamespace)
 	}
@@ -1434,10 +1156,7 @@ func TestAListedNamespaceGetsANarrowedReaderRole(t *testing.T) {
 	}
 }
 
-// TestAnEntryWithNoSecretsIsRefused keeps the omission from being the wide
-// grant. A Role with no resourceNames grants get on every Secret in the
-// namespace, which is what naming them exists to avoid, and an administrator
-// who listed the namespace would believe they had narrowed it.
+// A Role with no resourceNames would grant get on every Secret.
 func TestAnEntryWithNoSecretsIsRefused(t *testing.T) {
 	said := helmRefuses(t, `networkNamespaces=[{"namespace":"minecraft","secrets":[]}]`)
 	if !strings.Contains(said, "secrets") {

@@ -30,7 +30,6 @@ func paperValues() Values {
 	return Values{MaxPlayers: &n}
 }
 
-// The two file names Paper reads, at the paths it reads them from.
 func TestPaperWritesBothFiles(t *testing.T) {
 	files, err := Paper(paperValues(), "s3cret", nil)
 	if err != nil {
@@ -43,7 +42,6 @@ func TestPaperWritesBothFiles(t *testing.T) {
 	}
 }
 
-// The inversion this milestone exists to get right, on the backend half.
 func TestPaperTurnsOnlineModeOff(t *testing.T) {
 	files, err := Paper(paperValues(), "s3cret", nil)
 	if err != nil {
@@ -55,9 +53,8 @@ func TestPaperTurnsOnlineModeOff(t *testing.T) {
 	}
 }
 
-// Paper uses the same two words for the opposite setting: paper-global.yml's
-// proxies.velocity.online-mode means "trust what Velocity forwards", and it
-// must be true while server.properties says false. Both at once is correct.
+// paper-global.yml's proxies.velocity.online-mode means "trust what Velocity
+// forwards" and must be true while server.properties says false.
 func TestPaperEnablesVelocityForwarding(t *testing.T) {
 	files, err := Paper(paperValues(), "s3cret", nil)
 	if err != nil {
@@ -71,12 +68,8 @@ func TestPaperEnablesVelocityForwarding(t *testing.T) {
 	}
 }
 
-// paperGlobalDefault is Paper's own config/paper-global.yml, byte for byte as
-// the pinned build writes it on a first start against an otherwise empty data
-// directory. It is a measurement of the receiving program, not of this
-// package, which is the whole reason it exists — every other test in this file
-// asserts that the renderer writes the string the renderer says it writes, and
-// no such test can fail on a key Paper does not read. Reproduce it with:
+// paperGlobalDefault is Paper's own config/paper-global.yml as the pinned build
+// writes it on a first start. A Paper bump has to regenerate it with:
 //
 //	REPO=$(nix build .#paper-repo --no-link --print-out-paths)
 //	JAR=$(nix build .#paper-jar --no-link --print-out-paths)
@@ -86,32 +79,12 @@ func TestPaperEnablesVelocityForwarding(t *testing.T) {
 //	# wait for config/paper-global.yml to appear, then stop the server
 //	cp config/paper-global.yml "$OLDPWD"/internal/render/defaults/paper-global.default.yml
 //
-// (The dev shell's JDK is older than the 25 Paper 26.2 refuses to start
-// without, hence the separate jdk25_headless — the same one nix/paper.nix
-// patches the repo with. -Xmx1g only keeps the measurement off the host's
-// whole memory; it has no bearing on the file.)
-//
-// A Paper bump therefore has to re-run this and update the file. It is also
-// not the only guard: hack/image-test.sh boots the
-// pinned Paper against a rendered file and reads back what Paper made of it,
-// which needs no fixture to be refreshed and fails on a rename by itself.
+// jdk25_headless because the dev shell's JDK is older than Paper requires.
 const paperGlobalDefault = defaultsDir + "/paper-global.default.yml"
 
-// The keys this renderer writes have to be keys Paper declares.
-//
-// Paper does not refuse a key it does not know. It ignores it, keeps its own
-// default for the field the author meant, and writes the stray key back out on
-// the next save so the file on disk still looks like the override took.
-// Rendering secret-key rather than secret leaves Paper with an empty secret
-// and, through its own postProcess, enabled: false — a backend that starts
-// clean, passes every probe, and rejects every forwarded join.
-//
-// The class, which is the part that outlives this key: a green render test
-// proves what was written and never what was read. Every assertion in this
-// file that compares the renderer against itself is blind to a receiver that
-// ignores the key -- which is why this one compares against the receiving
-// program's own defaults, and why hack/image-test.sh reads the file back out
-// of a running container. Velocity has the same pair for the same reason.
+// Paper ignores an undeclared key and writes it back out, so only a
+// comparison against Paper's own defaults catches a misspelling such as
+// secret-key, which leaves Velocity forwarding disabled.
 func TestPaperWritesTheKeysPaperItselfReads(t *testing.T) {
 	defaults, err := os.ReadFile(paperGlobalDefault)
 	if err != nil {
@@ -133,10 +106,8 @@ func TestPaperWritesTheKeysPaperItselfReads(t *testing.T) {
 	}
 }
 
-// velocityKeysOf reads the proxies.velocity key names out of a paper-global.yml
-// document. It fails rather than returning an empty set when the block is
-// missing, so a fixture that was truncated or a renderer that stopped writing
-// the block at all cannot pass by having nothing to compare.
+// velocityKeysOf fails on a missing block, so a truncated fixture cannot pass
+// by having nothing to compare.
 func velocityKeysOf(t *testing.T, doc []byte, what string) map[string]bool {
 	t.Helper()
 	var parsed struct {
@@ -196,7 +167,6 @@ func TestPaperTurnsTheWhitelistOffUnlessAskedFor(t *testing.T) {
 	}
 }
 
-// An overlay reaches a field the API does not model.
 func TestPaperOverlayReachesAnUnmodelledField(t *testing.T) {
 	files, err := Paper(paperValues(), "s3cret", map[string]string{
 		"server.properties": "view-distance=8\n",
@@ -209,7 +179,6 @@ func TestPaperOverlayReachesAnUnmodelledField(t *testing.T) {
 	}
 }
 
-// And cannot reach a critical one.
 func TestPaperOverlayCannotTurnOnlineModeOn(t *testing.T) {
 	files, err := Paper(paperValues(), "s3cret", map[string]string{
 		"server.properties": "online-mode=true\nserver-port=1234\n",
@@ -246,13 +215,8 @@ func TestPaperRefusesAnOverlayForAFileItDoesNotWrite(t *testing.T) {
 	}
 }
 
-// The paper-global.yml analogue of TestPaperOverlayCannotTurnOnlineModeOn: an
-// overlay that tries to move all three of the critical Velocity keys at once
-// must lose on every one of them. This is the failure this task exists to
-// prevent — swap paperGlobal's copy-then-reassert order by one line and a
-// backend trusts nothing Velocity forwards, handing every player an
-// offline-mode UUID and detaching them from their own inventories — and
-// nothing before this test would have caught that swap.
+// Swapping paperGlobal's copy-then-reassert order would hand every player an
+// offline-mode UUID.
 func TestPaperOverlayCannotMoveVelocityCriticalKeys(t *testing.T) {
 	files, err := Paper(paperValues(), "s3cret", map[string]string{
 		"paper-global.yml": "proxies:\n  velocity:\n    enabled: false\n    online-mode: false\n    secret: not-the-real-secret\n",
@@ -260,13 +224,7 @@ func TestPaperOverlayCannotMoveVelocityCriticalKeys(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Paper: %v", err)
 	}
-	// Read out of the document rather than matched as substrings against the
-	// whole file. The substring form asserted "enabled: false" appears
-	// nowhere, which was only ever true by accident: the moment the renderer
-	// gained a second `enabled` anywhere -- update-checker did it -- the test
-	// failed while the keys it is actually about were correct. What it means
-	// is that proxies.velocity carries these three values, so that is what it
-	// now asks.
+	// Read out of the document: the renderer writes other `enabled` keys too.
 	global := string(files["config/paper-global.yml"])
 	doc := map[string]any{}
 	if err := yaml.Unmarshal(files["config/paper-global.yml"], &doc); err != nil {
@@ -288,15 +246,8 @@ func TestPaperOverlayCannotMoveVelocityCriticalKeys(t *testing.T) {
 	}
 }
 
-// The key that cost milestone 3c its first end-to-end join, arriving the other
-// way round. render.Paper wrote proxies.velocity.secret-key for a reader that
-// wanted secret; that spelling is fixed and pinned, and an overlay was the one
-// remaining path by which a second one could still have got in.
-//
-// Paper declares exactly three keys in that block and this operator writes all
-// three, so nothing an overlay puts there could ever have applied: it is either
-// overwritten here or ignored by Paper. Refusing says so at render time, where
-// the alternative said nothing at all in a cluster.
+// Paper declares exactly three keys in that block and the operator writes all
+// three, so an overlay key there could never apply.
 func TestPaperRefusesAVelocityKeyPaperDoesNotDeclare(t *testing.T) {
 	_, err := Paper(paperValues(), "s3cret", map[string]string{
 		"paper-global.yml": "proxies:\n  velocity:\n    secret-key: s3cret\n",
@@ -312,16 +263,8 @@ func TestPaperRefusesAVelocityKeyPaperDoesNotDeclare(t *testing.T) {
 	}
 }
 
-// A proxies key that is not a mapping is not a harmless overlay: it is a
-// mistake that would otherwise silently do nothing while the server comes up
-// looking healthy. The renderer must say so rather than swallow it, the same
-// way it refuses a missing forwarding secret.
-//
-// The assertion checks for "want a mapping" rather than just "paper-global.yml":
-// checkOverlayFiles' foreign-file rejection also names the file, so a
-// looser assertion would still pass if the paperOverlayKeys fix that makes
-// this overlay reach paperGlobal at all were reverted — it would just be
-// rejected for the wrong reason.
+// Checks for "want a mapping", since checkOverlayFiles' rejection also names
+// the file and would pass for the wrong reason.
 func TestPaperRefusesAMalformedOverlay(t *testing.T) {
 	_, err := Paper(paperValues(), "s3cret", map[string]string{
 		"paper-global.yml": "proxies: not-a-map\n",
@@ -337,8 +280,6 @@ func TestPaperRefusesAMalformedOverlay(t *testing.T) {
 	}
 }
 
-// The same refusal one level deeper: proxies is a mapping but its velocity
-// key is not. Nothing before this test exercised this branch at all.
 func TestPaperRefusesAMalformedVelocityOverlay(t *testing.T) {
 	_, err := Paper(paperValues(), "s3cret", map[string]string{
 		"paper-global.yml": "proxies:\n  velocity: not-a-map\n",
@@ -362,15 +303,8 @@ func keysOf(m map[string][]byte) []string {
 	return out
 }
 
-// An overlay key outside proxies.velocity has to reach the rendered file, and
-// until this test nothing looked. paperGlobal built the document from scratch
-// as {proxies: {velocity: ...}} and read the overlay only for its Velocity
-// keys, so every other part of paper-global.yml an overlay set was parsed and
-// dropped -- while paperOverlayKeys advertises the file as one an overlay may
-// set, and checkOverlayFiles' own comment calls a silently dropped overlay key
-// worse than an error. The two keys below are Paper's, chosen from opposite
-// ends of its document so that neither could pass by sitting near the block
-// the renderer already writes.
+// Two of Paper's keys from opposite ends of its document, so neither passes
+// by sitting near the Velocity block.
 func TestPaperOverlayReachesTheRestOfPaperGlobal(t *testing.T) {
 	files, err := Paper(paperValues(), "s3cret", map[string]string{
 		"paper-global.yml": "misc:\n  max-joins-per-tick: 5\nwatchdog:\n  early-warning-delay: 12000\n",
@@ -386,9 +320,6 @@ func TestPaperOverlayReachesTheRestOfPaperGlobal(t *testing.T) {
 				"one level up:\n%s", want, global)
 		}
 	}
-	// And the Velocity block is still asserted over whatever the overlay
-	// carried, which is the half that must not be traded away for the half
-	// above.
 	for _, want := range []string{"enabled: true", "online-mode: true", "secret: s3cret"} {
 		if !strings.Contains(global, want) {
 			t.Errorf("paper-global.yml does not contain %q, the critical Velocity block did not "+
@@ -397,28 +328,20 @@ func TestPaperOverlayReachesTheRestOfPaperGlobal(t *testing.T) {
 	}
 }
 
-// TestPaperTurnsOffTheUpdateChecker covers the outbound call every Paper start
-// used to make to fill.papermc.io. The build is pinned by nix/paper.nix, so
-// the answer can change nothing; what it reaches is the egress policy, and
-// anybody tightening that had to decide about a dependency the operator does
-// not need.
 func TestPaperTurnsOffTheUpdateChecker(t *testing.T) {
 	files, err := Paper(paperValues(), "s3cret", nil)
 	if err != nil {
 		t.Fatalf("Paper: %v", err)
 	}
-	// A map rather than a tagged struct: sigs.k8s.io/yaml converts YAML to
-	// JSON and reads `json` tags, so a `yaml` tag here would be ignored and
-	// every field would come back nil -- a test that passes for nothing.
+	// A map rather than a tagged struct: sigs.k8s.io/yaml reads `json` tags, so a
+	// `yaml` tag would leave every field nil.
 	if got := updateCheckerEnabled(t, files); got != false {
 		t.Errorf("update-checker.enabled = %v, want false", got)
 	}
 }
 
-// TestAnOverlayCanTurnTheUpdateCheckerBackOn is what makes the line above a
-// default rather than a critical key. The velocity block is reasserted
-// whatever an overlay says, because those keys decide whether a join works at
-// all; this one decides nothing, so the user wins.
+// A default, not a critical key: unlike the Velocity block it decides nothing
+// about joins, so the user wins.
 func TestAnOverlayCanTurnTheUpdateCheckerBackOn(t *testing.T) {
 	files, err := Paper(paperValues(), "s3cret", map[string]string{
 		"paper-global.yml": "update-checker:\n  enabled: true\n",
@@ -431,9 +354,8 @@ func TestAnOverlayCanTurnTheUpdateCheckerBackOn(t *testing.T) {
 	}
 }
 
-// updateCheckerEnabled reads update-checker.enabled out of the rendered
-// document, failing the test if the key is missing rather than reporting a
-// zero value that would read as "off" and pass one of its two callers.
+// updateCheckerEnabled fails on a missing key, which would otherwise read as
+// "off".
 func updateCheckerEnabled(t *testing.T, files map[string][]byte) bool {
 	t.Helper()
 	doc := map[string]any{}
@@ -451,24 +373,12 @@ func updateCheckerEnabled(t *testing.T, files map[string][]byte) bool {
 	return enabled
 }
 
-// paperPropertiesDefault is Minecraft's own server.properties, byte for byte
-// as the pinned Paper build writes it on a first start against an otherwise
-// empty data directory, and the third of the three defaults measured this way.
-//
-// Reproduce it with the paperGlobalDefault recipe above, taking
-// server.properties out of the same run rather than a second one -- the two
-// files appear together and one boot measures both.
-//
-// The second line of the file is the timestamp Minecraft stamps on it. It
-// carries no meaning for the check, which reads keys and ignores comments, and
-// it is kept rather than stripped so that regenerating the file dates the
-// measurement in the diff.
+// paperPropertiesDefault is Minecraft's own server.properties, taken from the
+// same run as paperGlobalDefault. The timestamp line is kept so a
+// regeneration dates itself in the diff.
 const paperPropertiesDefault = defaultsDir + "/server.properties.default"
 
-// TestServerPropertiesOverlayIsCheckedAgainstMinecraftsOwnKeys is the check
-// that entry asked for. Minecraft does not refuse a key it does not know: it
-// keeps its own default for the field the author meant and writes the stray
-// key back out, so the file on disk looks like the override took.
+// Minecraft keeps its own default for an unknown key and writes it back out.
 func TestServerPropertiesOverlayIsCheckedAgainstMinecraftsOwnKeys(t *testing.T) {
 	_, err := Paper(paperValues(), "s3cret", map[string]string{
 		// One character off view-distance, which is a real key.
@@ -484,9 +394,7 @@ func TestServerPropertiesOverlayIsCheckedAgainstMinecraftsOwnKeys(t *testing.T) 
 	}
 }
 
-// TestServerPropertiesOverlayAcceptsRealKeys is the other direction, and the
-// one that stops the check above from passing on a tree that refuses
-// everything. difficulty and view-distance are both Minecraft's.
+// Stops the check above from passing on a tree that refuses everything.
 func TestServerPropertiesOverlayAcceptsRealKeys(t *testing.T) {
 	files, err := Paper(paperValues(), "s3cret", map[string]string{
 		"server.properties": "difficulty=hard\nview-distance=12\n",
@@ -500,10 +408,7 @@ func TestServerPropertiesOverlayAcceptsRealKeys(t *testing.T) {
 	}
 }
 
-// TestTheMeasuredPropertiesDefaultIsTheOneTheRendererReads guards the fixture
-// itself. An empty or truncated file would build a tree that declares nothing,
-// and every overlay key would then be refused -- or, if the tree were empty
-// enough to be skipped, admitted. Both are silent from the renderer's side.
+// An empty or truncated fixture would refuse or admit every key silently.
 func TestTheMeasuredPropertiesDefaultIsTheOneTheRendererReads(t *testing.T) {
 	raw, err := os.ReadFile(paperPropertiesDefault)
 	if err != nil {
@@ -513,14 +418,11 @@ func TestTheMeasuredPropertiesDefaultIsTheOneTheRendererReads(t *testing.T) {
 	if len(keys) < 50 {
 		t.Fatalf("%s declares %d keys, want a real Minecraft default (about 70)", paperPropertiesDefault, len(keys))
 	}
-	// The four the operator itself writes have to be among them, or the
-	// critical layer would be writing keys Minecraft does not read.
 	for _, key := range []string{"server-port", "online-mode", "enable-status", "enforce-secure-profile"} {
 		if _, ok := keys[key]; !ok {
 			t.Errorf("%s does not declare %q, which this renderer writes unconditionally", paperPropertiesDefault, key)
 		}
 	}
-	// And the two a user's Values reach.
 	for _, key := range []string{"max-players", "motd"} {
 		if _, ok := keys[key]; !ok {
 			t.Errorf("%s does not declare %q", paperPropertiesDefault, key)
@@ -528,11 +430,8 @@ func TestTheMeasuredPropertiesDefaultIsTheOneTheRendererReads(t *testing.T) {
 	}
 }
 
-// A value ending in a backslash is a line continuation to Java, and the sort
-// puts online-mode right after motd: the overlay `motd=hello\` used to render
-// a file Java read as motd "helloonline-mode=false" with no online-mode key at
-// all, so Paper fell back to its own default of true and modern forwarding
-// failed every join.
+// A trailing backslash is a line continuation to Java, and the sort puts
+// online-mode right after motd.
 func TestATrailingBackslashInAnOverlayValueCannotSwallowTheNextLine(t *testing.T) {
 	files, err := Paper(paperValues(), "s3cret", map[string]string{
 		"server.properties": "motd=hello\\\n",

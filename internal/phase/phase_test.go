@@ -28,7 +28,6 @@ import (
 	"time"
 )
 
-// healthyReady is the input set of a server that is fine in phase Ready.
 func healthyReady() Inputs {
 	return Inputs{
 		PodExists:      true,
@@ -36,11 +35,7 @@ func healthyReady() Inputs {
 		PodReady:       true,
 		AgentReady:     true,
 		AgentConnected: true,
-		// A healthy Ready server is one the proxies have. Saying so here is
-		// not bookkeeping: Ready and unregistered is a real state -- a server
-		// whose door is shut, or one whose registration failed -- and Decide
-		// now acts on it, so a fixture that left this false would be
-		// describing a different server than it means to.
+		// Ready and unregistered is a distinct state Decide acts on.
 		Registered: true,
 		Slots:      100,
 	}
@@ -84,10 +79,7 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Ready, Register: true, Reason: ReasonReadyGatePassed},
 		},
 		{
-			// Regression for Minor 2: the ready gate must not trust a green
-			// probe and agent alone. Task 8 should never send PodReady/AgentReady
-			// without PodExists/PodRunning, but this package must not depend on
-			// caller discipline.
+			// This package must not depend on the caller never sending these together.
 			name:    "starting does not skip to ready on contradictory inputs without the pod existing and running",
 			current: Starting,
 			in:      Inputs{PodExists: false, PodRunning: false, PodReady: true, AgentReady: true},
@@ -122,8 +114,6 @@ func TestDecide(t *testing.T) {
 			want: Decision{Next: Starting, Deregister: true, CountReadinessLoss: true, Reason: ReasonReadinessLost},
 		},
 		{
-			// A live stream that reports not-ready is the agent telling us
-			// something, not us failing to hear it: no grace period applies.
 			name:    "ready falls back to starting at once when a live agent reports not ready",
 			current: Ready,
 			in: func() Inputs {
@@ -145,11 +135,7 @@ func TestDecide(t *testing.T) {
 			want: Decision{Next: Starting, Deregister: true, CountReadinessLoss: true, Reason: ReasonReadinessLost},
 		},
 		{
-			// The shape every server has right after an operator restart:
-			// the registry has never heard of the pod, so it is neither
-			// ready nor connected and its clock runs from when the operator
-			// began serving. StreamDownGrace is for one server going quiet;
-			// a whole fleet dialling back in gets ReconnectGrace.
+			// The shape of every server right after an operator restart.
 			name:    "ready tolerates an unheard agent until the reconnect grace",
 			current: Ready,
 			in: func() Inputs {
@@ -187,11 +173,8 @@ func TestDecide(t *testing.T) {
 			want: Decision{Next: Ready, Reason: ReasonReadyGatePassed},
 		},
 		{
-			// The exact shape the agent registry emits after Disconnect: it
-			// clears ready and starts the clock, so a Ready server inside the
-			// grace window arrives here as neither ready nor connected. This is
-			// the composition that made the StreamDownGrace clause unreachable
-			// before — inside the grace only the timer may decide.
+			// What the agent registry emits after Disconnect: inside the grace only
+			// the timer may decide.
 			name:    "ready tolerates a dropped stream whose agent has not reported ready since",
 			current: Ready,
 			in: func() Inputs {
@@ -237,13 +220,8 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Failed, Reason: ReasonStartupTimeout},
 		},
 		{
-			// A server that fell out of Ready and cannot come back must still be
-			// failed, and must take its players with it. The flap counter can
-			// never catch this on its own: losses are only counted on a
-			// Ready -> Starting transition, which a permanently red probe never
-			// produces again. The controller re-arms status.startedAt on entry
-			// into Starting, so the deadline here is one full recovery window
-			// after the fall-back, not the age of the pod.
+			// Losses are only counted on Ready -> Starting, which a permanently red
+			// probe never repeats, so the flap counter alone cannot catch this.
 			name:    "a server that cannot recover is failed and drained a deadline after falling back",
 			current: Starting,
 			in: Inputs{
@@ -253,9 +231,6 @@ func TestDecide(t *testing.T) {
 			want: Decision{Next: Failed, StartDrain: true, Reason: ReasonStartupTimeout},
 		},
 		{
-			// Flapping is the bound for a server that was once playable, and it
-			// must take its players with it: the readiness-loss fallback only
-			// deregistered, it never moved anyone off.
 			name:    "failing on flapping drains a server that still has players",
 			current: Ready,
 			in: func() Inputs {
@@ -268,8 +243,6 @@ func TestDecide(t *testing.T) {
 			want: Decision{Next: Failed, Deregister: true, StartDrain: true, Reason: ReasonFlapping},
 		},
 		{
-			// A terminal pod means the process is already down: there is nobody
-			// left to move, so draining would be pointless.
 			name:    "failing on a terminal pod does not try to drain",
 			current: Ready,
 			in: func() Inputs {
@@ -322,8 +295,6 @@ func TestDecide(t *testing.T) {
 			want: Decision{Next: Failed, StartDrain: true, Reason: ReasonDrainingBeforeCleanup},
 		},
 		{
-			// The escape hatch: one stuck player must not pin a failed server
-			// forever.
 			name:    "a failed server is cleaned up once its drain deadline passes",
 			current: Failed,
 			in: Inputs{
@@ -347,8 +318,6 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonDeletionRequested},
 		},
 		{
-			// Never registered means no session was ever routed here, so there
-			// is nothing to move off.
 			name:    "a failed server that was never registered is cleaned up directly",
 			current: Failed,
 			in:      Inputs{FailedRetentionElapsed: true, PlayersStale: true},
@@ -372,13 +341,6 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonDeletionRequested},
 		},
 		{
-			// Regression for the Critical finding: a Starting server that fell
-			// out of Ready (WasRegistered) still has its players connected — the
-			// readiness-loss fallback only deregistered to stop new joins, it did
-			// not move anyone off. Deleting such a server must drain it, not
-			// terminate it out from under 20 connected players. Reproduction as
-			// confirmed by the reviewer, one tick after the Ready server lost its
-			// probe and fell back to Starting.
 			name:    "deleting a starting server that was registered before drains it instead of dropping its players",
 			current: Starting,
 			in: Inputs{
@@ -419,10 +381,7 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonDrainTimeout},
 		},
 		{
-			// Regression for Minor 1: a crashed pod's players are already gone
-			// no matter what a stale report still claims, so draining must not
-			// burn the full drain timeout waiting for players who cannot leave
-			// a pod that no longer runs.
+			// A stale report must not make the drain wait for players who are gone.
 			name:    "draining terminates right away when the pod goes terminal, even with players reported online",
 			current: Draining,
 			in:      Inputs{PodTerminal: true, PlayersOnline: 3, PlayersStale: true},
@@ -438,10 +397,7 @@ func TestDecide(t *testing.T) {
 			want: Decision{Next: Retiring, Deregister: true, Reason: ReasonRetiring},
 		},
 		{
-			// Soft drain is deregistration without a move. The proxies learn the
-			// server is gone from status.registered; nothing tells them to take
-			// anyone off it, and internal/proxyreg only sends DrainPlayers for
-			// phase Draining.
+			// internal/proxyreg sends DrainPlayers only for phase Draining.
 			name:    "retiring never asks for a drain while it waits",
 			current: Retiring,
 			in:      Inputs{RetirementRequested: true, PodExists: true, PodRunning: true, PlayersOnline: 3},
@@ -454,8 +410,6 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Terminating, DeletePod: true, Reason: ReasonDrained},
 		},
 		{
-			// The whole difference from Draining: an occupied retiring server has
-			// no deadline over it at all until maxStaleSeconds says so.
 			name:    "an occupied retiring server is never terminated on a drain deadline",
 			current: Retiring,
 			in: Inputs{
@@ -474,8 +428,6 @@ func TestDecide(t *testing.T) {
 			want: Decision{Next: Draining, StartDrain: true, Reason: ReasonMaxStaleElapsed},
 		},
 		{
-			// Whoever deletes a retiring server gets the proper move, not a drop:
-			// it still has players on it.
 			name:    "deleting a retiring server moves its players off",
 			current: Retiring,
 			in: Inputs{
@@ -583,20 +535,13 @@ func TestDecide(t *testing.T) {
 	}
 }
 
-// TestStreamDownGraceIsFifteenSeconds pins the value, not just the symbol.
-// Every other test is written relative to the constant, so shrinking it to a
-// second would break nothing and silently drop the tolerance design spec 4.4
-// requires.
+// Every other test is relative to the constant, so only this pins its value.
 func TestStreamDownGraceIsFifteenSeconds(t *testing.T) {
 	if StreamDownGrace != 15*time.Second {
 		t.Errorf("StreamDownGrace = %v, want 15s (design spec 4.4)", StreamDownGrace)
 	}
 }
 
-// TestOccupiedFailedServerIsNeverDeletedBeforeItsDrainDeadline is the Failed
-// counterpart of TestOccupiedServerIsNeverDeletedWithoutDeadline: a failed
-// server can still hold live sessions, so neither the retention nor a deletion
-// request may remove its pod while players are on it.
 func TestOccupiedFailedServerIsNeverDeletedBeforeItsDrainDeadline(t *testing.T) {
 	for _, stale := range []bool{false, true} {
 		for _, deleting := range []bool{false, true} {
@@ -617,8 +562,6 @@ func TestOccupiedFailedServerIsNeverDeletedBeforeItsDrainDeadline(t *testing.T) 
 	}
 }
 
-// TestNoPathBackFromDraining guards the rule that a draining server never
-// serves players again, no matter how healthy it looks.
 func TestNoPathBackFromDraining(t *testing.T) {
 	got := Decide(Draining, healthyReady())
 	if got.Next == Ready || got.Register {
@@ -627,10 +570,8 @@ func TestNoPathBackFromDraining(t *testing.T) {
 }
 
 func TestNoPathBackFromRetiring(t *testing.T) {
-	// Retiring is one-way while the retirement stands, like Draining. A server that is being replaced
-	// must not re-register itself because its probe happens to be green:
-	// the proxies would start sending joins to a server the group has
-	// already decided to remove.
+	// While the retirement stands, a green probe must not re-register a server
+	// the group has decided to remove.
 	in := Inputs{
 		PodExists: true, PodRunning: true, PodReady: true, AgentReady: true,
 		PlayersOnline: 1, RetirementRequested: true,
@@ -640,7 +581,6 @@ func TestNoPathBackFromRetiring(t *testing.T) {
 	}
 }
 
-// TestNoPathBackFromFailed guards the same rule for Failed.
 func TestNoPathBackFromFailed(t *testing.T) {
 	got := Decide(Failed, healthyReady())
 	if got.Next == Ready || got.Register {
@@ -648,14 +588,9 @@ func TestNoPathBackFromFailed(t *testing.T) {
 	}
 }
 
-// TestOccupiedServerIsNeverDeletedWithoutDeadline is the core invariant: as
-// long as players are online and no deadline has passed, no decision may
-// delete the pod.
-//
-// Starting is checked only with WasRegistered: true — a Starting server that
-// fell out of Ready still holds the players it had before, while one that was
-// never registered cannot hold any, and treating its never-reported count as
-// occupied would hang its deletion until the drain deadline.
+// Starting is checked only with WasRegistered: a never-registered server
+// cannot hold players, and treating its unreported count as occupied would
+// hang its deletion until the drain deadline.
 func TestOccupiedServerIsNeverDeletedWithoutDeadline(t *testing.T) {
 	cases := []struct {
 		phase         Phase
@@ -683,13 +618,6 @@ func TestOccupiedServerIsNeverDeletedWithoutDeadline(t *testing.T) {
 	}
 }
 
-// A server whose pod was never created has no other way out.
-//
-// status.podName stays empty so PodLost never applies, and the startup
-// deadline asks whether a pod that exists became playable — which is a
-// different question with a different remedy. Without this transition such a
-// server stayed Pending for as long as whatever refused the create stood,
-// counting against its group's replicas the whole time.
 func TestAPodThatWasNeverCreatedFailsAtItsDeadline(t *testing.T) {
 	got := Decide(Pending, Inputs{PodCreationDeadlineReached: true})
 	if got.Next != Failed {
@@ -700,8 +628,6 @@ func TestAPodThatWasNeverCreatedFailsAtItsDeadline(t *testing.T) {
 			"become ready, it failed to be created, and the remedy is somewhere else",
 			got.Reason, ReasonPodNeverCreated)
 	}
-	// Nothing was ever registered and nobody is on it, so there is nobody to
-	// move and nothing to withdraw.
 	if got.StartDrain {
 		t.Error("a drain was started for a server that never had a pod")
 	}
@@ -713,10 +639,8 @@ func TestAPodThatWasNeverCreatedFailsAtItsDeadline(t *testing.T) {
 	}
 }
 
-// The deadline must not outrank a pod that has since turned up. It is
-// computed from "no pod, and none named in the status", so the controller
-// stops setting it the moment one exists — but a stale input reaching Decide
-// must not undo the transition either.
+// The controller stops setting the deadline once a pod exists, but a stale
+// input must not undo the transition either.
 func TestAPodThatArrivedOutranksTheCreationDeadline(t *testing.T) {
 	got := Decide(Pending, Inputs{
 		PodExists: true, PodRunning: true, PodCreationDeadlineReached: true,
@@ -727,24 +651,16 @@ func TestAPodThatArrivedOutranksTheCreationDeadline(t *testing.T) {
 	}
 }
 
-// TestOccupiedCountsAPlayerOnlyAProxyCanSee is the operator's half of the
-// drain gap. A player still completing the configuration phase is counted by
-// neither the backend nor the proxy's own player list -- disassembling
-// velocity 3.5.1 build 615, VelocityRegisteredServer.addPlayer is called only
-// from BackendPlaySessionHandler.activated(), the play phase -- so this server
-// read empty while a connection to it was in flight, and the pod went.
+// A player still in the configuration phase is counted by neither the backend
+// nor the proxy's own player list (Velocity calls addPlayer only on entering
+// play), so only the attach report sees them.
 func TestOccupiedCountsAPlayerOnlyAProxyCanSee(t *testing.T) {
-	// Exactly the state that used to delete a pod under somebody: the backend
-	// has reported zero, freshly, and a proxy says one player is on their way.
 	in := Inputs{PlayersOnline: 0, PlayersStale: false, ProxyAttached: 1}
 	if !in.Occupied() {
 		t.Error("a server with a player arriving reads as empty")
 	}
 }
 
-// TestOccupiedTreatsASilentProxyAsOccupied applies the same rule the backend's
-// own count already follows: a report we cannot trust counts as occupied,
-// because one server too many beats one kick.
 func TestOccupiedTreatsASilentProxyAsOccupied(t *testing.T) {
 	in := Inputs{PlayersOnline: 0, ProxyAttachStale: true}
 	if !in.Occupied() {
@@ -752,10 +668,8 @@ func TestOccupiedTreatsASilentProxyAsOccupied(t *testing.T) {
 	}
 }
 
-// TestOccupiedIsUnchangedWithoutProxyReports is the property that lets a fleet
-// upgrade in any order, and the one worth a test of its own: every term of
-// Occupied can only make it true, so an agent too old to report backends
-// contributes zero and the rule is exactly what it was before this existed.
+// Every term of Occupied can only make it true, so an agent too old to
+// report contributes zero and a fleet can upgrade in any order.
 func TestOccupiedIsUnchangedWithoutProxyReports(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -774,16 +688,9 @@ func TestOccupiedIsUnchangedWithoutProxyReports(t *testing.T) {
 	}
 }
 
-// TestBreakingASilentAgentsStreamCostsTheDrain is the reason the operator sets
-// no transport keepalive, made executable.
-//
-// AgentSilent is defined as "the stream is up and has gone quiet", so anything
-// that breaks that stream -- a keepalive, a shorter MaxConnectionIdle, an
-// operator hanging up on a peer it has written off -- turns it into the
-// ordinary broken stream below, which carries no StartDrain. The rescue window
-// is then not delayed but gone, and whoever comes to add a keepalive should
-// meet this test rather than a fleet that quietly stopped rescuing anybody.
-// The agent's own keepalive displaces nothing: see OperatorChannel.
+// The reason the operator sets no transport keepalive: anything that breaks
+// a silent agent's stream turns it into an ordinary broken stream, which
+// carries no StartDrain.
 func TestBreakingASilentAgentsStreamCostsTheDrain(t *testing.T) {
 	silent := Inputs{
 		PodExists: true, PodRunning: true, PodReady: true,
@@ -795,9 +702,6 @@ func TestBreakingASilentAgentsStreamCostsTheDrain(t *testing.T) {
 		t.Fatal("a silent agent on a live stream does not start a drain; the premise of this test is gone")
 	}
 
-	// The same moment, with the stream broken instead of quiet. AgentSilent
-	// cannot be true without AgentConnected, so this is what a keepalive would
-	// leave behind.
 	broken := silent
 	broken.AgentConnected = false
 	broken.AgentSilent = false
@@ -814,15 +718,8 @@ func TestBreakingASilentAgentsStreamCostsTheDrain(t *testing.T) {
 	}
 }
 
-// TestASilentAgentOnALiveStreamLosesReadinessAndDrains is the case a dead node
-// actually produces, and the one nothing used to notice.
-//
-// A node that is hard-powered off sends no FIN and no RST, so the operator's
-// socket goes on looking connected for minutes -- measured through a
-// freezable relay at over 200 seconds. AgentConnected therefore stays true and
-// AgentReady stays at the last thing the agent said, so the server stayed
-// Ready, stayed registered, and went on being sent new players, while the ones
-// already on it waited for Velocity's read timeout to disconnect them.
+// A hard-powered-off node sends no FIN or RST, so the socket looks connected
+// for minutes and AgentReady stays at the agent's last word.
 func TestASilentAgentOnALiveStreamLosesReadinessAndDrains(t *testing.T) {
 	d := Decide(Ready, Inputs{
 		PodExists: true, PodRunning: true, PodReady: true,
@@ -837,18 +734,13 @@ func TestASilentAgentOnALiveStreamLosesReadinessAndDrains(t *testing.T) {
 	if !d.Deregister {
 		t.Error("a server whose agent has gone silent stays registered, so new players keep arriving on it")
 	}
-	// The half that matters to the people already there. Velocity kicks them
-	// outright when its read timeout fires -- no KickedFromServerEvent, so the
-	// agent's own Rescue never sees them -- and this is the only thing that
-	// moves them first.
+	// Velocity kicks these players on its read timeout without a
+	// KickedFromServerEvent, so the agent's own Rescue never sees them.
 	if !d.StartDrain {
 		t.Error("the players on a dead backend were left to be disconnected by the read timeout")
 	}
 }
 
-// TestAnOrdinaryReadinessLossDoesNotDrain keeps the drain to the case that
-// needs it. A server that reports not-ready may come back, and moving its
-// players costs them a loading screen for nothing.
 func TestAnOrdinaryReadinessLossDoesNotDrain(t *testing.T) {
 	d := Decide(Ready, Inputs{
 		PodExists: true, PodRunning: true, PodReady: true,
@@ -864,11 +756,7 @@ func TestAnOrdinaryReadinessLossDoesNotDrain(t *testing.T) {
 	}
 }
 
-// TestABrokenStreamIsStillJustABrokenStream is the discriminator, and the
-// reason this is safe to run in an operator restart -- which breaks every
-// agent's stream at once. A broken stream leaves AgentConnected false and is
-// tolerated for StreamDownGrace exactly as before; only a stream that is up
-// and quiet is read as a peer that has gone without TCP noticing.
+// An operator restart breaks every stream at once; that must stay tolerated.
 func TestABrokenStreamIsStillJustABrokenStream(t *testing.T) {
 	d := Decide(Ready, Inputs{
 		PodExists: true, PodRunning: true, PodReady: true,
@@ -885,13 +773,8 @@ func TestABrokenStreamIsStillJustABrokenStream(t *testing.T) {
 	}
 }
 
-// TestTheShippedVelocityDefaultMatchesTheConstant is what keeps
-// VelocityReadTimeout from being a number somebody wrote down once.
-//
-// The operator does not render velocity.toml -- spawnery-config does, inside
-// the pod, from the defaults this repository ships plus the user's overlay --
-// so the constant here and the file there are two statements of one fact with
-// nothing between them. This is the something.
+// The operator does not render velocity.toml, spawnery-config does inside the
+// pod, so nothing else ties the constant to the shipped file.
 func TestTheShippedVelocityDefaultMatchesTheConstant(t *testing.T) {
 	raw, err := os.ReadFile(filepath.Join("..", "render", "defaults", "velocity.default.toml"))
 	if err != nil {
@@ -921,10 +804,6 @@ func TestTheShippedVelocityDefaultMatchesTheConstant(t *testing.T) {
 	}
 }
 
-// TestTheRescueWindowIsTheReadTimeoutLessWhatStalenessSpends pins the
-// arithmetic at the operator's own default and at the boundary the entry that
-// produced this named: above fifteen seconds the operator is later than the
-// kick it is racing.
 func TestTheRescueWindowIsTheReadTimeoutLessWhatStalenessSpends(t *testing.T) {
 	for _, tc := range []struct {
 		reportInterval time.Duration
@@ -942,23 +821,13 @@ func TestTheRescueWindowIsTheReadTimeoutLessWhatStalenessSpends(t *testing.T) {
 	}
 }
 
-// TestRescueWindowUsesWhatTheProxyReported is the point of the field the proxy
-// now sends: a velocity.toml overlay lowering read-timeout used to close this
-// window with nothing noticing, because the operator could only assume the
-// value this repository ships.
 func TestRescueWindowUsesWhatTheProxyReported(t *testing.T) {
-	// Half the shipped default, at the operator's own report interval: the
-	// window halves with it rather than staying at the shipped twenty.
 	if got, want := RescueWindow(5*time.Second, 15*time.Second), 5*time.Second; got != want {
 		t.Errorf("RescueWindow(5s, 15s) = %s, want %s", got, want)
 	}
-	// A proxy more patient than the default is believed too. The operator is
-	// not entitled to assume the worse of the two.
 	if got, want := RescueWindow(5*time.Second, 60*time.Second), 50*time.Second; got != want {
 		t.Errorf("RescueWindow(5s, 60s) = %s, want %s", got, want)
 	}
-	// Nothing reported falls back to the shipped default, which is the reading
-	// the operator took before any proxy sent this.
 	if got, want := RescueWindow(5*time.Second, 0), RescueWindow(5*time.Second, VelocityReadTimeout); got != want {
 		t.Errorf("an unreported timeout gave %s, want the shipped default's %s", got, want)
 	}
@@ -980,8 +849,8 @@ func TestAnUnregisteredServerRegistersAgain(t *testing.T) {
 }
 
 func TestRetiringWinsOverRegistering(t *testing.T) {
-	// If the register branch spoke first, a retiring server that is not in
-	// the table would be put back on its way out.
+	// If the register branch spoke first, a retiring server that is not in the
+	// table would be put back on its way out.
 	in := healthyReady()
 	in.Registered = false
 	in.RetirementRequested = true
@@ -993,15 +862,8 @@ func TestRetiringWinsOverRegistering(t *testing.T) {
 	}
 }
 
-// Every phase, named one by one rather than asserted about two, and the
-// table checked against the phases the package actually declares.
-//
-// The second half is what makes the first half hold: a hand-written table is
-// a list somebody has to remember to extend, and a Phase added without a line
-// here would simply be absent from it and pass. Read from the source instead,
-// an addition fails this test until somebody decides whether the new phase
-// ends a server's run -- which is the decision callers elsewhere are relying
-// on having been made. What declaredPhases can and cannot see is written on it.
+// The table is checked against the phases the package declares, so a new
+// Phase fails this test until someone decides whether it is terminal.
 func TestTerminalIsFailedAndFinishedAndNothingElse(t *testing.T) {
 	terminal := map[Phase]bool{
 		Pending:     false,
@@ -1030,20 +892,9 @@ func TestTerminalIsFailedAndFinishedAndNothingElse(t *testing.T) {
 	}
 }
 
-// declaredPhases is every Phase constant this package declares, read from its
-// own source.
-//
-// go/parser and not reflection, because a constant leaves nothing behind at
-// run time to enumerate. The whole directory rather than phase.go alone, so
-// that a phase declared in a file added later is still seen.
-//
-// It finds the one shape this package declares phases in: a constant with an
-// explicit Phase type and a plain string literal, `Name Phase = "Name"`. It
-// does not find a constant whose type is left to the block (`Name = "Name"`),
-// nor one whose value is not a plain double-quoted literal (`Phase(x)`, a
-// concatenation, a backtick string). A phase added in one of those shapes
-// passes this test unnoticed, so put it in the table above yourself or
-// declare it the way the others are.
+// declaredPhases reads the source because constants leave nothing to
+// enumerate at run time. It only sees the shape `Name Phase = "Name"`; a
+// phase declared any other way passes unnoticed.
 func declaredPhases(t *testing.T) []Phase {
 	t.Helper()
 	sources, err := filepath.Glob("*.go")
@@ -1089,9 +940,7 @@ func declaredPhases(t *testing.T) []Phase {
 	return declared
 }
 
-// TestAServerWhoseRoundEndedShutsDownAsFinished covers the shutdown that follows
-// endRound: the probe going red or the stream breaking is the process stopping,
-// not a fault, so it is neither a readiness loss nor a trip through Starting.
+// After endRound the probe going red is the process stopping, not a fault.
 func TestAServerWhoseRoundEndedShutsDownAsFinished(t *testing.T) {
 	ended := func(mutate func(*Inputs)) Inputs {
 		in := healthyReady()
@@ -1187,10 +1036,8 @@ func TestAWithdrawnRetirementGoesBackToReady(t *testing.T) {
 	}
 }
 
-// TestAFinishedServerStillRunningMovesItsPlayersBeforeItGoes covers a server
-// that reached Finished through a lost ready signal after endRound while its
-// pod still runs: its retention is measured from the round's end, so it can
-// expire with players still on it.
+// The retention runs from the round's end, so it can expire with players
+// still on a pod that kept running.
 func TestAFinishedServerStillRunningMovesItsPlayersBeforeItGoes(t *testing.T) {
 	running := Inputs{
 		PodExists: true, PodRunning: true, RoundEnded: true, WasRegistered: true,

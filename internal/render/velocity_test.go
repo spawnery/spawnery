@@ -33,62 +33,25 @@ func velocityValues() Values {
 
 const testSecretPath = "/etc/spawnery/forwarding.secret"
 
-// containsTOMLString reports whether rendered sets key to value, written as
-// either of TOML's two equivalent string forms — the literal ('...') form
-// go-toml/v2 prefers when a value permits it, or the basic ("...") form.
-// Both parse to the identical value in any TOML reader, Velocity's included,
-// so a test asserting the rendered *behaviour* has no business pinning one
-// spelling over the other.
+// containsTOMLString accepts both TOML string forms; go-toml/v2 picks the
+// literal one when it can.
 func containsTOMLString(rendered, key, value string) bool {
 	return strings.Contains(rendered, key+` = "`+value+`"`) ||
 		strings.Contains(rendered, key+` = '`+value+`'`)
 }
 
-// velocityDefault is Velocity's own default-velocity.toml, byte for byte as
-// the pinned jar ships it. Velocity writes this file out when /data has none,
-// and it is the same document its config loader validates a rendered one
-// against — so it is a measurement of the receiving program, which is the only
-// reason it exists. Every other test in this file asserts that the renderer
-// writes the string the renderer says it writes, and no such test can fail on
-// a key Velocity does not read.
-//
-// It costs an extraction rather than a server boot, because Velocity ships it
-// as a jar resource. Reproduce it with:
+// velocityDefault is Velocity's own default-velocity.toml from the pinned jar.
+// A Velocity bump has to regenerate it with:
 //
 //	JAR=$(nix build .#velocity-jar --no-link --print-out-paths)
 //	cd internal/render/defaults && jar xf "$JAR" default-velocity.toml
 //	mv default-velocity.toml velocity.default.toml
-//
-// (default-velocity.toml sits at the jar root, not under META-INF; `unzip` is
-// not on PATH in the dev shell, so `jar xf` extracts it. This is the same
-// command nix/velocity.nix's config-version comment records, against the same
-// pin.)
-//
-// A Velocity bump therefore has to re-run this and update the file, exactly
-// the way a Paper bump has to re-run internal/render/defaults'
-// paper-global.default.yml.
 const velocityDefault = defaultsDir + "/velocity.default.toml"
 
-// The keys this renderer writes have to be keys Velocity declares.
-//
-// Velocity does not refuse a key it does not know; night-config parses the
-// file and the loader reads out the keys it asks for, so a misspelling is a
-// key nobody reads and a default silently kept. Two shapes of that are not
-// theoretical:
-//
-//   - forwarding-secret-file misspelled: Velocity finds no such key, falls
-//     back to its own relative "forwarding.secret", finds no such file,
-//     creates one in the writable /data, fills it with twelve random
-//     characters, logs "The forwarding-secret-file does not exist. A new file
-//     has been created at {}", starts cleanly, passes the port probe — and
-//     refuses every forwarded join, because the backends carry a different
-//     secret.
-//   - show-max-players misspelled: Velocity's own default is 500 and
-//     podspec.DefaultPlayerLimit is 500, so on the default path there is
-//     nothing to see at all.
-//
-// This mirrors TestPaperWritesTheKeysPaperItselfReads, which makes the same
-// check on the Paper side.
+// Velocity never refuses an unknown key. A misspelled forwarding-secret-file
+// makes it generate a random secret in /data and reject every forwarded
+// join; a misspelled show-max-players is invisible, since both defaults are
+// 500.
 func TestVelocityWritesTheKeysVelocityItselfReads(t *testing.T) {
 	defaults, err := os.ReadFile(velocityDefault)
 	if err != nil {
@@ -110,12 +73,7 @@ func TestVelocityWritesTheKeysVelocityItselfReads(t *testing.T) {
 	}
 }
 
-// The config-version the renderer writes is the one the pinned jar ships, and
-// this is the only place the two are compared. velocityConfigVersion is a
-// constant measured by hand out of the jar; the fixture is that same file
-// checked in. A Velocity bump that regenerates the fixture without moving the
-// constant fails here instead of producing a config Velocity migrates out from
-// under the renderer on first start.
+// The only place velocityConfigVersion is compared with the fixture.
 func TestVelocityWritesThePinnedConfigVersion(t *testing.T) {
 	defaults, err := os.ReadFile(velocityDefault)
 	if err != nil {
@@ -133,16 +91,9 @@ func TestVelocityWritesThePinnedConfigVersion(t *testing.T) {
 	}
 }
 
-// velocityTomlKeysOf reads the key names out of a velocity.toml document: every
-// top-level key, plus servers.try and every key under [advanced]. It fails
-// rather than returning an empty set when the document has no keys, so a
-// truncated fixture cannot pass by having nothing to compare.
-//
-// [servers] is the one table whose keys are not Velocity's to declare — each
-// is a server name somebody chose, and the fixture's are Velocity's three
-// example servers — so only try, the reserved key in there, is carried
-// through. [forced-hosts] is the same shape and contributes nothing but its
-// own name. [advanced] is Velocity's own and is carried through whole.
+// velocityTomlKeysOf returns the top-level keys, servers.try and everything
+// under [advanced]; other [servers] and [forced-hosts] keys are user names.
+// It fails on an empty document, so a truncated fixture cannot pass.
 func velocityTomlKeysOf(t *testing.T, doc []byte, what string) map[string]bool {
 	t.Helper()
 	var parsed map[string]any
@@ -172,7 +123,6 @@ func velocityTomlKeysOf(t *testing.T, doc []byte, what string) map[string]bool {
 	return keys
 }
 
-// The proxy half of the inversion: true here, false on the backends.
 func TestVelocityKeepsOnlineModeOn(t *testing.T) {
 	files, err := Velocity(velocityValues(), testSecretPath, nil)
 	if err != nil {
@@ -184,11 +134,6 @@ func TestVelocityKeepsOnlineModeOn(t *testing.T) {
 	}
 }
 
-// And the value actually travels, rather than the renderer reading
-// v.OnlineMode and writing true anyway. Without this the field would be a
-// setting that exists on the CRD, appears in config.yaml, and does nothing —
-// which is the failure mode the caller would only find by trying to join with
-// an unauthenticated client and being told to log in.
 func TestVelocityTurnsOnlineModeOffWhenTheValueSaysSo(t *testing.T) {
 	v := velocityValues()
 	off := false
@@ -204,10 +149,6 @@ func TestVelocityTurnsOnlineModeOffWhenTheValueSaysSo(t *testing.T) {
 	}
 }
 
-// A config.yaml that says nothing about online-mode is refused rather than
-// guessed at, the way an absent playerLimit is. Both defaults would be wrong:
-// true silently overrides an operator who chose false, false silently opens
-// the network to anyone under any name.
 func TestVelocityRefusesAnUnsetOnlineMode(t *testing.T) {
 	v := velocityValues()
 	v.OnlineMode = nil
@@ -221,13 +162,8 @@ func TestVelocityRefusesAnUnsetOnlineMode(t *testing.T) {
 	}
 }
 
-// The overlay still cannot reach online-mode, and the direction that matters
-// most is the one the four-key test above cannot cover: with the value set to
-// false, an overlay must not be able to turn authentication back on either.
-// online-mode moved from a literal to a value read out of Values, and a
-// renderer that set it in the base document instead of after the merge would
-// pass every other test in this file while handing a configOverlay control of
-// whether the network authenticates anyone.
+// With the value false, an overlay must not turn authentication back on
+// either; a renderer setting online-mode before the merge would allow it.
 func TestVelocityOverlayCannotMoveOnlineModeInEitherDirection(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
@@ -255,8 +191,6 @@ func TestVelocityOverlayCannotMoveOnlineModeInEitherDirection(t *testing.T) {
 	}
 }
 
-// 25565, not Velocity's own default of 25577: internal/podspec names 25565 and
-// the Service targets it by name.
 func TestVelocityBindsThePortThePodspecNames(t *testing.T) {
 	files, err := Velocity(velocityValues(), testSecretPath, nil)
 	if err != nil {
@@ -291,8 +225,6 @@ func TestVelocityUsesModernForwarding(t *testing.T) {
 	}
 }
 
-// The agent registers backends over the operator channel. A static list here
-// would be a second truth about which servers exist.
 func TestVelocityShipsNoServers(t *testing.T) {
 	files, err := Velocity(velocityValues(), testSecretPath, nil)
 	if err != nil {
@@ -307,17 +239,9 @@ func TestVelocityShipsNoServers(t *testing.T) {
 	}
 }
 
-// try and forced-hosts have to be spelled out empty, not merely absent: a
-// missing key falls back to Velocity's own built-in example (try = ["lobby"]
-// and three forced hosts naming servers this proxy never declares), which
-// refuses to start against an empty [servers] table rather than warning and
-// continuing. hack/velocity-image-test.sh is what actually caught this — a
-// unit test asserting on the rendered string cannot tell "absent" from
-// "explicitly empty" the way Velocity's own config loader does.
-//
-// This covers only the no-overlay case; see
-// TestVelocityOverlayServersTableKeepsAnEmptyTry for the one where an
-// overlay's own [servers] table would otherwise carry try away with it.
+// Absent is not empty to Velocity: it falls back to its examples and refuses
+// to start. Only hack/velocity-image-test.sh can see the difference at
+// runtime.
 func TestVelocityDefaultsTryAndForcedHostsEmptyWithNoOverlay(t *testing.T) {
 	files, err := Velocity(velocityValues(), testSecretPath, nil)
 	if err != nil {
@@ -332,14 +256,7 @@ func TestVelocityDefaultsTryAndForcedHostsEmptyWithNoOverlay(t *testing.T) {
 	}
 }
 
-// doc[k] = val in velocityToml is whole-key assignment, not a deep merge: an
-// overlay that declares its own [servers] table — to add a server, say —
-// replaces the base table outright, including the try = [] subkey nested
-// inside it. Without the post-overlay check this test guards, that overlay
-// would silently reopen the startup refusal
-// TestVelocityDefaultsTryAndForcedHostsEmptyWithNoOverlay closes: Velocity
-// falls back to try = ["lobby"], which does not exist in this rendered file
-// either.
+// An overlay [servers] table replaces the base one wholesale, try included.
 func TestVelocityOverlayServersTableKeepsAnEmptyTry(t *testing.T) {
 	files, err := Velocity(velocityValues(), testSecretPath, map[string]string{
 		"velocity.toml": "[servers]\n" + `lobby-external = "10.0.0.5:25565"` + "\n",
@@ -371,14 +288,8 @@ func TestVelocityCarriesTheMotdAndLimit(t *testing.T) {
 	}
 }
 
-// An overlay that tries to move any of the four critical keys must lose to
-// the reassertion at the end of velocityToml — the Velocity analogue of
-// TestPaperOverlayCannotMoveVelocityCriticalKeys. All four are attacked in
-// one overlay and all four are asserted, because they are set together in
-// one block in velocityToml: a test that only attacked bind and online-mode
-// would stay green if a later edit dropped the line reasserting
-// player-info-forwarding-mode or forwarding-secret-file, which is exactly
-// the class of regression this test exists to catch.
+// All four attacked and asserted at once, so dropping any one reassertion
+// line fails.
 func TestVelocityOverlayCannotMoveCriticalKeys(t *testing.T) {
 	files, err := Velocity(velocityValues(), testSecretPath, map[string]string{
 		"velocity.toml": "online-mode = false\n" +
@@ -433,15 +344,8 @@ func TestVelocityRefusesAnOverlayForAFileItDoesNotWrite(t *testing.T) {
 	}
 }
 
-// TOML's literal ('...') and basic ("...") string forms stop being
-// interchangeable exactly when a value contains a single quote or a control
-// character such as a newline: a literal string cannot express either at
-// all, so a correct encoder must fall back to a basic string and escape the
-// value. This is the one place the quoting distinction the earlier tests
-// deliberately ignore is actually load-bearing, and the failure it would
-// catch is a real encoding bug rather than a style choice — so instead of
-// asserting anything about which quote character was used, this parses the
-// rendered file back with the same library and checks the motd survives.
+// A single quote or newline cannot be a TOML literal string, so this parses
+// the output back instead of asserting a quote style.
 func TestVelocityEscapesAMotdThatCannotBeALiteralString(t *testing.T) {
 	v := velocityValues()
 	m := "A 'Spawnery' network\\with a backslash\nand a newline"
@@ -463,13 +367,6 @@ func TestVelocityEscapesAMotdThatCannotBeALiteralString(t *testing.T) {
 	}
 }
 
-// A [servers] or [forced-hosts] an overlay turned into something other than a
-// table is refused, not skipped.
-//
-// servers is the one with teeth: a quiet type assertion there drops the empty
-// try list this renderer exists to keep alive, go-toml marshals
-// `servers = "x"` without complaint, and the user's whole report is Velocity
-// refusing to start with nothing naming the overlay.
 func TestVelocityRefusesAMisshapenServersTable(t *testing.T) {
 	for _, tc := range []struct{ name, overlay, key string }{
 		{"servers", "servers = \"lobby\"\n", "servers"},
@@ -492,18 +389,8 @@ func TestVelocityRefusesAMisshapenServersTable(t *testing.T) {
 	}
 }
 
-// The RKE2 rollout's half day, made into a render-time error.
-//
-// Velocity's haproxy-protocol lives under [advanced]. Set at the top level it
-// reached the rendered /data/velocity.toml — where it read exactly as intended
-// — and Velocity behaved as though it were false: no PROXY header required,
-// and a connection carrying one dropped without a log line. Nothing in the
-// operator knew Velocity's schema, so a misplaced key was indistinguishable
-// from a correct one until something downstream behaved strangely.
-//
-// The error has to say where the key does live, because that is the shape both
-// of this project's overlay outages took: a real key at the wrong depth, not
-// an invented one.
+// haproxy-protocol belongs under [advanced]; at the top level Velocity reads
+// it as false without a word. The error must name where the key belongs.
 func TestVelocityRefusesAKeyAtTheWrongDepth(t *testing.T) {
 	_, err := Velocity(velocityValues(), testSecretPath, map[string]string{
 		"velocity.toml": "haproxy-protocol = true\n",
@@ -517,9 +404,7 @@ func TestVelocityRefusesAKeyAtTheWrongDepth(t *testing.T) {
 	}
 }
 
-// The same key in the right place is the overlay a real cluster runs, so it
-// must keep working. Without this the test above would be satisfied by a check
-// that refuses everything.
+// Without this the test above would pass on a check that refuses everything.
 func TestVelocityAcceptsTheSameKeyWhereItBelongs(t *testing.T) {
 	files, err := Velocity(velocityValues(), testSecretPath, map[string]string{
 		"velocity.toml": "[advanced]\nhaproxy-protocol = true\n",
@@ -532,8 +417,6 @@ func TestVelocityAcceptsTheSameKeyWhereItBelongs(t *testing.T) {
 	}
 }
 
-// [servers] and [forced-hosts] are keyed by names somebody chose, so the check
-// must not measure those against the fixture's three example servers.
 func TestVelocityAcceptsNamesTheUserChose(t *testing.T) {
 	files, err := Velocity(velocityValues(), testSecretPath, map[string]string{
 		"velocity.toml": "[servers]\nsurvival = \"10.0.0.5:25565\"\n" +
@@ -550,8 +433,6 @@ func TestVelocityAcceptsNamesTheUserChose(t *testing.T) {
 	}
 }
 
-// A key that is nowhere in the document at all gets the other half of the
-// message: what the level it was written at does declare.
 func TestVelocityRefusesAKeyItHasNeverHeardOf(t *testing.T) {
 	_, err := Velocity(velocityValues(), testSecretPath, map[string]string{
 		"velocity.toml": "[advanced]\nhaproxy-protokol = true\n",

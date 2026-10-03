@@ -37,11 +37,8 @@ func testNetwork() *spawneryv1alpha1.Network {
 	}
 }
 
-// TestBuildNetworkPolicySelectsServersOfOneNetwork pins the three terms of the
-// pod selector. Dropping any one of them widens the policy to pods it was
-// never meant to govern -- without the role term it would select the proxies
-// too, and a proxy's readiness is a kubelet dial (internal/podspec/proxy.go),
-// which is exactly the failure design §3.3 exists to avoid.
+// Without the role term the policy would select proxies too, whose readiness
+// is a kubelet dial.
 func TestBuildNetworkPolicySelectsServersOfOneNetwork(t *testing.T) {
 	p := podspec.BuildNetworkPolicy(testNetwork(), "spawnery-system")
 
@@ -62,12 +59,6 @@ func TestBuildNetworkPolicySelectsServersOfOneNetwork(t *testing.T) {
 	if p.Namespace != "minecraft" {
 		t.Errorf("namespace = %q, want minecraft", p.Namespace)
 	}
-	// The label is metadata, not a mechanism: nothing selects on it, and the
-	// manager's cache holds NetworkPolicies unrestricted. This message used to
-	// say the operator's restricted cache could not otherwise see the object
-	// it wrote, which described a restriction that does not exist in
-	// cmd/spawnery-operator's ByObject map — the worst kind of wrong, since a
-	// failure message is read only by somebody already confused.
 	if p.Labels[podspec.LabelManagedBy] != podspec.ManagedByValue {
 		t.Errorf("the policy does not carry %s=%s; it is how a human reading "+
 			"kubectl output in a namespace Spawnery does not own tells this "+
@@ -76,12 +67,8 @@ func TestBuildNetworkPolicySelectsServersOfOneNetwork(t *testing.T) {
 	}
 }
 
-// TestBuildNetworkPolicyAdmitsOnlyItsOwnProxies checks the rule the whole
-// milestone exists for, and the one thing about it that is easy to get wrong:
-// the ingress peer carries a podSelector and NO namespaceSelector, which
-// restricts it to the policy's own namespace. Adding an empty namespaceSelector
-// there would admit a proxy of the same network name from any namespace in the
-// cluster.
+// No namespaceSelector restricts the peer to the policy's own namespace; an
+// empty one would admit a same-named proxy from anywhere.
 func TestBuildNetworkPolicyAdmitsOnlyItsOwnProxies(t *testing.T) {
 	p := podspec.BuildNetworkPolicy(testNetwork(), "spawnery-system")
 
@@ -101,13 +88,8 @@ func TestBuildNetworkPolicyAdmitsOnlyItsOwnProxies(t *testing.T) {
 	if peer.PodSelector == nil {
 		t.Fatal("the ingress peer has no podSelector, so it admits every pod")
 	}
-	// Exactly these three, compared by length as well as by key -- the same
-	// check the pod selector above carries, and for the same reason. Checking
-	// only the keys the peer happens to declare is a trap in both directions:
-	// dropping LabelManagedBy admits any pod in the namespace wearing the
-	// network and role labels, and adding one bogus label makes the peer match
-	// nothing, so no proxy reaches any backend. Both mutations were green
-	// before this.
+	// Compared by length as well as key: a dropped label widens the peer, an
+	// extra one makes it match nothing.
 	wantPeer := map[string]string{
 		podspec.LabelManagedBy: podspec.ManagedByValue,
 		podspec.LabelNetwork:   "production",
@@ -127,10 +109,8 @@ func TestBuildNetworkPolicyAdmitsOnlyItsOwnProxies(t *testing.T) {
 	}
 }
 
-// TestBuildNetworkPolicyEgressIsDNSAndTheOperatorOnly pins the egress half. A
-// backend runs online-mode=false and never authenticates a player, so it never
-// needs Mojang; its only other measured outbound call is Paper's update check,
-// which docs/reference/known-issues.md records as failing harmlessly with no network.
+// A backend never authenticates players, so it never needs Mojang; Paper's
+// update check fails harmlessly.
 func TestBuildNetworkPolicyEgressIsDNSAndTheOperatorOnly(t *testing.T) {
 	p := podspec.BuildNetworkPolicy(testNetwork(), "spawnery-system")
 
@@ -167,22 +147,14 @@ func TestBuildNetworkPolicyEgressIsDNSAndTheOperatorOnly(t *testing.T) {
 	if len(op.To) != 1 {
 		t.Fatalf("got %d operator peers, want exactly one", len(op.To))
 	}
-	// One peer carrying both selectors means "pods matching podSelector in
-	// namespaces matching namespaceSelector". Two peers would mean OR, which
-	// would admit every pod in the operator's namespace and the operator's own
-	// labels in every namespace.
+	// One peer with both selectors is AND; two peers would be OR.
 	if op.To[0].NamespaceSelector == nil || op.To[0].PodSelector == nil {
 		t.Fatalf("the operator peer needs both selectors in one peer; got %+v", op.To[0])
 	}
 	if got := op.To[0].NamespaceSelector.MatchLabels[podspec.NamespaceNameLabel]; got != "spawnery-system" {
 		t.Errorf("operator namespace = %q, want spawnery-system", got)
 	}
-	// The podSelector's content, not just its presence: OperatorPodLabels'
-	// own doc comment calls this a trap for anyone writing a peer selector by
-	// copying ManagedSelector, since the operator pod carries neither
-	// LabelManagedBy nor LabelNetwork. A selector with the wrong labels would
-	// admit nothing -- or the wrong thing -- while every other assertion here
-	// stayed green.
+	// The operator pod carries neither LabelManagedBy nor LabelNetwork.
 	wantOperator := podspec.OperatorPodLabels()
 	gotOperator := op.To[0].PodSelector.MatchLabels
 	if len(gotOperator) != len(wantOperator) {
@@ -198,11 +170,6 @@ func TestBuildNetworkPolicyEgressIsDNSAndTheOperatorOnly(t *testing.T) {
 	}
 }
 
-// TestBuildNetworkPolicyIsOwnedByItsNetwork is the property that keeps a stale
-// policy from outliving the Network it protects. It is the one place this
-// builder departs from BuildDataClaim, which carries no owner reference on
-// purpose: a stale claim is a world somebody may still want, a stale
-// NetworkPolicy silently drops traffic.
 func TestBuildNetworkPolicyIsOwnedByItsNetwork(t *testing.T) {
 	network := testNetwork()
 	p := podspec.BuildNetworkPolicy(network, "spawnery-system")
@@ -215,27 +182,19 @@ func TestBuildNetworkPolicyIsOwnedByItsNetwork(t *testing.T) {
 		t.Errorf("owner = %s/%s uid %s, want Network/%s uid %s",
 			ref.Kind, ref.Name, ref.UID, network.Name, network.UID)
 	}
-	// APIVersion matters as much as Kind: the garbage collector resolves the
-	// owner by GroupVersionKind, and a wrong or missing APIVersion means it
-	// never finds the Network, so the policy outlives it -- the exact failure
-	// this owner reference exists to prevent.
+	// The garbage collector resolves the owner by GroupVersionKind.
 	if ref.APIVersion != spawneryv1alpha1.GroupVersion.String() {
 		t.Errorf("owner apiVersion = %q, want %q", ref.APIVersion, spawneryv1alpha1.GroupVersion.String())
 	}
 	if ref.Controller == nil || !*ref.Controller {
 		t.Error("the owner reference must be a controller reference")
 	}
-	// BlockOwnerDeletion defaults to false, which permits a foreground-deletion
-	// race: the policy could be deleted out from under a Network still being
-	// foreground-deleted, instead of blocking until the policy is gone.
 	if ref.BlockOwnerDeletion == nil || !*ref.BlockOwnerDeletion {
 		t.Error("the owner reference must block owner deletion")
 	}
 }
 
-// TestBuildNetworkPolicyDeclaresBothPolicyTypes guards a silent widening.
-// PolicyTypes is not decoration: a policy with egress rules but no
-// PolicyTypeEgress applies none of them, and the object is still accepted.
+// A policy with egress rules but no PolicyTypeEgress applies none of them.
 func TestBuildNetworkPolicyDeclaresBothPolicyTypes(t *testing.T) {
 	p := podspec.BuildNetworkPolicy(testNetwork(), "spawnery-system")
 
@@ -263,9 +222,6 @@ func TestTheProxyPolicyIsEgressOnlyAndSelectsOneGroupsProxies(t *testing.T) {
 	if p.Name != "gateway-proxies" || p.Namespace != "minecraft" {
 		t.Errorf("name/namespace = %s/%s, want gateway-proxies/minecraft", p.Name, p.Namespace)
 	}
-	// Egress only: an ingress type here would put the kubelet's readiness
-	// probe under policy, the reason BuildNetworkPolicy never selected
-	// proxies at all.
 	if len(p.Spec.PolicyTypes) != 1 || p.Spec.PolicyTypes[0] != networkingv1.PolicyTypeEgress {
 		t.Errorf("policyTypes = %v, want exactly [Egress]", p.Spec.PolicyTypes)
 	}

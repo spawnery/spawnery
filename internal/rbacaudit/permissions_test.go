@@ -34,8 +34,6 @@ func keys(perms []Permission) []string {
 	return out
 }
 
-// sameKeys compares two key lists element by element, so callers can assert
-// exact order rather than just set membership.
 func sameKeys(got, want []string) bool {
 	if len(got) != len(want) {
 		return false
@@ -108,9 +106,7 @@ func TestExpandRules(t *testing.T) {
 			want:  nil,
 		},
 		{
-			// The input order here is deliberately not alphabetical, so that
-			// this case only passes if the result is actually sorted rather
-			// than merely reflecting iteration order by coincidence.
+			// Deliberately not alphabetical input.
 			name: "results come back sorted by key regardless of input order",
 			rules: []rbacv1.PolicyRule{{
 				APIGroups: []string{"spawnery.cloud", ""},
@@ -145,11 +141,7 @@ func TestExpandRules(t *testing.T) {
 	}
 }
 
-// TestExpandRulesSplitsSubresourceFields checks the Resource and Subresource
-// fields directly. Key() renders an unsplit "servers/status" identically to a
-// split Resource="servers"/Subresource="status", so a test that only checks
-// Key() (as TestExpandRules's own subresource case does) cannot tell the
-// split apart from a no-op strings.Cut.
+// Key() renders a split and an unsplit "servers/status" identically.
 func TestExpandRulesSplitsSubresourceFields(t *testing.T) {
 	got, err := ExpandRules([]rbacv1.PolicyRule{{
 		APIGroups: []string{"spawnery.cloud"},
@@ -168,9 +160,6 @@ func TestExpandRulesSplitsSubresourceFields(t *testing.T) {
 	}
 }
 
-// TestExpandRulesRejectsWildcards is the point of this function: a wildcard
-// grants everything in its position, so it can never be matched against a
-// finite table. Treating it as an over-grant is the only honest answer.
 func TestExpandRulesRejectsWildcards(t *testing.T) {
 	cases := []struct {
 		name string
@@ -196,13 +185,8 @@ func TestExpandRulesRejectsWildcards(t *testing.T) {
 	}
 }
 
-// TestExpandRulesRejectsNonResourceURLs guards against the same failure mode
-// as the wildcard rejection above, from a different angle: a rule using
-// NonResourceURLs has empty APIGroups and Resources, so the group/resource
-// loops in ExpandRules simply do not run for it. Without an explicit check,
-// such a rule would silently expand to zero permissions instead of erroring,
-// and the audit would report a role granting non-resource access as if it
-// granted nothing at all.
+// A NonResourceURLs rule has no groups or resources, so without an explicit
+// check it would expand to nothing.
 func TestExpandRulesRejectsNonResourceURLs(t *testing.T) {
 	rule := rbacv1.PolicyRule{
 		NonResourceURLs: []string{"/healthz"},
@@ -271,10 +255,7 @@ func TestCompare(t *testing.T) {
 		}
 	})
 
-	// In real use, Required entries always carry a Why and ExpandRules output
-	// never does — so if Compare ever matched on the whole struct instead of
-	// Key(), every single permission would come back both missing and extra
-	// at once, no matter how well the role matches the table.
+	// Required entries carry a Why and expanded rules never do.
 	t.Run("Why does not affect matching", func(t *testing.T) {
 		withWhy := []Permission{
 			{Group: "", Resource: "pods", Verb: "get", Why: "watch loop"},
@@ -292,10 +273,7 @@ func TestCompare(t *testing.T) {
 		}
 	})
 
-	// Compare's output feeds directly into failure messages; a random order
-	// makes those messages jump around between runs. Enough entries here
-	// that a would-be regression to unsorted output has only a 1-in-120
-	// chance of coincidentally landing in sorted order via map iteration.
+	// Enough entries that unsorted output lands sorted by chance only 1 in 120.
 	t.Run("missing and extra are each returned in sorted order", func(t *testing.T) {
 		manyRequired := []Permission{
 			perm("", "secrets", "", "get"),
@@ -323,25 +301,8 @@ func TestCompare(t *testing.T) {
 	})
 }
 
-// TestExpandRulesRejectsResourceNames guards the same failure mode as the
-// wildcard rejection, from the opposite direction. A wildcard grants more than
-// the table can express and is refused as an over-grant. A resourceNames
-// restriction grants *less* than the table can express, and expanding it
-// anyway is the more dangerous of the two: the Permission carries no name, so
-// the rule reads as unrestricted and Compare reports the requirement satisfied
-// for every object when it holds for one.
-//
-// controller-gen emits no resourceNames, so nothing in the generated manifest
-// exercises this; the master design asks for them on the forwarding-secret
-// reader Role, which is what makes the case real rather than hypothetical.
-// TestExpandRulesCarriesResourceNames is what lets the chart render a narrowed
-// forwarding-secret reader Role at all.
-//
-// The names are part of Permission's identity, so a named rule and an
-// unnamed one are simply different permissions -- which is the property this
-// asserts, in both directions. Expanding a named rule into an unnamed one
-// would read as unrestricted and have Compare report a requirement satisfied
-// for every object when it holds for one.
+// A named rule must not expand into an unnamed one, which would read as
+// unrestricted.
 func TestExpandRulesCarriesResourceNames(t *testing.T) {
 	named, err := ExpandRules([]rbacv1.PolicyRule{{
 		APIGroups:     []string{""},
@@ -359,16 +320,12 @@ func TestExpandRulesCarriesResourceNames(t *testing.T) {
 		t.Fatalf("ResourceNames = %v, want the rule's own", got)
 	}
 
-	// A named grant does not satisfy an unrestricted requirement. This is the
-	// direction the old refusal existed to prevent, and the one that would
-	// report the operator able to read every Secret when it can read one.
+	// A named grant does not satisfy an unrestricted requirement.
 	unrestricted := []Permission{{Group: "", Resource: "secrets", Verb: "get"}}
 	if diff := Compare(unrestricted, named); len(diff.Missing) != 1 {
 		t.Errorf("Missing = %v, want the unrestricted requirement unmet by a named grant", diff.Missing)
 	}
-	// And an unrestricted grant does not silently satisfy a named requirement
-	// either: it is wider, and an audit that accepted it would miss a role
-	// that had quietly stopped naming anything.
+	// Nor an unrestricted grant a named requirement: it is wider.
 	wide, err := ExpandRules([]rbacv1.PolicyRule{{
 		APIGroups: []string{""}, Resources: []string{"secrets"}, Verbs: []string{"get"},
 	}})
@@ -381,9 +338,6 @@ func TestExpandRulesCarriesResourceNames(t *testing.T) {
 	}
 }
 
-// TestKeyIgnoresTheOrderOfResourceNames keeps a role that lists the same
-// secrets in a different order from reading as a different permission. RBAC
-// does not care about the order and neither does this.
 func TestKeyIgnoresTheOrderOfResourceNames(t *testing.T) {
 	a := Permission{Group: "", Resource: "secrets", Verb: "get", ResourceNames: []string{"b", "a"}}
 	b := Permission{Group: "", Resource: "secrets", Verb: "get", ResourceNames: []string{"a", "b"}}

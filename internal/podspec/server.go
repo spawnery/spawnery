@@ -30,214 +30,93 @@ import (
 )
 
 const (
-	// MinecraftPort is the port every Paper server listens on.
-	MinecraftPort int32 = 25565
-	// MinecraftPortName names that port.
-	MinecraftPortName = "minecraft"
+	MinecraftPort     int32 = 25565
+	MinecraftPortName       = "minecraft"
 
-	// ContainerName is the name of the Paper container.
 	ContainerName = "minecraft"
 
-	// DataVolumeName is the server's working directory: an emptyDir for
-	// ephemeral groups, a PVC for persistent ones.
+	// DataVolumeName is an emptyDir for ephemeral groups, a PVC for persistent ones.
 	DataVolumeName = "data"
-	// TmpVolumeName is scratch space, needed because the root filesystem is
-	// read-only.
+	// TmpVolumeName is scratch space; the root filesystem is read-only.
 	TmpVolumeName = "tmp"
 
-	// DataMountPath is where DataVolumeName is mounted.
 	DataMountPath = "/data"
-	// TmpMountPath is where TmpVolumeName is mounted.
-	TmpMountPath = "/tmp"
+	TmpMountPath  = "/tmp"
 
-	// ServerConfigDirPath is the server's own configuration directory, and a
-	// place no user mount may go -- not at it, and not inside it.
-	//
-	// The kubelet creates the parent directory of a mount itself, and creates
-	// it root-owned and group-read-only -- drwxr-sr-x 0 10001 -- while fsGroup
-	// with OnRootMismatch only ever touches the volume's own root, which comes
-	// out drwxrwsrwx. So a mount anywhere under here leaves the container
-	// unable to write into the directory, and the first thing it tries to
-	// write is spawnery-config's own paper-global.yml:
-	//
-	//	spawnery-config: /data/config/paper-global.yml: open ...: permission denied
-	//
-	// The server then never starts, and nothing in that message names a mount.
-	// Refusing it here is what turns that into a sentence on the object
-	// somebody just wrote. Nothing this operator can do makes it work: the
-	// ownership is the kubelet's, and fixing it would need a root init
-	// container, which is the one thing every pod here is built not to have.
-	//
-	// Refused for proxy pods too, though only the Paper flavour writes here.
-	// One rule rather than two, and a proxy loses nothing by it: Velocity
-	// reads velocity.toml at /data's root and has no configuration directory
-	// of its own.
+	// ServerConfigDirPath refuses user mounts at or under it: the kubelet creates
+	// a mount's parent directories root-owned and group-read-only, and fsGroup
+	// with OnRootMismatch only fixes the volume root, so the server could no
+	// longer write paper-global.yml here and never starts. Refused for proxy
+	// pods too; Velocity has no configuration directory to lose.
 	ServerConfigDirPath = DataMountPath + "/config"
 
-	// PluginsMountPath is the server's plugins directory, and the one place
-	// under DataMountPath a user mount cannot go.
-	//
-	// image/entrypoint.sh copies the agent jar into it on every start, and
-	// every user mount is read-only (this package sets ReadOnly on all of
-	// them, unconditionally), so a mount here makes that copy fail under
-	// `set -eu` with a bare `cp:` message that names no cause. The jar cannot
-	// simply be loaded from where it ships either: Paper writes its plugins'
-	// data folders inside this directory, so pointing --plugins at a
-	// read-only path takes Paper's own bundled plugins down with it.
-	//
-	// Refused on an exact match only, unlike the bidirectional check
-	// AgentMountPath gets. A mount *inside* it is the ordinary way to add a
-	// plugin and breaks nothing -- the copy writes one file beside whatever
-	// is mounted -- and a mount above it is DataMountPath, which is already
-	// refused on its own account.
+	// PluginsMountPath refuses a user mount at exactly this path: the entrypoint
+	// copies the agent jar in on every start and every user mount is read-only.
+	// The jar cannot load from elsewhere, because Paper writes its plugins' data
+	// folders here. A mount inside it is the ordinary way to add a plugin.
 	PluginsMountPath = DataMountPath + "/plugins"
 
-	// PluginSourceVolumeName and PluginSourceMountPath are where a group's
-	// spec.extraPlugins claim is mounted.
-	//
-	// **Outside DataMountPath, and that is the whole reason for a second
-	// path.** A user mount may not target PluginsMountPath -- the comment
-	// above says why -- and every mount this package renders is read-only, so
-	// the claim cannot simply *be* the plugins directory. It is a source the
-	// entrypoint copies out of, exactly as it copies the agent jar out of the
-	// read-only part of the image.
-	//
-	// A constant known to both sides rather than a path the user chooses,
-	// because the entrypoint has to find it. A chosen path would have to reach
-	// the entrypoint through an environment variable, which is a second place
-	// for the two to disagree.
+	// PluginSourceVolumeName and PluginSourceMountPath are where spec.extraPlugins
+	// is mounted: outside DataMountPath, as a read-only source the entrypoint
+	// copies out of, since the plugins directory itself cannot be read-only. A
+	// fixed path, so the entrypoint needs no env var to find it.
 	PluginSourceVolumeName = "extra-plugins"
 	PluginSourceMountPath  = "/var/run/spawnery/plugins"
 
-	// FileSourceVolumeName and FileSourceMountPath are where a group's
-	// spec.extraFiles claim is mounted.
-	//
-	// Outside DataMountPath for the same reason PluginSourceMountPath is: the
-	// claim cannot *be* the directory it fills, because every mount this
-	// package renders is read-only and a read-only /data breaks everything
-	// the server writes. It is a source the entrypoint copies out of.
+	// FileSourceVolumeName and FileSourceMountPath are where spec.extraFiles is
+	// mounted, outside DataMountPath for the same reason.
 	FileSourceVolumeName = "extra-files"
 	FileSourceMountPath  = "/var/run/spawnery/files"
 
-	// SLPHealthBinary is the Server-List-Ping tool baked into the base image.
-	// Kubelet knows no SLP probe type, and a tcpSocket probe on 25565 turns
-	// green before the world is loaded.
+	// SLPHealthBinary exists because the kubelet has no SLP probe, and a
+	// tcpSocket probe on 25565 turns green before the world is loaded.
 	SLPHealthBinary = "/usr/local/bin/spawnery-slp"
 
-	// AgentVolumeName is the projected volume carrying the agent's token and
-	// the CA it verifies the operator's gRPC endpoint with.
+	// AgentVolumeName carries the agent's token and the CA it verifies the
+	// operator's gRPC endpoint with.
 	AgentVolumeName = "spawnery-agent"
-	// AgentMountPath is where AgentVolumeName is mounted.
-	AgentMountPath = "/var/run/spawnery"
-	// AgentTokenPath is the projected file holding the audience-bound
-	// ServiceAccount token, relative to AgentMountPath.
+	AgentMountPath  = "/var/run/spawnery"
+	// AgentTokenPath and AgentCAPath are relative to AgentMountPath.
 	AgentTokenPath = "token"
-	// AgentCAPath is the projected file holding the operator's CA
-	// certificate, relative to AgentMountPath.
-	AgentCAPath = "ca.crt"
+	AgentCAPath    = "ca.crt"
 
-	// ConfigVolumeName is the projected volume carrying the operator's
-	// rendered configuration: the group's own ConfigMap and the Network's
-	// forwarding secret. internal/render.Load reads exactly this layout by
-	// default, and it is shared verbatim by BuildServerPod and BuildProxyPod
-	// through configVolume below, so the two layers cannot drift into
-	// different answers about where configuration lives.
+	// ConfigVolumeName carries the group's ConfigMap and the Network's forwarding
+	// secret in the layout internal/render.Load reads by default.
 	ConfigVolumeName = "spawnery-config"
-	// ConfigOverlayVolumeName carries the user's spec.configOverlay
-	// ConfigMap, mounted only when a group declares one, nested inside
-	// ConfigMountPath at configOverlayDir.
-	//
-	// It is a plain ConfigMap volume, not a source folded into
-	// ConfigVolumeName's own Projected volume, and that is not
-	// interchangeable with the alternative: a Projected ConfigMap source
-	// only ever surfaces the keys explicitly named in its Items, so the only
-	// way to fold an arbitrarily-named overlay key in without enumerating a
-	// fixed list — which internal/render's checkOverlayFiles must see even
-	// the *wrong* names to refuse loudly, per its own doc comment — would be
-	// to guess the flavour's target names ahead of time and hardcode them
-	// here. A typo or a name from a different flavour would then be dropped
-	// by the kubelet before internal/render ever saw it: no refusal, no
-	// crash loop, just an overlay that silently did nothing — the one
-	// failure mode this whole area of the design exists to prevent. A plain
-	// ConfigMap volume with no Items mounts every key under it unfiltered,
-	// so whatever the user actually wrote reaches the renderer and
-	// checkOverlayFiles is what decides whether it is accepted.
+	// ConfigOverlayVolumeName is a plain ConfigMap volume rather than a source in
+	// ConfigVolumeName's projection: a projected source surfaces only the keys
+	// named in Items, so a misnamed overlay key would vanish silently instead of
+	// reaching internal/render's checkOverlayFiles and being refused.
 	ConfigOverlayVolumeName = "spawnery-config-overlay"
-	// ConfigMountPath is where ConfigVolumeName is mounted.
-	//
-	// Not /data/config: Paper writes paper-global.yml and
-	// paper-world-defaults.yml there itself at startup, and a ConfigMap
-	// mount is always read-only, so a mount there breaks the start. Mounting
-	// at ConfigMountPath instead means the collision never arises rather than
-	// getting resolved.
-	//
-	// Not under AgentMountPath: that is the agent's credential mount, and
-	// checkMountCollision guards it with a bidirectional nesting check it
-	// applies to nothing else. Keeping the two apart keeps that rule saying
-	// the one thing it exists to say — ConfigMountPath gets the same
-	// bidirectional check below, for the same reason: a user mount there
-	// would shadow the file the renderer reads the forwarding secret from.
-	//
-	// PluginSourceMountPath and FileSourceMountPath do nest under
-	// AgentMountPath and inherit that check rather than repeating it — see
-	// checkMountCollision, which spells their safety out as a dependency on
-	// it. ConfigMountPath is kept out from under it and carries its own copy,
-	// so that what each path refuses, and why, is readable where that path is
-	// defined.
+	// ConfigMountPath is not /data/config, where Paper writes its own files and a
+	// read-only ConfigMap would break the start, and not under AgentMountPath, so
+	// each carries its own bidirectional check in checkMountCollision.
 	ConfigMountPath = "/etc/spawnery"
-	// ConfigValuesKey is both the data key of the group's rendered ConfigMap
-	// — the key Task 10's controller marshals render.Values into — and the
-	// file name it lands at under ConfigMountPath, since that key already
-	// matches internal/render.ValuesFile and needs no renaming between the
-	// two.
-	ConfigValuesKey = "config.yaml"
-	// ForwardingSecretKey is the data key of the Network's forwarding
-	// Secret, per NetworkSpec.ForwardingSecretRef's documented contract.
+	// ConfigValuesKey is both the ConfigMap data key and the file name under
+	// ConfigMountPath; it matches internal/render.ValuesFile.
+	ConfigValuesKey     = "config.yaml"
 	ForwardingSecretKey = "secret"
-	// configSecretFile is where ForwardingSecretKey lands under
-	// ConfigMountPath. internal/render.SecretFile names the same file
-	// independently: podspec stays free of internal/render so that building
-	// a pod spec never depends on a package that touches the filesystem.
+	// configSecretFile duplicates internal/render.SecretFile so that podspec does
+	// not import a package that touches the filesystem.
 	configSecretFile = "forwarding.secret"
-	// configOverlayDir is the subdirectory the overlay's files land under.
-	// internal/render.OverlayDir names the same directory independently, for
-	// the reason above — and load.go's own comment on why that loader
-	// resolves each entry with os.Stat, rather than trusting DirEntry's
-	// Lstat-based type, is exactly why this must be a real subdirectory a
-	// ConfigMap is mounted at, not a naming convention layered onto the
-	// mount root.
+	// configOverlayDir duplicates internal/render.OverlayDir, for the same reason.
 	configOverlayDir = "overlay"
 
-	// EnvOperatorEndpoint names the container env var carrying the address
-	// the agent dials to reach the operator's gRPC endpoint.
 	EnvOperatorEndpoint = "SPAWNERY_OPERATOR_ENDPOINT"
 
-	// TokenExpirationSeconds is the lifetime of the projected token. Short,
-	// because it keeps the replay window small; the kubelet rotates it
-	// well before it runs out.
+	// TokenExpirationSeconds is short to keep the replay window small; the
+	// kubelet rotates the token well before it runs out.
 	TokenExpirationSeconds int64 = 600
 
-	// FSGroupID is the supplemental group the kubelet chowns DataVolumeName
-	// to before the container starts, so uid 10001 — the container's own
-	// uid, per nix/oci-common.nix's `uid` and `gid`, which set both to the
-	// same 10001 — can write into a PersistentVolumeClaim that arrives
-	// owned by root. It is not a separate identity: nix/oci-common.nix
-	// gives the image one uid and one matching gid, both 10001, so the
-	// value that must appear here is the same 10001 the container already
-	// runs as.
+	// FSGroupID is the image's uid and gid (nix/oci-common.nix), so the
+	// container can write into a PVC that arrives owned by root.
 	FSGroupID int64 = 10001
 )
 
-// DataClaimName is the name of the PVC of a persistent server.
 func DataClaimName(server string) string {
 	return server + "-" + DataVolumeName
 }
 
-// configVolume is the projected volume both BuildServerPod and BuildProxyPod
-// mount read-only at ConfigMountPath: the group's rendered ConfigMap and the
-// Network's forwarding secret. One function shared by both builders is what
-// stops the two layers from drifting into different answers about where
-// configuration lives.
 func configVolume(groupConfigMap, forwardingSecret string) corev1.Volume {
 	return corev1.Volume{
 		Name: ConfigVolumeName,
@@ -266,18 +145,9 @@ func configVolume(groupConfigMap, forwardingSecret string) corev1.Volume {
 	}
 }
 
-// configOverlayVolume is the volume ConfigOverlayVolumeName when a group
-// declares spec.configOverlay, or nil when it does not — the caller appends
-// it (and its mount) only in the non-nil case, since an always-present
-// volume naming an empty ConfigMap is a pod that never starts, not an
-// absent overlay.
-//
-// No Items: every key of the referenced ConfigMap becomes a file here,
-// whatever its name, so a key internal/render does not recognise still
-// reaches checkOverlayFiles and gets refused there — loudly, by design —
-// instead of being filtered out by the kubelet before the renderer ever
-// runs. See the comment on ConfigOverlayVolumeName for why an enumerated
-// Items list was tried and rejected.
+// configOverlayVolume returns nil without spec.configOverlay: a volume naming
+// an empty ConfigMap is a pod that never starts. No Items, see
+// ConfigOverlayVolumeName.
 func configOverlayVolume(overlay *spawneryv1alpha1.ObjectRef) *corev1.Volume {
 	if overlay == nil {
 		return nil
@@ -292,8 +162,7 @@ func configOverlayVolume(overlay *spawneryv1alpha1.ObjectRef) *corev1.Volume {
 	}
 }
 
-// BuildServerPod renders the pod of one Server. The Server owns the pod, so
-// deleting the Server cascades.
+// BuildServerPod's pod is owned by the Server, so deleting the Server cascades.
 func BuildServerPod(
 	net *spawneryv1alpha1.Network,
 	group *spawneryv1alpha1.ServerGroup,
@@ -331,9 +200,7 @@ func BuildServerPod(
 				Projected: &corev1.ProjectedVolumeSource{
 					Sources: []corev1.VolumeProjection{
 						{
-							// The audience is what makes a standard API server
-							// token worthless here, and the short expiry keeps
-							// the replay window small. The kubelet rotates it.
+							// The audience makes a standard API server token worthless here.
 							ServiceAccountToken: &corev1.ServiceAccountTokenProjection{
 								Audience:          AgentTokenAudience,
 								ExpirationSeconds: ptr.To(TokenExpirationSeconds),
@@ -360,10 +227,6 @@ func BuildServerPod(
 		{Name: AgentVolumeName, MountPath: AgentMountPath, ReadOnly: true},
 		{Name: ConfigVolumeName, MountPath: ConfigMountPath, ReadOnly: true},
 	}
-	// Nested inside ConfigVolumeName's own mount: Kubernetes mounts a
-	// VolumeMount whose path lies under another's without issue, ordering
-	// them itself, and design spec 4.3's own DataMountPath+"/config" example
-	// already relies on the same nesting elsewhere in this package.
 	if vol := configOverlayVolume(group.Spec.ConfigOverlay); vol != nil {
 		volumes = append(volumes, *vol)
 		mounts = append(mounts, corev1.VolumeMount{
@@ -380,13 +243,8 @@ func BuildServerPod(
 	volumes = append(volumes, userVolumes...)
 	mounts = append(mounts, userVolumeMounts...)
 
-	// The group's own plugin volume, if it named one. Read-only at the volume
-	// as well as at the mount: one claim may serve several groups, and a group
-	// that could write it could change what every other group loads.
-	//
-	// Mounted outside DataMountPath -- see PluginSourceMountPath. The
-	// entrypoint copies out of it; it is not the plugins directory itself,
-	// which a read-only mount could not be.
+	// Read-only at the volume as well as the mount: one claim may serve several
+	// groups, and a group that could write it could change what the others load.
 	if group.Spec.ExtraPlugins != nil {
 		volumes = append(volumes, sourceVolume(PluginSourceVolumeName,
 			group.Spec.ExtraPlugins.ClaimName, group.Spec.ExtraPlugins.Image, group.Spec.ExtraPlugins.PullPolicy))
@@ -397,10 +255,6 @@ func BuildServerPod(
 		})
 	}
 
-	// The group's own file volume, if it named one. Same reasoning as the
-	// plugin source above: read-only at both the volume and the mount, and
-	// outside DataMountPath because a read-only mount cannot be the directory
-	// it fills.
 	if group.Spec.ExtraFiles != nil {
 		volumes = append(volumes, sourceVolume(FileSourceVolumeName,
 			group.Spec.ExtraFiles.ClaimName, group.Spec.ExtraFiles.Image, group.Spec.ExtraFiles.PullPolicy))
@@ -414,22 +268,9 @@ func BuildServerPod(
 	container := corev1.Container{
 		Name:  ContainerName,
 		Image: group.Spec.Image,
-		// Stdin, so `kubectl attach` can reach the console.
-		//
-		// Without it the container gets /dev/null on stdin, the server's
-		// console reader sees EOF at once, and an attaching client's
-		// keystrokes go nowhere. It is what lets an operator run /cloud on a
-		// network where nobody has been granted a permission yet.
-		//
-		// StdinOnce is deliberately left false. It would close the container's
-		// stdin the moment the first attaching client disconnects, so the
-		// console would answer exactly one session and be dead for the rest of
-		// the pod's life -- and the second person to try it would find a
-		// command that used to work.
-		//
-		// No TTY either. Paper and Velocity both switch to a terminal console
-		// when they have one, which changes how their output is written, and
-		// nothing needs a terminal here: a command arrives over a plain pipe.
+		// Stdin lets `kubectl attach` reach the console. StdinOnce would close stdin
+		// after the first attached client leaves; a TTY would switch Paper and
+		// Velocity to terminal console output.
 		Stdin: true,
 
 		Ports: []corev1.ContainerPort{{
@@ -437,13 +278,8 @@ func BuildServerPod(
 			ContainerPort: MinecraftPort,
 			Protocol:      corev1.ProtocolTCP,
 		}},
-		// The group's own variables come last, after the four this operator
-		// owns. Order is not what protects those four: ReservedEnvPrefix and
-		// the CEL rule on spec.env are, and they make it impossible for a
-		// group to repeat one of these names at all. Appending is a
-		// readability decision -- it keeps the operator's own set at a fixed
-		// position in every pod, so `kubectl describe pod` still reads
-		// straight down for a group that sets twenty of its own.
+		// The group's own variables come last; ReservedEnvPrefix and the CEL rule on
+		// spec.env, not order, protect the operator's four.
 		Env: append(append(append([]corev1.EnvVar{
 			{Name: "SPAWNERY_NETWORK", Value: net.Name},
 			{Name: "SPAWNERY_GROUP", Value: group.Name},
@@ -451,9 +287,8 @@ func BuildServerPod(
 			{Name: EnvOperatorEndpoint, Value: agentEndpoint},
 		}, substitutionEnv(group.Spec.Substitution)...), keepEnv(group.Spec.Storage)...), group.Spec.Env...),
 		VolumeMounts: mounts,
-		// Readiness only. A liveness probe would restart the container and
-		// kick every player on it — the state machine handles a red readiness
-		// probe by deregistering instead.
+		// Readiness only: a liveness restart would kick every player, whereas the
+		// state machine deregisters on a red readiness probe.
 		ReadinessProbe: &corev1.Probe{
 			ProbeHandler: corev1.ProbeHandler{
 				Exec: &corev1.ExecAction{
@@ -499,48 +334,19 @@ func BuildServerPod(
 		Spec: corev1.PodSpec{
 			Containers: []corev1.Container{container},
 			Volumes:    volumes,
-			// Never for an ephemeral server, so a pod that stopped stays
-			// stopped and the operator gets to see it. Always would restart
-			// the container inside the same pod, over the same emptyDir, which
-			// is how a finished round used to come back with its own world.
-			//
-			// A persistent server keeps Always: its world is a claim, its
-			// identity is its ordinal, and a round's end is not a thing that
-			// happens to it.
+			// Never for an ephemeral server: Always would restart the container over
+			// the same emptyDir and bring a finished round back with its own world.
 			RestartPolicy: restartPolicy(group),
-			// The pods carry no Kubernetes credentials from the API server's
-			// own token machinery. AutomountServiceAccountToken stays off;
-			// the projected, audience-bound token above is the exception,
-			// and it is what ties the pod to ServiceAccountName below.
+			// The projected, audience-bound token above is the only credential the pod
+			// carries; AutomountServiceAccountToken stays off.
 			ServiceAccountName:            ServerServiceAccountName,
 			AutomountServiceAccountToken:  ptr.To(false),
 			ImagePullSecrets:              pullSecrets,
 			TerminationGracePeriodSeconds: ptr.To(group.Spec.TerminationGracePeriodSeconds),
-			// FSGroup is set for every server pod, ephemeral and persistent
-			// alike, not only for the persistent ones that need it. An
-			// emptyDir already arrives world-writable, so an ephemeral pod
-			// gains nothing from it — but a PersistentVolumeClaim arrives
-			// owned by root, and uid 10001 (nix/oci-common.nix's `uid` and
-			// `gid` for this image) cannot write into it without this. One
-			// PodSecurityContext shape for every server pod, rather than a
-			// second one that only a persistent group gets, is one fewer
-			// thing to keep in sync as the two group types' pod specs
-			// otherwise diverge — and the kubelet's ownership walk below
-			// costs nothing extra on a freshly created, empty emptyDir.
-			//
-			// FSGroupChangePolicy is OnRootMismatch, not the kubelet's own
-			// default of Always. Always recursively chowns every file under
-			// the volume on every single pod start; for a Minecraft world
-			// that can be gigabytes of region files, that cost is paid on
-			// every restart forever. OnRootMismatch instead checks only the
-			// volume's top-level directory: if its group already matches
-			// FSGroup — true for an emptyDir after its first mount, and true
-			// for a PVC after this fix's first chown — the kubelet skips the
-			// walk entirely. The trade-off this accepts: a file deep in the
-			// tree with the wrong group ownership (from a manual chmod,
-			// say) is not corrected once the root already matches. Nothing
-			// short of Always closes that, and Always is not affordable
-			// here.
+			// FSGroup is set for every server pod: a PVC arrives owned by root, and one
+			// PodSecurityContext shape is simpler than two. OnRootMismatch rather than
+			// Always, which would chown gigabytes of region files on every start; the
+			// cost is that a deep file with the wrong group is not corrected.
 			SecurityContext: &corev1.PodSecurityContext{
 				RunAsNonRoot:        ptr.To(true),
 				SeccompProfile:      &corev1.SeccompProfile{Type: corev1.SeccompProfileTypeRuntimeDefault},
@@ -556,11 +362,8 @@ func BuildServerPod(
 		pod.Spec.Affinity = scheduling.Affinity
 	}
 
-	// Stamped from the Network's status rather than computed here: one reader
-	// of the Secret is the whole point (design section 2.1), and the group
-	// controllers copy a string out of an object they already hold. Empty
-	// means the operator does not know the digest yet, and an absent label is
-	// "unknown" — see LabelForwardingHash.
+	// Stamped from the Network's status so the Secret has one reader. An absent
+	// label means "unknown", see LabelForwardingHash.
 	if hash := net.Status.ForwardingSecretHash; hash != "" {
 		pod.Labels[LabelForwardingHash] = hash
 	}
@@ -575,10 +378,8 @@ func restartPolicy(group *spawneryv1alpha1.ServerGroup) corev1.RestartPolicy {
 	return corev1.RestartPolicyNever
 }
 
-// keepsWorld reports whether a server of this group has a world that outlives
-// its pod. Persistent servers and on-demand members both do, and they are
-// otherwise nothing alike: one is an ordinal a person wrote down, the other a
-// key somebody asked for.
+// keepsWorld reports whether a server's world outlives its pod: persistent
+// servers and on-demand members.
 func keepsWorld(group *spawneryv1alpha1.ServerGroup) bool {
 	return group.Spec.Type == spawneryv1alpha1.ServerGroupPersistent ||
 		group.Spec.Type == spawneryv1alpha1.ServerGroupOnDemand
@@ -601,25 +402,10 @@ func dataVolume(group *spawneryv1alpha1.ServerGroup, srv *spawneryv1alpha1.Serve
 	}
 }
 
-// renderUserMounts turns spec.mounts into the volumes and mounts a pod
-// carries. Shared by both group kinds: a ServerGroup and a ProxyGroup declare
-// the same field with the same reserved paths, and two copies would be two
-// answers the day one of them learns something.
-//
-// checkMountCollision sees one mount at a time, so a collision *between* two
-// user mounts is structurally invisible to it. The API server catches both of
-// these -- duplicate volume names and duplicate mount paths are invalid -- but
-// it catches them as a rejected pod create, which reaches the user as a
-// Degraded condition carrying an apimachinery validation message about an
-// index in an array. Refusing here names the mount and the reason, and does it
-// before anything is sent.
-//
-// A claim is the only source that can be writable, and it is read-only unless
-// the mount says otherwise. ConfigMaps and Secrets are read-only whatever
-// anybody writes -- the kubelet mounts them that way -- so asking about
-// Writable for them would be a question with no answer. Nothing here checks
-// that the claim exists or that it is ReadWriteMany; that needs a client, and
-// internal/controller's checkMountClaims does it before this is ever reached.
+// renderUserMounts is shared by ServerGroup and ProxyGroup. It refuses
+// duplicate names and paths among user mounts itself, because the API
+// server would only reject the pod with an array index. Claim existence and
+// access mode are checked by internal/controller's checkMountClaims.
 func renderUserMounts(list []spawneryv1alpha1.Mount) ([]corev1.Volume, []corev1.VolumeMount, error) {
 	var volumes []corev1.Volume
 	var mounts []corev1.VolumeMount
@@ -634,9 +420,6 @@ func renderUserMounts(list []spawneryv1alpha1.Mount) ([]corev1.Volume, []corev1.
 			return nil, nil, fmt.Errorf("mount %q is declared twice; two mounts of one group cannot share a name", m.Name)
 		}
 		seenNames[m.Name] = true
-		// Cleaned before comparing, so "/plugins" and "/plugins/" are one
-		// path -- the same normalisation checkMountCollision applies before
-		// comparing against the reserved paths.
 		clean := path.Clean(m.MountPath)
 		if seenPaths[clean] {
 			return nil, nil, fmt.Errorf("mount %q targets %q, which another mount of this group already targets; one path can hold one mount", m.Name, m.MountPath)
@@ -647,11 +430,8 @@ func renderUserMounts(list []spawneryv1alpha1.Mount) ([]corev1.Volume, []corev1.
 		readOnly := true
 		if claim := m.PersistentVolumeClaim; claim != nil {
 			readOnly = !claim.Writable
-			// Read-only at the volume as well as at the mount, when it is
-			// read-only at all. The pair matters: a volume marked writable and
-			// mounted read-only is still attached read-write to the node, and
-			// the difference shows up as a claim that cannot be attached
-			// elsewhere rather than as anything about this pod.
+			// Read-only at the volume as well: a writable volume mounted read-only is
+			// still attached read-write to the node.
 			source = corev1.VolumeSource{
 				PersistentVolumeClaim: &corev1.PersistentVolumeClaimVolumeSource{
 					ClaimName: claim.ClaimName,
@@ -670,62 +450,20 @@ func renderUserMounts(list []spawneryv1alpha1.Mount) ([]corev1.Volume, []corev1.
 	return volumes, mounts, nil
 }
 
-// checkMountCollision refuses a user mount that reuses one of the operator's
-// own volume names, or whose mount path collides with one of ours at the
-// filesystem level. The API server would reject the resulting pod anyway —
-// on a duplicate volume name outright — but a colliding path it happily
-// accepts: Kubernetes permits nested mounts.
-//
-// The path check is deliberately asymmetric between the two mounts below and
-// the other two, and that asymmetry is not an oversight to "tidy up" later:
-//
-//   - AgentMountPath and ConfigMountPath each get the full bidirectional
-//     nesting check, equal path, nested under, or an ancestor of it, all
-//     refused. They are the two of the four that hold something worth
-//     shadowing: a user mount at AgentMountPath+"/token" would silently
-//     overlay the exact file the agent reads its credential from, and a
-//     mount at ConfigMountPath+"/forwarding.secret" would do the same to the
-//     file the renderer reads the forwarding secret from. Nothing but this
-//     check stops either. Nesting under either is never legitimate.
-//
-//   - DataMountPath and TmpMountPath only refuse an exact match (after
-//     path.Clean, so a trailing slash does not slip past). Mounting AT
-//     DataMountPath would replace the whole working directory and is
-//     refused; mounting INSIDE it is the documented way to add extra files,
-//     so unlike the other two, a nested path under these two is a feature and
-//     not a collision.
-//
-//     With one exception: ServerConfigDirPath, under DataMountPath, is
-//     refused equal-or-under like the two above. Its own comment carries the
-//     kubelet ownership rule that makes a mount there break every start.
-//
-//   - FileSourceMountPath and PluginSourceMountPath get no entry of their own,
-//     and must not be given one. Both are directories *under* AgentMountPath
-//     — "/var/run/spawnery/files" and "/var/run/spawnery/plugins" — so the
-//     bidirectional check above has already refused a mount at either of them,
-//     anywhere inside either of them, and at any ancestor of either, before
-//     control reaches the exact-match loop below. An entry there could never
-//     fire.
-//
-//     That is a dependency, not a coincidence, and it is the whole reason
-//     these two claims are safe: nothing else refuses a spec.mounts entry
-//     that would shadow the claim an entrypoint copies out of. If
-//     AgentMountPath ever stops being a parent of these two, or its check is
-//     narrowed to an exact match, each of them needs its own bidirectional
-//     entry here on the same day. TestCollidingUserMountsAreRefused pins the
-//     refusal for FileSourceMountPath and for a path nested under it, so that
-//     narrowing fails a test rather than quietly opening the hole.
-//
-// Path comparison is on segment boundaries, not raw string prefixes, so
-// "/data-extra" is never mistaken for a child of "/data".
-// reservedVolumeNames are the volumes the operator itself renders into a
-// server pod; a user mount reusing one would be a duplicate volume name, which
-// the API server refuses with an array index rather than a mount name.
 var reservedVolumeNames = []string{
 	AgentVolumeName, ConfigVolumeName, ConfigOverlayVolumeName, DataVolumeName,
 	TmpVolumeName, FileSourceVolumeName, PluginSourceVolumeName,
 }
 
+// checkMountCollision refuses a user mount that reuses an operator volume
+// name or collides with an operator path; the API server accepts nested
+// mounts. AgentMountPath and ConfigMountPath refuse equal, under and above,
+// since a mount there would shadow a credential. DataMountPath and
+// TmpMountPath refuse only an exact match, as mounting inside them is a
+// feature; ServerConfigDirPath is the exception. FileSourceMountPath and
+// PluginSourceMountPath have no entry because they live under
+// AgentMountPath and rely on its check; if that ever changes they need
+// their own (TestCollidingUserMountsAreRefused pins it).
 func checkMountCollision(m spawneryv1alpha1.Mount) error {
 	for _, name := range reservedVolumeNames {
 		if m.Name == name {
@@ -747,10 +485,6 @@ func checkMountCollision(m spawneryv1alpha1.Mount) error {
 		}
 	}
 
-	// Equal or under, like the two above rather than like the two below: a
-	// mount AT this directory replaces the one the server writes into, and a
-	// mount inside it makes that directory unwritable. See ServerConfigDirPath
-	// for the measurement.
 	if conf := path.Clean(ServerConfigDirPath); user == conf || isPathUnder(user, conf) {
 		return fmt.Errorf("mount %q at %q is at or inside %s, the directory the server writes its "+
 			"own configuration into; the kubelet creates a mount's parent directory root-owned, "+
@@ -766,10 +500,6 @@ func checkMountCollision(m spawneryv1alpha1.Mount) error {
 		}
 	}
 
-	// Its own message rather than the generic one above, because the generic
-	// one would send a reader looking for what the operator keeps there. What
-	// it keeps there is one file it writes on every start, and the remedy is
-	// to mount a directory beside it rather than over it.
 	if user == path.Clean(PluginsMountPath) {
 		return fmt.Errorf(
 			"mount %q targets %s, where the entrypoint copies the agent plugin on every start; "+
@@ -780,11 +510,8 @@ func checkMountCollision(m spawneryv1alpha1.Mount) error {
 	return nil
 }
 
-// isPathUnder reports whether child is nested inside parent. It compares on
-// path segment boundaries — appending a separator before the prefix check —
-// so a sibling that merely shares a textual prefix, like "/data-extra" next
-// to "/data", is never mistaken for a descendant. Both arguments must
-// already be path.Clean-ed.
+// isPathUnder compares on segment boundaries, so "/data-extra" is not under
+// "/data". Both arguments must be path.Clean-ed.
 func isPathUnder(child, parent string) bool {
 	if parent == "/" {
 		return child != "/"

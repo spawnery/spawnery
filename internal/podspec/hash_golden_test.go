@@ -26,70 +26,23 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
-// The two tests in this file are the answer to a question nobody could ask
-// before an upgrade: does this build roll every pod in every installation?
-//
-// DesiredProxyHash and DesiredServerHash are pure functions of what the
-// operator renders. The operator rolls a group when the hash it computes stops
-// matching the one stamped on the running pods, so *any* change to the render
-// path -- a new environment variable, a changed mount, a different security
-// context, a constant nudged by one -- moves the hash for every group
-// everywhere, and the next operator upgrade performs a rolling changeover of
-// every proxy group and every server group in the cluster. For proxies that
-// means players moved off their pods; for servers it means worlds stopped and
-// restarted.
-//
-// These tests ask the question at the moment the change is written, in CI, on
-// the pull request, and cannot be fooled by a guess about which files belong
-// to the render path, because they run the render itself.
-//
-// **A failure here is not necessarily a defect.** Rolling every pod is
-// sometimes exactly what a change is for. The test's job is to make that a
-// decision somebody takes and records, rather than a side effect discovered by
-// players. When you have decided, update the constant and say so in the commit
-// message: the release that carries it needs to say it too.
-//
-// The fixtures below are deliberately frozen literals rather than the package's
-// shared testNetwork/testProxyGroup helpers. A shared fixture that somebody
-// edits for an unrelated test would move these digests without a single line of
-// render logic changing, and a guard that cries wolf is a guard that gets its
-// constant updated without being read.
+// Any change to the render path moves these digests, and with them every pod
+// in every installation rolls on the next operator upgrade. A failure here is
+// not necessarily a defect: update the constant deliberately and say so in
+// the commit message and the release. The fixtures are frozen literals rather
+// than shared helpers, so an unrelated fixture edit cannot move them.
 
-// goldenProxyDigest is DesiredProxyHash over goldenNetwork/goldenProxyGroup,
-// goldenAgentEndpoint and goldenConfigValues. See the comment above before
-// changing it.
 const goldenProxyDigest = "25460cf6ba7e7c0d"
 
-// goldenServerDigest is DesiredServerHash over goldenNetwork/goldenServerGroup
-// and goldenConfigValues. See the comment above before changing it.
-//
-// Moved on 2026-08-29, from 67445461adf39969, for the reason goldenProxyDigest
-// gives. For servers a roll means worlds stopped and restarted, and players
-// finishing their sessions on pods being replaced.
 const goldenServerDigest = "85fe4733710a4013"
 
-// goldenEphemeralServerDigest is DesiredServerHash over
-// goldenNetwork/goldenEphemeralServerGroup and goldenConfigValues. See the
-// comment above before changing it.
-//
-// The sibling above renders a *persistent* group, and the two types do not
-// render the same pod: an ephemeral one gets an emptyDir instead of a claim
-// and restartPolicy: Never instead of Always. One fixture therefore guards
-// only half the fleet, and this constant is the other half.
+// goldenEphemeralServerDigest covers the other render path: emptyDir instead
+// of a claim, restartPolicy Never instead of Always.
 const goldenEphemeralServerDigest = "1918d30a757abb1d"
 
-// goldenAgentEndpoint is an input to DesiredProxyHash and not to
-// DesiredServerHash -- the asymmetry is deliberate and DesiredServerHash's own
-// comment explains it. Frozen here so that neither the operator's real flag
-// defaults nor a change to them can reach these digests.
 const goldenAgentEndpoint = "spawnery-operator.spawnery-system.svc:9443"
 
-// goldenConfigValues stands in for the marshalled render.Values the controller
-// passes. It is a literal rather than a real marshal on purpose: the digest
-// takes these bytes verbatim, so a constant input keeps these tests measuring
-// the *pod render* alone. The other half -- that the produced bytes themselves
-// can move and roll every pod for that reason instead -- belongs to whatever
-// produces them, not here.
+// goldenConfigValues is a literal, so these tests measure the pod render alone.
 var goldenConfigValues = []byte("playerLimit: 100\nmotd: golden\n")
 
 func goldenNetwork() *spawneryv1alpha1.Network {
@@ -143,11 +96,6 @@ func goldenServerGroup() *spawneryv1alpha1.ServerGroup {
 	}
 }
 
-// goldenEphemeralServerGroup is goldenServerGroup with the one field that
-// picks the other render path, and its storage dropped because an ephemeral
-// group has none. Everything else is deliberately identical, so a failure here
-// and not there names the ephemeral-only half of the render as the thing that
-// moved.
 func goldenEphemeralServerGroup() *spawneryv1alpha1.ServerGroup {
 	return &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{

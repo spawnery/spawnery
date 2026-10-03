@@ -21,8 +21,7 @@ import (
 	"testing"
 )
 
-// Absent and zero are different answers and the difference is load-bearing:
-// a group that says nothing must be refused, not defaulted to Paper's 20.
+// A group that says nothing must be refused, not defaulted to Paper's 20.
 func TestValuesRejectsAnAbsentMaxPlayers(t *testing.T) {
 	var v Values
 	err := v.RequireMaxPlayers()
@@ -50,11 +49,6 @@ func TestValuesAcceptsAPositiveMaxPlayers(t *testing.T) {
 	}
 }
 
-// RequirePlayerLimit guards the worse failure mode of the two: a zero limit
-// does not just mean uncapped planning, it means internal/agent.Registry
-// discards every player report the proxy ever sends because players will
-// exceed slots. That silent metric-reads-zero case gets the same three
-// cases as RequireMaxPlayers so a regression here is caught the same way.
 func TestValuesRejectsAnAbsentPlayerLimit(t *testing.T) {
 	var v Values
 	err := v.RequirePlayerLimit()
@@ -82,10 +76,8 @@ func TestValuesAcceptsAPositivePlayerLimit(t *testing.T) {
 	}
 }
 
-// onlineMode has no zero to reject — false is a legitimate answer, and the
-// point of the refusal is that there is no safe direction to guess in. So the
-// three cases are absent, false and true, and the two present ones must both
-// be accepted rather than one of them quietly treated as unset.
+// No zero to reject: false is legitimate, so both present values must be
+// accepted.
 func TestValuesRejectsAnAbsentOnlineMode(t *testing.T) {
 	var v Values
 	err := v.RequireOnlineMode()

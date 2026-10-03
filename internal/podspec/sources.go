@@ -24,14 +24,12 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
-// EnvSubstitutionPrefix carries spec.substitution.prefix to the entrypoint.
 const EnvSubstitutionPrefix = "SPAWNERY_SUBSTITUTION_PREFIX"
 
 // EnvKeep carries spec.storage.keep to the entrypoint, one entry per line.
 const EnvKeep = "SPAWNERY_KEEP"
 
-// sourceVolume renders a plugin or file source: a read-only claim, or a
-// read-only image volume for an image source.
+// sourceVolume renders a read-only claim, or an image volume for an image source.
 func sourceVolume(name, claim, image string, pull corev1.PullPolicy) corev1.Volume {
 	if image != "" {
 		if pull == "" {

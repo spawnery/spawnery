@@ -25,10 +25,8 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// helmTemplate runs the chart with extra arguments and returns helm's combined
-// output and whether it succeeded. Unlike renderChart it deliberately does not
-// memoise: every case here is a different set of values, and the point is what
-// helm decides about each.
+// helmTemplate does not memoise, unlike renderChart: every case has
+// different values.
 func helmTemplate(t *testing.T, args ...string) (string, bool) {
 	t.Helper()
 	full := append([]string{
@@ -43,20 +41,12 @@ func helmTemplate(t *testing.T, args ...string) (string, bool) {
 	return out.String(), err == nil
 }
 
-// TestTheValuesSchemaRefusesWhatTheFlagParserUsedTo is what
-// charts/spawnery/values.schema.json is for. Without it a wrong value reaches
-// a cluster as a container that exits at startup — CrashLoopBackOff, with the
-// operator's flag parser naming a flag rather than helm naming a value.
-//
-// Every case here asserts two things, and the second is the one worth having:
-// that helm refuses, and that its message names the key. A refusal that does
-// not say which of a dozen values is wrong has moved the problem earlier
-// without making it easier.
+// Without the schema a wrong value surfaces as a crash-looping operator naming
+// a flag. Each case checks that helm refuses and names the key.
 func TestTheValuesSchemaRefusesWhatTheFlagParserUsedTo(t *testing.T) {
 	for _, tc := range []struct {
-		name string
-		args []string
-		// names is what the refusal has to mention for somebody to act on it.
+		name  string
+		args  []string
 		names string
 		why   string
 	}{
@@ -118,13 +108,7 @@ func TestTheValuesSchemaRefusesWhatTheFlagParserUsedTo(t *testing.T) {
 	}
 }
 
-// TestTheValuesSchemaAcceptsWhatIsActuallyUsed is the other half, and it is
-// the half the known-issues entry gave as the reason for not writing a schema
-// at all: "hack/e2e.sh passes four --set values that a schema written slightly
-// wrong would break in a target nobody runs on the commit loop." Milestone 6e
-// put e2e on the commit loop, which is what made this worth doing — but a
-// schema that breaks the e2e install should fail here, in two seconds, rather
-// than there, in forty minutes.
+// A schema that breaks the e2e install should fail here, in seconds.
 func TestTheValuesSchemaAcceptsWhatIsActuallyUsed(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -132,9 +116,7 @@ func TestTheValuesSchemaAcceptsWhatIsActuallyUsed(t *testing.T) {
 	}{
 		{"the defaults", nil},
 		{
-			// Copied from hack/e2e.sh's helm install, values changed but shapes
-			// kept. If that script grows a fifth --set, this is where a schema
-			// that has not heard about it says so.
+			// Copied from hack/e2e.sh's helm install, values changed but shapes kept.
 			name: "what hack/e2e.sh sets",
 			args: []string{
 				"--set", "image.repository=localhost/spawnery-operator",

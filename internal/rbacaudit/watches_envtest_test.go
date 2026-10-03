@@ -32,47 +32,20 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// watchBuilders are the controller-runtime builder methods that start an
-// informer. Each takes the object as its first argument, and an informer needs
-// list and watch on that kind or it retries, silently, forever.
+// An informer without list and watch on its kind retries silently forever.
 var watchBuilders = map[string]bool{"For": true, "Owns": true, "Watches": true}
 
-// watchedKind is one such call, kept with where it was written so a failure
-// names the line rather than the kind alone.
 type watchedKind struct {
 	pkgPath string
 	name    string
 	where   string
 }
 
-// TestEveryWatchedKindIsInTheRequiredTable is the one comparison between the
-// required table and what the code actually does that nothing else makes.
-//
-// # Why this is the only verb class that needs it
-//
-// Everything else the operator calls is already compared against the table,
-// though not by anything that looks like an audit. internal/controller's
-// envtest suite hands every reconciler testenv.RestrictedClient, which
-// impersonates the operator and holds exactly the ClusterRole the kubebuilder
-// markers generate; and rbacaudit's own tests hold that ClusterRole against
-// the required table. So a get, list, create, update, delete or patch the code
-// makes and the markers do not grant fails in the test that drives it, with
-// the API server's own refusal quoted. The audit alone would not: it compares
-// two declarations, so a verb removed from the marker and the table together
-// leaves it correctly green.
-//
-// A watch is the exception, and it is the one that matters most. No test
-// starts an informer under the operator's identity, so nothing refuses a watch
-// the markers do not grant. Worse, nothing anywhere would: a watch that cannot
-// start is retried silently forever -- no log line, no 403 in the client
-// metrics, no restart. The operator sits there looking healthy and reconciling
-// nothing.
-//
-// So this reads the builder calls themselves. It is a syntactic scan and it is
-// exact about what it does not do: it sees a kind named in a For, Owns or
-// Watches literal and nothing else -- not a watch started from a raw source,
-// not one built through a variable. Both are visible in a diff as something
-// this test would not have seen; neither exists today.
+// Other verbs are covered: controller tests run under the operator's
+// restricted ClusterRole, which the audit holds against the table. No test
+// starts an informer under that identity, and a forbidden watch is silent,
+// so this scans For/Owns/Watches literals. It does not see a watch from a
+// raw source or built through a variable; none exists today.
 func TestEveryWatchedKindIsInTheRequiredTable(t *testing.T) {
 	watched := watchedKindsIn(t, testenv.RepoPath(t, filepath.Join("internal", "controller")))
 	if len(watched) == 0 {
@@ -82,8 +55,6 @@ func TestEveryWatchedKindIsInTheRequiredTable(t *testing.T) {
 	c, _ := testenv.Client(t)
 	scheme := testenv.Scheme(t)
 
-	// The scheme knows every kind by its Go type, so inverting it turns the
-	// (import path, type name) a source file names back into a GVK.
 	byType := map[watchedKind]schema.GroupVersionKind{}
 	for gvk, rt := range scheme.AllKnownTypes() {
 		byType[watchedKind{pkgPath: rt.PkgPath(), name: rt.Name()}] = gvk
@@ -123,8 +94,6 @@ func TestEveryWatchedKindIsInTheRequiredTable(t *testing.T) {
 	}
 }
 
-// watchedKindsIn parses every non-test Go file in dir and returns the kinds its
-// builder calls name.
 func watchedKindsIn(t *testing.T, dir string) []watchedKind {
 	t.Helper()
 
@@ -134,11 +103,8 @@ func watchedKindsIn(t *testing.T, dir string) []watchedKind {
 		t.Fatalf("read %s: %v", dir, err)
 	}
 
-	// The files are read here rather than through parser.ParseDir, which is
-	// deprecated for not considering build tags when it groups files into
-	// packages. Grouping is exactly what this does not need: every file in
-	// this directory is read for builder calls and none of them is attributed
-	// to a package.
+	// Not parser.ParseDir, which is deprecated for ignoring build tags; no
+	// package grouping is needed here.
 	files := map[string]*ast.File{}
 	for _, entry := range entries {
 		name := entry.Name()
@@ -169,10 +135,7 @@ func watchedKindsIn(t *testing.T, dir string) []watchedKind {
 			}
 			alias, name, ok := literalType(call.Args[0])
 			if !ok {
-				// A builder call whose object is not a plain &pkg.Type{}.
-				// Reported rather than skipped: this test's whole claim is
-				// that it sees every informer, and one it cannot read is the
-				// one place that claim could quietly stop being true.
+				// Reported rather than skipped: this test claims to see every informer.
 				t.Errorf("%s: %s(...) is not called with a &pkg.Type{} literal, so this "+
 					"test cannot tell which kind it watches. Widen it rather than "+
 					"leaving the kind unchecked",
@@ -186,10 +149,8 @@ func watchedKindsIn(t *testing.T, dir string) []watchedKind {
 			}
 			found = append(found, watchedKind{
 				pkgPath: pkgPath, name: name,
-				// The method's own position, not the call's: these are chained
-				// onto one builder, so call.Pos() is the start of the whole
-				// chain and would name the For() line for every Owns() and
-				// Watches() under it.
+				// The method's position, not the call's: in a chain call.Pos() is the For()
+				// line for every Owns() and Watches() under it.
 				where: filepath.Base(path) + ":" + strconv.Itoa(set.Position(sel.Sel.Pos()).Line),
 			})
 			return true
@@ -219,7 +180,6 @@ func literalType(arg ast.Expr) (string, string, bool) {
 	return pkg.Name, sel.Sel.Name, true
 }
 
-// importsOf maps the aliases a file uses to the paths they stand for.
 func importsOf(file *ast.File) map[string]string {
 	out := map[string]string{}
 	for _, spec := range file.Imports {

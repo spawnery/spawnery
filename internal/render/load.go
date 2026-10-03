@@ -25,37 +25,23 @@ import (
 	"sigs.k8s.io/yaml"
 )
 
-// The read-only mount the operator's rendered configuration arrives on.
-//
-// Deliberately not under /var/run/spawnery: that is the agent's credential
-// mount, and podspec.checkMountCollision guards it with a bidirectional
-// nesting check it applies to nothing else. Keeping the two apart keeps that
-// rule saying the one thing it exists to say.
+// Not under /var/run/spawnery, the agent's credential mount, which
+// podspec.checkMountCollision guards on its own terms.
 const (
-	// ConfigDir is where cmd/spawnery-config looks by default; a Server's
-	// pod mounts the rendered ConfigMap and Secret here.
-	ConfigDir = "/etc/spawnery"
-	// ValuesFile is the operator's Values document, in ConfigDir.
+	// ConfigDir is where cmd/spawnery-config looks by default.
+	ConfigDir  = "/etc/spawnery"
 	ValuesFile = "config.yaml"
-	// SecretFile is the forwarding secret, mounted from a Kubernetes Secret
-	// rather than carried in the ConfigMap Values comes from.
+	// SecretFile comes from a Secret, not the ConfigMap that carries Values.
 	SecretFile = "forwarding.secret"
-	// OverlayDir holds the operator's optional per-flavour overlay files,
-	// keyed by the base name Paper or Velocity reads them under.
+	// OverlayDir holds per-flavour overlay files under the base names Paper or
+	// Velocity read.
 	OverlayDir = "overlay"
 )
 
-// Load reads the three inputs a flavour needs off ConfigDir: the Values
-// document, the forwarding secret, and an optional overlay.
-//
-// It is the one place "file missing" or "file empty" turns into a refusal
-// naming the file and the key, so that Paper and Velocity can assume their
-// three arguments already exist and need only be validated for content. A
-// missing OverlayDir is not a refusal — the overlay is optional — but a
-// missing or empty SecretFile is: Paper and Velocity both refuse an empty
-// secret already, but only because Load hands them "" rather than never
-// getting that far, and a caller that skipped Load could not tell "the
-// secret is empty" apart from "the secret was never read".
+// Load reads the Values document, the forwarding secret and the optional
+// overlay from dir. It is where a missing or empty file becomes a refusal
+// naming it; a missing OverlayDir is fine, a missing or empty SecretFile is
+// not.
 func Load(dir string) (Values, string, map[string]string, error) {
 	valuesPath := filepath.Join(dir, ValuesFile)
 	data, err := os.ReadFile(valuesPath)
@@ -78,29 +64,12 @@ func Load(dir string) (Values, string, map[string]string, error) {
 		}
 		return Values{}, "", nil, fmt.Errorf("%s: %w", secretPath, err)
 	}
-	// Canonicalise, then refuse. Paper gets this package's own return value
-	// written verbatim into paper-global.yml, but Velocity is handed
-	// secretPath and reads the file itself — and the pinned jar, 4.2.0-30 as
-	// 3.5.1-615 before it, joins the file's lines with Files.readAllLines and
-	// "", which drops exactly one trailing \n or \r\n (readAllLines never
-	// emits a further empty line for it) and would delete an internal one too.
-	// A single trailing line terminator is therefore not a divergence — both this
-	// function's TrimSpace-based history and Velocity's own read have always
-	// discarded it the same way — but treating a raw byte comparison as the
-	// refusal predicate did, and that refused every operator-authored Secret
-	// this repository's own config/samples/network.yaml documents producing
-	// (`head -c 32 /dev/urandom | base64`, which `kubectl create secret
-	// generic --from-file` carries into the mount terminator and all).
-	//
-	// So: strip exactly one trailing terminator first, then apply the actual
-	// refusal — edge whitespace (Velocity's read would keep it, Paper's
-	// write already has it, so it never disagrees on its own, but it is
-	// exactly the shape an operator-authored Secret should never need) and
-	// any interior \n or \r (Velocity's read deletes it, Paper's does not,
-	// which is a real divergence). What is left after that strip is what
-	// Velocity's own read produces from the raw file, so returning it here
-	// is what keeps Paper's copy and Velocity's read of the same Secret
-	// equal.
+	// Velocity reads the secret file itself via Files.readAllLines joined with
+	// "", which drops one trailing line terminator and deletes interior ones,
+	// while Paper gets this value verbatim. So strip exactly one trailing
+	// terminator (which `kubectl create secret --from-file` usually leaves),
+	// then refuse edge whitespace and interior \n or \r, leaving what Velocity
+	// itself reads.
 	secret := string(secretData)
 	canonical := secret
 	switch {
@@ -130,31 +99,11 @@ func Load(dir string) (Values, string, map[string]string, error) {
 	return v, secret, overlay, nil
 }
 
-// loadOverlay reads every file directly under dir into a map keyed by base
-// name — the same bare names Paper's and Velocity's overlay keys use, since
-// a ConfigMap key cannot contain '/'.
-//
-// dir is not read with os.ReadDir's own Lstat-based entry types, because a
-// ConfigMap or Secret mounted as a directory — the idiom internal/podspec
-// already uses for the agent CA and for a Server's own mounts — does not
-// present its keys as regular files. The kubelet lays each key down as a
-// symlink into a hidden "..data" directory, so it can swap that one symlink
-// atomically on update; "..data" itself is a symlink to a further hidden,
-// timestamped directory holding the real content. Lstat sees the key
-// symlinks as symlinks, not regular files, so filtering on
-// DirEntry.Type().IsRegular() — what os.ReadDir's entries report — skips
-// every one of them and returns an empty overlay with no error: the exact
-// failure this package exists to prevent, a configuration that silently did
-// not take effect. os.Stat, used here instead, follows symlinks: a key
-// resolves to the real file and is read, while "..data" and the timestamped
-// directory it points at both resolve to directories and are skipped, with
-// no special case needed for Kubernetes' naming convention.
-//
-// A missing dir is not an error: the overlay is optional, and most Servers
-// will never render one. Anything else that stops a read — a permission bit
-// this container's user does not have, most plausibly — is, because a
-// silently-dropped overlay entry is indistinguishable from one that took
-// effect.
+// loadOverlay uses os.Stat, not os.ReadDir's Lstat-based types: the kubelet
+// lays ConfigMap keys down as symlinks into a hidden "..data" directory, so
+// filtering on IsRegular would silently return an empty overlay. Followed,
+// keys resolve to files and "..data" to a directory, which is skipped. A
+// missing dir is fine; any other read error is refused.
 func loadOverlay(dir string) (map[string]string, error) {
 	overlay := map[string]string{}
 
@@ -184,9 +133,8 @@ func loadOverlay(dir string) (map[string]string, error) {
 	return overlay, nil
 }
 
-// WriteAll writes every rendered file under root, creating parent
-// directories first so a key like "config/paper-global.yml" lands even
-// though config/ does not exist yet on a fresh volume.
+// WriteAll creates parent directories, since config/ does not exist yet on a
+// fresh volume.
 func WriteAll(root string, files map[string][]byte) error {
 	for name, content := range files {
 		path := filepath.Join(root, name)
