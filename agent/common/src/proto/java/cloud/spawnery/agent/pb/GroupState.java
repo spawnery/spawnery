@@ -35,6 +35,7 @@ private static final long serialVersionUID = 0L;
     name_ = "";
     kind_ = 0;
     displayName_ = "";
+    joinPermission_ = "";
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -501,6 +502,70 @@ java.lang.String defaultValue) {
     return enforcePlayableSlots_;
   }
 
+  public static final int JOIN_PERMISSION_FIELD_NUMBER = 11;
+  @SuppressWarnings("serial")
+  private volatile java.lang.Object joinPermission_ = "";
+  /**
+   * <pre>
+   * The permission that decides who may join this group's servers, already
+   * resolved from spec.joinPermission. Empty means the group has no rule.
+   * </pre>
+   *
+   * <code>string join_permission = 11;</code>
+   * @return The joinPermission.
+   */
+  @java.lang.Override
+  public java.lang.String getJoinPermission() {
+    java.lang.Object ref = joinPermission_;
+    if (ref instanceof java.lang.String) {
+      return (java.lang.String) ref;
+    } else {
+      com.google.protobuf.ByteString bs = 
+          (com.google.protobuf.ByteString) ref;
+      java.lang.String s = bs.toStringUtf8();
+      joinPermission_ = s;
+      return s;
+    }
+  }
+  /**
+   * <pre>
+   * The permission that decides who may join this group's servers, already
+   * resolved from spec.joinPermission. Empty means the group has no rule.
+   * </pre>
+   *
+   * <code>string join_permission = 11;</code>
+   * @return The bytes for joinPermission.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getJoinPermissionBytes() {
+    java.lang.Object ref = joinPermission_;
+    if (ref instanceof java.lang.String) {
+      com.google.protobuf.ByteString b = 
+          com.google.protobuf.ByteString.copyFromUtf8(
+              (java.lang.String) ref);
+      joinPermission_ = b;
+      return b;
+    } else {
+      return (com.google.protobuf.ByteString) ref;
+    }
+  }
+
+  public static final int JOIN_PERMISSION_DENY_ONLY_FIELD_NUMBER = 12;
+  private boolean joinPermissionDenyOnly_ = false;
+  /**
+   * <pre>
+   * spec.joinPermission.mode is DenyOnly: only an explicit false refuses.
+   * </pre>
+   *
+   * <code>bool join_permission_deny_only = 12;</code>
+   * @return The joinPermissionDenyOnly.
+   */
+  @java.lang.Override
+  public boolean getJoinPermissionDenyOnly() {
+    return joinPermissionDenyOnly_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -547,6 +612,12 @@ java.lang.String defaultValue) {
     }
     if (enforcePlayableSlots_ != false) {
       output.writeBool(10, enforcePlayableSlots_);
+    }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(joinPermission_)) {
+      com.google.protobuf.GeneratedMessage.writeString(output, 11, joinPermission_);
+    }
+    if (joinPermissionDenyOnly_ != false) {
+      output.writeBool(12, joinPermissionDenyOnly_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -596,6 +667,13 @@ java.lang.String defaultValue) {
       size += com.google.protobuf.CodedOutputStream
         .computeBoolSize(10, enforcePlayableSlots_);
     }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(joinPermission_)) {
+      size += com.google.protobuf.GeneratedMessage.computeStringSize(11, joinPermission_);
+    }
+    if (joinPermissionDenyOnly_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(12, joinPermissionDenyOnly_);
+    }
     return size;
   }
   @java.lang.Override
@@ -639,6 +717,10 @@ java.lang.String defaultValue) {
         != other.getPlayableSlots()) return false;
     if (getEnforcePlayableSlots()
         != other.getEnforcePlayableSlots()) return false;
+    if (!getJoinPermission()
+        .equals(other.getJoinPermission())) return false;
+    if (getJoinPermissionDenyOnly()
+        != other.getJoinPermissionDenyOnly()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -673,6 +755,11 @@ java.lang.String defaultValue) {
     hash = (37 * hash) + ENFORCE_PLAYABLE_SLOTS_FIELD_NUMBER;
     hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
         getEnforcePlayableSlots());
+    hash = (37 * hash) + JOIN_PERMISSION_FIELD_NUMBER;
+    hash = (53 * hash) + getJoinPermission().hashCode();
+    hash = (37 * hash) + JOIN_PERMISSION_DENY_ONLY_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getJoinPermissionDenyOnly());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -840,6 +927,8 @@ java.lang.String defaultValue) {
       displayName_ = "";
       playableSlots_ = 0;
       enforcePlayableSlots_ = false;
+      joinPermission_ = "";
+      joinPermissionDenyOnly_ = false;
       return this;
     }
 
@@ -904,6 +993,12 @@ java.lang.String defaultValue) {
       if (((from_bitField0_ & 0x00000200) != 0)) {
         result.enforcePlayableSlots_ = enforcePlayableSlots_;
       }
+      if (((from_bitField0_ & 0x00000400) != 0)) {
+        result.joinPermission_ = joinPermission_;
+      }
+      if (((from_bitField0_ & 0x00000800) != 0)) {
+        result.joinPermissionDenyOnly_ = joinPermissionDenyOnly_;
+      }
     }
 
     @java.lang.Override
@@ -951,6 +1046,14 @@ java.lang.String defaultValue) {
       }
       if (other.getEnforcePlayableSlots() != false) {
         setEnforcePlayableSlots(other.getEnforcePlayableSlots());
+      }
+      if (!other.getJoinPermission().isEmpty()) {
+        joinPermission_ = other.joinPermission_;
+        bitField0_ |= 0x00000400;
+        onChanged();
+      }
+      if (other.getJoinPermissionDenyOnly() != false) {
+        setJoinPermissionDenyOnly(other.getJoinPermissionDenyOnly());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -1032,6 +1135,16 @@ java.lang.String defaultValue) {
               bitField0_ |= 0x00000200;
               break;
             } // case 80
+            case 90: {
+              joinPermission_ = input.readStringRequireUtf8();
+              bitField0_ |= 0x00000400;
+              break;
+            } // case 90
+            case 96: {
+              joinPermissionDenyOnly_ = input.readBool();
+              bitField0_ |= 0x00000800;
+              break;
+            } // case 96
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1662,6 +1775,147 @@ java.lang.String defaultValue) {
     public Builder clearEnforcePlayableSlots() {
       bitField0_ = (bitField0_ & ~0x00000200);
       enforcePlayableSlots_ = false;
+      onChanged();
+      return this;
+    }
+
+    private java.lang.Object joinPermission_ = "";
+    /**
+     * <pre>
+     * The permission that decides who may join this group's servers, already
+     * resolved from spec.joinPermission. Empty means the group has no rule.
+     * </pre>
+     *
+     * <code>string join_permission = 11;</code>
+     * @return The joinPermission.
+     */
+    public java.lang.String getJoinPermission() {
+      java.lang.Object ref = joinPermission_;
+      if (!(ref instanceof java.lang.String)) {
+        com.google.protobuf.ByteString bs =
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        joinPermission_ = s;
+        return s;
+      } else {
+        return (java.lang.String) ref;
+      }
+    }
+    /**
+     * <pre>
+     * The permission that decides who may join this group's servers, already
+     * resolved from spec.joinPermission. Empty means the group has no rule.
+     * </pre>
+     *
+     * <code>string join_permission = 11;</code>
+     * @return The bytes for joinPermission.
+     */
+    public com.google.protobuf.ByteString
+        getJoinPermissionBytes() {
+      java.lang.Object ref = joinPermission_;
+      if (ref instanceof String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        joinPermission_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+    /**
+     * <pre>
+     * The permission that decides who may join this group's servers, already
+     * resolved from spec.joinPermission. Empty means the group has no rule.
+     * </pre>
+     *
+     * <code>string join_permission = 11;</code>
+     * @param value The joinPermission to set.
+     * @return This builder for chaining.
+     */
+    public Builder setJoinPermission(
+        java.lang.String value) {
+      if (value == null) { throw new NullPointerException(); }
+      joinPermission_ = value;
+      bitField0_ |= 0x00000400;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * The permission that decides who may join this group's servers, already
+     * resolved from spec.joinPermission. Empty means the group has no rule.
+     * </pre>
+     *
+     * <code>string join_permission = 11;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearJoinPermission() {
+      joinPermission_ = getDefaultInstance().getJoinPermission();
+      bitField0_ = (bitField0_ & ~0x00000400);
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * The permission that decides who may join this group's servers, already
+     * resolved from spec.joinPermission. Empty means the group has no rule.
+     * </pre>
+     *
+     * <code>string join_permission = 11;</code>
+     * @param value The bytes for joinPermission to set.
+     * @return This builder for chaining.
+     */
+    public Builder setJoinPermissionBytes(
+        com.google.protobuf.ByteString value) {
+      if (value == null) { throw new NullPointerException(); }
+      checkByteStringIsUtf8(value);
+      joinPermission_ = value;
+      bitField0_ |= 0x00000400;
+      onChanged();
+      return this;
+    }
+
+    private boolean joinPermissionDenyOnly_ ;
+    /**
+     * <pre>
+     * spec.joinPermission.mode is DenyOnly: only an explicit false refuses.
+     * </pre>
+     *
+     * <code>bool join_permission_deny_only = 12;</code>
+     * @return The joinPermissionDenyOnly.
+     */
+    @java.lang.Override
+    public boolean getJoinPermissionDenyOnly() {
+      return joinPermissionDenyOnly_;
+    }
+    /**
+     * <pre>
+     * spec.joinPermission.mode is DenyOnly: only an explicit false refuses.
+     * </pre>
+     *
+     * <code>bool join_permission_deny_only = 12;</code>
+     * @param value The joinPermissionDenyOnly to set.
+     * @return This builder for chaining.
+     */
+    public Builder setJoinPermissionDenyOnly(boolean value) {
+
+      joinPermissionDenyOnly_ = value;
+      bitField0_ |= 0x00000800;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * spec.joinPermission.mode is DenyOnly: only an explicit false refuses.
+     * </pre>
+     *
+     * <code>bool join_permission_deny_only = 12;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearJoinPermissionDenyOnly() {
+      bitField0_ = (bitField0_ & ~0x00000800);
+      joinPermissionDenyOnly_ = false;
       onChanged();
       return this;
     }

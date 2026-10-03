@@ -578,6 +578,11 @@ message GroupState {
   int32 playable_slots = 9;
   // spec.enforcePlayableSlots.
   bool enforce_playable_slots = 10;
+  // The permission that decides who may join this group's servers, already
+  // resolved from spec.joinPermission. Empty means the group has no rule.
+  string join_permission = 11;
+  // spec.joinPermission.mode is DenyOnly: only an explicit false refuses.
+  bool join_permission_deny_only = 12;
 }
 
 // ServerState is one backend as the operator last observed it.

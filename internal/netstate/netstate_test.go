@@ -364,6 +364,45 @@ func TestBuildCarriesAGroupsAdmission(t *testing.T) {
 	}
 }
 
+func TestBuildCarriesAGroupsJoinRule(t *testing.T) {
+	required := ephemeralGroup("ns", "build")
+	required.Spec.JoinPermission = &spawneryv1alpha1.JoinPermission{}
+	denyOnly := ephemeralGroup("ns", "hub")
+	denyOnly.Spec.JoinPermission = &spawneryv1alpha1.JoinPermission{
+		Node: "network.banned", Mode: spawneryv1alpha1.JoinPermissionDenyOnly,
+	}
+	src, _ := source(t, required, denyOnly, ephemeralGroup("ns", "lobby"))
+
+	got, err := src.Build(context.Background(), "ns", netstate.ForServers)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	// Sorted: build, hub, lobby.
+	if g := got.GetGroups()[0]; g.GetJoinPermission() != "spawnery.join.build" || g.GetJoinPermissionDenyOnly() {
+		t.Errorf("build = %+v, want spawnery.join.build, required", g)
+	}
+	if g := got.GetGroups()[1]; g.GetJoinPermission() != "network.banned" || !g.GetJoinPermissionDenyOnly() {
+		t.Errorf("hub = %+v, want network.banned, deny-only", g)
+	}
+	if g := got.GetGroups()[2]; g.GetJoinPermission() != "" {
+		t.Errorf("lobby = %+v, want no rule", g)
+	}
+}
+
+func TestAnOnDemandGroupsJoinRuleReachesTheProxies(t *testing.T) {
+	private := onDemandGroup("ns", "realms")
+	private.Spec.JoinPermission = &spawneryv1alpha1.JoinPermission{}
+	src, _ := source(t, private)
+
+	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if len(got.GetGroups()) != 1 || got.GetGroups()[0].GetJoinPermission() != "spawnery.join.realms" {
+		t.Errorf("groups = %+v, want realms with spawnery.join.realms", got.GetGroups())
+	}
+}
+
 func TestAGroupWithoutADisplayNameTravelsWithAnEmptyOne(t *testing.T) {
 	// Which name stands in for a missing display name is the reader's decision.
 	src, _ := source(t, ephemeralGroup("ns", "lobby"))
