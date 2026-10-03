@@ -21,9 +21,8 @@ import (
 	"time"
 )
 
-// ProxyView is what the rollout decision needs to know about one proxy pod.
-// It is deliberately not a corev1.Pod: the rules are about staleness,
-// occupancy and intent, and a view keeps them testable without a cluster.
+// ProxyView is not a corev1.Pod so the rollout rules stay testable without a
+// cluster.
 type ProxyView struct {
 	Name         string
 	Stale        bool
@@ -36,26 +35,16 @@ type ProxyView struct {
 	RetireRequested bool
 }
 
-// RolloutDecision is what one pass should do: how many pods to create, and
-// which pods to mark as going. Drain carries names rather than indices,
-// because after this milestone a pod's fate no longer depends on its
-// position.
 type RolloutDecision struct {
 	Create int32
 	Drain  []string
 }
 
-// DecideRollout decides one pass: how many pods to create, and which pods to
-// mark as going.
-//
-// While the group may surge it rolls blue/green: every stale pod gets its
-// replacement up front, and once replicas current pods are Ready every stale
-// pod is marked at once. Pods beyond that target drain as a surplus always
-// did, while nothing else is draining; until replicas current pods are Ready
-// that surplus comes from current pods only, since stale pods are still the
-// ones serving. Without surge the group waits at its
-// size, and a stale pod is replaced in place only when it serves nobody or
-// the group has ready capacity to spare.
+// DecideRollout rolls blue/green while the group may surge: every stale pod
+// gets its replacement up front, and once replicas current pods are Ready
+// every stale pod is marked at once. Until then a surplus drains from current
+// pods only, since stale pods are still serving. Without surge a stale pod is
+// replaced in place only when it serves nobody or ready capacity is spare.
 func DecideRollout(pods []ProxyView, replicas int32, surgeAllowed bool) RolloutDecision {
 	var stale, draining, currentReady int32
 	var markable []string
@@ -110,9 +99,8 @@ func DecideRollout(pods []ProxyView, replicas int32, surgeAllowed bool) RolloutD
 	return RolloutDecision{}
 }
 
-// staleIdle returns the stale pods that serve nobody: not Ready, and not
-// already going. Retiring one costs no ready capacity, so a crashlooping
-// proxy cannot hold its own replacement back.
+// staleIdle returns the stale pods that serve nobody, so a crashlooping proxy
+// cannot hold its own replacement back.
 func staleIdle(pods []ProxyView) []ProxyView {
 	var out []ProxyView
 	for _, p := range pods {
@@ -123,9 +111,6 @@ func staleIdle(pods []ProxyView) []ProxyView {
 	return out
 }
 
-// readyBeyond reports whether a stale pod may safely go: the group already
-// has a ready pod to spare, stale and current counted the same, so retiring
-// one stale pod cannot drop ready capacity below replicas.
 func readyBeyond(pods []ProxyView, replicas int32) bool {
 	var readyTotal int32
 	for _, p := range pods {
@@ -156,52 +141,14 @@ func staleOnly(pods []ProxyView) []ProxyView {
 	return out
 }
 
-// pick returns the n pods that should go, in order. Stale before current,
-// because a stale pod has to go regardless and taking a current one first
-// would drain two pods for one replacement. Then not-Ready before Ready,
-// because a pod the kubelet does not call Ready is behind no Service
-// endpoint: nobody can reach it, nobody new will, and retiring it lowers the
-// group's ready capacity by exactly zero. That makes it the cheapest thing
-// here to retire. It is above the player clauses deliberately: a fallen pod's
-// last reported count is what it held before it fell over, not what it holds
-// now, so sorting it by that figure would rank it on a number that has
-// stopped meaning anything.
+// pick orders candidates for retirement: stale before current, then not-Ready
+// before Ready (behind no Service endpoint, and its last player count is
+// stale), then fewest players with an untrusted count as occupied, then newest
+// first. Newest-first stands in for the occupancy the operator cannot see when
+// every count is untrusted; do not flip it for symmetry.
 //
-// Then fewest players, because the emptiest finishes soonest and disconnects
-// fewest people at the deadline. An untrusted count sorts last on the
-// repository's own rule -- unknown counts as occupied, since a pod whose
-// agent stream is down may hold players nobody can see.
-//
-// Age breaks what is left, newest first, and the direction is not symmetry: it
-// is the same guess the rule this function replaced was making, that an older
-// proxy has had longer to collect players. That guess is worth nothing between
-// two known counts -- equally empty is equally empty, whoever got there first
-// -- and it is the only thing there is when every count is untrusted, which is
-// an operator that has just restarted or a fleet whose agent streams are all
-// down. Marking the oldest there picks the pod most likely to be occupied,
-// which then reads as occupied, which holds the drain open to the full
-// deadline before disconnecting whoever was on it. So age points the way it
-// always did, and a later reader should not flip it back for looking
-// arbitrary: it is a stand-in for the occupancy the operator cannot see.
-//
-// It also keeps the order deterministic, so a test can name the pod it expects
-// rather than counting survivors.
-//
-// Everything above is written from the retirement direction, which is what
-// DecideRollout wants: it takes the returned names as the pods to mark.
-// reconcileReplicas inverts it: it calls pick over the surplus marks already
-// standing and keeps the marks on what comes back, so there "first" means
-// kept rather than retired, and the pods released are the tail. The order needs no special case
-// for that -- a fresh DecideRollout would choose the same head, which is the
-// whole reason that loop calls this function instead of a rule of its own --
-// but the sense of it flips, and it is worth knowing which way round you are
-// reading before deciding whether a clause looks right. Worked through for the
-// clause most likely to surprise: where one surplus mark is Ready and another
-// is NotReady with players on it, the readiness clause keeps the mark on the
-// fuller, further-drained pod and gives the Ready one back. That is the
-// intended reading in both directions -- a draining pod the kubelet still
-// calls Ready has made the least progress toward being empty, so releasing it
-// throws away the least drain already served.
+// reconcileReplicas calls pick over standing surplus marks and keeps the marks
+// on what comes back, so there the head means kept and the tail is released.
 func pick(pods []ProxyView, n int32) []string {
 	candidates := append([]ProxyView(nil), pods...)
 	sort.SliceStable(candidates, func(i, j int) bool {

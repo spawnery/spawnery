@@ -25,11 +25,8 @@ func at(min int) time.Time {
 	return time.Date(2026, 8, 14, 12, min, 0, 0, time.UTC)
 }
 
-// TestDecideRolloutCountsDrainingIndependentlyOfStale pins that the draining
-// guard reads ProxyView.Draining alone: a draining pod that is no longer
-// stale, as after a node is released mid-drain, still holds it.
-// TestAnUncordonedNodeKeepsTheMarkAlreadyMade in proxygroup_controller_test.go
-// is what establishes that the mark survives a real reconcile.
+// A draining pod that is no longer stale, as after a node is released
+// mid-drain, still holds the draining guard.
 func TestDecideRolloutCountsDrainingIndependentlyOfStale(t *testing.T) {
 	pods := []ProxyView{
 		{Name: "old", Stale: false, Ready: false, Draining: true, Players: 2},
@@ -146,12 +143,8 @@ func TestDecideRollout(t *testing.T) {
 			want:     RolloutDecision{Drain: []string{"young"}},
 		},
 		{
-			// The case age is actually for. Every count here is untrusted, so
-			// the three clauses above it all tie and age is the only thing
-			// deciding -- and the guess it stands in for, that an older proxy
-			// has had longer to collect players, is the only information the
-			// operator has left. Taking "old" here would mark the pod most
-			// likely to have somebody on it.
+			// All counts untrusted, so age alone decides: an older proxy has
+			// had longer to collect players.
 			name: "untrusted counts all round still take the newest",
 			pods: []ProxyView{
 				{Name: "young", Ready: true, PlayersStale: true, CreatedAt: at(9)},
@@ -217,11 +210,8 @@ func TestDecideRollout(t *testing.T) {
 			want:     RolloutDecision{Drain: []string{"b"}},
 		},
 		{
-			// Same shape, but the unready stale pod is the fullest and the
-			// least trusted -- the two things pick otherwise sorts last. It
-			// still goes first, because a pod the kubelet does not call Ready
-			// is behind no Service endpoint and the count is what it held
-			// before it fell over, not what it holds now.
+			// An unready pod is behind no Service endpoint; its count is what
+			// it held before it fell over.
 			name: "an unready stale pod goes ahead of an emptier ready one",
 			pods: []ProxyView{
 				{Name: "quiet", Stale: true, Ready: true, Players: 0, CreatedAt: at(0)},
@@ -233,17 +223,8 @@ func TestDecideRollout(t *testing.T) {
 			want:     RolloutDecision{Drain: []string{"fallen"}},
 		},
 		{
-			// A rollout cancelled before any pod was marked: the spec went
-			// back, so nothing is stale any more, so surge drops to 0 and the
-			// target with it -- but the surge pod that was already built is
-			// still standing. The group leaves through the surplus branch,
-			// which is the whole content of the case and is why the fixture
-			// needs three pods rather than the two a quiet group has.
-			//
-			// The surge pod is deliberately not the emptiest here. Nothing
-			// undoes a surge as such; the surplus is resolved by the ordinary
-			// rule, so the emptiest goes even when that is one of the
-			// originals and the newcomer stays.
+			// Cancelled before any mark: surge drops to 0 while the surge pod
+			// still stands, so the surplus goes by the ordinary rule.
 			name: "a cancelled rollout retires a surplus pod by the ordinary rule, not the surge pod",
 			pods: []ProxyView{
 				{Name: "a", Ready: true, Players: 5, CreatedAt: at(0)},
@@ -370,9 +351,7 @@ func TestDecideRollout(t *testing.T) {
 	}
 }
 
-// TestDecideRolloutWithoutSurge is the budget's counterpart to TestDecideRollout:
-// with surgeAllowed false the group never grows to replicas+1, whatever is
-// stale. It waits at its size, and the only pod it may still touch is one
+// Without surge the group never grows past replicas; it may only touch a pod
 // that already serves nobody.
 func TestDecideRolloutWithoutSurge(t *testing.T) {
 	tests := []struct {

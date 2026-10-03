@@ -32,11 +32,7 @@ func TestPersistentServerName(t *testing.T) {
 	}
 }
 
-// ordinalView builds the ServerView of a persistent server: named for its
-// ordinal and carrying that ordinal in the Ordinal field too, since
-// DecidePersistentSize reads the field and never the name. It is not called
-// view, because candidates_test.go already owns that name for a different
-// shape of builder in this same package.
+// ordinalView sets Ordinal too: DecidePersistentSize reads the field, never the name.
 func ordinalView(name string, ordinal int32, p phase.Phase) ServerView {
 	return ServerView{Name: name, Ordinal: &ordinal, Phase: p}
 }
@@ -64,10 +60,7 @@ func TestDecidePersistentSize(t *testing.T) {
 	})
 
 	t.Run("the surplus is taken from the top, one ordinal at a time", func(t *testing.T) {
-		// Two ordinals are surplus here, but TestDecidePersistentSizeTakesOneOrdinalDownAtATime
-		// is what the invariant itself belongs to: this case only checks that
-		// the single ordinal this pass does nominate is the highest one, not
-		// the lowest.
+		// Only checks that the nominated ordinal is the highest.
 		got := DecidePersistentSize(PersistentInputs{
 			Group: "survival", Replicas: 1,
 			Views: []ServerView{
@@ -83,18 +76,7 @@ func TestDecidePersistentSize(t *testing.T) {
 	})
 
 	t.Run("an ordinal held by a leaving server is neither missing nor removed again", func(t *testing.T) {
-		// survival-1 is draining. It still holds ordinal 1, so nothing may be
-		// built on its claim -- and it is already going, so it must not be
-		// named for deletion a second time.
-		//
-		// Only the CreateOrdinals assertion below actually discriminates
-		// here: held is built with no phase filter at all, so this is what
-		// tests that an ordinal counts as taken whatever phase its server is
-		// in. The Delete assertion cannot fail on its own in this case --
-		// ordinal 1 sits below Replicas and never reaches the surplus set,
-		// so it never reaches the leaving() guard either. That guard has its
-		// own case below, where the held ordinal is surplus as well as
-		// leaving.
+		// survival-1 still holds ordinal 1 whatever its phase, so nothing is built on its claim.
 		got := DecidePersistentSize(PersistentInputs{
 			Group: "survival", Replicas: 2,
 			Views: []ServerView{ordinalView("survival-0", 0, phase.Ready), ordinalView("survival-1", 1, phase.Draining)},
@@ -108,15 +90,8 @@ func TestDecidePersistentSize(t *testing.T) {
 	})
 
 	t.Run("a surplus ordinal held by a leaving server is not named for deletion again", func(t *testing.T) {
-		// survival-1's ordinal is surplus (>= Replicas) as well as already
-		// draining. PendingDeletes does not cover this on its own: observe()
-		// clears that reservation as soon as the cache shows a leaving
-		// phase -- typically the very next pass after the delete was issued
-		// -- while the drain itself keeps the server around for up to
-		// spec.drain.timeoutSeconds, which can far outlast the reservation's
-		// own TTL. leaving() is what keeps this rule from naming survival-1
-		// again for the rest of that drain, with no reservation left to lean
-		// on.
+		// observe() clears the PendingDeletes reservation once a leaving phase shows, but the
+		// drain can outlast it; leaving() keeps survival-1 from being named again.
 		got := DecidePersistentSize(PersistentInputs{
 			Group: "survival", Replicas: 1,
 			Views: []ServerView{ordinalView("survival-0", 0, phase.Ready), ordinalView("survival-1", 1, phase.Draining)},
@@ -162,11 +137,7 @@ func TestDecidePersistentSize(t *testing.T) {
 	})
 
 	t.Run("a server with no ordinal is ignored", func(t *testing.T) {
-		// A leftover from an ephemeral past, or a hand-made object: it carries
-		// no ordinal to fill or free. It neither fills one nor is removed as
-		// surplus -- removing it would be this rule deleting something it
-		// cannot name. The name is incidental here, not load-bearing: what
-		// matters is that Ordinal is nil.
+		// No Ordinal: it neither fills one nor is removed as surplus.
 		got := DecidePersistentSize(PersistentInputs{
 			Group: "survival", Replicas: 1,
 			Views: []ServerView{{Name: "survival-a7kd", Phase: phase.Ready}},
@@ -212,11 +183,8 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 		views      []ServerView
 		wantCreate []int32
 		wantDelete []string
-		// wantReason is SizeDecision.DeleteReason: which class nominated the
-		// ordinal, carried into the event size() emits. Tabled here rather
-		// than tested on its own so that no case can nominate under one class
-		// and report another, and so that a case added later has to answer
-		// the question.
+		// wantReason is SizeDecision.DeleteReason, tabled so no case nominates under one
+		// class and reports another.
 		wantReason string
 	}{
 		{
@@ -246,13 +214,8 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 			wantDelete: nil,
 		},
 		{
-			// This is the case above's stronger sibling. There the draining
-			// ordinal (3) was also the top surplus, so a rule that merely
-			// declines to re-nominate an already-leaving ordinal -- what the
-			// old surplus loop did before Gate A existed -- would pass it too.
-			// Here ordinal 1 is draining and ordinal 2 is the top surplus, Ready
-			// and otherwise perfectly nominable: only Gate A, which looks at
-			// the whole group rather than the one candidate, holds it back.
+			// Ordinal 2 is nominable on its own; only Gate A, which looks at the whole group,
+			// holds it back.
 			name:     "Gate A holds a surplus that is not itself the draining ordinal",
 			replicas: 1,
 			podHash:  "h1",
@@ -262,12 +225,7 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 			wantDelete: nil,
 		},
 		{
-			// A squatter or hand-made object carries no ordinal, so
-			// DecidePersistentSize's own doc comment says it "fills no
-			// ordinal, and it is not deleted as surplus". Gate A must honour
-			// that too: it asks the views a question about takedowns in
-			// flight, but a server this rule cannot name is not evidence of
-			// one, and must not block the nomination of g-1 below.
+			// A server with no ordinal is not a takedown in flight and must not block g-1.
 			name:     "a nil-ordinal squatter does not block Gate A",
 			replicas: 1,
 			podHash:  "h1",
@@ -279,9 +237,7 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 			wantReason: "SurplusOrdinal",
 		},
 		{
-			// Spec 2.1: a surplus ordinal sits above replicas, so Gate B cannot
-			// see it. Gate A is what holds the invariant here, and this case is
-			// what proves it does.
+			// A surplus ordinal sits above replicas, so Gate B cannot see it; Gate A must hold.
 			name:     "Gate B does not apply to surplus: a sick ordinal 0 does not block a scale-down",
 			replicas: 1,
 			podHash:  "h1",
@@ -333,14 +289,7 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 			wantDelete: nil,
 		},
 		{
-			// Task 5, not this one, fills PersistentInputs.PodHash from the
-			// group; until then a real caller passes the zero value here while
-			// views already carry real hashes. Without this guard every ordinal
-			// of every persistent group would compare unequal to "", read as
-			// stale, and be nominated for takedown. It is also correct on its
-			// own terms: a rule that cannot know what current looks like must
-			// not declare anything stale, the same way an empty view hash is
-			// adopted rather than compared.
+			// A rule that cannot know what current looks like must not declare anything stale.
 			name:       "an empty group PodHash skips the stale class entirely",
 			replicas:   2,
 			podHash:    "",
@@ -348,10 +297,7 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 			wantDelete: nil,
 		},
 		{
-			// The lowest-priority class: both ordinals are current spec and
-			// otherwise healthy, so resize-pending is the only thing that can
-			// nominate either, and it takes the highest the way surplus and
-			// stale do.
+			// Both ordinals are current and healthy, so only resize-pending can nominate.
 			name:     "resize-pending is nominated, but only after stale",
 			replicas: 2,
 			podHash:  "h1",
@@ -377,10 +323,7 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 			wantReason: "StaleSpec",
 		},
 		{
-			// Resize-pending is subject to Gate A exactly like stale is: a
-			// takedown already in flight for one ordinal holds back the
-			// nomination of another, whatever class that other ordinal would
-			// otherwise be nominated under.
+			// Resize-pending is held back by Gate A exactly like stale.
 			name:     "Gate A holds a resize-pending ordinal while another is draining",
 			replicas: 2,
 			podHash:  "h1",
@@ -415,9 +358,6 @@ func TestDecidePersistentSizeTakesOneOrdinalDownAtATime(t *testing.T) {
 	}
 }
 
-// ordinalViewWithHash is ordinalView plus a PodHash, for the table cases in
-// TestDecidePersistentSizeTakesOneOrdinalDownAtATime that need a phase other
-// than Ready or Draining together with an explicit hash.
 func ordinalViewWithHash(name string, ordinal int32, p phase.Phase, hash string) ServerView {
 	v := ordinalView(name, ordinal, p)
 	v.PodHash = hash
@@ -493,9 +433,7 @@ func TestOrdinalOf(t *testing.T) {
 		{"a negative number is not an ordinal", "survival", "survival--1", 0, false},
 		{"a leading zero is not the same ordinal", "survival", "survival-01", 0, false},
 		{"empty", "survival", "", 0, false},
-		// A group whose own name ends in a number is the case that breaks a
-		// naive suffix split: the boundary is the last hyphen, and everything
-		// before it must equal the group exactly.
+		// The boundary is the last hyphen, so a group name ending in a number must still parse.
 		{"a group name ending in a digit", "survival-2", "survival-2-3", 3, true},
 		{"that group's own name is not one of its servers", "survival-2", "survival-2", 0, false},
 	}
@@ -510,16 +448,10 @@ func TestOrdinalOf(t *testing.T) {
 	}
 }
 
-// TestADuplicatedOrdinalIsReportedAndNeverActedOn covers the state
-// DecidePersistentSize used to be unable to name. held is keyed by ordinal, so
-// a second server carrying one overwrote the first, and the loser was never
-// surplus, never recreated, and never mentioned anywhere -- while its pod went
-// on mounting the claim named after its own name.
+// A second server on one ordinal must be reported, not silently dropped from a map
+// keyed by ordinal.
 func TestADuplicatedOrdinalIsReportedAndNeverActedOn(t *testing.T) {
-	// Both orderings, because the defect was decided by list order: whichever
-	// server came second won the map entry. A fix that reported the conflict
-	// but still nominated from held would pass one of these and fail the
-	// other, which is precisely the bug wearing a condition.
+	// Both orderings: list order decides which duplicate a map keyed by ordinal keeps.
 	for _, order := range [][]ServerView{
 		{ordinalView("survival-2", 2, phase.Ready), ordinalView("restored-copy", 2, phase.Ready)},
 		{ordinalView("restored-copy", 2, phase.Ready), ordinalView("survival-2", 2, phase.Ready)},
@@ -529,8 +461,7 @@ func TestADuplicatedOrdinalIsReportedAndNeverActedOn(t *testing.T) {
 				ordinalView("survival-0", 0, phase.Ready),
 				ordinalView("survival-1", 1, phase.Ready),
 			}, order...)
-			// Replicas 2 makes ordinal 2 surplus, which is the nomination that
-			// would otherwise delete one of the two arbitrarily.
+			// Replicas 2 makes ordinal 2 surplus, which would otherwise delete one of the two.
 			got := DecidePersistentSize(PersistentInputs{Group: "survival", Replicas: 2, Views: views})
 
 			if len(got.Delete) != 0 {
@@ -544,9 +475,7 @@ func TestADuplicatedOrdinalIsReportedAndNeverActedOn(t *testing.T) {
 	}
 }
 
-// TestADuplicatedOrdinalDoesNotStopTheRestOfTheGroup keeps the refusal narrow.
-// Refusing everything would turn one hand-created object into a group-wide
-// stall, which is a worse failure than the one being prevented.
+// Refusing everything would turn one hand-made object into a group-wide stall.
 func TestADuplicatedOrdinalDoesNotStopTheRestOfTheGroup(t *testing.T) {
 	// Ordinal 1 is doubled; ordinal 3 is missing and ordinal 4 is surplus.
 	got := DecidePersistentSize(PersistentInputs{
@@ -560,12 +489,10 @@ func TestADuplicatedOrdinalDoesNotStopTheRestOfTheGroup(t *testing.T) {
 		},
 	})
 
-	// The missing ordinal is still created: the create loop asks only whether
-	// an ordinal is taken, and a doubled one is taken twice over.
+	// A doubled ordinal still counts as taken.
 	if !equalOrdinals(got.CreateOrdinals, []int32{3}) {
 		t.Errorf("CreateOrdinals = %v, want [3]", got.CreateOrdinals)
 	}
-	// And the surplus that is *not* doubled is still nominated.
 	if len(got.Delete) != 1 || got.Delete[0] != "survival-4" {
 		t.Errorf("Delete = %v, want [survival-4]", got.Delete)
 	}
@@ -574,10 +501,7 @@ func TestADuplicatedOrdinalDoesNotStopTheRestOfTheGroup(t *testing.T) {
 	}
 }
 
-// TestAStaleDuplicatedOrdinalIsNotReplaced is the second nomination path, and
-// the one with the sharpest edge: replacing a stale ordinal deletes its server
-// so a new one can take the claim. Doing that to the wrong half of a duplicate
-// pair takes down a world that was never stale.
+// Replacing the wrong half of a duplicate pair takes down a world that was never stale.
 func TestAStaleDuplicatedOrdinalIsNotReplaced(t *testing.T) {
 	got := DecidePersistentSize(PersistentInputs{
 		Group: "survival", Replicas: 2, PodHash: "new",
@@ -596,9 +520,6 @@ func TestAStaleDuplicatedOrdinalIsNotReplaced(t *testing.T) {
 	}
 }
 
-// TestThreeServersOnOneOrdinalAreAllNamed guards the collection rather than
-// the rule: a message that named only the first two would send somebody to
-// delete "the other one" when there were two others.
 func TestThreeServersOnOneOrdinalAreAllNamed(t *testing.T) {
 	got := DecidePersistentSize(PersistentInputs{
 		Group: "survival", Replicas: 1,
@@ -614,15 +535,13 @@ func TestThreeServersOnOneOrdinalAreAllNamed(t *testing.T) {
 	}
 }
 
-// TestNoConflictsWhenEveryOrdinalIsSingle is the negative: the field stays nil
-// on the ordinary path, so a caller can use its emptiness as the question.
+// A caller can use the field's emptiness as the question.
 func TestNoConflictsWhenEveryOrdinalIsSingle(t *testing.T) {
 	got := DecidePersistentSize(PersistentInputs{
 		Group: "survival", Replicas: 2,
 		Views: []ServerView{
 			ordinalView("survival-0", 0, phase.Ready),
 			ordinalView("survival-1", 1, phase.Ready),
-			// A view with no ordinal at all shares no identity with anything.
 			{Name: "stray", Phase: phase.Ready},
 		},
 	})

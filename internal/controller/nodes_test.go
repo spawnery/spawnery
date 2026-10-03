@@ -44,9 +44,7 @@ func TestIsDeparting(t *testing.T) {
 			want: true,
 		},
 		{
-			// PreferNoSchedule does not stop the replacement being scheduled
-			// back onto this node, so treating it as departing would condemn
-			// the replacement too, and the one after that, without end.
+			// PreferNoSchedule lets the replacement be scheduled back onto this node.
 			name: "the same key with PreferNoSchedule is not enough",
 			node: taintedNode(false, corev1.Taint{Key: "k", Effect: corev1.TaintEffectPreferNoSchedule}),
 			keys: []string{"k"},
@@ -89,18 +87,15 @@ func TestIsDeparting(t *testing.T) {
 func TestNodeDeparting(t *testing.T) {
 	c, ctx := testenv.Client(t)
 
-	// An unresolvable node is not departing: failing towards "stay" keeps an
-	// unreadable Node from emptying a group on the strength of a cache miss.
+	// Failing towards "stay": a cache miss must not empty a group.
 	if nodeDeparting(ctx, c, "no-such-node", nil) {
 		t.Error("an unreadable node must not read as departing")
 	}
-	// An empty node name is an unscheduled pod, which is on no node at all.
 	if nodeDeparting(ctx, c, "", nil) {
 		t.Error("an empty node name must not read as departing")
 	}
 
-	// A real node, before and after the cordon. Nodes are cluster-scoped, so
-	// the name has to be unique across this whole test binary.
+	// Nodes are cluster-scoped, so the name must be unique across the test binary.
 	node := &corev1.Node{ObjectMeta: metav1.ObjectMeta{Name: "node-departing-test"}}
 	if err := c.Create(ctx, node); err != nil {
 		t.Fatalf("create node: %v", err)
@@ -119,16 +114,7 @@ func TestNodeDeparting(t *testing.T) {
 	}
 }
 
-// TestAWellKnownDrainTaintIsNoticedWithoutBeingActedOn is the answer to
-// docs/reference/known-issues.md's "nothing in the operator will tell them they missed
-// it". An unset -drain-taint and a genuinely quiet cluster look identical from
-// inside this operator, and the one thing that tells them apart is a node
-// turning up with a taint that plainly means the node is going.
-//
-// The two halves are asserted together on purpose. Noticing must not become
-// acting: a default that moved pods off another project's taint key would
-// couple this operator to a vocabulary that project is free to rename, which
-// is the coupling the configurable list exists to avoid.
+// Noticing must not become acting: another project's taint keys are not ours to act on.
 func TestAWellKnownDrainTaintIsNoticedWithoutBeingActedOn(t *testing.T) {
 	for key, project := range map[string]string{
 		"ToBeDeletedByClusterAutoscaler": "cluster-autoscaler",
@@ -150,10 +136,6 @@ func TestAWellKnownDrainTaintIsNoticedWithoutBeingActedOn(t *testing.T) {
 	}
 }
 
-// TestAConfiguredTaintReportsNothingMissing keeps the warning from firing on
-// the cluster that did it right. An operator who passed the flag has nothing
-// to be told, and a line saying otherwise would be noise on exactly the
-// installations that read their logs.
 func TestAConfiguredTaintReportsNothingMissing(t *testing.T) {
 	node := &corev1.Node{Spec: corev1.NodeSpec{Taints: []corev1.Taint{
 		{Key: "ToBeDeletedByClusterAutoscaler", Effect: corev1.TaintEffectNoSchedule},
@@ -168,11 +150,7 @@ func TestAConfiguredTaintReportsNothingMissing(t *testing.T) {
 	}
 }
 
-// TestACordonedNodeReportsNothingMissing is the same point by the other route
-// into IsDeparting. A cordon is honoured whatever the taints say, so a node
-// that is already departing has nothing missing to report even when it also
-// carries an unconfigured key -- which is exactly what
-// --cordon-node-before-terminating produces.
+// --cordon-node-before-terminating produces exactly this cordon plus unconfigured taint.
 func TestACordonedNodeReportsNothingMissing(t *testing.T) {
 	node := &corev1.Node{Spec: corev1.NodeSpec{
 		Unschedulable: true,
@@ -187,11 +165,7 @@ func TestACordonedNodeReportsNothingMissing(t *testing.T) {
 	}
 }
 
-// TestAPreferNoScheduleWellKnownTaintIsNotEvenNoticed keeps the hint on the
-// same footing as the decision. IsDeparting ignores PreferNoSchedule because
-// it does not stop the scheduler putting a replacement back on the same node;
-// a warning about one would send an operator to add a flag that would then
-// have to be ignored anyway.
+// IsDeparting ignores PreferNoSchedule, so a hint about it would ask for a flag that cannot apply.
 func TestAPreferNoScheduleWellKnownTaintIsNotEvenNoticed(t *testing.T) {
 	node := &corev1.Node{Spec: corev1.NodeSpec{Taints: []corev1.Taint{
 		{Key: "ToBeDeletedByClusterAutoscaler", Effect: corev1.TaintEffectPreferNoSchedule},
@@ -202,10 +176,7 @@ func TestAPreferNoScheduleWellKnownTaintIsNotEvenNoticed(t *testing.T) {
 	}
 }
 
-// TestTheMissingTaintWarningIsOncePerNode pins the gate rather than the
-// wording. nodeDeparting runs for every pod of every group on every reconcile,
-// so an ungated warning would be several lines a second for as long as the
-// node stood, about something that does not change while it stands.
+// nodeDeparting runs for every pod of every group on every reconcile.
 func TestTheMissingTaintWarningIsOncePerNode(t *testing.T) {
 	var o once
 	calls := 0
@@ -218,15 +189,6 @@ func TestTheMissingTaintWarningIsOncePerNode(t *testing.T) {
 	}
 }
 
-// TestNodeDrainingSaysWhenTheGroupCannotReplace closes the half of two entries
-// that stayed open after the condemnation itself was settled.
-//
-// A group in create-backoff, or one whose Network is unusable, condemns the
-// pods on a departing node and cannot rebuild them. That ruling is sound --
-// those players are evicted off the node whatever the group does, so moving
-// them beats being kicked with nowhere chosen. What it costs is capacity, and
-// both halves of that were on the object separately (NodeDraining: True beside
-// Accepted: False or BackingOff: True) while the combination was on neither.
 func TestNodeDrainingSaysWhenTheGroupCannotReplace(t *testing.T) {
 	for _, tc := range []struct {
 		name    string
@@ -241,15 +203,11 @@ func TestNodeDrainingSaysWhenTheGroupCannotReplace(t *testing.T) {
 			absent:  "cannot build replacements",
 		},
 		{
-			// The unbounded one. It waits for a person, which is the only
-			// case worth waking up for.
 			name:    "a broken Network",
 			blocked: blockedReplacement{Reason: "its Network is missing or not accepted"},
 			want:    []string{"node-a", "cannot build replacements", "Network", "until that is fixed"},
 		},
 		{
-			// The bounded one, which needs no action and must not read like
-			// the case above.
 			name: "create-backoff",
 			blocked: blockedReplacement{
 				Reason:  "its servers are failing to start and it is backing off",
@@ -275,11 +233,6 @@ func TestNodeDrainingSaysWhenTheGroupCannotReplace(t *testing.T) {
 	}
 }
 
-// TestAGroupWithNoDrainingNodesSaysNothingAboutReplacing keeps the addition
-// off the False side. A group with nothing on a departing node has no
-// replacement problem to report, whatever else is wrong with it, and a
-// condition that mentioned one would be describing a situation that does not
-// exist.
 func TestAGroupWithNoDrainingNodesSaysNothingAboutReplacing(t *testing.T) {
 	cond := drainingConditionBlocked(nil, blockedReplacement{
 		Reason: "its Network is missing or not accepted",

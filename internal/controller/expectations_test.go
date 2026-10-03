@@ -90,12 +90,8 @@ func TestExpectedDeleteIsSatisfiedByDisappearanceOrDeparture(t *testing.T) {
 }
 
 func TestExpectedDeleteIsNotSatisfiedByCondemnedAlone(t *testing.T) {
-	// Condemned is an independent node-level signal, not evidence that the
-	// reserved removal has landed: a server this reconciler already
-	// reserved an ordinary delete for can have its node cordoned before the
-	// cache shows any consequence of that delete. Clearing the reservation
-	// on Condemned alone would drop the guard that keeps condemned() from
-	// re-listing the same server on the next pass.
+	// Condemned is a node-level signal, not proof the reserved delete landed;
+	// clearing on it would let condemned() re-list the same server.
 	e, _ := newTestExpectations()
 	e.expectDeleted("ns/lobby", "lobby-aaaa")
 
@@ -134,10 +130,7 @@ func TestForgetDropsAGroupEntirely(t *testing.T) {
 	}
 }
 
-// TestPendingSeparatesCreatesFromDeletes exercises the type's primary read API
-// with both kinds in one group at once. It is the arithmetic task 6 sizes the
-// group from: a delete counted as a create inflates alive by two and hides a
-// shortfall the group actually has.
+// A delete counted as a create inflates alive by two and hides a shortfall.
 func TestPendingSeparatesCreatesFromDeletes(t *testing.T) {
 	e, _ := newTestExpectations()
 	e.expectCreated("ns/lobby", "lobby-aaaa", 0)
@@ -153,15 +146,8 @@ func TestPendingSeparatesCreatesFromDeletes(t *testing.T) {
 	}
 }
 
-// TestPendingNamesItsCreates is what the persistent sizing rule needs: not how
-// many creates are in flight, but which ordinals they are for.
-//
-// The first two assertions report rather than halt, and that is the whole
-// reason the third one exists. Pinning creates to exactly two named keys with
-// a t.Fatalf makes the third assertion dead: a mutation that let a delete
-// reservation leak into the creates map trips the first one and stops the test
-// there, so "a delete must not appear among the creates" could never be the
-// thing that failed.
+// The first two assertions report rather than halt, so the third (no delete
+// among the creates) can still be the one that fails.
 func TestPendingNamesItsCreates(t *testing.T) {
 	e := newExpectations(func() time.Time { return time.Unix(0, 0) })
 	e.expectCreated("ns/survival", "survival-0", 0)
@@ -181,9 +167,8 @@ func TestPendingNamesItsCreates(t *testing.T) {
 }
 
 func TestExpectedRetireCountsUntilTheCacheShowsIt(t *testing.T) {
-	// Without this reservation a second server can be nominated while the
-	// first patch has not reached the cache, and maxUnavailable is exceeded
-	// by one. The window is small; the standard here is not smallness.
+	// Without the reservation a second server can be nominated before the
+	// first patch reaches the cache, exceeding maxUnavailable by one.
 	e := newExpectations(time.Now)
 	e.expectRetired("ns/g", "a")
 
@@ -192,22 +177,17 @@ func TestExpectedRetireCountsUntilTheCacheShowsIt(t *testing.T) {
 		t.Fatal("a retirement the cache has not shown is not reserved")
 	}
 
-	// The cache still shows the old spec: still reserved.
 	e.observe("ns/g", []ServerView{{Name: "a"}})
 	if _, _, retires = e.pending("ns/g"); !retires["a"] {
 		t.Error("the reservation was dropped before the cache caught up")
 	}
 
-	// The cache shows the patch: the reservation has done its job.
 	e.observe("ns/g", []ServerView{{Name: "a", Retire: true}})
 	if _, _, retires = e.pending("ns/g"); retires["a"] {
 		t.Error("the reservation outlived the observation")
 	}
 }
 
-// TestObservePodsClearsACreateReservation pins observePods -- observe's pod-
-// shaped counterpart for the ProxyGroup controller, which lists pods rather
-// than the Server CRs observe reads.
 func TestObservePodsClearsACreateReservation(t *testing.T) {
 	e := newExpectations(func() time.Time { return time.Unix(0, 0) })
 	e.expectCreated("gateway", "gateway-aaaa", 0)
@@ -238,9 +218,8 @@ func TestObservePodsClearsADeleteReservationWhenThePodIsGone(t *testing.T) {
 }
 
 func TestExpectedRetireIsSatisfiedByDisappearance(t *testing.T) {
-	// A server that finished retiring and was deleted between the patch and
-	// the next list would otherwise hold a slot of the budget forever, or
-	// until the TTL — and the TTL is the backstop, not the mechanism.
+	// A server deleted between the patch and the next list would otherwise
+	// hold a budget slot until the TTL.
 	e := newExpectations(time.Now)
 	e.expectRetired("ns/g", "a")
 	e.observe("ns/g", nil)
@@ -267,10 +246,8 @@ func TestPendingNumbersHoldsWhatWasReserved(t *testing.T) {
 func TestPendingNumbersSkipsZero(t *testing.T) {
 	e := newExpectations(time.Now)
 
-	// A proxy pod and a persistent server both reserve a name without
-	// reserving a number, and pass zero to say so. Zero is not a number the
-	// ephemeral rule may hand out, so letting it into the set would only
-	// mislead a reader of it.
+	// Zero means a name without a number; the ephemeral rule never hands out
+	// zero.
 	e.expectCreated("ns/gateway", "gateway-a1b2", 0)
 
 	if got := e.pendingNumbers("ns/gateway"); len(got) != 0 {

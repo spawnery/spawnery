@@ -32,41 +32,20 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// rotationRunbook is where the condition messages and the rotation event send
-// an operator. Named once so the three cannot drift apart.
 const rotationRunbook = "docs/guides/rotating-the-forwarding-secret.md"
 
-// forwardingRead is what one attempt at reading a Network's forwarding secret
-// produced: the digest when it worked, and in every case the
-// ForwardingSecretResolved condition it justifies.
 type forwardingRead struct {
-	// Hash is podspec.ForwardingHash over the secret's value, empty unless the
-	// read succeeded and the value was usable. Callers test this rather than
-	// Reason, because "is there a digest to compare against" is the question
-	// every one of them is actually asking.
-	Hash string
-	// Status, Reason and Message make up ForwardingSecretResolved.
+	// Hash is empty unless the read succeeded and the value was usable.
+	Hash    string
 	Status  metav1.ConditionStatus
 	Reason  string
 	Message string
-	// Err is the API server's own error on the two branches that have one, and
-	// it is carried out rather than dropped for one reason: Message is written
-	// for a person reading `kubectl describe network` and says what to do
-	// about it, so it deliberately does not quote the API server. That means
-	// it carries no `is forbidden:` substring, which is the exact string
-	// test/e2e's theOperatorWasNeverDenied greps the operator's log for. A 403
-	// on this read was therefore invisible to the one check in this repository
-	// that exists to catch a denial the RBAC audit cannot -- not through the
-	// cache, the way that check's other blind spot works, but through an error
-	// the code handled instead of surfacing. The caller logs this.
+	// Err is the API server's error, for the caller to log: Message omits it,
+	// and test/e2e's theOperatorWasNeverDenied greps the log for "is forbidden:".
 	Err error
 }
 
-// readForwardingSecret fetches the Network's forwarding secret and digests it.
-//
-// The reader is an argument rather than a field of the reconciler because it
-// has to be the uncached one: a cached Secret would need an informer over every
-// Secret in scope, and this operator holds no list or watch on them.
+// The reader must be uncached: the operator holds no list or watch on Secrets.
 func readForwardingSecret(ctx context.Context, reader client.Reader, net *spawneryv1alpha1.Network) forwardingRead {
 	name := net.Spec.ForwardingSecretRef.Name
 	secret := &corev1.Secret{}
@@ -115,7 +94,6 @@ func readForwardingSecret(ctx context.Context, reader client.Reader, net *spawne
 	}
 }
 
-// resolvedCondition turns a read into the condition it justifies.
 func resolvedCondition(read forwardingRead) metav1.Condition {
 	return metav1.Condition{
 		Type:    spawneryv1alpha1.ConditionForwardingSecretResolved,
@@ -125,24 +103,15 @@ func resolvedCondition(read forwardingRead) metav1.Condition {
 	}
 }
 
-// forwardingStamp is one running pod's contribution to the rotation report.
 type forwardingStamp struct {
 	Group string
 	Role  string
-	// Hash is podspec.LabelForwardingHash, empty when the pod carries none.
-	Hash string
+	Hash  string
 }
 
-// forwardingStamps reduces a network's pods to what the rotation report needs.
-// Two kinds of pod are dropped, neither of them running a process the stamp
-// describes. One with a DeletionTimestamp is on its way out and must not hold
-// the report open after the replacement that fixes it already exists. One
-// podTerminal calls finished is down, and its Server keeps it for
-// spec.failedRetentionSeconds — an hour by default — so counting it would hold
-// the report open for that hour after a rotation that is otherwise complete.
-// The crash-looping case reads worst of all: the container may have restarted
-// since the rotation and read the projected secret again, in which case the
-// stamp does not name what that pod last loaded.
+// forwardingStamps drops terminating pods and pods podTerminal calls finished:
+// neither runs the process the stamp describes, and a failed pod kept for
+// spec.failedRetentionSeconds would hold the report open for that long.
 func forwardingStamps(pods []corev1.Pod) []forwardingStamp {
 	stamps := make([]forwardingStamp, 0, len(pods))
 	for i := range pods {
@@ -159,9 +128,8 @@ func forwardingStamps(pods []corev1.Pod) []forwardingStamp {
 	return stamps
 }
 
-// rotationCondition decides ForwardingSecretRotationPending, in this
-// precedence: an unreadable secret, then a stale pod, then an unstamped one. A
-// known problem outranks an unknown one.
+// rotationCondition's precedence: an unreadable secret, then a stale pod, then
+// an unstamped one. A known problem outranks an unknown one.
 func rotationCondition(read forwardingRead, stamps []forwardingStamp) metav1.Condition {
 	cond := metav1.Condition{Type: spawneryv1alpha1.ConditionForwardingSecretRotationPending}
 
@@ -204,27 +172,12 @@ func rotationCondition(read forwardingRead, stamps []forwardingStamp) metav1.Con
 	return cond
 }
 
-// groupRotationCondition decides one group's own
-// ForwardingSecretRotationPending from the digest its Network published and
-// the stamps on that group's own pods.
+// groupRotationCondition is one group's own ForwardingSecretRotationPending,
+// the same condition type as the Network's at group scope, with
+// rotationCondition's precedence.
 //
-// The same condition type as the Network's, deliberately: it is the same
-// question at a different scope, and a second name would make an operator
-// reading a group and an operator reading its network learn two vocabularies
-// for one fact. The Network's is the fleet sum and names which groups are
-// behind, in a message; this one is a group answering for itself, so
-// `kubectl get servergroup -o json` and a per-group alert have a condition to
-// read rather than a string to parse.
-//
-// It reads the digest off Network.status rather than reading the secret. The
-// group controllers hold no uncached reader for one and deliberately no grant
-// on secrets outside the operator's own namespace, so this is strictly
-// downstream of the Network's own report: a network that cannot read its
-// secret publishes no digest, and every group in it says so too rather than
-// guessing.
-//
-// The precedence is rotationCondition's, for the same reason -- a known
-// problem outranks an unknown one.
+// It reads the digest off Network.status rather than the secret: the group
+// controllers have no grant on secrets outside the operator's namespace.
 func groupRotationCondition(networkHash string, stamps []forwardingStamp) metav1.Condition {
 	cond := metav1.Condition{Type: spawneryv1alpha1.ConditionForwardingSecretRotationPending}
 
@@ -268,17 +221,12 @@ func groupRotationCondition(networkHash string, stamps []forwardingStamp) metav1
 	return cond
 }
 
-// reportGroupRotation writes groupRotationCondition onto whichever group kind
-// is asking. A *[]metav1.Condition rather than the object, because a
-// ServerGroup and a ProxyGroup have nothing else in common here and one
-// function beats two that must agree.
 func reportGroupRotation(conditions *[]metav1.Condition, networkHash string, pods []corev1.Pod) {
 	meta.SetStatusCondition(conditions, groupRotationCondition(networkHash, forwardingStamps(pods)))
 }
 
-// staleSummary renders the stale counts as role/group=count, every server entry
-// before every proxy entry and each sorted by name. The order is the runbook's:
-// whoever reads this message is about to do the work it lists.
+// staleSummary lists every server entry before every proxy entry, each sorted
+// by name: the runbook's order.
 func staleSummary(stale map[string]int) string {
 	keys := make([]string, 0, len(stale))
 	for k := range stale {
@@ -299,10 +247,8 @@ func staleSummary(stale map[string]int) string {
 	return strings.Join(parts, ", ")
 }
 
-// hasConditionReason reports whether the object already carries this condition
-// with this reason — which is how the events tell entering a state from staying
-// in it. At a five-second requeue the difference is one event against seven
-// hundred an hour.
+// hasConditionReason tells entering a state from staying in it, so events fire
+// once rather than on every five-second requeue.
 func hasConditionReason(conditions []metav1.Condition, condType, reason string) bool {
 	cond := meta.FindStatusCondition(conditions, condType)
 	return cond != nil && cond.Reason == reason

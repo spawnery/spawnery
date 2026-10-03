@@ -41,11 +41,8 @@ func groupWithMounts(ns, name string, mounts ...spawneryv1alpha1.Mount) *spawner
 	}
 }
 
-// The rule went from "exactly one of two" to "exactly one of three" when the
-// claim source arrived, and a CEL expression rewritten from != to exists_one
-// is exactly the kind of change that compiles, installs, and quietly stops
-// refusing anything. So all three of the shapes it exists to reject are driven
-// against a real API server, not reasoned about.
+// A CEL rule rewritten to exists_one can compile and install while refusing
+// nothing, so every shape it rejects is driven against a real API server.
 func TestTheAPIServerRefusesAMountWithoutExactlyOneSource(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -80,9 +77,7 @@ func TestTheAPIServerRefusesAMountWithoutExactlyOneSource(t *testing.T) {
 }
 
 func TestTheAPIServerAdmitsEachMountSourceOnItsOwn(t *testing.T) {
-	// The other half: the rule has to let all three through. An exists_one
-	// written against the wrong operand would refuse everything and pass the
-	// test above completely.
+	// A rule that refuses everything would pass the test above.
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
 
@@ -104,9 +99,7 @@ func TestTheAPIServerAdmitsEachMountSourceOnItsOwn(t *testing.T) {
 		t.Fatalf("a group with one mount of each source was refused: %v", err)
 	}
 
-	// Read back rather than trusting the round trip: writable is the field
-	// with a default, and a bool that does not survive serialisation would
-	// leave every claim read-only with the spec saying otherwise.
+	// writable has a default and must survive the round trip.
 	var got spawneryv1alpha1.ServerGroup
 	if err := c.Get(ctx, client.ObjectKeyFromObject(good), &got); err != nil {
 		t.Fatalf("get: %v", err)
@@ -118,10 +111,7 @@ func TestTheAPIServerAdmitsEachMountSourceOnItsOwn(t *testing.T) {
 }
 
 func TestAProxyGroupAcceptsMounts(t *testing.T) {
-	// spec.mounts is new on ProxyGroup. Without this, the CRD could ship
-	// without the field and every manifest naming it would be accepted with
-	// the mounts silently pruned -- which is what the API server does with an
-	// unknown field on a structural schema.
+	// An unknown field on a structural schema is pruned silently, not refused.
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
 

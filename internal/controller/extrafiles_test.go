@@ -27,15 +27,11 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
-// fileReader is pluginReader under this file's name -- the fixture every test
-// below builds on, empty unless given objects to seed.
 func fileReader(t *testing.T, objects ...client.Object) client.Reader {
 	t.Helper()
 	return pluginReader(t, objects...)
 }
 
-// fileReaderWithClaim seeds a reader with a single claim named name, carrying
-// the given access modes.
 func fileReaderWithClaim(t *testing.T, name string, modes ...corev1.PersistentVolumeAccessMode) client.Reader {
 	t.Helper()
 	return pluginReader(t, pluginClaim(name, modes...))
@@ -82,12 +78,8 @@ func TestAReadWriteOnceFilesClaimIsRefused(t *testing.T) {
 }
 
 func TestExtraFilesSwitchOffReadsNoClaim(t *testing.T) {
-	// The other half of TestExtraFilesWithoutTheFlagIsRefused, and it needs
-	// its own test because it is a claim about a call that does not happen.
-	// An installation with the feature off must not spend an API read per
-	// group per resync on a field it will refuse anyway -- see
-	// TestTheSwitchOffReadsNoClaimAtAll in extraplugins_test.go, which this
-	// mirrors.
+	// Feature off: no API read per group per resync, as in
+	// TestTheSwitchOffReadsNoClaimAtAll.
 	c := &countingReader{Reader: fileReaderWithClaim(t, "files", corev1.ReadWriteMany)}
 
 	checkExtraFiles(context.Background(), c, "minecraft",
@@ -99,9 +91,7 @@ func TestExtraFilesSwitchOffReadsNoClaim(t *testing.T) {
 }
 
 func TestAGroupWithBothFieldsWrongReportsThePluginOneFirst(t *testing.T) {
-	// checkGroupVolumes' existing order: extraPlugins is the older field and
-	// the one more installations set, and when both are wrong there is no
-	// reason to prefer the other.
+	// extraPlugins is asked first: the older field, set by more installations.
 	c := fileReader(t)
 
 	reason, _, ok := checkGroupVolumes(context.Background(), c, "minecraft",

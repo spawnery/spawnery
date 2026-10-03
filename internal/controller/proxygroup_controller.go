@@ -52,92 +52,41 @@ import (
 )
 
 // ProxyDrainingSinceAnnotation records when the operator first asked a proxy
-// pod to stop taking connections, as an RFC 3339 timestamp.
-//
-// It is on the pod because that is the only per-pod place that survives an
-// operator restart: a proxy has no CR of its own, and the ProxyGroup's status
-// is per group. Everything else about a drain is re-derived every pass — which
-// pods are surplus, and therefore what readiness each should have — so this is
-// the only thing that has to be written down.
+// pod to stop taking connections, as an RFC 3339 timestamp. On the pod because
+// a proxy has no CR of its own and the date must survive an operator restart.
 const ProxyDrainingSinceAnnotation = podspec.AnnotationProxyDrainingSince
 
 // readinessDivergenceGrace is how long a pod's actual readiness may disagree
-// with the asserted one before the group says so. It must clear both known
-// delays: the kubelet's probe takes 10 to 15 seconds to flip a condition
-// (period 5s times failure threshold 3), and Fleet.Resync re-asserts every 30
-// seconds. 60 clears both with margin.
+// with the asserted one before the group says so. It clears the probe's 10 to
+// 15 seconds (period 5s times threshold 3) and Fleet.Resync's 30 seconds.
 const readinessDivergenceGrace = 60 * time.Second
 
-// ProxyReadinessSetter is how the ProxyGroup controller tells one proxy pod
-// whether it should be taking connections. *proxyreg.Fleet satisfies it; the
-// narrow interface — not the concrete type — mirrors why Registrar exists for
-// the Server controller's wider write surface, and keeps this file's only
-// dependency on proxyreg to the one method it actually calls.
+// ProxyReadinessSetter tells one proxy pod whether it should be taking
+// connections. *proxyreg.Fleet satisfies it.
 type ProxyReadinessSetter interface {
 	SetReady(ctx context.Context, podUID string, ready bool) error
 }
 
-// NewProxyName builds a unique proxy pod name below the group prefix. Same
-// generator and same alphabet as NewServerName: a proxy has no CR of its own,
-// so the pod name is the only handle anyone has on it, and it has to be as
-// readable off a terminal as a server's.
+// NewProxyName builds a unique proxy pod name below the group prefix.
 func NewProxyName(group string) string { return NewServerName(group) }
 
 // ProxyGroupReconciler keeps a proxy group at its replica count, keeps its
 // Service in step, and publishes where players connect.
 //
-// Unlike ServerGroupReconciler it manages pods directly. Proxies are
-// fungible: there is no per-proxy object and no state machine. Draining one
-// is the readiness contract — telling a surplus pod's own agent to stop
-// taking connections and dating when that started — plus the wait that
-// contract exists for: reconcileReplicas removes a surplus pod once it is
-// empty, or once its deadline has passed, and not before.
+// Unlike ServerGroupReconciler it manages pods directly: proxies are fungible,
+// with no per-proxy object and no state machine. Draining one means telling
+// its agent to stop taking connections, dating that, and removing the pod
+// once it is empty or its deadline has passed.
 //
-// It emits Kubernetes events on the occasions below; the four about the
-// group clear one bar: something happened that no other signal on the object
-// reports.
-//
-//   - A proxy marked for going off a departing node (NodeDraining, Normal,
-//     from the assertion loop in reconcileReplicas). Fired once, on the pass
-//     that actually marks it, and only when the node is the reason — a
-//     hash-mismatch-only surplus reduction says nothing here.
-//   - A drain that ran out of time (ProxyDrainTimeout, Warning, from the
-//     deletion loop in reconcileReplicas). It is the one thing in this
-//     milestone that disconnects a player, it is configured rather than
-//     accidental, and nothing else on the object would ever say it happened.
-//   - A readiness divergence crossing its grace period, on the flank in
-//     either direction (ReadinessDiverged as a Warning, ReadinessAgrees as a
-//     Normal, from reportReadinessDivergence). Here the condition of the same
-//     name carries the state, so what the event adds is the transition and
-//     its timing: a condition read later says a proxy is ignoring its
-//     withdrawal, not when it started or that it happened at all if it has
-//     since cleared. An agent that heard a withdrawal and went on taking
-//     connections looks healthy from every angle the kubelet reports, so
-//     nothing outside this pair reports it.
-//   - A proxy pod that cannot come into existence, on the flank in either
-//     direction (ProxyPodBlocked as a Warning, from either the create path in
-//     Reconcile when the API server refuses a pod or the scheduler-reading
-//     branch of reportBlockedProxies when one cannot be placed; and the
-//     recovery back to every proxy pod existing, ProxyPodsAdmitted as a
-//     Normal, from reportBlockedProxies). Same shape as the readiness pair
-//     above: the Degraded condition already carries which of the two is
-//     true, so what the event adds is that a transition happened and when —
-//     a group that recovers between two resyncs would otherwise show a
-//     clean Degraded=False with nothing on its timeline saying it was ever
-//     anything else.
-//
-// Three more are about a single proxy and are recorded on its pod, which is
-// what lets the in-game feed name the proxy: ProxyStarted on its first pass
-// of the ready gate (announceReady), ProxyRetiring when it is first marked
-// draining for a rollout, a retire request or a scale-down (a departing node
-// has NodeDraining above instead), and ProxyStopped when it is deleted
-// empty.
+// Group events: NodeDraining (a proxy marked off a departing node),
+// ProxyDrainTimeout (the one thing here that disconnects a player),
+// ReadinessDiverged/ReadinessAgrees and ProxyPodBlocked/ProxyPodsAdmitted on
+// the flanks of their conditions. Pod events, which let the in-game feed name
+// the proxy: ProxyStarted, ProxyRetiring, ProxyStopped.
 type ProxyGroupReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
 
-	// Agents is the runtime state reported by the in-game agents. Read for the
-	// connected player count.
 	Agents *agent.Registry
 	// Bootstrap puts the CA bundle and the ServiceAccounts into the namespace
 	// before the first pod is created there.
@@ -147,63 +96,31 @@ type ProxyGroupReconciler struct {
 	// OperatorNamespace is where the operator runs; the group's egress
 	// policy names it so a proxy may dial the agent port.
 	OperatorNamespace string
-	// Proxies is how a surplus proxy is told to stop taking connections, and
-	// a proxy that is no longer surplus is told to resume. See
-	// ProxyReadinessSetter.
-	Proxies ProxyReadinessSetter
-	// Clock is injectable so the drain deadline is testable.
-	Clock func() time.Time
-	// Recorder announces two things: a drain that hit its deadline with
-	// players still on the proxy, and the flank of a readiness divergence.
-	// See the type comment for the bar both clear and why nothing else here
-	// is announced.
-	Recorder events.EventRecorder
+	Proxies           ProxyReadinessSetter
+	Clock             func() time.Time
+	Recorder          events.EventRecorder
 	// Expectations reserves the pod creates and deletes this reconciler has
 	// issued and the cache has not shown yet. One instance is shared across
-	// groups. Task 4 made a rollout create a pod per replacement rather than
-	// only at scale-up, which makes the create path race the informer cache as
-	// a matter of course rather than rarely; see expectations.go. Only create
-	// and delete apply here -- a proxy has no per-pod CR and so no retirement,
-	// which is the one thing ServerGroupReconciler reserves that this does not.
+	// groups.
 	Expectations *expectations
-	// Divergence tracks how long each pod's actual readiness has disagreed
-	// with the readiness this reconciler last asserted for it, so
-	// ConditionReadinessDiverged can be raised once that has run past
-	// readinessDivergenceGrace. One instance is shared across groups, like
-	// Expectations.
+	// Divergence tracks how long each pod's actual readiness has disagreed with
+	// the asserted one. Shared across groups.
 	Divergence *readinessDivergence
 	// DrainTaintKeys is Options.DrainTaintKeys. Nil means only cordoned nodes
 	// count.
 	DrainTaintKeys []string
 
-	// AllowPluginVolumes is Options.AllowPluginVolumes -- an operational
-	// switch and not a security boundary. See that field.
+	// AllowPluginVolumes is Options.AllowPluginVolumes.
 	AllowPluginVolumes bool
 
-	// AllowFileVolumes is Options.AllowFileVolumes -- an operational switch
-	// and not a security boundary. See that field.
+	// AllowFileVolumes is Options.AllowFileVolumes.
 	AllowFileVolumes bool
 
-	// AllowMountVolumes is Options.AllowMountVolumes -- an operational switch
-	// and not a security boundary. See that field.
+	// AllowMountVolumes is Options.AllowMountVolumes.
 	AllowMountVolumes bool
 
 	// ClaimReader reads a group's spec.extraPlugins claim, and it must be
-	// uncached.
-	//
-	// **The manager's cache holds only PersistentVolumeClaims carrying our own
-	// managed-by label** -- see the ByObject restriction in
-	// cmd/spawnery-operator/main.go, whose comment already warns that a claim
-	// missing the label is invisible through it. A plugin claim is created by
-	// an administrator and carries no label of ours, so the cached client
-	// answers NotFound for one that is plainly there -- and the refusal then
-	// says "does not exist in this namespace", which sends somebody looking
-	// for an object they can see with kubectl.
-	//
-	// No test catches this: envtest's client is not cache-restricted the same
-	// way, so the mistake is invisible until a real cluster. Labelling the
-	// claim would be wrong twice over -- it is not our object, and the orphan
-	// sweep deletes by that label.
+	// uncached; see ServerGroupReconciler.ClaimReader.
 	ClaimReader client.Reader
 }
 
@@ -217,25 +134,15 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	group := &spawneryv1alpha1.ProxyGroup{}
 	if err := r.Get(ctx, req.NamespacedName, group); err != nil {
 		if apierrors.IsNotFound(err) {
-			// No ProxyGroup finalizer exists, so a deleted group is gone from
-			// the API server before any reconcile can observe its deletion
-			// timestamp. This is the only path most deletions take, and without
-			// it a group's reservations would sit under a key nothing will ever
-			// observe again, for the life of the process -- see
-			// ServerGroupReconciler.Reconcile, which forgets for the same
-			// reason at the same two sites. Divergence forgets here too, for
-			// the same reason: its pods are gone with the group, and no later
-			// observe call for this key is ever coming to prune their entries.
+			// No ProxyGroup finalizer exists, so most deletions are only seen as
+			// NotFound; nothing would ever observe these keys again.
 			r.Expectations.forget(req.Namespace + "/" + req.Name)
 			r.Divergence.forget(req.Namespace + "/" + req.Name)
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !group.DeletionTimestamp.IsZero() {
-		// The pods and the Service are owned by this object, so the API server
-		// removes them. There is nothing to drain here: moving players is the
-		// proxy's own job, and making deletion wait for it belongs to a later
-		// task.
+		// The pods and the Service are owned and go with the group.
 		r.Expectations.forget(group.Namespace + "/" + group.Name)
 		r.Divergence.forget(group.Namespace + "/" + group.Name)
 		return ctrl.Result{}, nil
@@ -257,15 +164,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.refuse(ctx, group)
 	}
 
-	// After the network checks on purpose. A group whose Network is missing has
-	// a bigger problem than its plugin volume, and reporting the smaller one
-	// first would send somebody to their storage while the real cause sits one
-	// condition away.
-	//
-	// refuse() returns before anything creates a pod, so this stops the group
-	// rather than decorating it: every proxy would otherwise sit Pending on a
-	// volume that will not attach, and the group would look like a scheduling
-	// problem rather than a spec one.
+	// After the network checks: a missing Network is the bigger problem.
 	reason, message, ok := checkGroupVolumes(
 		ctx, r.ClaimReader, group.Namespace,
 		group.Spec.ExtraPlugins, group.Spec.ExtraFiles, group.Spec.Mounts,
@@ -276,10 +175,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		reason, message, ok = keepLastVolumeDecision(group.Status.Conditions, reason, message, ok)
 	}
 	if !ok {
-		// Announced on the transition only, following the rule
-		// network_controller.go states: this runs on every pass for as long as
-		// the claim is wrong, and an event per resync forever is not a report,
-		// it is noise that buries the one that mattered.
+		// Announced on the transition only; this runs every pass.
 		if !hasConditionReason(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted, reason) {
 			r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, reason, actionSyncStatus,
 				"%s", message)
@@ -288,23 +184,13 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		return r.refuse(ctx, group)
 	}
 
-	// The strategies differ in reconcileService and proxyAddress and nowhere
-	// else. This guard is not about any of them: the CRD's enum is closed, so
-	// no object carrying an unrecognised type can be created, and the branch
-	// below is reachable only if a fifth value is added to the enum without
-	// a branch to serve it. A refusal on the object is a message a user can
-	// read; the alternative is now reconcileService's named error, which
-	// fails the reconcile into the log where nobody looking at the group
-	// would find it.
+	// Unreachable while the CRD's enum is closed; it catches a new enum value
+	// without a branch, as a refusal a user can read.
 	if !exposeImplemented(group.Spec.Expose.Type) {
 		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonExposeNotImplemented,
 			fmt.Sprintf("expose.type %s is not implemented by this operator",
 				group.Spec.Expose.Type))
-		// refuse rather than a bare return, for the reason it documents: the
-		// player-safety pass has to run again, and whether a proxy is
-		// occupied is a fact about the agent registry that nothing watches.
-		// A user whose group is stuck here has real pods with real players on
-		// them for as long as the refusal stands.
+		// refuse, not a bare return: the player-safety pass must keep running.
 		return r.refuse(ctx, group)
 	}
 	if message, ok := podspec.SchedulingRefusal(network,
@@ -327,33 +213,17 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		}
 	}
 	setProxyGroupAccepted(group, true, spawneryv1alpha1.ReasonAccepted, "")
-	// Persisted now, before any of the side effects below can fail: without
-	// this write, a group that reaches here and then hits an error — the
-	// shipped sample's hardcoded NodePort colliding across namespaces is a
-	// real way to do it — would return having recorded nothing, leaving the
-	// object with no conditions and no phase, indistinguishable from one no
-	// reconcile has ever touched. Recording the intent before attempting the
-	// side effect is the same shape as persisting status.wasRegistered before
-	// telling the proxies elsewhere in this plan: a failure partway through
-	// must not leave the record claiming less than what is actually true.
+	// Persisted before the side effects, so a failure below (a NodePort
+	// collision, say) does not leave an object with no conditions at all.
 	if err := r.writeStatus(ctx, group); err != nil {
 		return ctrl.Result{}, err
 	}
 
 	obs, res, err := r.reconcileObserved(ctx, network, group)
 
-	// One named exception to "wherever the pods were read", below. A group
-	// whose rendered ConfigMap name is occupied by somebody else's object
-	// never gets as far as reading a pod, and it never will: the operator
-	// refuses to write into an object it does not own, so nothing downstream
-	// of that can run. Left to the rule below it would requeue in silence for
-	// as long as the collision stood, which is the one outcome worse than
-	// either alternative the refusal was choosing between.
-	//
-	// The pods and the Service are deliberately not touched here, for the
-	// same reason the missing-Network path does not touch them: they are
-	// running and people are connected through them, and this pass learned
-	// nothing about either.
+	// A foreign ConfigMap at the rendered name stops the pass before any pod is
+	// read, for good; without this it would requeue in silence. The pods and the
+	// Service are left alone, as on the missing-Network path.
 	if errors.Is(err, errForeignConfigMap) {
 		name := podspec.GroupConfigMapName(group.Name, podspec.RoleProxy)
 		meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
@@ -363,38 +233,20 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 			Message: foreignConfigMapMessage(group.Namespace, name),
 		})
 		group.Status.Phase = "Degraded"
-		// refuse, like the other refusals: the budget and a departing node do
-		// not depend on who owns a ConfigMap. It writes the status and
-		// requeues rather than leaving this to a watch, because the colliding
-		// object carries no owner reference back here.
+		// refuse: the budget and a departing node do not depend on the
+		// ConfigMap. Requeued, as the collision has no owner reference here.
 		return r.refuse(ctx, group)
 	}
 
-	// The status is written wherever the pods and the Service were actually
-	// read, and nowhere else. Both halves of that are deliberate.
-	//
-	// Wherever: a status write placed after the eleven error returns below
-	// would leave a pass that failed partway through publishing whatever the
-	// last successful one did -- a group switched into a strategy the API
-	// server refuses would go on advertising the node port of a Service
-	// reconcileService has already deleted, and no later pass could correct it
-	// because no later pass gets any further.
-	//
-	// And nowhere else: Reconcile also returns before any of this, on a
-	// missing or unaccepted Network and on an unimplemented expose type. The
-	// address is untouched there on purpose. Nothing about the serving world
-	// has changed on those paths -- the pods are running, the Service is
-	// there, people are connected through it -- and blanking a working address
-	// because a different object went missing would be a regression caused by
-	// this fix rather than a part of it.
+	// The status is written wherever the pods and the Service were read, so a
+	// pass failing partway does not keep advertising what an earlier pass saw;
+	// and nowhere else, so a missing Network does not blank a working address.
 	if obs.observed {
 		r.setStatus(group, obs.pods, obs.svc)
 		if werr := r.writeStatus(ctx, group); werr != nil {
 			if err == nil {
 				return res, werr
 			}
-			// The reconcile's own error is the cause and the one worth backing
-			// off on; the failed write is reported rather than substituted.
 			log.FromContext(ctx).Error(werr, "recording the group's status")
 		}
 	}
@@ -402,9 +254,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 }
 
 // proxyObservation is what one pass of reconcileObserved saw. observed is a
-// flag and not a nil check on svc: HostPort creates no Service at all, so a
-// nil svc is that strategy's normal state and cannot stand in for "this pass
-// never looked".
+// flag because HostPort creates no Service, so a nil svc is normal there.
 type proxyObservation struct {
 	observed bool
 	pods     []corev1.Pod
@@ -412,9 +262,7 @@ type proxyObservation struct {
 }
 
 // reconcileObserved does everything from the namespace bootstrap onward and
-// returns what it saw, so that its caller can record the status however this
-// returns. Its result carries the RequeueAfter the successful path has always
-// returned; the caller adds nothing to it.
+// returns what it saw, so the caller can record the status either way.
 func (r *ProxyGroupReconciler) reconcileObserved(
 	ctx context.Context,
 	network *spawneryv1alpha1.Network,
@@ -425,11 +273,8 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 	if err := r.Bootstrap.Ensure(ctx, group.Namespace); err != nil {
 		return obs, ctrl.Result{}, err
 	}
-	// Rendered here, beside Bootstrap.Ensure and before reconcileReplicas can
-	// create the first proxy pod: that pod's projected volume names this
-	// ConfigMap by group (podspec.GroupConfigMapName), and returning on error
-	// stops the reconcile before reconcileReplicas runs — the guarantee is
-	// the early return, not the order these lines happen to be written in.
+	// Every proxy pod mounts this ConfigMap by name; the early return keeps
+	// reconcileReplicas from creating one before it exists.
 	if err := r.reconcileConfigMap(ctx, group); err != nil {
 		return obs, ctrl.Result{}, err
 	}
@@ -440,14 +285,8 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 	if err := r.reconcileNetworkPolicy(ctx, group); err != nil {
 		return obs, ctrl.Result{}, err
 	}
-	// A snapshot from before this pass's own creates: reconcileReplicas may
-	// create pods below, but pods itself is not refreshed to include them, so
-	// its per-pod logic -- the readiness assertion loop and the divergence
-	// check riding along with it -- sees a newly created pod for the first
-	// time on the pass after this one, not this one. This has caught test
-	// construction twice: a test that creates a pod and then asserts something
-	// about it within the same reconcile is asserting against a snapshot that
-	// predates it.
+	// A snapshot from before this pass's own creates: a pod created below is
+	// first seen by the per-pod logic on the next pass.
 	pods, err := r.pods(ctx, group)
 	if err != nil {
 		return obs, ctrl.Result{}, err
@@ -455,92 +294,49 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 	if err := r.announceReady(ctx, pods); err != nil {
 		return obs, ctrl.Result{}, err
 	}
-	// From here the pass has seen both, so every return below carries an
-	// observation the caller will record.
 	obs = proxyObservation{observed: true, pods: pods, svc: svc}
 
 	if err := r.reconcileReplicas(ctx, network, group, pods); err != nil {
-		// A create the API server refused is the group's business and not
-		// only the log's. IsForbidden covers both ways it happens: a Pod
-		// Security profile that forbids the pod's shape -- which is how every
-		// HostPort group in a baseline or restricted namespace ends -- and an
-		// RBAC grant the operator does not have. IsInvalid covers a pod the
-		// API server rejects outright, a quota or a webhook among them.
+		// A refused create belongs on the group: Pod Security (every HostPort
+		// group in a baseline or restricted namespace), RBAC, quota, a webhook.
 		if apierrors.IsForbidden(err) || apierrors.IsInvalid(err) {
 			if setProxyPodsBlocked(group, spawneryv1alpha1.ReasonProxyPodRejected, err.Error()) {
 				r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, "ProxyPodBlocked",
 					actionCreateProxyPod, "%s",
 					eventNote("the API server refused a proxy pod: %s", err.Error()))
 			}
-			// The phase is not set here and the status is not written here.
-			// setStatus derives Degraded from the condition this branch just
-			// set, and the caller writes on every path that got this far.
+			// setStatus derives Degraded from this condition; the caller writes.
 		}
 		return obs, ctrl.Result{}, err
 	}
 
-	// Re-read after the changes, so the status describes what is there rather
-	// than what was there when the reconcile started. A failure here leaves
-	// the earlier snapshot in place: a status describing the last observation
-	// that succeeded is a weaker statement than this pass meant to make and a
-	// far stronger one than none.
+	// Re-read after the changes, so the status describes what is there now.
 	if pods, err = r.pods(ctx, group); err != nil {
 		return obs, ctrl.Result{}, err
 	}
 	obs.pods = pods
 
-	// Before setStatus: setStatus reads the Degraded condition to derive the
-	// phase, so whether a pod this group asked for failed to come into
-	// existence has to be known before that read.
+	// Before setStatus, which reads Degraded.
 	r.reportBlockedProxies(group, pods)
-	// This group's own answer about the forwarding secret. The Network carries
-	// the fleet sum and names which groups are behind, in a message; this is
-	// the group saying it for itself, so a per-group watch reads a condition.
-	// On the re-read pods rather than the ones reconcileReplicas saw, so a
-	// replacement created this pass counts as of this pass.
+	// On the re-read pods, so a replacement created this pass counts.
 	reportGroupRotation(&group.Status.Conditions, network.Status.ForwardingSecretHash, pods)
-	// Before setStatus: the budget's selector has to find the label already on
-	// the pods it is sizing minAvailable for, on the same pass.
 	if err := r.protectOccupiedProxies(ctx, group, pods); err != nil {
 		return obs, ctrl.Result{}, err
 	}
 	return obs, ctrl.Result{RequeueAfter: ResyncInterval}, nil
 }
 
-// refuse is the shared tail of the three paths that give up before
-// reconcileReplicas: a missing Network, one that is not Accepted, and an
-// expose.type this operator has no branch for. The third is unreachable
-// while the CRD's enum and exposeImplemented agree — the API server rejects
-// any object this operator could not classify — but the branch, and this
-// tail, stay in place for the day they disagree. The caller has already put
-// the reason on the group's Accepted condition; this does everything that is
-// the same for all three.
+// refuse is the shared tail of the paths that give up before
+// reconcileReplicas; the caller has already set the Accepted reason.
 //
-// Divergence is not forgotten here, because there is no gap in observation to
-// forget: protectPlayersOnly runs drainDeparting, which withdraws readiness
-// and reports divergence for the pods it acts on. A proxy told to stop taking
-// connections while its group is refused is exactly as capable of ignoring the
-// instruction as any other, and a cleared observation would hide it -- see the
-// comment on the readinessDivergence type.
-//
-// The status is written whether or not protectPlayersOnly succeeded, and the
-// reason is the one the accepted path states for its own early write: a
-// reconcile that returned having recorded nothing leaves the object with no
-// conditions and no phase, indistinguishable from one no reconcile has ever
-// touched. A permanent failure in protectPlayersOnly -- a PodDisruptionBudget
-// sitting at this group's name and owned by something else is a way to get
-// one -- would otherwise hide the refusal that explains the group's whole
-// state, on exactly the groups whose state most needs explaining.
-//
-// The requeue is networkRetryInterval rather than ResyncInterval, which is
-// what bounds how stale the budget can get here; see protectPlayersOnly.
-// controller-runtime ignores it when the error is non-nil and backs off
-// instead, which is the behaviour wanted for a failed protection pass.
+// Divergence is not forgotten: protectPlayersOnly still withdraws readiness
+// from pods on departing nodes, and a proxy can ignore that here as anywhere.
+// The status is written even when protectPlayersOnly fails, or a permanent
+// failure there would hide the refusal. The requeue is networkRetryInterval;
+// controller-runtime backs off instead on an error.
 func (r *ProxyGroupReconciler) refuse(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) (ctrl.Result, error) {
-	// A Waiting group has no replacement pods, so giving up its place costs
-	// nothing; see AdmitChangeovers, which would otherwise keep handing the
-	// place to this name forever. A Begun group's replacement pods exist and
-	// it is never paused halfway, so its state stands.
+	// A Waiting group gives up its changeover place, which AdmitChangeovers
+	// would otherwise keep handing to it. A Begun one is never paused halfway.
 	if group.Status.Changeover == spawneryv1alpha1.ChangeoverWaiting {
 		group.Status.Changeover = spawneryv1alpha1.ChangeoverNone
 	}
@@ -552,17 +348,10 @@ func (r *ProxyGroupReconciler) refuse(ctx context.Context, group *spawneryv1alph
 	return ctrl.Result{RequeueAfter: networkRetryInterval}, protectErr
 }
 
-// protectOccupiedProxies is the pair that keeps the eviction API off a proxy
-// with players on it: the podspec.LabelOccupied label, and the
-// PodDisruptionBudget whose selector matches it.
-//
-// The two are one step and not two, and the order inside it is load-bearing:
-// the budget's selector has to find the label already on the pods it is
-// sizing minAvailable for, on the same pass. occupied is syncOccupiedLabels's
-// own tally, taken while it is already looking at each pod to decide the
-// label -- not a second count reconcileProxyPDB derives by asking the
-// registry again. See the comment on proxyOccupied for why a second call is
-// not safe here.
+// protectOccupiedProxies keeps the eviction API off a proxy with players: the
+// occupied label first, then the PodDisruptionBudget whose selector matches it,
+// sized from syncOccupiedLabels's own tally rather than a second registry read
+// (see proxyOccupied).
 func (r *ProxyGroupReconciler) protectOccupiedProxies(
 	ctx context.Context,
 	group *spawneryv1alpha1.ProxyGroup,
@@ -576,45 +365,21 @@ func (r *ProxyGroupReconciler) protectOccupiedProxies(
 }
 
 // protectPlayersOnly is what this group still owes its players on the paths
-// that give up before reconcileReplicas: a missing Network, one that has not
-// been accepted, and an expose.type this milestone refuses.
+// that give up before reconcileReplicas: the occupied label, the budget and
+// the NodeDraining condition, which do not depend on the Network (the rule
+// ServerGroupReconciler.Reconcile states). Without it a broken Network would
+// freeze the budget, and a player joining later could be evicted.
 //
-// The rule is the one ServerGroupReconciler.Reconcile states at its own
-// Network gate. A step that keeps the eviction API off an occupied pod, or
-// that moves players off a node that is going away, does not depend on the
-// Network — the players on these pods are already connected, and a group the
-// operator has refused is still carrying them. Creating pods, sizing the
-// group and publishing where to connect all genuinely need a usable Network
-// and stay above these returns; the occupied label, the budget sized from it
-// and the NodeDraining condition do not, and this is where they run instead.
-//
-// Without this a ProxyGroup whose Network broke would stop maintaining its
-// budget entirely: a proxy empty at the last successful pass freezes the
-// budget at minAvailable: 0 with no label on the pod, and a player joining
-// afterwards sits on a pod the eviction API can take with nothing standing in
-// the way. That is a disconnect, not a hung drain.
-//
-// nodeDeparting is asked once per pod here, which is the only time it is
-// asked on these paths -- reconcileReplicas, which computes the same fact for
-// the rollout and hands it to reportNodeDraining, does not run on any path
-// that reaches this function.
-//
-// The residual cost is timing, and it is worth stating: these paths requeue
-// at networkRetryInterval rather than ResyncInterval, so a proxy that becomes
-// occupied while its group's Network is broken can wait up to that long to be
-// counted, against five seconds on a healthy group. A bounded lag replaces an
-// unbounded one.
+// These paths requeue at networkRetryInterval, so a newly occupied proxy can
+// wait that long to be counted.
 func (r *ProxyGroupReconciler) protectPlayersOnly(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) error {
 	pods, err := r.pods(ctx, group)
 	if err != nil {
 		return err
 	}
 	nodeGoing := make([]bool, len(pods))
-	// The departing-node pods, and only those. Everything else DecideRollout
-	// would have nominated -- a surplus reduction, a stale hash -- needs a
-	// replacement this group cannot build without its Network, and can wait
-	// for the Network at no cost to anybody. A departing node cannot wait; see
-	// drainDeparting.
+	// Only departing-node pods: a surplus or stale hash needs a replacement the
+	// refused group cannot build, and can wait.
 	leaving := make(map[string]bool, len(pods))
 	for i := range pods {
 		nodeGoing[i] = nodeDeparting(ctx, r.Client, pods[i].Spec.NodeName, r.DrainTaintKeys)
@@ -622,37 +387,25 @@ func (r *ProxyGroupReconciler) protectPlayersOnly(ctx context.Context, group *sp
 			leaving[pods[i].Name] = true
 		}
 	}
-	// The whole point of this path is that the group is refused, so a drain
-	// here removes a proxy nothing can replace until the refusal lifts. The
-	// group already says Accepted: False; what it did not say is that the
-	// combination of that and a departing node is about to leave it smaller.
-	// Four refusals reach here, and the Accepted condition already names the
-	// one that applies; the sentence follows it rather than blaming the
-	// Network for a claim or an expose type.
+	// The sentence follows the Accepted reason rather than always blaming the
+	// Network.
 	blocked := blockedReplacement{Reason: "its Network is missing or not accepted"}
 	if c := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted); c != nil &&
 		c.Reason != spawneryv1alpha1.ReasonNetworkNotFound && c.Reason != spawneryv1alpha1.ReasonNetworkNotAccepted {
 		blocked.Reason = "it is not accepted (" + c.Reason + ")"
 	}
 	r.reportNodeDraining(group, pods, nodeGoing, blocked)
-	// Before the drain, not after: the label and the budget are what stand
-	// between the eviction API and a proxy that still has players, and
-	// drainDeparting can delete a pod, which changes what the budget is
-	// sizing. Protecting first means the budget of this pass describes the
-	// fleet the drain then acted on.
+	// Protect before the drain, so this pass's budget describes the fleet the
+	// drain then acts on.
 	if err := r.protectOccupiedProxies(ctx, group, pods); err != nil {
 		return err
 	}
 	return r.drainDeparting(ctx, group, pods, leaving, nodeGoing, "")
 }
 
-// pods lists the group's live proxy pods, oldest first, so scale-down is
-// deterministic rather than map-order.
-//
-// The filter is podspec.ProxyLabels, the exact map reconcileService also uses
-// as the Service selector — not a hand-written subset of it. Deriving both
-// from the same function keeps them in agreement by construction rather than
-// by the two places happening to match.
+// pods lists the group's live proxy pods, oldest first. The filter is
+// podspec.ProxyLabels, the same map reconcileService uses as the Service
+// selector.
 func (r *ProxyGroupReconciler) pods(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) ([]corev1.Pod, error) {
 	list := &corev1.PodList{}
 	labels := podspec.ProxyLabels(group.Spec.NetworkRef.Name, group.Name)
@@ -671,60 +424,25 @@ func (r *ProxyGroupReconciler) pods(ctx context.Context, group *spawneryv1alpha1
 		}
 		return live[i].CreationTimestamp.Before(&live[j].CreationTimestamp)
 	})
-	// Namespace-qualified, matching every other key this reconciler's
-	// Expectations uses (see reconcileReplicas and Reconcile's forget calls)
-	// and the composite key ServerGroupReconciler keys its own Expectations
-	// by -- a bare group.Name would collide across namespaces.
 	r.Expectations.observePods(group.Namespace+"/"+group.Name, live)
 	return live, nil
 }
 
-// proxyOccupied is the occupancy rule for a proxy pod, and the base of the
-// only other one — proxyOccupiedForBudget below, which is this plus a single
-// term. Whichever of the two a caller asks, it must ask once per pod per
-// pass: syncOccupiedLabels evaluates its own exactly once and hands that one
-// verdict to both the label it writes and the count reconcileProxyPDB sizes
-// minAvailable from, rather than making two calls that would merely apply the
-// same rule. A second call is not guaranteed to repeat the first: the
-// registry these read from is mutated by live agent streams, and Lookup
-// re-derives PlayersStale from the clock on every call, so two calls a few
-// lines apart can disagree even with nothing running concurrently, purely
-// because the clock moved between them.
+// proxyOccupied is the occupancy rule for a proxy pod. Ask it (or
+// proxyOccupiedForBudget) once per pod per pass: Lookup re-derives PlayersStale
+// from the clock, so two calls can disagree.
 //
-// A proxy has no wasRegistered qualifier the way a server does — it sits behind
-// the Service and players reach it directly — so for a running pod there is no
-// state in which a stale count is safe to read as empty. Staleness alone is
-// enough, and so is a stream that is down: Velocity goes on serving the
-// sessions it holds after its agent's stream breaks, so a count nobody is
-// updating says nothing about who is on it.
-//
-// This is the unqualified rule. It is read directly in one place — the
-// deletion wait at the bottom of reconcileReplicas — and everywhere else
-// through proxyOccupiedForBudget, which wraps it. The deletion wait can
-// afford it unqualified because spec.drain.timeoutSeconds bounds that wait: a
-// proxy this calls occupied forever is still deleted at its deadline. The
-// label and the budget have no such bound, which is the whole of the
-// difference between the two functions; see the wrapper for the term it adds
-// and why the two consumers cannot share an answer.
+// A proxy has no wasRegistered qualifier: players reach it directly through
+// the Service. A down stream counts too, because Velocity keeps serving its
+// sessions after its agent's stream breaks. Read unqualified only by the
+// deletion wait, which drain.timeoutSeconds bounds.
 func proxyOccupied(snap agent.Snapshot) bool {
 	return snap.Players != 0 || snap.PlayersStale || !snap.Connected
 }
 
 // proxyPlayerNote says what is known about who is on a proxy the deadline is
-// about to disconnect.
-//
-// A phrase rather than a number, because the number is not a measurement.
-// Registry.Lookup hands back the last report and nothing else: a proxy whose
-// agent died with seven players on it reads as seven for as long as it exists,
-// and one whose agent never connected at all reads as zero -- which is how
-// "0 player(s) still connected" came to appear inside a Warning about
-// disconnecting people. The three cases the snapshot can actually distinguish
-// are named instead, and the two uncertain ones say they are uncertain.
-//
-// Nothing but this event's text reads any of it, which is what keeps a wrong
-// number cosmetic today and is exactly why it is worth correcting before the
-// first reader -- a metric, a condition, a decision -- turns it into a wrong
-// input.
+// about to disconnect. A phrase, not a number: Lookup returns the last report,
+// so a dead agent reads as its last count and a never-connected one as zero.
 func proxyPlayerNote(snap agent.Snapshot) string {
 	switch {
 	case !snap.Known:
@@ -736,38 +454,17 @@ func proxyPlayerNote(snap agent.Snapshot) string {
 	}
 }
 
-// proxyOccupiedForBudget is proxyOccupied for the two consumers with no
-// deadline behind them: the podspec.LabelOccupied label and the
-// PodDisruptionBudget counted from it.
-//
-// Registry.Lookup answers for a pod it has never seen with {Known: false,
-// PlayersStale: true}, which proxyOccupied reads as occupied. On the deletion
-// wait that costs one drain deadline; on a budget nothing bounds it, so a
-// replacement pod pushes minAvailable above the currentHealthy the group can
-// reach and blocks every eviction until its agent reports -- for a proxy stuck
-// in CrashLoopBackOff, never.
-//
-// snap.Known is the discriminator: Registry.Disconnect leaves it true, so a
-// proxy whose agent connected and then died still counts as occupied, which is
-// right because Velocity goes on serving the sessions it holds. Excluded is
-// only the pod the registry has never heard of, which cannot hold players --
-// its readiness probe is served by its own agent (podspec.BuildProxyPod's TCP
-// probe on ProxyReadyPort), so it is no endpoint of the group's Service,
-// publishes no hostPort and runs on no host network.
-//
-// Except right after an operator restart, when every pod in the fleet is
-// unknown and full of players -- an operator evicted off the very node being
-// drained is an ordinary way to reach that state, with kubectl drain retrying
-// throughout. Registry.Lookup answers this too: for an unknown pod it reports
-// StreamDownFor as the time since the operator started, and inside
-// budgetReconnectGrace such a pod counts as occupied.
+// proxyOccupiedForBudget is proxyOccupied for the label and the budget, which
+// no deadline bounds. A pod the registry never heard of reads as occupied, and
+// a replacement stuck in CrashLoopBackOff would block every eviction forever.
+// Such a pod cannot hold players: its readiness probe is served by its own
+// agent, so it is no Service endpoint. Registry.Disconnect keeps Known true,
+// so a pod whose agent died still counts. Right after an operator restart every
+// pod is unknown, so an unknown pod counts as occupied within
+// budgetReconnectGrace.
 
-// budgetReconnectGrace is how long an unknown pod is treated as occupied:
-// the fleet's reconnect time after an operator restart, which is the same
-// question the Server side's ready gate asks and gets the same answer. Too
-// short a grace expires while the fleet is still reconnecting, and an
-// unknown pod outside it reads as unoccupied -- so minAvailable is sized
-// without pods that are Ready and full of players.
+// budgetReconnectGrace is the fleet's reconnect time after an operator
+// restart, the same question the Server side's ready gate asks.
 const budgetReconnectGrace = phase.ReconnectGrace
 
 func proxyOccupiedForBudget(snap agent.Snapshot) bool {
@@ -777,20 +474,10 @@ func proxyOccupiedForBudget(snap agent.Snapshot) bool {
 	return proxyOccupied(snap)
 }
 
-// syncOccupiedLabels keeps podspec.LabelOccupied on the group's pods in step
-// with proxyOccupiedForBudget — not the bare proxyOccupied the deletion wait
-// uses; see that pair of functions for the one term between them and why
-// only the deadline-bounded consumer can afford the conservative answer — and
-// returns how many pods it found occupied while doing
-// so. reconcileProxyPDB sizes minAvailable from that returned count rather
-// than asking the registry again itself — see the comment on proxyOccupied
-// for why a second, independent call could answer differently and leave the
-// label and the budget disagreeing pod for pod. A budget that counts fewer
-// pods than carry the label hands the eviction API a disruption to spend on
-// an occupied one; one that counts more blocks every eviction of a pod the
-// selector matches — the occupied-labelled proxies, not an empty one, which
-// this budget does not cover at all and which the eviction API can still
-// take freely.
+// syncOccupiedLabels keeps podspec.LabelOccupied in step with
+// proxyOccupiedForBudget and returns how many pods it found occupied, which
+// reconcileProxyPDB sizes minAvailable from so label and budget agree pod for
+// pod.
 func (r *ProxyGroupReconciler) syncOccupiedLabels(ctx context.Context, pods []corev1.Pod) (int32, error) {
 	var occupiedCount int32
 	for i := range pods {
@@ -800,9 +487,6 @@ func (r *ProxyGroupReconciler) syncOccupiedLabels(ctx context.Context, pods []co
 			occupiedCount++
 		}
 		_, labelled := pod.Labels[podspec.LabelOccupied]
-		// No write when nothing changed: this runs every five seconds per pod,
-		// and a patch per pass would be a write per pod per pass for the life
-		// of the group.
 		if occupied == labelled {
 			continue
 		}
@@ -815,19 +499,8 @@ func (r *ProxyGroupReconciler) syncOccupiedLabels(ctx context.Context, pods []co
 		} else {
 			delete(patched.Labels, podspec.LabelOccupied)
 		}
-		// NotFound tolerated for the same race markDraining's patch documents.
-		// On the ordinary path this loop runs over a pods() read taken after
-		// reconcileReplicas has already deleted this pass's newly-empty pods:
-		// a pod that just went from occupied to empty and was deleted for it
-		// still carries the occupied label in that read — occupied recomputes
-		// false, labelled is still true, and the mismatch above builds a patch
-		// for a pod the API server no longer has. protectPlayersOnly reaches
-		// this loop without reconcileReplicas having run, so it cannot race
-		// this pass's own delete; it can still race one from any other source,
-		// which is the same tolerance and the same reason. Failing the whole
-		// Reconcile over a label write for a pod that is already gone would
-		// abort the rest of this pass for this group — its budget, its status
-		// write, and every other pod's label still to come in this loop.
+		// NotFound: the read may predate this pass's own delete of a pod that just
+		// emptied.
 		if err := r.Patch(ctx, patched, client.MergeFrom(pod)); err != nil && !apierrors.IsNotFound(err) {
 			return 0, err
 		}
@@ -835,26 +508,10 @@ func (r *ProxyGroupReconciler) syncOccupiedLabels(ctx context.Context, pods []co
 	return occupiedCount, nil
 }
 
-// reconcileProxyPDB keeps the group's PodDisruptionBudget in step with the
-// number of occupied proxy pods. occupied is syncOccupiedLabels's own tally,
-// not a second count this function derives on its own — see the comment on
-// proxyOccupied for why a second registry read is not safe here.
-//
-// The same formulation as the ServerGroup's, for the same reason: for pods
-// without a controller carrying a scale subresource, Kubernetes allows
-// neither maxUnavailable nor percentages in a PDB. The absolute number of
-// occupied pods is the only one that works, and it makes the eviction API
-// refuse to evict any of them.
-//
-// Without this object, kubectl drain evicts a proxy in the same second the
-// node is cordoned, while the replacement this operator ordered is still
-// pulling its image -- and everyone on that proxy is disconnected by the
-// eviction rather than carried by the drain.
-//
-// Named through podspec.GroupPDBName, not group.Name: a ServerGroup and a
-// ProxyGroup can share a name in one namespace, and GroupPDBName's own doc
-// comment narrates what naming this object after the bare group name would
-// do about it.
+// reconcileProxyPDB keeps the group's PodDisruptionBudget in step with
+// syncOccupiedLabels's tally, as an absolute minAvailable like the
+// ServerGroup's. Without it kubectl drain evicts a proxy the second the node
+// is cordoned, while its replacement is still pulling its image.
 func (r *ProxyGroupReconciler) reconcileProxyPDB(
 	ctx context.Context,
 	group *spawneryv1alpha1.ProxyGroup,
@@ -871,11 +528,7 @@ func (r *ProxyGroupReconciler) reconcileProxyPDB(
 	_, err := controllerutil.CreateOrUpdate(ctx, r.Client, pdb, func() error {
 		pdb.Spec.MinAvailable = &minAvailable
 		pdb.Spec.MaxUnavailable = nil
-		// Derived from ProxyLabels, the same function reconcileService uses as
-		// the Service selector, plus the occupancy label -- not a hand-written
-		// map that happens to match one. ProxyLabels returns a fresh map
-		// literal on every call, so mutating it here cannot reach back into
-		// the Service selector.
+		// ProxyLabels returns a fresh map, so this does not reach the Service.
 		selector := podspec.ProxyLabels(group.Spec.NetworkRef.Name, group.Name)
 		selector[podspec.LabelOccupied] = "true"
 		pdb.Spec.Selector = &metav1.LabelSelector{MatchLabels: selector}
@@ -885,25 +538,15 @@ func (r *ProxyGroupReconciler) reconcileProxyPDB(
 }
 
 // reconcileReplicas creates or removes pods until the count matches the spec,
-// and replaces pods that are stale: whose rendered shape no longer matches
-// the group, or that sit on a node that is going away.
-//
-// Which pods go is DecideRollout's answer, not this function's: stale before
-// current, then the fewest players, then the newest. The player count comes
-// from the proxies' own agents where there is one, and falls back to newest
-// first where there is not -- an older proxy has had longer to collect
-// players. Staleness comes first because a stale pod has to go regardless, and
-// taking a current one ahead of it would drain two pods for one replacement.
+// and replaces pods that are stale: whose rendered shape no longer matches the
+// group, that were asked to retire, or that sit on a departing node. Which pods
+// go is DecideRollout's answer.
 func (r *ProxyGroupReconciler) reconcileReplicas(
 	ctx context.Context,
 	network *spawneryv1alpha1.Network,
 	group *spawneryv1alpha1.ProxyGroup,
 	pods []corev1.Pod,
 ) error {
-	// The two places whose failure leaves nothing hashed or judged: without
-	// configValues there is nothing to hash, and without the digest no pod's
-	// staleness can be judged, so continuing past either would either roll
-	// nothing or roll everything.
 	configValues, err := yaml.Marshal(proxyConfigValues(group))
 	if err != nil {
 		return err
@@ -913,12 +556,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		return err
 	}
 
-	// nodeGoing is this pass's nodeDeparting verdict for each live pod, kept
-	// alongside views by the same index so it can be reused below (the
-	// draining mark's event gate, and the NodeDraining condition) instead of
-	// being asked a second time. Task 8's brief names the hazard directly:
-	// the same fact computed twice from the same source at two different
-	// moments can disagree.
+	// Asked once per pod and reused, since two asks can disagree.
 	nodeGoing := make([]bool, len(pods))
 	views := make([]ProxyView, 0, len(pods))
 	for i := range pods {
@@ -927,12 +565,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		nodeGoing[i] = nodeDeparting(ctx, r.Client, pods[i].Spec.NodeName, r.DrainTaintKeys)
 		requested := pods[i].Annotations[podspec.AnnotationRetireRequested] != ""
 		views = append(views, ProxyView{
-			Name: pods[i].Name,
-			// Two ways to be out of date, and the rollout does not distinguish
-			// them: a pod whose rendered shape no longer matches the group, and
-			// a pod on a node that is going away. Both have to be replaced by a
-			// pod somewhere else without disconnecting anyone — which is the
-			// sentence DecideRollout already implements.
+			Name:            pods[i].Name,
 			Stale:           pods[i].Labels[podspec.LabelPodHash] != wantHash || nodeGoing[i] || requested,
 			RetireRequested: requested,
 			Ready:           isPodReady(&pods[i]),
@@ -942,22 +575,9 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 			CreatedAt:       pods[i].CreationTimestamp.Time,
 		})
 	}
-	// The group's NodeDraining condition is built from this pass's live set,
-	// independent of whether DecideRollout has actually picked any of these
-	// pods to drain yet -- it reports where pods are, not what has been
-	// decided about them. No event accompanies it: the per-proxy event fired
-	// below, at the point a proxy is actually marked, is the one §3.7 asks
-	// for, and a second event tied to this condition's own transition would
-	// under-report a group where a second departing node appears while the
-	// condition is already True.
-	// Nothing blocked here: reaching reconcileReplicas at all means the
-	// Network is usable and this group can build what it removes.
+	// Reports where pods are, not what was decided; the per-proxy event fires
+	// when one is marked. Nothing blocks replacement once we get this far.
 	r.reportNodeDraining(group, pods, nodeGoing, blockedReplacement{})
-	// Counted from the labels rather than from views[i].Stale, which folds the
-	// node-draining reason in with the hash one. Keeping them apart is the
-	// point: a group replacing a pod because its node is leaving and a group
-	// replacing every pod because a release changed the render are different
-	// events, and only the second is a fact about the whole installation.
 	key := group.Namespace + "/" + group.Name
 	pendingCreates, _, _ := r.Expectations.pending(key)
 	own, surgeAllowed, wait, err := proxyChangeover(ctx, r, network, group, wantHash, int32(len(pendingCreates)))
@@ -969,44 +589,15 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 
 	decision := DecideRollout(views, group.Spec.Replicas, surgeAllowed)
 
-	// DecideRollout sizes target - total from views, which pods() has already
-	// read through the manager's cached client: a reconcile triggered by its
-	// own create can run again before that create is visible, see the group
-	// still short by the same count, and decide to create it a second time.
-	// NewProxyName is NewServerName by direct delegation, so it draws the same
-	// fresh crypto/rand suffix on every call: the race described above is not
-	// a retry of the name already in flight -- apierrors.IsAlreadyExists below
-	// has nothing to catch, because the second create asks for a different,
-	// genuinely distinct pod for the slot the first one already fills. The
-	// real asymmetry with ServerGroupReconciler.createServer is elsewhere: it
-	// treats any Create error as fatal, where the loop below tolerates
-	// AlreadyExists -- a difference in error handling, not in how the two
-	// names are generated. key is namespace-qualified: see the comment on
-	// pods() for why.
-	//
-	// The correction is arithmetic, not a bare gate: capping at zero the
-	// moment anything is pending would also block a create the group still
-	// legitimately needs beyond the one already reserved. Subtracting exactly
-	// what is reserved is what ServerGroupReconciler.size does through
-	// DecideSize's alive := in.PendingCreates (scaling.go); this states the
-	// same correction as a post-processing step on DecideRollout's answer
-	// instead, so rollout.go's sizing keeps knowing nothing about reservations.
+	// The views come from the cache, which may not show this reconciler's own
+	// creates yet; subtracting exactly the reserved creates keeps a legitimate
+	// further create possible.
 	create := decision.Create - int32(len(pendingCreates))
 	if create < 0 {
 		create = 0
 	}
-	// A failure partway through this loop -- either return below -- leaves the
-	// reservations made by whichever earlier iterations already succeeded
-	// standing past this Reconcile: Reconcile's second pods() call, the one
-	// that would otherwise observe and clear them, never runs on an error
-	// return. That is deliberate, not a leak: the pods those reservations
-	// name were actually created, controller-runtime requeues on the
-	// returned error, and it is exactly this surviving reservation that stops
-	// the retried reconcile -- which may run before a real informer cache has
-	// caught up with those creates -- from creating duplicates for slots the
-	// failed pass already filled. It clears on the next pass's own pods()
-	// call once the cache shows it, or on the TTL if that call is somehow
-	// never reached.
+	// Reservations made before a failure in this loop stand on purpose: those
+	// pods exist, and the retry must not duplicate them.
 	for i := int32(0); i < create; i++ {
 		pod, err := podspec.BuildProxyPod(network, group, NewProxyName(group.Name), r.AgentEndpoint, configValues)
 		if err != nil {
@@ -1015,88 +606,31 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 		if err := r.Create(ctx, pod); err != nil && !apierrors.IsAlreadyExists(err) {
 			return err
 		}
-		// Reserved on the same terms the loop above already tolerates: an
-		// AlreadyExists means a pod under this name exists in the API server
-		// either way, so it is as reserved as one this call just created.
-		// Reserved only here, matching ServerGroupReconciler.size, which calls
-		// expectCreated after createServer returns successfully and not
-		// before: a failed Create returns from this function immediately,
-		// and no reservation is made for a create that never happened. There
-		// is nothing to expire on the TTL in that case, because nothing was
-		// recorded.
 		r.Expectations.expectCreated(key, pod.Name, 0)
 	}
 	if own == spawneryv1alpha1.ChangeoverWaiting && decision.Create > 0 {
 		group.Status.Changeover = spawneryv1alpha1.ChangeoverBegun
 	}
 
-	// Which pods are going, decided once and used by both loops below.
-	//
-	// Derived rather than re-read from the annotation: on the pass that first
-	// marks a pod, the annotation is not on it yet when the readiness loop
-	// runs, and readiness would lag a whole pass behind the mark.
+	// Which pods are going, derived rather than read off the annotation, which
+	// a pod marked this pass does not carry yet.
 	leaving := make(map[string]bool, len(decision.Drain))
 	for _, name := range decision.Drain {
 		leaving[name] = true
 	}
-	// A pod already carrying the mark keeps it while the group still wants it
-	// gone, because DecideRollout names only pods to mark now: never a stale
-	// pod already draining, and no surplus while anything drains. Without
-	// this the drain started last pass would be cancelled on the next one and
-	// made again on the one after, and each cancellation deletes the
-	// annotation, so the deadline would start from zero every time.
-	//
-	// Wanting it gone is two different questions, and they have to be asked
-	// differently. A stale pod has to go whatever else is true of the group, so
-	// that mark is kept per pod. Being surplus is not a property of any pod at
-	// all: it is a shortfall of one number against another, and no pod can be
-	// asked about it. Asking "is the group over its count?" once per marked pod
-	// gives the same answer for every one of them, so a group that lowered
-	// replicas twice and then raised them partway keeps every mark it made
-	// rather than the number it still needs, and sits under capacity until a
-	// drain finishes on its own. Nothing rescues it in the meantime: the group
-	// is not short of pods, only of ready ones, so DecideRollout's create
-	// branch does not fire, and its surplus branch waits while anything
-	// drains.
-	//
-	// The number it needs comes out of what must be left standing:
+	// DecideRollout names only pods to mark now, so existing marks are kept here,
+	// or every drain would be cancelled and its deadline restarted. A stale mark
+	// is kept per pod. Surplus belongs to no pod, so only as many surplus marks
+	// are kept as
 	//
 	//	len(views) - staleMarks - keptSurplusMarks >= replicas
 	//
-	// so at most len(views)-staleMarks-replicas surplus marks are kept. A pod
-	// already leaving for being stale must not also spend the surplus budget,
-	// or the group holds a mark for a pod it needs back and counts the same
-	// departure twice.
-	//
-	// The term subtracts stale *marks* rather than stale pods because what the
-	// invariant is about is pods that are leaving, and a stale pod with no mark
-	// is still serving — it will be marked once the group's current pods are
-	// Ready.
-	//
-	// The two counts come apart in one state: a spec change reverted while a
-	// proxy is draining for it.
-	// Take a group of two on v1, change the image, wait for the replacements,
-	// and let the old proxies be marked; then put the image back. The marked
-	// pods match the spec again and the replacements do not, so what were
-	// stale marks are now surplus marks and the pods nobody has marked are the
-	// stale ones. Subtracting stale pods would release the marks on the spot,
-	// because the replacements' eventual departure is counted as if it had
-	// already happened; subtracting stale marks holds them, and the
-	// replacements are replaced in turn when these have finished.
-	//
-	// Holding them is the conservative reading: the
-	// budget is spent only on departures that are actually under way, so a spec
-	// that flaps does not release a drain it will want back. It costs the group
-	// up to replicas proxies more than the minimum, bounded by the deadline
-	// like every other wait here.
-	// TestARevertedSpecChangeKeepsTheMarkItAlreadyMade pins it, so this is a
-	// decision the code states rather than one a comment claims.
-	//
-	// The count is what keeps a drain cancellable. Persisting every mark would
-	// make a marked pod's readiness remembered rather than derived, and a
-	// scale-down reversed before its pod was gone would not be reversed on the
-	// pod: it would sit NotReady until it emptied, and then be replaced by one
-	// of the same shape.
+	// allows. Stale marks rather than stale pods: after a reverted spec change the
+	// marked pods are surplus and the unmarked replacements stale, and subtracting
+	// stale pods would release the marks at once. Holding them costs up to
+	// replicas extra proxies, bounded by the deadline;
+	// TestARevertedSpecChangeKeepsTheMarkItAlreadyMade pins it. Counting rather
+	// than persisting marks keeps a reversed scale-down reversible on the pod.
 	var staleMarks int32
 	surplusMarks := make([]ProxyView, 0, len(views))
 	for _, v := range views {
@@ -1109,107 +643,34 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 			surplusMarks = append(surplusMarks, v)
 		}
 	}
-	// pick, so that the marks released are the ones a fresh decision would not
-	// have made: a pod the kubelet still calls Ready goes back into service
-	// ahead of anything else, then the least trusted, then the fullest — and
-	// the pods that keep their marks are the ones the same rule would choose
-	// again. That last clause is the load-bearing one and it holds by
-	// construction, because a fresh DecideRollout sorts with this same
-	// comparator.
+	// pick keeps the marks a fresh DecideRollout would make, since it sorts with
+	// the same comparator. A released pod loses its annotation on the same pass
+	// and leaves the candidate set, so this cannot oscillate.
 	//
-	// Readiness leads the enumeration because the clause added for the
-	// unready-stale stall sits above both player clauses, and it reads well
-	// here for a reason of this loop's own: a draining pod the kubelet still
-	// calls Ready is one whose withdrawal has not taken effect yet, so it is
-	// the mark that has made the least progress and the cheapest to give back.
-	//
-	// Ordering cannot make this oscillate, and the reason is stronger than
-	// pick being deterministic: a released pod loses its annotation on the same
-	// pass, so it is not Draining on the next one and drops out of this
-	// candidate set. Player counts moving underneath can therefore change which
-	// of the marks still standing would be kept, but nothing here can hand a
-	// mark back to a pod this loop released — only a fresh decision can, and
-	// DecideRollout marks no current pod while anything is draining.
-	//
-	// The set is not monotone. It grows whenever a pass with nothing draining
-	// decides a surplus, which is how every mark here first appears; the
-	// exception while a drain is under way is the rollback above, where a mark
-	// held in the stale branch moves into this one when the spec comes back.
-	// Both add a candidate rather than restoring a released one, so neither can
-	// start the cycle this paragraph rules out.
-	// One direction here is open and is left open knowingly, so that the next
-	// reader has the question rather than having to find it. views is built
-	// from the pods this pass could see, so a create the informer cache has
-	// not caught up with makes len(views) one low, which makes want one low,
-	// which releases one more mark than a correct count would. Releasing a
-	// mark deletes the annotation, so that pod's deadline restarts from zero
-	// when the group decides it should go after all -- a drain that had nearly
-	// run its course begins again, and the players on it wait another full
-	// timeout.
-	//
-	// Whether that is reachable was not settled. Four candidate states were
-	// traced -- scale-down then up with a create pending, a rollback with a
-	// replacement pod lost, replicas raised mid-rollout, and a mixed-generation
-	// surplus -- and in each either surplusMarks was empty or want did not
-	// cross 1 to 0, so none of them reaches it. That is not a proof it is
-	// unreachable. Note the direction is the opposite of the create cap's
-	// above, where the same undercount is conservative; here it is not, which
-	// is the reason to write it down.
+	// Open: a create the cache has not shown makes len(views), and so want, one
+	// low, releasing one mark too many and restarting that drain's deadline. Four
+	// candidate states were traced without reaching it; that is no proof.
 	if want := int32(len(views)) - staleMarks - group.Spec.Replicas; want > 0 {
 		for _, name := range pick(surplusMarks, want) {
 			leaving[name] = true
 		}
 	}
 
-	// The drain half, shared with the path that never gets here. See
-	// drainDeparting.
 	return r.drainDeparting(ctx, group, pods, leaving, nodeGoing, wantHash)
 }
 
-// drainDeparting is everything a proxy pod's removal consists of once
-// something has decided it should go: withdraw its readiness so no new player
-// arrives, stamp the draining mark that starts its deadline, and delete it
-// once it is empty or that deadline has passed.
+// drainDeparting is a proxy pod's removal once something decided it should go:
+// withdraw its readiness, stamp the draining mark that starts its deadline,
+// and delete it once it is empty or the deadline has passed.
 //
-// It is a function of its own because two callers need it.
-// reconcileReplicas passes what DecideRollout nominated --
-// surplus, a stale hash, a departing node. protectPlayersOnly passes the
-// departing-node pods and nothing else, on the three paths that give up before
-// reconcileReplicas ever runs: a missing Network, one that is not Accepted,
-// and an expose.type this operator has no branch for.
+// reconcileReplicas passes what DecideRollout nominated; protectPlayersOnly
+// passes only departing-node pods. A refused group cannot replace what it
+// removes, but a departing node cannot wait: without this the budget would
+// refuse the eviction while nothing acted on it, and kubectl drain would hang
+// until the Network is fixed.
 //
-// # Why the refusing paths get this and not the rest of reconcileReplicas
-//
-// A group whose Network is broken cannot create anything -- the render needs
-// the Network -- so it cannot replace a proxy it removes. Everything
-// DecideRollout does is therefore out of reach there, and that is right: a
-// surplus reduction and a hash rollout can both wait for the Network without
-// costing anyone anything.
-//
-// A departing node cannot wait. The node is going whatever this operator
-// decides, and the only question is whether its proxy leaves gracefully or is
-// killed by the kubelet with its players still on it. Without this on those
-// paths, a ProxyGroup with a broken Network publishes NodeDraining: True
-// naming the node and sizes minAvailable to cover every occupied proxy -- so
-// the eviction API refuses every attempt to take it -- while never marking it
-// draining, never starting its removal deadline and never withdrawing its
-// readiness. The budget refuses the disruption and nothing acts on it, so
-// `kubectl drain` cannot complete until somebody fixes the Network.
-//
-// The lost capacity is real and is the price. A group that drains its last
-// proxy on a broken Network has no proxy until the Network is fixed, where
-// before it had one on a node that was being taken away. That is a worse
-// steady state and a better outcome, because the pod on the departing node
-// was never going to survive the drain either way.
-//
-// # Cancellation
-//
-// leaving is recomputed by each caller on every pass and never read back off
-// the annotation, so a node whose taint is removed stops being a reason: the
-// loop below re-asserts readiness and markDraining clears the mark. That
-// matters most on the refusing paths, where a cancelled node drain would
-// otherwise leave a proxy withdrawn from service with nothing able to bring it
-// back.
+// leaving is recomputed every pass, so a node whose taint is removed stops
+// being a reason and the mark is cleared.
 func (r *ProxyGroupReconciler) drainDeparting(
 	ctx context.Context,
 	group *spawneryv1alpha1.ProxyGroup,
@@ -1219,41 +680,17 @@ func (r *ProxyGroupReconciler) drainDeparting(
 	wantHash string,
 ) error {
 	key := group.Namespace + "/" + group.Name
-	// The desired readiness is derived, not remembered: this loop already
-	// knows which pods are surplus, so it asserts the answer for every pod on
-	// every pass. An operator restart recomputes the same thing, and a
-	// cancelled scale-down corrects itself without anything to clean up —
-	// including one cancelled part of the way, which returns as many proxies to
-	// service as the new count asks for and leaves the rest draining.
-	// diverging and names feed reportReadinessDivergence below: it needs to
-	// know, for every live pod, both what was just asserted for it and what
-	// the kubelet actually reports, and this loop is the only place both are
-	// in hand at once -- going is local to this function, and isPodReady
-	// reads the same pod this loop already has open.
+	// The desired readiness is derived, not remembered, so a restart or a
+	// cancelled scale-down corrects itself.
 	//
-	// Only the withdrawal direction counts: going && isPodReady is true
-	// exactly when a pod was just told to stop taking connections and the
-	// kubelet still calls it Ready -- an agent that heard the instruction
-	// and did not act on it, which is what this condition exists to catch.
-	// The reverse -- asserted ready but not yet actually Ready -- is
-	// deliberately not checked. SetReady(true) is asserted for a
-	// non-draining pod from the moment it exists, before any kubelet has
-	// had a chance to probe it even once, and a cold image pull can easily
-	// outrun readinessDivergenceGrace without the pod having disobeyed
-	// anything: it is starting up, not diverging, and reporting that
-	// direction would misname it as an agent that heard an instruction and
-	// ignored it. A proxy that is supposed to be ready and never gets there
-	// is already visible without this: the group sits below its ready count.
+	// Only the withdrawal direction counts as divergence: an agent told to stop
+	// that is still Ready. Asserted ready but not Ready yet is a pod starting up,
+	// and a cold image pull can outrun the grace.
 	diverging := make(map[types.UID]bool, len(pods))
 	names := make(map[types.UID]string, len(pods))
 	for i := range pods {
 		going := leaving[pods[i].Name]
-		// Read before markDraining below can change it, which is what makes
-		// it mean "already marked, before this call" for the event gate two
-		// lines down. Asked of the pod here rather than carried in from a
-		// ProxyView, so that the caller with no views -- protectPlayersOnly --
-		// gets the same answer: markDraining only ever patches the pod of its
-		// own iteration, so an earlier iteration cannot have changed this one.
+		// Read before markDraining below changes it.
 		_, wasMarked := drainingSince(&pods[i])
 		if err := r.Proxies.SetReady(ctx, string(pods[i].UID), !going); err != nil {
 			return err
@@ -1261,15 +698,7 @@ func (r *ProxyGroupReconciler) drainDeparting(
 		if err := r.markDraining(ctx, &pods[i], going); err != nil {
 			return err
 		}
-		// The event §3.7 asks for on the ProxyGroup: fired once, on the pass
-		// that actually marks a proxy, and only when the node is a reason it
-		// was marked -- not when a hash mismatch is the only reason. going is
-		// leaving[pods[i].Name] and can be true for reasons nodeGoing[i] does
-		// not cover (a plain surplus reduction, a hash mismatch alone), so
-		// nodeGoing[i] is what keeps this from firing on those. !wasMarked is
-		// what keeps it from firing again on every later pass the same pod
-		// spends draining, matching markDraining's own guard against
-		// re-stamping a mark it already made.
+		// Once per proxy, and only when the node is a reason it was marked.
 		if going && !wasMarked && nodeGoing[i] {
 			r.Recorder.Eventf(group, nil, corev1.EventTypeNormal, spawneryv1alpha1.ReasonNodeDraining, actionDrainProxy,
 				"draining proxy %s off a node that is going away", pods[i].Name)
@@ -1290,78 +719,26 @@ func (r *ProxyGroupReconciler) drainDeparting(
 	}
 	r.reportReadinessDivergence(group, key, diverging, names)
 
-	// Removal waits for the pod to be empty. Readiness stopped the inflow —
-	// the Service dropped the endpoint, so no new connection arrives — but it
-	// said nothing about the players already on it, whose TCP sessions
-	// Kubernetes does not close. Deleting at NotReady would disconnect exactly
-	// the people the readiness contract exists to protect.
+	// Removal waits for the pod to be empty: NotReady stops new connections,
+	// but Kubernetes does not close the sessions already on it. The deadline is
+	// the only path here that disconnects anyone.
 	//
-	// The operator moves nobody off a draining proxy: the connection ends at
-	// the proxy being removed. With spec.update.transfer its agent may move
-	// players itself, but the deadline below is still the only path here that
-	// disconnects anyone.
+	// Empty means fresh, zero, and from a stream that is still up. Velocity keeps
+	// serving after its agent's stream breaks, and Registry.Disconnect keeps the
+	// last count, so a zero from a dead stream is believed for 2x the report
+	// interval while players can still join.
 	//
-	// Empty means the count is fresh, zero, and reported by a stream that is
-	// still up. A count we cannot trust is treated as occupied — proxyOccupied
-	// above states it for a proxy pod, on the same principle candidates.go's
-	// isOccupied states for the Server controller. It matters more here than the
-	// phrasing suggests: an agent's gRPC stream breaking does not disconnect
-	// anybody, because Velocity goes on serving the sessions it already holds,
-	// and the registry then reports a pod it has never heard of and a pod
-	// whose agent died three minutes ago identically — both as zero players.
-	// Deleting on a bare zero would disconnect everyone on a proxy whose only
-	// fault was a dropped stream, which is precisely the failure this wait
-	// exists to prevent.
-	//
-	// Connected is what makes "three minutes ago" and "three seconds ago" the
-	// same answer. Registry.Disconnect deliberately keeps the last count and
-	// leaves lastReportAt alone, so freshness alone still believes a zero for
-	// 2 × the report interval — 10 s at the operator's configured 5 s — after
-	// the stream that produced it died. A player can join through the Service
-	// inside that window, because the pod is Ready until its own agent closes
-	// the gate, and Velocity accepts them with nothing left to report it. So
-	// the count is only believed while the stream that would have updated it
-	// is still there.
-	//
-	// isOccupied's own rule also requires wasRegistered, because nobody is
-	// ever routed to a server the proxies were not told about. A proxy has no
-	// such qualifier: it sits behind the Service and players reach it
-	// directly, so for a pod that is still running there is no state in which
-	// a stale count is safe to read as empty. Staleness alone is enough, and
-	// the cost is bounded — a proxy whose agent never appears is removed by
-	// the deadline rather than never.
-	//
-	// That bound is why this call is proxyOccupied and the label and budget
-	// use proxyOccupiedForBudget instead. The two ask the same question of
-	// the same snapshot; only this one has a deadline underneath it, so only
-	// this one can afford to be wrong in the conservative direction with
-	// nothing to end it. A budget has no such deadline: a minAvailable held
-	// above an achievable currentHealthy lifts when the pod's agent finally
-	// reports and not before, so the same conservative answer applied there
-	// blocks every eviction in the group for as long as that takes — for a
-	// pod whose agent never arrives, for as long as the pod exists. Same
-	// question, different consequence for being wrong, so the two consumers
-	// do not share an answer.
-	//
-	// isOccupied has a third term this deliberately does not model:
-	// sessionsGone, which overrides even a non-zero count, because a pod that
-	// reached a terminal state took its sessions down with it. A crashed
-	// surplus proxy therefore waits out its full deadline here rather than
-	// going immediately, and is then announced as losing players who were
-	// disconnected by the crash. That is wasteful and the event overstates,
-	// but both err towards keeping a pod that might still have someone on it,
-	// and the wait is bounded. Reading pod state to decide it is a wider
-	// change than this task, which only ever asks the registry.
+	// Unlike isOccupied there is no sessionsGone term: a crashed surplus proxy
+	// waits out its deadline and is announced as losing players the crash already
+	// disconnected. Conservative and bounded.
 	for i := range pods {
 		if !leaving[pods[i].Name] {
 			continue
 		}
 		pod := &pods[i]
 		snap := r.Agents.Lookup(string(pod.UID))
-		// A pod with no readable stamp has no deadline. It is not a dead end:
-		// the assertion loop above has already re-stamped every surplus pod
-		// that lacked one, this pod included, so the deadline starts on this
-		// pass rather than never.
+		// The loop above has already stamped every leaving pod, so the deadline
+		// starts this pass at the latest.
 		since, dated := drainingSince(pod)
 		waited := r.Clock().Sub(since)
 		// Measured from when the count became unknown, not from the drain's
@@ -1378,71 +755,44 @@ func (r *ProxyGroupReconciler) drainDeparting(
 			(unknownFor > 0 && unknownFor >= group.DrainTimeout() && waited >= group.DrainTimeout()) ||
 			(group.MaxStale() > 0 && waited >= group.MaxStale()))
 
-		// Held until the delete lands, for the reason the Network
-		// controller's announce slice carries: the event describes a
-		// disconnection, and a pass that did not manage to delete the pod
-		// disconnected nobody. Emitting first meant a failed delete
-		// re-announced on the next pass, and a NotFound announced lost
-		// sessions for a pod that was already gone.
+		// Announced only once the delete lands: a pass that failed to delete
+		// disconnected nobody.
 		var announce func()
 		switch {
 		case !proxyOccupied(snap):
-			// Known empty: nobody is on it, so removing it costs nothing.
 			announce = func() {
 				r.Recorder.Eventf(pod, nil, corev1.EventTypeNormal, "ProxyStopped", actionDrainProxy,
 					"proxy %s stopped: no players left", pod.Name)
 			}
 		case expired:
-			// The one path in this milestone that disconnects anybody. It is
-			// configured rather than accidental, so it says so loudly and
-			// names what it cost.
+			// The one path that disconnects anybody, so it says so loudly.
 			announce = func() {
 				r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, "ProxyDrainTimeout", actionDrainProxy,
 					"deleting proxy %s after %s: %s",
 					pod.Name, group.DrainTimeout(), proxyPlayerNote(snap))
 			}
 		default:
-			// Still draining. Nothing to do; the next pass looks again.
 			continue
 		}
 		if err := r.Delete(ctx, pod); err != nil {
 			if !apierrors.IsNotFound(err) {
 				return err
 			}
-			// Already gone. The reservation below still stands -- the pod is
-			// not there, which is what it records -- but nothing this pass did
-			// disconnected anybody, so there is nothing to announce.
+			// Already gone: still reserved, but nobody was disconnected by this pass.
 			announce = nil
 		}
 		if announce != nil {
 			announce()
 		}
-		// Reserved after the Delete succeeds (or the pod was already gone),
-		// matching ServerGroupReconciler.size's expectDeleted -- and, like the
-		// create loop above, matching what it does on failure too: an error
-		// other than NotFound returns above before this line runs, so nothing
-		// is reserved for a delete that did not go through.
 		r.Expectations.expectDeleted(key, pod.Name)
 	}
 	return nil
 }
 
-// reportReadinessDivergence tells the group's ReadinessDiverged condition
-// what r.Divergence has observed for this pass's pods, and fires the one
-// event this readiness contract needs beyond Resync's own repeated
-// assertion: a pod that was told to stop taking connections and the kubelet
-// still calls Ready, for at least readinessDivergenceGrace. A divergence
-// caused by a lost SetReady or a lost pod-status update heals on the next
-// resync; what survives that is an agent that received the withdrawal and
-// did not act on it, and reporting -- not repairing -- is what this
-// function does about it. See the comment on diverging in
-// reconcileReplicas for why only this direction is checked.
-//
-// Built false-by-default and flipped, like ScalingLimited and BackingOff in
-// ServerGroupReconciler.Reconcile. The event goes on the flank only, for the
-// same reason theirs does: SetStatusCondition moves lastTransitionTime just
-// on a change of status, so comparing IsStatusConditionTrue across the call
-// is what tells a transition from a resync repeating the same verdict.
+// reportReadinessDivergence reports a pod told to stop taking connections that
+// the kubelet still calls Ready past readinessDivergenceGrace: an agent that
+// got the withdrawal and did not act. A lost SetReady heals on the next resync;
+// this only reports. The event goes on the flank.
 func (r *ProxyGroupReconciler) reportReadinessDivergence(
 	group *spawneryv1alpha1.ProxyGroup,
 	key string,
@@ -1484,21 +834,9 @@ func (r *ProxyGroupReconciler) reportReadinessDivergence(
 }
 
 // reportNodeDraining tells the group's NodeDraining condition which nodes,
-// among this pass's live pods, are on their way out of service. nodeGoing is
-// its caller's own per-pod nodeDeparting verdict -- never asked a second time
-// here -- indexed the same way as pods.
-//
-// Two callers, one per pass and never both: reconcileReplicas hands over the
-// verdict from the loop that built views, and protectPlayersOnly computes it
-// itself on the paths where reconcileReplicas does not run at all. Both keep
-// the fact to one evaluation per pass, which is what the shared parameter is
-// for.
-//
-// No event goes with this: the one §3.7 asks for is fired in reconcileReplicas
-// at the point a proxy is actually marked, which is a per-proxy occasion this
-// condition's own True/False flank cannot stand in for -- a second departing
-// node while the condition is already True marks another proxy without the
-// condition changing at all.
+// among this pass's live pods, are departing. nodeGoing is the caller's own
+// per-pod verdict, indexed like pods. No event: a second departing node while
+// the condition is True would not flip it; the per-proxy event covers that.
 func (r *ProxyGroupReconciler) reportNodeDraining(
 	group *spawneryv1alpha1.ProxyGroup,
 	pods []corev1.Pod,
@@ -1515,18 +853,9 @@ func (r *ProxyGroupReconciler) reportNodeDraining(
 }
 
 // reportChangingOver sets ConditionChangingOver from how many of the group's
-// live pods carry a hash this operator no longer renders.
-//
-// No event accompanies it, for the reason reportNodeDraining gives about its
-// own condition: an event tied to a condition's transition under-reports, since
-// a group that is already True and then has more pods fall stale produces no
-// second transition to fire on. The condition carries the count, so it says the
-// second thing where the event could not.
-//
-// A pod with no hash label at all counts as stale. Nothing this operator
-// creates lacks one -- podspec stamps it on every proxy pod -- so the only way
-// to be here is a pod somebody else made under this group's name, and a pod
-// whose shape cannot be compared is not a pod whose shape agrees.
+// live pods carry a hash this operator no longer renders; a pod with no hash
+// label counts. No event, as in reportNodeDraining: the count can grow without
+// a transition.
 func reportChangingOver(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, wantHash string, wait ChangeoverWait) {
 	stale := 0
 	for i := range pods {
@@ -1555,25 +884,10 @@ func reportChangingOver(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, w
 	meta.SetStatusCondition(&group.Status.Conditions, cond)
 }
 
-// drainingSince reads the annotation markDraining writes. ok is false when
-// there is no usable start for the deadline to run from, which is two cases
-// that behave identically from here: no annotation at all — the pod has not
-// been asked to drain yet — and an annotation that does not parse.
-//
-// An unparsable stamp is deliberately not an error. The annotation is on a
-// pod, so anybody who can write a pod annotation can produce one, and
-// returning an error would abort the whole Reconcile — Service, status, and
-// every other pod's readiness assertion with it — on every pass, forever,
-// because nothing downstream of the error would ever rewrite the value. Every
-// other API call reconcileReplicas makes tolerates one pod's bad state
-// (Create tolerates AlreadyExists, Delete tolerates NotFound, markDraining's
-// patch tolerates NotFound, Fleet.SetReady is a no-op for an unknown pod);
-// this is the one whose input a user can write.
-//
-// Treating it as no stamp is what makes it recoverable: markDraining's guard
-// keys on this function, so a surplus pod whose stamp does not parse is
-// re-stamped with the current time on the same pass. See markDraining for
-// what that costs.
+// drainingSince reads the annotation markDraining writes. ok is false when it
+// is missing or does not parse. Not an error: anyone who can annotate a pod
+// can write a bad value, and an error would abort every pass forever.
+// markDraining re-stamps such a pod.
 func drainingSince(pod *corev1.Pod) (time.Time, bool) {
 	raw, ok := pod.Annotations[ProxyDrainingSinceAnnotation]
 	if !ok {
@@ -1588,31 +902,11 @@ func drainingSince(pod *corev1.Pod) (time.Time, bool) {
 
 // markDraining writes or removes the annotation that dates a proxy's drain.
 //
-// Written once and never moved while it stays readable: the deadline runs
-// from the first assertion, and re-stamping it on every five-second pass would
-// push it forever and the drain would never end. So the write branch is keyed
-// on drainingSince — on a stamp the deadline can actually run from — and not
-// on the annotation merely being present.
-//
-// The one case where a stamp is rewritten is a stamp that does not parse,
-// which is the only way out of it: drainingSince cannot read it and no other
-// code path touches the annotation, so a guard keyed on presence would leave
-// a corrupt value there for the pod's whole life. Rewriting costs that pod a
-// restarted clock — its deadline runs from now rather than from whenever the
-// drain really began, so it can wait up to one full spec.drain.timeoutSeconds
-// longer than it should. That is the same direction every other rule here
-// errs in: waiting too long keeps players connected, and the wait stays
-// bounded. Nothing is lost that was ever readable.
-//
-// The removal branch keys on presence instead, so that cancelling a
-// scale-down clears an unparsable stamp as well as a good one rather than
-// leaving litter on a pod that is no longer draining.
-//
-// The patch tolerates NotFound like every other API call reconcileReplicas
-// makes for a racing pod (Create tolerates AlreadyExists, Delete tolerates
-// NotFound, Fleet.SetReady is a no-op for a pod it has no session for): a
-// pod evicted or deleted between the informer list and this patch should
-// not fail the whole reconcile over a stamp that no longer matters.
+// Written once and never moved while readable, or the deadline would never
+// arrive; so the write keys on drainingSince, not on presence. An unparsable
+// stamp is rewritten, which restarts that pod's clock: it can wait up to one
+// drain timeout longer. Removal keys on presence, so a bad stamp is cleared
+// too. NotFound is tolerated for a pod deleted since the list.
 func (r *ProxyGroupReconciler) markDraining(ctx context.Context, pod *corev1.Pod, draining bool) error {
 	raw, marked := pod.Annotations[ProxyDrainingSinceAnnotation]
 	_, dated := drainingSince(pod)
@@ -1662,13 +956,9 @@ func (r *ProxyGroupReconciler) announceReady(ctx context.Context, pods []corev1.
 	return nil
 }
 
-// reconcileService keeps the group's Service in step with its expose
-// strategy, and returns the Service it settled on so the caller can read
-// status.loadBalancer off it without a second Get.
-//
-// HostPort gets no Service and returns nil: nothing inside the cluster dials
-// a proxy. Players arrive from outside, agents dial the operator, and
-// Velocity dials backends.
+// reconcileService keeps the group's Service in step with its expose strategy
+// and returns it, for status.loadBalancer. HostPort gets no Service and
+// returns nil: nothing inside the cluster dials a proxy.
 func (r *ProxyGroupReconciler) reconcileService(
 	ctx context.Context,
 	group *spawneryv1alpha1.ProxyGroup,
@@ -1686,9 +976,7 @@ func (r *ProxyGroupReconciler) reconcileService(
 		}
 		svc.Labels[podspec.LabelManagedBy] = podspec.ManagedByValue
 
-		// Unconditional rather than inside the LoadBalancer arm: a group that
-		// leaves LoadBalancer has to release the keys it set, and nil is how
-		// that is said.
+		// Unconditional: leaving LoadBalancer releases the keys with nil.
 		var lbAnnotations map[string]string
 		if group.Spec.Expose.Type == spawneryv1alpha1.ExposeLoadBalancer &&
 			group.Spec.Expose.LoadBalancer != nil {
@@ -1696,9 +984,7 @@ func (r *ProxyGroupReconciler) reconcileService(
 		}
 		applyExposeAnnotations(svc, lbAnnotations)
 
-		// The selector must pin the role as well as the group: without it the
-		// Service would also select any server pod that happened to share the
-		// group name, and players would land on a backend directly.
+		// The selector pins the role, or same-named server pods would be selected.
 		svc.Spec.Selector = podspec.ProxyLabels(group.Spec.NetworkRef.Name, group.Name)
 
 		port := corev1.ServicePort{
@@ -1711,37 +997,20 @@ func (r *ProxyGroupReconciler) reconcileService(
 		case spawneryv1alpha1.ExposeLoadBalancer:
 			svc.Spec.Type = corev1.ServiceTypeLoadBalancer
 			svc.Spec.ExternalTrafficPolicy = loadBalancerTrafficPolicy(group)
-			// No node port is named. A LoadBalancer Service gets one anyway,
-			// allocated by the API server, and naming one here would add a
-			// second way for two groups in different namespaces to collide
-			// over a number no player ever dials.
+			// No node port named: the API server allocates one, and naming it
+			// would let two groups collide over a number no player dials.
 		case spawneryv1alpha1.ExposeClusterIP:
-			// No external traffic policy: the field is meaningless on a
-			// ClusterIP Service and the API server rejects it. No node port
-			// either, which is the whole reason this strategy exists -- the
-			// NodePort workaround it replaces left one allocated that nobody
-			// dialled and a host firewall had to account for.
+			// No external traffic policy: the API server rejects it on ClusterIP.
 			svc.Spec.Type = corev1.ServiceTypeClusterIP
 		case spawneryv1alpha1.ExposeNodePort:
-			// Local, not the Cluster default, for the same reason
-			// LoadBalancerSpec.ExternalTrafficPolicy defaults to Local: the
-			// default SNATs, so Velocity would never see a player's real IP,
-			// and bans and rate limits depend on it. The consequence is the
-			// trade-off this makes: a client that reaches a node running no
-			// proxy pod for this group gets no answer at all, rather than
-			// being routed to one that does. That is consistent with
-			// proxyAddress only ever publishing the address of a node that
-			// demonstrably runs a ready proxy -- a client dialing the
-			// published address never hits the empty case.
+			// Local: Cluster SNATs, and Velocity needs players' real IPs for bans
+			// and rate limits. A node without a proxy pod then answers nothing,
+			// but proxyAddress only publishes nodes that run a ready one.
 			svc.Spec.Type = corev1.ServiceTypeNodePort
 			svc.Spec.ExternalTrafficPolicy = corev1.ServiceExternalTrafficPolicyLocal
 			port.NodePort = group.Spec.Expose.NodePort.Port
 		default:
-			// Unreachable while exposeImplemented and this switch agree, and
-			// written out because that is exactly the assumption a fifth
-			// strategy breaks: whoever adds one and updates only one of the
-			// two gets a named error here instead of the nil dereference the
-			// old default: arm produced by reading NodePort.Port.
+			// Unreachable while exposeImplemented and this switch agree.
 			return fmt.Errorf("expose.type %s reached reconcileService without a branch",
 				group.Spec.Expose.Type)
 		}
@@ -1782,10 +1051,8 @@ func applyExposeAnnotations(svc *corev1.Service, want map[string]string) {
 	svc.Annotations[podspec.AnnotationExposeAnnotations] = strings.Join(keys, ",")
 }
 
-// loadBalancerTrafficPolicy is the CRD's Local default, restated in code.
-// A ProxyGroup built in a unit test never passes through the API server's
-// defaulting, and an empty policy on a Service is not a valid value -- the
-// same hazard podspec.DefaultDrainTimeoutSeconds exists for.
+// loadBalancerTrafficPolicy is the CRD's Local default, restated for objects
+// that never passed the API server's defaulting.
 func loadBalancerTrafficPolicy(group *spawneryv1alpha1.ProxyGroup) corev1.ServiceExternalTrafficPolicy {
 	if lb := group.Spec.Expose.LoadBalancer; lb != nil && lb.ExternalTrafficPolicy != "" {
 		return lb.ExternalTrafficPolicy
@@ -1794,27 +1061,10 @@ func loadBalancerTrafficPolicy(group *spawneryv1alpha1.ProxyGroup) corev1.Servic
 }
 
 // deleteServiceIfOurs removes the Service a group had before it switched to
-// HostPort, and only that one.
-//
-// The ownership check is the whole of the function's care: a Service
-// somebody else put at the group's name is not this operator's to remove,
-// and a delete is the one action here that cannot be undone. The
-// preconditions pin the object the decision was made about -- between the
-// Get and the Delete the name could have come to hold a different object
-// entirely.
-//
-// Both halves of that check are required, as design section 4 specifies: a
-// controller reference whose UID is this group's, and podspec.LabelManagedBy.
-// The UID is the strong half -- it fails for a Service controlled by anything
-// else, this group's own predecessor of the same name included, which is the
-// case the garbage collector can leave standing after a delete-and-recreate.
-// The label is the cheap half and is kept anyway, because it is the same
-// label cmd/spawnery-operator narrows the manager's cache by for every other
-// kind the operator writes. Services are the one kind it does not narrow
-// (main.go's ByObject list covers ConfigMaps, ServiceAccounts and PVCs), so
-// this function is the only thing standing between a stray object at the
-// group's name and an irreversible delete, and it checks everything the
-// operator stamps rather than the cheapest sufficient thing.
+// HostPort, and only that one: controlled by this group's UID (not a
+// same-named predecessor) and carrying our managed-by label. The cache does not
+// narrow Services, so this check is all that stands before an irreversible
+// delete; the preconditions pin the object the decision was made about.
 func (r *ProxyGroupReconciler) deleteServiceIfOurs(
 	ctx context.Context,
 	group *spawneryv1alpha1.ProxyGroup,
@@ -1840,22 +1090,6 @@ func (r *ProxyGroupReconciler) deleteServiceIfOurs(
 	}))
 }
 
-// reconcileConfigMap keeps the group's rendered ConfigMap — design section
-// 5.4's one ConfigMap per group — in step with the fields spec.config exposes
-// to a user. It carries playerLimit, motd and onlineMode: the forwarding mode
-// and the ports are operationally critical, and live in internal/render's
-// critical layer and nowhere else, so there is exactly one place that can be
-// wrong about either. onlineMode is written here too, and is still critical in
-// the sense that matters — no configOverlay can reach it — but its value is a
-// deliberate choice a user makes on the ProxyGroup, so it travels as a value
-// rather than as a constant in the renderer.
-//
-// It marshals a render.Values document under podspec.ConfigValuesKey, the
-// same key BuildProxyPod projects into ConfigDir, and it carries
-// podspec.LabelManagedBy for the reason podspec.GroupConfigMapName and
-// Bootstrapper.ensureConfigMap both document: cmd/spawnery-operator narrows
-// the manager's cache for ConfigMaps to that label, so an unlabelled one this
-// reconciler just wrote would be invisible to it on the very next Get.
 // reconcileNetworkPolicy keeps the group's egress policy in step with its
 // online-mode, which is the one input that changes what a proxy may reach.
 func (r *ProxyGroupReconciler) reconcileNetworkPolicy(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) error {
@@ -1882,22 +1116,14 @@ func (r *ProxyGroupReconciler) reconcileConfigMap(ctx context.Context, group *sp
 		podspec.GroupConfigMapName(group.Name, podspec.RoleProxy), data)
 }
 
-// proxyConfigValues builds the neutral document reconcileConfigMap writes
-// from whatever a user set in spec.config. PlayerLimit is never left nil —
-// spec.config itself being nil counts as PlayerLimit unset, and it defaults
-// to podspec.DefaultPlayerLimit, the exact constant BuildProxyPod defaults
-// SPAWNERY_PLAYER_LIMIT from. The two must agree: if this function left the
-// field nil instead, render.Velocity's RequirePlayerLimit would refuse every
-// ProxyGroup that never set spec.config.playerLimit, while that same
-// ProxyGroup's pods already claim a limit of 500 in their own environment —
-// Accepted, Service up, and every pod in CrashLoopBackOff forever, with
-// nothing on the CR saying why.
-// OnlineMode is never left nil for the same reason and with a sharper edge:
-// render.Velocity's RequireOnlineMode refuses to guess, and the value decides
-// whether the proxy authenticates players at all. The default here is true —
-// the same default the CRD stamps on spec.config.onlineMode — so a ProxyGroup
-// whose spec.config is nil, or one created before the field existed and never
-// defaulted, renders an authenticating proxy rather than an open one.
+// proxyConfigValues builds the document reconcileConfigMap writes. The
+// forwarding mode and ports are not in it; they live only in internal/render's
+// critical layer.
+//
+// PlayerLimit is never nil, defaulting to podspec.DefaultPlayerLimit as the
+// pod's environment does: render.Velocity refuses a missing limit, and every
+// pod would crash-loop. OnlineMode is never nil either, defaulting to true like
+// the CRD, so an unset spec renders an authenticating proxy.
 func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
 	var values render.Values
 	limit := podspec.ProxyPlayerLimit(group)
@@ -1916,36 +1142,16 @@ func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
 }
 
 // setProxyPodsBlocked records why a proxy pod this group asked for does not
-// exist. It reports whether the condition transitioned to True on this call,
-// so the caller can put an event on the flank rather than on every resync.
+// exist, and reports whether Degraded turned True on this call.
 //
-// This is the first writer of Degraded on a ProxyGroup. setStatus has always
-// read it and routed it to phase Degraded; until now only ServerGroup ever
-// set one.
-//
-// A condition already saying this exact thing is left byte-for-byte alone,
-// and that is load-bearing rather than an optimisation. The refused-create
-// caller passes the API server's own text, which names the pod it refused --
-// and NewProxyName draws a fresh random suffix for every attempt, so the
-// message differs on every single pass. Rewriting it made writeStatus bump
-// resourceVersion every pass, which the For(&ProxyGroup{}) watch turned
-// straight back into an enqueue, ahead of the rate-limited retry: a group
-// whose pods the API server refuses -- exactly what a HostPort group in a
-// baseline namespace is -- span at roughly 28 reconciles a second, forever.
-// The milestone measured that as 3,940 refusals in a 139-second E2E run and
-// filed the number as a normal cost; it was not.
-//
-// sameRefusal is what makes "this exact thing" mean the refusal rather than
-// the string: two messages that differ only in the name of the object the
-// API server refused are the same refusal, so the write is skipped, while a
-// genuinely different refusal under the same reason -- a quota after a Pod
-// Security fix, say -- still replaces the message. Nothing here edits what
-// gets stored. The stored text stays the cluster's own, verbatim, because
-// the remedy is in the API server's wording and nothing else knows it.
+// The same refusal leaves the condition untouched: the API server's message
+// names the refused pod, and a fresh random name each pass would bump
+// resourceVersion and re-enqueue the group in a tight loop. sameRefusal ignores
+// that name; a different refusal under the same reason still replaces the
+// message. The stored text stays the API server's own.
 func setProxyPodsBlocked(group *spawneryv1alpha1.ProxyGroup, reason, message string) bool {
-	// Read out, not held: FindStatusCondition returns a pointer into the
-	// slice SetStatusCondition below writes through, so a verdict read after
-	// that call is the value just written and never the value it replaced.
+	// FindStatusCondition returns a pointer into the slice SetStatusCondition
+	// writes through, so read the old verdict now.
 	existing := meta.FindStatusCondition(group.Status.Conditions,
 		spawneryv1alpha1.ConditionDegraded)
 	was := existing != nil && existing.Status == metav1.ConditionTrue
@@ -1962,24 +1168,12 @@ func setProxyPodsBlocked(group *spawneryv1alpha1.ProxyGroup, reason, message str
 }
 
 // sameRefusal reports whether two cluster messages describe the same refusal,
-// differing at most in the name of the object refused.
-//
-// The API server renders a refused create as
+// differing at most in the first quoted run, which the API server fills with
+// the refused object's name:
 //
 //	pods "gateway-kt84" is forbidden: violates PodSecurity "baseline:latest": hostPort ...
 //
-// where the first quoted run is the pod's name and everything after it is the
-// remedy. The name is the only part that moves between two attempts at the
-// same create, and it names a pod that never came into existence, so two
-// messages that agree once it is elided are the same fact reported twice.
-//
-// This is a comparison and only a comparison: it elides nothing from the
-// message that gets stored on the condition.
-//
-// The unschedulable half of Degraded carries no quoted run at all -- its
-// message is "<pod> cannot be scheduled: <scheduler text>" -- so both sides
-// pass through unchanged there and a different pod, or a different scheduler
-// verdict on the same pod, is correctly seen as a different fact.
+// Unschedulable messages carry no quoted run and compare whole.
 func sameRefusal(a, b string) bool {
 	return elideFirstQuoted(a) == elideFirstQuoted(b)
 }
@@ -1996,34 +1190,15 @@ func elideFirstQuoted(msg string) string {
 	return msg[:open+1] + msg[open+1+rest:]
 }
 
-// proxyPodsAdmittedMessage is the all-clear, and it is deliberately narrower
-// than "every proxy pod this group asked for exists" -- the sentence it
-// replaces, which claimed a count nothing on this path compares.
+// proxyPodsAdmittedMessage claims no pod count: nothing on this path
+// compares one.
 const proxyPodsAdmittedMessage = "the API server refused no proxy pod of this group, " +
 	"and none is reported unschedulable"
 
-// reportBlockedProxies is the second of the two ways a proxy pod fails to
-// exist: the scheduler has nowhere to put it. With hostPort at most one pod
-// of a group fits per node, so replicas is silently capped by the node count
-// -- the likeliest HostPort mistake there is, and one that produces a pod
-// that exists, never runs, and explains itself only on its own object.
-//
-// The pod's name is in the message because a group has several, and a
-// condition that says only "a pod cannot be placed" cannot be acted on.
-//
-// It does not count nodes and predict. Doing that would mean reimplementing
-// the scheduler's view of node selectors, taints and foreign hostPort
-// holders in order to guess ahead of it, and being wrong the moment a node
-// joins. Both halves of this condition report what the cluster said.
-//
-// The all-clear tail below fires an event too, on the same flank-only terms
-// as setProxyPodsBlocked and matching ServerGroupReconciler's own
-// BackingOff/Degraded pair: read the condition before writing it, write, and
-// fire only when the write actually changed the verdict. Without this a
-// group that recovers from a rejected or unschedulable proxy pod back to
-// fully admitted did so silently — the Degraded condition would read False
-// again, but nothing on the object's event timeline would say the recovery
-// ever happened, unlike every other condition pair this reconciler reports.
+// reportBlockedProxies reports a proxy pod the scheduler cannot place (with
+// hostPort at most one pod of a group fits per node) or one that crash-loops,
+// naming the pod. It reports what the cluster said rather than predicting the
+// scheduler. The all-clear fires an event on the flank too.
 func (r *ProxyGroupReconciler) reportBlockedProxies(
 	group *spawneryv1alpha1.ProxyGroup,
 	pods []corev1.Pod,
@@ -2043,31 +1218,15 @@ func (r *ProxyGroupReconciler) reportBlockedProxies(
 		}
 	}
 
-	// A proxy that is scheduled, admitted, and cannot run.
-	//
-	// Nothing said this. A ProxyGroup whose pods crash-loop reported Accepted,
-	// had its Service up, and published no reason anywhere -- the shape
-	// proxyConfigValues' own comment names as the cost of guessing a player
-	// limit wrong, and the shape a proxy that cannot bind its ready port
-	// used to leave behind. The ServerGroup controller has reported
-	// CrashLoopBackoff since 4d; this is its counterpart, and it arrives with
-	// the agent change that makes a hopeless ready gate reach it.
-	//
-	// After the scheduling loop above rather than merged into it, because the
-	// two are different states with different remedies: unschedulable is about
-	// where a pod could go, crash-looping is about what it does once it is
-	// there, and an operator reading one is looking somewhere the other is
-	// not. Scheduling wins the condition when both are true, since a pod that
-	// never landed cannot also be crashing.
+	// Scheduled and admitted but crash-looping. After the scheduling loop:
+	// a pod that never landed cannot also be crashing.
 	for i := range pods {
 		for _, cs := range pods[i].Status.ContainerStatuses {
 			if cs.State.Waiting == nil || cs.State.Waiting.Reason != "CrashLoopBackOff" {
 				continue
 			}
-			// The *last* termination rather than the waiting message, which
-			// says only "back-off 5m0s restarting failed container". What
-			// killed it is in the previous run's exit code and reason, and
-			// that is what an operator has to see.
+			// The waiting message only says "back-off ... restarting"; the last
+			// termination says what killed it.
 			detail := cs.State.Waiting.Message
 			if last := cs.LastTerminationState.Terminated; last != nil {
 				detail = fmt.Sprintf("exit %d (%s)", last.ExitCode, last.Reason)
@@ -2084,14 +1243,8 @@ func (r *ProxyGroupReconciler) reportBlockedProxies(
 			return
 		}
 	}
-	// What the pass actually established, and no more: reconcileReplicas
-	// returned without the API server refusing anything, and no pod in the
-	// list is reported unschedulable. It did not establish that the group has
-	// as many pods as spec.replicas -- a create this pass suppressed by a
-	// pending expectation is not refused, merely deferred -- so the sentence
-	// must not say so. The condition's own semantics are unchanged: Degraded
-	// answers "is a pod of this group blocked from existing", not "is this
-	// group at size", which is what status.replicas is for.
+	// Only what the pass established: nothing refused, nothing unschedulable.
+	// Not that the group is at size; a create may merely be deferred.
 	wasBlocked := meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
 	meta.SetStatusCondition(&group.Status.Conditions, metav1.Condition{
 		Type:    spawneryv1alpha1.ConditionDegraded,
@@ -2106,34 +1259,13 @@ func (r *ProxyGroupReconciler) reportBlockedProxies(
 }
 
 // setStatus writes what is observably true of the group's pods.
-//
-// The two counts deliberately answer different questions about the same pods.
-// readyReplicas is about the ready gate, so it counts only pods the kubelet
-// calls Ready. connectedPlayers is about people, so it counts every pod in the
-// group, ready or not — the CRD calls it "the sum of players across all
-// proxies" and it is a printed column.
+// readyReplicas counts Ready pods; connectedPlayers counts every pod.
 func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, svc *corev1.Service) {
 	var ready int32
 	var players int32
 	for i := range pods {
-		// Outside the readiness guard below, and that placement is the whole
-		// point: a draining proxy is NotReady on purpose and still has the
-		// people this milestone exists to protect on it. Counting only ready
-		// pods reported 0 during exactly the one operation where this field is
-		// the only observable — nothing logs a readiness withdrawal anywhere —
-		// so a real drain printed PLAYERS 0 with somebody in the game.
-		//
-		// The case the guard was written for is unaffected: a pod that is
-		// starting up has told the registry nothing, and Lookup returns a zero
-		// count for a pod it has not heard from, so it contributes 0 whether
-		// the guard is here or not.
-		//
-		// The case that does change is a pod whose count is stale — an agent
-		// that died with people on it, say. That one now contributes its last
-		// known figure rather than nothing, which is a better answer than
-		// zero and is the property this field already had for ready pods.
-		// Both the drain event and status.connectedPlayers are last-reported
-		// numbers, not measurements, and neither can be more than that.
+		// Outside the readiness guard: a draining proxy is NotReady on purpose
+		// and still carries players. Last-reported numbers, not measurements.
 		players += r.Agents.Lookup(string(pods[i].UID)).Players
 		if !isPodReady(&pods[i]) {
 			continue
@@ -2156,10 +1288,8 @@ func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pod
 	}
 }
 
-// readyHostIP is the node address of the first ready pod that has one. It is
-// the readiness gate every strategy shares: nothing is published for a group
-// whose pods cannot answer, which is what test/e2e/expose_test.go rests on --
-// no image resolves there, so no pod is ready, so no address appears.
+// readyHostIP is the node address of the first ready pod that has one: the
+// readiness gate every strategy shares. test/e2e/expose_test.go rests on it.
 func readyHostIP(pods []corev1.Pod) string {
 	for i := range pods {
 		if isPodReady(&pods[i]) && pods[i].Status.HostIP != "" {
@@ -2170,25 +1300,11 @@ func readyHostIP(pods []corev1.Pod) string {
 }
 
 // readyHostIPBindingPort is the node address of the first ready pod whose
-// container actually declares hostPort.
-//
-// This exists because a group's pods outlive the spec that created them. A
-// group switched from NodePort to HostPort keeps its NodePort pods running and
-// Ready until they are replaced -- and if the replacement is refused, forever.
-// Asking only "is some pod ready" and then appending the spec's port published
-// an address whose host was real, whose port was real, and which no process on
-// that node was listening on. podspec.BuildProxyPod sets the container's
-// HostPort only under the HostPort strategy (internal/podspec/proxy.go), so a
-// pod from any other generation carries zero here and is skipped, which makes
-// the distinction a fact about the pod rather than a rule to remember.
+// container declares hostPort. A group switched to HostPort keeps its old pods
+// Ready until they are replaced, and their node is not listening on that port.
 func readyHostIPBindingPort(pods []corev1.Pod, hostPort int32) string {
-	// Zero matches every pod that declares no host port at all, which is every
-	// pod of every other strategy -- so without this the helper would invert
-	// its own purpose and hand back a node address for `host:0`. No object
-	// reaching here can carry it: HostPortSpec.Port is a required non-pointer
-	// field with +kubebuilder:validation:Minimum=1. The guard is for the
-	// callers validation does not stand in front of, which is what this
-	// package's own tests are.
+	// Zero would match every pod without a host port. The CRD forbids it; tests
+	// do not pass through validation.
 	if hostPort == 0 {
 		return ""
 	}
@@ -2207,18 +1323,8 @@ func readyHostIPBindingPort(pods []corev1.Pod, hostPort int32) string {
 	return ""
 }
 
-// allocatedNodePort is the node port the API server assigned, read back off
-// the Service rather than taken from the spec.
-//
-// The spec's port is only ever a request, and reconcileService's own
-// NodePort case writes it straight into the Service it creates or updates —
-// NodePortSpec.Port is required and `+kubebuilder:validation:Minimum=1`, so
-// the API server never has to allocate one on the spec's behalf. What can
-// happen is the Service itself being gone: a spec still naming a port proves
-// nothing about whether anything is listening on it once the Service that
-// carried it has been deleted, and the Service is the only place that says
-// so. Matched by name, because that is what reconcileService sets and a
-// group's Service carries exactly one port.
+// allocatedNodePort reads the node port off the Service rather than the spec:
+// once the Service is gone, the spec's port proves nothing.
 func allocatedNodePort(svc *corev1.Service) int32 {
 	if svc == nil {
 		return 0
@@ -2231,59 +1337,14 @@ func allocatedNodePort(svc *corev1.Service) int32 {
 	return 0
 }
 
-// proxyAddress is where players connect.
+// proxyAddress is where players connect, published only while a proxy is
+// demonstrably serving; otherwise empty.
 //
-// Every branch publishes an address only while a proxy is demonstrably
-// serving, and that is the property the whole function is built around.
-// Empty is the truthful answer otherwise: there is nowhere to connect yet,
-// and printing an address for a proxy that is not serving would send players
-// at a closed port.
-//
-// For NodePort and HostPort the address is a node's, and the operator has no
-// right to read Node objects -- nor does it need one: hostIP on a ready
-// proxy pod is the address of a node that demonstrably has a proxy on it,
-// and the pod is already watched. Granting a cluster-wide node read for a
-// status string would be the same trade the bootstrapper refused when it
-// declined the update verb on ServiceAccounts to restore a cosmetic label.
-//
-// "A ready pod" is not the same claim as "a ready pod serving this
-// strategy", and the two arms below no longer conflate them. HostPort asks
-// readyHostIPBindingPort for a pod whose own container declares the port in
-// question, not merely any ready pod -- see that function's comment for why
-// a pod can be ready and still prove nothing about this strategy. NodePort
-// asks allocatedNodePort for the port the Service actually carries, not
-// group.Spec.Expose.NodePort.Port, because the spec is a request and the
-// Service is what reconcileService and the API server made of it.
-//
-// For LoadBalancer the address comes from the Service instead, and the
-// readiness gate has to be stated rather than inherited -- the Service knows
-// nothing about whether anything is serving, so without the gate this would
-// publish an address the moment a load balancer answered, including for a
-// group whose every pod is in ImagePullBackOff.
-//
-// For ClusterIP the address is neither a node's nor the Service's: it is the
-// string the operator wrote in the spec, echoed back unchanged, because the
-// thing that owns it -- an ingress controller's TCP entry point, a gateway, a
-// tunnel, a DNS record -- lives under an API this operator does not read.
-//
-// That arm is still behind a readiness gate, and that is the surprising
-// part, because it reads neither of the things the gate tests. The gate
-// needs a pod that is both Ready and carrying a non-empty hostIP, so a
-// ClusterIP group publishes nothing while its pods are in ImagePullBackOff
-// -- and also nothing for a pod that is Ready but whose hostIP has not been
-// reported yet, a value this arm would never have used.
-//
-// This is deliberate, and is the same promise every other branch makes:
-// status.address means "players can connect here now", not "this is what was
-// configured". The configured value is already readable at
-// spec.expose.clusterIP.address, so publishing it unconditionally would add
-// no information while breaking the one invariant the field has. The
-// consequence to accept is that this arm's answer is gated on facts about a
-// pod that it never reads.
-//
-// net.JoinHostPort rather than a format string: a node with an IPv6 hostIP
-// needs brackets, and the old formatting produced an address no client could
-// use. For an IPv4 address the two are identical.
+// NodePort and HostPort publish a ready pod's hostIP: the operator has no right
+// to read Nodes and does not need one. LoadBalancer reads the Service, gated on
+// readiness, which the Service knows nothing about. ClusterIP echoes the
+// configured address, also gated on a ready pod although it reads nothing
+// from it: status.address means "players can connect here now".
 func proxyAddress(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, svc *corev1.Service) string {
 	port := func(p int32) string { return strconv.Itoa(int(p)) }
 
@@ -2311,14 +1372,8 @@ func proxyAddress(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, svc *co
 		}
 		return net.JoinHostPort(hostIP, port(group.Spec.Expose.HostPort.Port))
 	case spawneryv1alpha1.ExposeClusterIP:
-		// Echoed, not composed: no port is appended, because a Minecraft
-		// client defaults to 25565 and "mc.example.test" is the whole of what
-		// a player types. An operator who needs another port writes it in.
-		//
-		// The Service is required even though the address does not come from
-		// it: this strategy publishes a name that something outside the
-		// cluster routes to the Service, so without the Service the name goes
-		// nowhere.
+		// No port is appended: a client defaults to 25565. The Service is still
+		// required; the published name routes to it.
 		if svc == nil || group.Spec.Expose.ClusterIP == nil || readyHostIP(pods) == "" {
 			return ""
 		}
@@ -2334,17 +1389,13 @@ func proxyAddress(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, svc *co
 		}
 		return net.JoinHostPort(hostIP, port(nodePort))
 	default:
-		// See reconcileService's default: for why this is written out rather
-		// than folded into the NodePort arm.
 		return ""
 	}
 }
 
 // isPodReady reports what the kubelet says about the pod's readiness probe.
-// For a proxy that is the whole ready gate: design 6.6 has the agent serve the
-// probe itself and only turn it green after it has processed its FullSync, so
-// this condition already carries the answer the registry would otherwise be
-// asked for.
+// For a proxy that is the whole ready gate: its agent turns the probe green
+// only after processing its FullSync.
 func isPodReady(pod *corev1.Pod) bool {
 	for _, c := range pod.Status.Conditions {
 		if c.Type == corev1.PodReady {
@@ -2355,19 +1406,9 @@ func isPodReady(pod *corev1.Pod) bool {
 }
 
 // exposeImplemented reports whether this operator has a branch for the
-// strategy. See the call site in Reconcile for why it exists at all, and
-// TestExposeImplementedCoversTheEnumAndNothingElse for why it is a function
-// rather than an inline default arm.
-//
-// Adding a strategy means editing four things that must agree and are not
-// checked against each other by anything: the CRD's enum, this list, the
-// switch in reconcileService, and the switch in proxyAddress. Nothing
-// automated enforces the agreement -- the enum is closed, so no test can
-// construct an object that exercises a disagreement through the API, which is
-// exactly why the disagreement can be committed green. Stated here because
-// this is the list a fifth strategy's author edits first, and the two
-// default: arms are what catch the half-done edit: reconcileService returns
-// an error naming the type, proxyAddress returns "".
+// strategy. A new strategy needs four edits nothing checks against each other:
+// the CRD's enum, this list, and the switches in reconcileService and
+// proxyAddress, whose default arms catch a half-done edit.
 func exposeImplemented(t spawneryv1alpha1.ExposeType) bool {
 	switch t {
 	case spawneryv1alpha1.ExposeNodePort,
@@ -2394,18 +1435,8 @@ func (r *ProxyGroupReconciler) writeStatus(ctx context.Context, group *spawneryv
 	return r.Status().Update(ctx, group)
 }
 
-// groupsOfNetwork maps a Network event onto the ProxyGroups in its namespace that
-// name it.
-//
-// Namespace-scoped and filtered by NetworkRef rather than enqueueing every
-// group: one-network-per-namespace means the filter is nearly always a
-// formality, but a namespace holding a loser as well as a winner is exactly
-// the state this repository's own duplicate-network rule creates, and a group
-// pointed at the loser has no business being woken by the winner.
-//
-// A List error returns nothing rather than failing. This shortens a wait that
-// the resync would end anyway, so losing it costs latency and never
-// correctness.
+// groupsOfNetwork maps a Network event onto the ProxyGroups in its namespace
+// that name it, like ServerGroupReconciler.groupsOfNetwork.
 func (r *ProxyGroupReconciler) groupsOfNetwork(ctx context.Context, obj client.Object) []reconcile.Request {
 	list := &spawneryv1alpha1.ProxyGroupList{}
 	if err := r.List(ctx, list, client.InNamespace(obj.GetNamespace())); err != nil {
@@ -2424,34 +1455,15 @@ func (r *ProxyGroupReconciler) groupsOfNetwork(ctx context.Context, obj client.O
 	return out
 }
 
-// groupsOnNode maps a Node event onto the ProxyGroups with pods on that node.
-//
-// Mirrors ServerGroupReconciler.groupsOnNode: the five-second resync would
-// find a cordoned node on its own, and the watch is what makes the answer
-// immediate. It lists this operator's pods and filters by node rather than
-// asking for a spec.nodeName field index, for the same reason that function
-// gives — an index shared by two controllers would have to be registered
-// once, registering it twice fails at manager start, and a label-scoped list
-// over a warm cache is cheaper than that coordination is worth. The role
-// label pins RoleProxy rather than only ManagedBy, so a server pod that
-// happens to share a node is never in the candidate set to begin with —
-// neither network nor group is known yet at this point, which is what
-// r.pods's podspec.ProxyLabels selector has and this one does not, so the
-// two fields it can name are the ones ProxyLabels always sets regardless.
+// groupsOnNode maps a Node event onto the ProxyGroups with pods on that node,
+// like ServerGroupReconciler.groupsOnNode.
 func (r *ProxyGroupReconciler) groupsOnNode(ctx context.Context, obj client.Object) []reconcile.Request {
 	pods := &corev1.PodList{}
 	if err := r.List(ctx, pods, client.MatchingLabels{
 		podspec.LabelManagedBy: podspec.ManagedByValue,
 		podspec.LabelRole:      podspec.RoleProxy,
 	}); err != nil {
-		// Enqueue nothing rather than guess. A map function has no way to
-		// return an error and no queue of its own to retry from, so dropping
-		// the event is the only option here; the five-second resync is the
-		// fallback, and it reaches the same conclusion from reconcileReplicas.
-		// That costs this cordon its immediacy, which is the whole point of
-		// the watch, so it is logged rather than swallowed — the same rule
-		// nodeDeparting follows when it cannot read a node, and the same
-		// choice ServerGroupReconciler.groupsOnNode makes for the same reason.
+		// A map function cannot return an error; the resync is the fallback.
 		log.FromContext(ctx).V(1).Info("listing proxy pods for a node event failed, "+
 			"leaving this cordon to the resync", "node", obj.GetName(), "error", err)
 		return nil
@@ -2479,16 +1491,8 @@ func (r *ProxyGroupReconciler) groupsOnNode(ctx context.Context, obj client.Obje
 
 // SetupWithManager registers the controller.
 func (r *ProxyGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
-	// A construction site that forgets either of these would otherwise panic
-	// inside a reconcile, in a goroutine, minutes after start — the same
-	// failure mode SetupAll refuses a nil Bootstrapper for, and the same guard
-	// ServerGroupReconciler.SetupWithManager carries for Expectations. Cheap
-	// insurance twice over here: 4c-1 shipped exactly this defect once, and
-	// Divergence is reached on paths that return before reconcileReplicas —
-	// forget on the two that end the group's life, and observe by way of
-	// protectPlayersOnly's drainDeparting on the three that refuse it — so a
-	// nil field would be dereferenced there first, and the earliest of them is
-	// reachable on the very first reconcile of a group that is already gone.
+	// Divergence is reached on paths that return before reconcileReplicas,
+	// including the first reconcile of a group already gone.
 	if r.Expectations == nil {
 		r.Expectations = newExpectations(r.Clock)
 	}
@@ -2503,11 +1507,8 @@ func (r *ProxyGroupReconciler) SetupWithManager(mgr ctrl.Manager) error {
 		Owns(&policyv1.PodDisruptionBudget{}).
 		Owns(&networkingv1.NetworkPolicy{}).
 		Watches(&corev1.Node{}, handler.EnqueueRequestsFromMapFunc(r.groupsOnNode)).
-		// A group refused because its Network is missing or unaccepted has no
-		// way of hearing that the Network came back: it is not an owner, and
-		// nothing about the group itself changes when the Network does. It
-		// waited out the resync: recovery measured at roughly ninety seconds
-		// under 4b, two requeues stacked, and this watch removes the second.
+		// A group refused for its Network is no owner of it and would otherwise
+		// wait out the resync.
 		Watches(&spawneryv1alpha1.Network{},
 			handler.EnqueueRequestsFromMapFunc(r.groupsOfNetwork)).
 		Complete(r)

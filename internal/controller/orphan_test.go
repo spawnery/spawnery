@@ -15,8 +15,7 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// createProxyPod adds a managed proxy pod belonging to the named group, and
-// returns its UID — the key the agent registry is on.
+// createProxyPod returns the pod UID the agent registry is keyed on.
 func (f *fixture) createProxyPod(name, group string) string {
 	f.t.Helper()
 	pod := &corev1.Pod{
@@ -34,9 +33,6 @@ func (f *fixture) createProxyPod(name, group string) string {
 	}
 	return string(pod.UID)
 }
-
-// `createProxyGroup` comes from Task 7's proxygroup_controller_test.go — both
-// files are in package controller, so it is already available here.
 
 func orphanReconciler(f *fixture) *OrphanReconciler {
 	return &OrphanReconciler{
@@ -160,14 +156,8 @@ func TestSweepForgetsAgentsOfVanishedPods(t *testing.T) {
 	}
 }
 
-// TestSweepKeepsAPodWhoseServerHasNotRecordedTheNameYet pins the window the
-// Server controller and the sweep share: a Server is created before its pod
-// ever exists (Reconcile only builds the pod once the Server object is
-// already there), and status.PodName is only written after the pod. If the
-// sweep ran on the pod's label alone without checking for a live Server, or
-// if it needed status.PodName to agree, a sweep landing in that gap could
-// delete a pod that its Server was about to adopt. It must not: the Server
-// object existing under the name the pod's label carries is enough.
+// A Server exists before its pod and writes status.PodName only after it, so
+// the Server named by the pod's label is enough to keep the pod.
 func TestSweepKeepsAPodWhoseServerHasNotRecordedTheNameYet(t *testing.T) {
 	f := newFixture(t)
 	o := orphanReconciler(f)
@@ -183,9 +173,7 @@ func TestSweepKeepsAPodWhoseServerHasNotRecordedTheNameYet(t *testing.T) {
 		t.Fatalf("create server: %v", err)
 	}
 
-	// Simulate the window right after Create(pod) but before
-	// Status().Update(srv): the pod exists and carries the Server's name, but
-	// srv.Status.PodName is still empty.
+	// After Create(pod), before status.PodName is written.
 	pod := &corev1.Pod{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      "lobby-p3nd",
@@ -213,10 +201,6 @@ func TestSweepKeepsAPodWhoseServerHasNotRecordedTheNameYet(t *testing.T) {
 	}
 }
 
-// The defect this task exists to remove: a proxy agent connects, one sweep
-// runs, and the registry has forgotten it. Nothing logs a reason, because from
-// the sweep's point of view the pod never existed — it filtered on role=server
-// and then pruned every registry key not in that list.
 func TestSweepKeepsAConnectedProxyAgent(t *testing.T) {
 	f := newFixture(t)
 	o := orphanReconciler(f)
@@ -234,8 +218,7 @@ func TestSweepKeepsAConnectedProxyAgent(t *testing.T) {
 	}
 }
 
-// The mirror of the Server case. A proxy has no CR of its own, so its group is
-// what owns it, and nothing else would ever remove the pod.
+// A proxy has no CR of its own; nothing else would remove the pod.
 func TestSweepDeletesAProxyPodWhoseGroupIsGone(t *testing.T) {
 	f := newFixture(t)
 	o := orphanReconciler(f)
@@ -251,9 +234,7 @@ func TestSweepDeletesAProxyPodWhoseGroupIsGone(t *testing.T) {
 	}
 }
 
-// The widened list must not make proxy pods candidates for the Server check.
-// They carry no server label and never will, and deleting them for that would
-// be the same bug pointing the other way.
+// Proxy pods carry no server label and must not face the Server check.
 func TestSweepKeepsAProxyPodThatHasItsGroup(t *testing.T) {
 	f := newFixture(t)
 	o := orphanReconciler(f)
@@ -269,12 +250,8 @@ func TestSweepKeepsAProxyPodThatHasItsGroup(t *testing.T) {
 	}
 }
 
-// The switch in Sweep has no default case, so an unrecognised role is a
-// silent no-op by construction — nothing matches, err stays nil, nothing is
-// deleted. Nothing but this test would catch a regression that changed that:
-// a `default:` branch added later that deletes, or a new role value routed
-// into the wrong case by copy-paste. The pod is still managed-by Spawnery, so
-// it must reach the loop body; it just must not be acted on once there.
+// Sweep's switch has no default: a managed pod with an unknown role reaches
+// the loop body and must not be acted on there.
 func TestSweepIgnoresAManagedPodWithAnUnknownRole(t *testing.T) {
 	f := newFixture(t)
 	o := orphanReconciler(f)
@@ -305,11 +282,8 @@ func TestSweepIgnoresAManagedPodWithAnUnknownRole(t *testing.T) {
 	}
 }
 
-// TestSweepAndServerControllerConverge runs the sweep and the Server
-// controller in alternation across many passes on a healthy, Ready server.
-// Both can delete things — the sweep a pod without a Server, the Server
-// controller a pod it decides to replace — and they must not fight: the pod
-// and the Ready phase must survive every round.
+// Both delete things and must not fight: the pod and the Ready phase survive
+// every round.
 func TestSweepAndServerControllerConverge(t *testing.T) {
 	f := newFixture(t)
 	o := orphanReconciler(f)
@@ -335,21 +309,8 @@ func TestSweepAndServerControllerConverge(t *testing.T) {
 	}
 }
 
-// TestSweepKeepsTheAgentOfADrainingPod pins an ordering docs/reference/known-issues.md
-// files as "the deletionTimestamp skip in Sweep is covered by no test; it
-// concerns only an already-deleting orphaned pod, where a second Delete is
-// harmless."
-//
-// The skip is indeed harmless. What is not harmless is the line above it:
-// liveUIDs records the pod *before* the skip, and a UID missing from liveUIDs
-// has its agent forgotten at the bottom of Sweep. A terminating proxy pod is
-// exactly the pod that is still serving people — a drain is a pod with a
-// deletion timestamp and players still on it — so forgetting its agent would
-// throw away the operator's knowledge of those players, which is what decides
-// occupancy, the disruption budget, and when the drain may end.
-//
-// So the test is not about the skip. It is about the two lines being in this
-// order, which nothing said and nothing checked.
+// A draining pod carries a deletion timestamp and still has players; its UID
+// must reach liveUIDs before Sweep skips it, or its agent is forgotten.
 func TestSweepKeepsTheAgentOfADrainingPod(t *testing.T) {
 	f := newFixture(t)
 	o := orphanReconciler(f)
@@ -357,9 +318,8 @@ func TestSweepKeepsTheAgentOfADrainingPod(t *testing.T) {
 	uid := f.createProxyPod("gateway-abcd", "gateway")
 	f.agents.Connect(uid, agent.RoleProxy)
 
-	// A pod bound to a node keeps its deletion timestamp: the API server waits
-	// for a kubelet's confirmation and envtest runs none. That is what a
-	// draining proxy looks like from here.
+	// A bound pod keeps its deletion timestamp because envtest runs no
+	// kubelet: a draining proxy, as seen from here.
 	pod := &corev1.Pod{}
 	if err := f.c.Get(f.ctx, types.NamespacedName{Namespace: f.ns, Name: "gateway-abcd"}, pod); err != nil {
 		t.Fatalf("get the pod: %v", err)
@@ -392,8 +352,7 @@ func TestSweepKeepsTheAgentOfADrainingPod(t *testing.T) {
 	}
 }
 
-// Both boosts in one test, because a sweep that deleted everything would pass
-// a test that only asserted the expired one was gone.
+// Both in one test, so a sweep that deleted everything fails.
 func TestTheSweepRemovesAnExpiredBoostAndLeavesALiveOne(t *testing.T) {
 	f := newFixture(t)
 	past := metav1.NewTime(f.clock.now.Add(-time.Minute))
@@ -424,9 +383,6 @@ func TestTheSweepRemovesAnExpiredBoostAndLeavesALiveOne(t *testing.T) {
 	}
 }
 
-// A boost with no expiry is the "forever" case, and the sweep must leave it
-// alone -- otherwise the type's own optional field would mean the opposite of
-// what its comment says.
 func TestTheSweepLeavesABoostWithNoExpiry(t *testing.T) {
 	f := newFixture(t)
 	if err := f.c.Create(f.ctx, &spawneryv1alpha1.ScaleBoost{

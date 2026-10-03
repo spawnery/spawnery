@@ -72,21 +72,20 @@ var (
 )
 
 // NetworkMetrics is registered at init so the metrics reference lists its
-// series; SetupAll binds it to the manager's cache and the agent registry.
+// series; SetupAll binds it.
 var NetworkMetrics = &NetworkCollector{}
 
 func init() { metrics.Registry.MustRegister(NetworkMetrics) }
 
-// NetworkCollector derives player, group, server and proxy metrics from the
-// cache and the agent registry on every scrape. Nothing is kept between
-// scrapes, so a server that is gone leaves no series behind.
+// NetworkCollector keeps nothing between scrapes, so a server that is gone
+// leaves no series behind.
 type NetworkCollector struct {
 	mu     sync.RWMutex
 	reader client.Reader
 	agents *agent.Registry
 }
 
-// Bind gives the collector what it reads. Before it is bound it emits nothing.
+// Bind: an unbound collector emits nothing.
 func (c *NetworkCollector) Bind(reader client.Reader, agents *agent.Registry) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -205,9 +204,8 @@ func (c *NetworkCollector) Collect(ch chan<- prometheus.Metric) {
 	}
 }
 
-// reporting is whether an agent's figures describe its pod now. An entry
-// outlives its stream until it is forgotten, so a crashed server would
-// otherwise keep its last TPS and heap as a flat line.
+// reporting: an entry outlives its stream until it is forgotten, so a crashed
+// server would otherwise keep its last TPS and heap as a flat line.
 func reporting(snap agent.Snapshot) bool {
 	return snap.Known && snap.Connected && !snap.PlayersStale && snap.Slots > 0
 }

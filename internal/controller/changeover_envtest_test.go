@@ -425,8 +425,6 @@ func (f *fixture) serverGroup(t *testing.T, name string) *spawneryv1alpha1.Serve
 	return g
 }
 
-// finishChangeover readies the group's current-generation servers, deletes its
-// stale ones and reconciles the group twice.
 func (f *fixture) finishChangeover(t *testing.T, r *ServerGroupReconciler, group string) {
 	t.Helper()
 	g := f.serverGroup(t, group)
@@ -510,10 +508,7 @@ func TestChangeoverBudgetUnsetDoesNotRefuseADegradedProxyGroup(t *testing.T) {
 	}
 }
 
-// A stale proxy that is draining or terminating no longer blocks the group
-// from reaching Deferred once its replacements are Ready, so the place it
-// held is free for the next group in the budget's queue — it does not wait
-// for the stale pod to actually be gone.
+// The freed place does not wait for the stale pod to actually be gone.
 func TestChangeoverBudgetFreedOnceTheLastStaleProxyIsLeaving(t *testing.T) {
 	for _, leaving := range []string{"draining", "terminating"} {
 		t.Run(leaving, func(t *testing.T) {
@@ -556,10 +551,8 @@ func TestChangeoverBudgetFreedOnceTheLastStaleProxyIsLeaving(t *testing.T) {
 	}
 }
 
-// A Waiting proxy group that is then refused must give up its place: refuse()
-// used to leave status.changeover untouched, so the refused group kept
-// winning AdmitChangeovers's name-ordered admission forever, and a real
-// waiting sibling named after it never got in.
+// Otherwise the refused group keeps winning AdmitChangeovers's name-ordered
+// admission, and a waiting sibling named after it never gets in.
 func TestARefusedWaitingProxyGroupGivesUpItsPlace(t *testing.T) {
 	f := newFixture(t)
 	gr := groupReconciler(f)
@@ -572,8 +565,7 @@ func TestARefusedWaitingProxyGroupGivesUpItsPlace(t *testing.T) {
 		g.Spec.Expose.NodePort.Port = 30002
 	})
 
-	// lobby is reconciled first and alone, so it takes the network's one
-	// place and holds it.
+	// lobby, reconciled first and alone, takes the network's one place.
 	f.setImage(t, "lobby", nextImage)
 	f.reconcileNamedGroup(t, gr, "lobby")
 
@@ -588,8 +580,7 @@ func TestARefusedWaitingProxyGroupGivesUpItsPlace(t *testing.T) {
 		t.Fatalf("zulu status.changeover = %q, want Waiting", got)
 	}
 
-	// gateway is refused on an unrelated ground -- its own scheduling, which
-	// the network does not allow -- while it is still Waiting.
+	// gateway is refused on its own scheduling while still Waiting.
 	gateway := f.proxyGroup("gateway")
 	gateway.Spec.Scheduling = &spawneryv1alpha1.Scheduling{
 		Tolerations: []corev1.Toleration{{Key: "spawnery.cloud/test-refusal", Operator: corev1.TolerationOpExists}},
@@ -606,10 +597,7 @@ func TestARefusedWaitingProxyGroupGivesUpItsPlace(t *testing.T) {
 		t.Fatalf("gateway status.changeover = %q after its refusal, want empty: a Waiting group has no extra pod to hold a place with", got)
 	}
 
-	// The holder finishes; the place is free. zulu, waiting since before
-	// gateway was refused and named after it, must be admitted -- not
-	// blocked forever by a refused group AdmitChangeovers still counts as
-	// Waiting.
+	// zulu, waiting and named after gateway, must now be admitted.
 	f.finishChangeover(t, gr, "lobby")
 	f.reconcileProxyGroup(pr, "zulu")
 	if n := len(f.proxyPods("zulu")); n != 4 {
@@ -897,8 +885,6 @@ func TestAProxyStageGatesWithTheBudgetUnset(t *testing.T) {
 	}
 }
 
-// readyProxyGroup creates a proxy group, reconciles it once and readies its
-// pods, returning their names.
 func (f *fixture) readyProxyGroup(t *testing.T, r *ProxyGroupReconciler, name string, mutate ...func(*spawneryv1alpha1.ProxyGroup)) []string {
 	t.Helper()
 	f.createProxyGroup(name, mutate...)
@@ -921,8 +907,7 @@ func (f *fixture) setProxyImage(t *testing.T, name, image string) {
 	}
 }
 
-// deletePod deletes a pod at once, or, held by a finalizer, leaves it
-// terminating.
+// deletePod with hold leaves the pod terminating behind a finalizer.
 func (f *fixture) deletePod(t *testing.T, name string, hold bool) {
 	t.Helper()
 	pod, ok := f.pod(name)

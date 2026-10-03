@@ -27,19 +27,8 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// The reserved-prefix rule is a CEL expression on the CRD, so the only thing
-// that can prove it works is an API server holding the generated CRD and
-// refusing the object. internal/podspec/env_test.go checks that the rule still
-// spells the prefix the Go constant does; this checks that the rule the API
-// server compiles actually denies anything.
-//
-// Both halves are needed. A rule with a typo in the CEL -- an unbalanced
-// paren, `startWith` for `startsWith` -- fails to compile, and a CRD whose
-// validation does not compile is accepted with the rule inert on some
-// versions. Then every group is admitted, a group shadowing
-// SPAWNERY_OPERATOR_ENDPOINT points its agents at an address of its choosing,
-// and the marker test goes on passing because the literal in the rule is
-// still right.
+// The reserved-prefix rule is CEL, and a CEL rule that fails to compile can
+// install inert; only a real API server proves it denies anything.
 func TestTheAPIServerRefusesAReservedEnvName(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -88,9 +77,7 @@ func TestTheAPIServerRefusesAReservedEnvName(t *testing.T) {
 }
 
 func TestTheAPIServerAdmitsAnOrdinaryEnvName(t *testing.T) {
-	// The other half of the rule: it has to let through the thing the field
-	// exists for. A CEL expression that refuses everything would pass the test
-	// above and leave the feature unusable.
+	// A rule that refuses everything would pass the test above.
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
 
@@ -111,8 +98,7 @@ func TestTheAPIServerAdmitsAnOrdinaryEnvName(t *testing.T) {
 		t.Fatalf("an ordinary env name was refused: %v", err)
 	}
 
-	// And the list is a map by name, so the same name twice is refused before
-	// two entries can reach a pod and leave the winner unstated.
+	// The list is a map by name, so a duplicate name is refused.
 	dup := group.DeepCopy()
 	dup.ObjectMeta = metav1.ObjectMeta{Name: "bingo-team", Namespace: ns}
 	dup.Spec.Env = []corev1.EnvVar{

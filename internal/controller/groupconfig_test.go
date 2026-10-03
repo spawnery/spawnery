@@ -31,15 +31,8 @@ import (
 )
 
 // stranger builds a ConfigMap at a group's rendered name that the group does
-// not own, and returns it as it stands in the API server.
-//
-// labelled decides which of the two collisions this is. With the label the
-// object is visible to a restricted cache, so CreateOrUpdate's Get finds it
-// and the ownership check refuses it; without, a real operator's Get misses
-// and the Create comes back AlreadyExists. This package's fixture reads
-// through a direct client, so both land on the ownership check here -- which
-// is why TestAnInvisibleCollisionIsRefusedToo below builds a real filtered
-// cache instead of relying on this.
+// not own. labelled only matters to a filtered cache; this package's direct
+// client lets both shapes reach the ownership check.
 func (f *fixture) stranger(t *testing.T, name string, labelled bool, owner *metav1.OwnerReference) *corev1.ConfigMap {
 	t.Helper()
 	cm := &corev1.ConfigMap{
@@ -58,7 +51,6 @@ func (f *fixture) stranger(t *testing.T, name string, labelled bool, owner *meta
 	return cm
 }
 
-// reread returns the ConfigMap as the API server holds it now.
 func (f *fixture) reread(t *testing.T, name string) *corev1.ConfigMap {
 	t.Helper()
 	cm := &corev1.ConfigMap{}
@@ -68,15 +60,9 @@ func (f *fixture) reread(t *testing.T, name string) *corev1.ConfigMap {
 	return cm
 }
 
-// assertUntouched compares the object against itself as it stood before the
-// reconcile.
-//
-// ResourceVersion carries the whole claim, and it is a stronger one than
-// checking the fields this operator would have changed: the API server moves
-// it on any write at all, so an unchanged version means the operator issued
-// none. The data and owner references are asserted beside it anyway, because
-// a failure that says only "the version moved" sends whoever reads it looking
-// for which write, and these two are the writes the defect made.
+// assertUntouched relies on ResourceVersion: unchanged means the operator
+// issued no write. Data and owner references are compared too, so a failure
+// names which write happened.
 func assertUntouched(t *testing.T, before, after *corev1.ConfigMap) {
 	t.Helper()
 	if after.ResourceVersion != before.ResourceVersion {
@@ -105,9 +91,7 @@ func assertRefusedOnStatus(t *testing.T, conditions []metav1.Condition, phase st
 	if degraded.Reason != spawneryv1alpha1.ReasonConfigMapNotOurs {
 		t.Errorf("reason = %q, want %q", degraded.Reason, spawneryv1alpha1.ReasonConfigMapNotOurs)
 	}
-	// The message has to name the object, because "delete it" is useless
-	// advice without a name and this is a collision the operator cannot
-	// resolve on its own.
+	// The operator cannot resolve this itself, so the message must name it.
 	if degraded.Message == "" {
 		t.Error("the condition carries no message")
 	}
@@ -116,19 +100,16 @@ func assertRefusedOnStatus(t *testing.T, conditions []metav1.Condition, phase st
 	}
 }
 
-// TestServerGroupRefusesAConfigMapItDoesNotOwn is the defect itself.
-// SetControllerReference refuses an object owned by a *different* controller
-// and silently adopts one owned by nobody, so an ownerless ConfigMap at the
-// rendered name used to be rewritten and given an owner reference that hands
-// it to the garbage collector when the group goes.
+// SetControllerReference silently adopts an ownerless object, which would
+// hand somebody else's ConfigMap to the garbage collector with the group.
 func TestServerGroupRefusesAConfigMapItDoesNotOwn(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	name := podspec.GroupConfigMapName(f.group.Name, podspec.RoleServer)
 	before := f.stranger(t, name, true, nil)
 
-	// Not reconcileGroup: that helper fails the test on any error, and the
-	// refusal deliberately returns none -- it writes a status and requeues.
+	// Not reconcileGroup: the refusal returns no error, it writes a status and
+	// requeues.
 	if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
 		NamespacedName: types.NamespacedName{Name: f.group.Name, Namespace: f.ns},
 	}); err != nil {
@@ -143,17 +124,12 @@ func TestServerGroupRefusesAConfigMapItDoesNotOwn(t *testing.T) {
 	}
 	assertRefusedOnStatus(t, group.Status.Conditions, group.Status.Phase)
 
-	// And no Server was created behind the refusal. The ConfigMap is what a
-	// pod's projected volume names, so a group that started servers anyway
-	// would be starting them against somebody else's configuration.
+	// Pods would start against somebody else's configuration.
 	if servers := f.listServers(t); len(servers) != 0 {
 		t.Errorf("servers = %d, want none created while the group cannot write its own configuration", len(servers))
 	}
 }
 
-// TestProxyGroupRefusesAConfigMapItDoesNotOwn is the same defect on the other
-// controller. The two reconcilers had the same code and would have needed the
-// same fix twice; they now share one, and this is what says so.
 func TestProxyGroupRefusesAConfigMapItDoesNotOwn(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -180,11 +156,8 @@ func TestProxyGroupRefusesAConfigMapItDoesNotOwn(t *testing.T) {
 	}
 }
 
-// TestAConfigMapOwnedByAPredecessorIsRefused is the case the UID half of the
-// rule exists for, and the one a Kind-and-name check would walk straight
-// past. A delete-and-recreate of a group leaves the old group's ConfigMap
-// standing until the garbage collector catches up: same name, same kind, and
-// an object already condemned.
+// A delete-and-recreate leaves the old group's ConfigMap until the garbage
+// collector catches up: same kind and name, a different owner UID.
 func TestAConfigMapOwnedByAPredecessorIsRefused(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -195,7 +168,6 @@ func TestAConfigMapOwnedByAPredecessorIsRefused(t *testing.T) {
 		APIVersion: spawneryv1alpha1.GroupVersion.String(),
 		Kind:       "ServerGroup",
 		Name:       f.group.Name,
-		// Everything matches except the identity, which is the whole point.
 		UID:        f.group.UID + "-predecessor",
 		Controller: &controller,
 	})
@@ -209,10 +181,7 @@ func TestAConfigMapOwnedByAPredecessorIsRefused(t *testing.T) {
 	assertUntouched(t, before, f.reread(t, name))
 }
 
-// TestTheGroupRecoversWhenTheCollisionGoesAway is the other half of a
-// refusal: it has to be a state and not a latch. The remedy the message gives
-// is "delete it", so deleting it has to be enough -- without a restart, and
-// without the Degraded condition outliving its cause.
+// A refusal is a state, not a latch: deleting the object must be enough.
 func TestTheGroupRecoversWhenTheCollisionGoesAway(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -238,28 +207,15 @@ func TestTheGroupRecoversWhenTheCollisionGoesAway(t *testing.T) {
 	if degraded != nil && degraded.Reason == spawneryv1alpha1.ReasonConfigMapNotOurs {
 		t.Errorf("Degraded still reads %q after the collision was removed", degraded.Reason)
 	}
-	// And the group's own ConfigMap is there now, owned by it.
 	written := f.reread(t, name)
 	if len(written.OwnerReferences) != 1 || written.OwnerReferences[0].UID != group.UID {
 		t.Errorf("owner references = %+v, want this group's", written.OwnerReferences)
 	}
 }
 
-// TestAnInvisibleCollisionIsRefusedToo covers the other shape, and the more
-// likely one: a colliding ConfigMap that does *not* carry
-// podspec.LabelManagedBy.
-//
-// cmd/spawnery-operator narrows the manager's ConfigMap cache to that label,
-// so such an object is invisible to the reconciler's Get. CreateOrUpdate
-// therefore never reaches its mutate closure -- the ownership check the tests
-// above exercise is not consulted at all -- and goes on to a Create the API
-// server rejects as AlreadyExists. Unmapped, that is a bare error and an
-// endless requeue with nothing on the group.
-//
-// It needs a real filtered cache, for the reason bootstrap_test.go's
-// restrictedCacheClient gives: every other test in this package reads through
-// a direct client, where an unlabelled ConfigMap is perfectly visible and this
-// branch is unreachable.
+// The manager's ConfigMap cache is narrowed to podspec.LabelManagedBy, so an
+// unlabelled collision is invisible to Get and surfaces as AlreadyExists on
+// Create. Needs a real filtered cache; the fixture's direct client sees it.
 func TestAnInvisibleCollisionIsRefusedToo(t *testing.T) {
 	f := newFixture(t)
 	name := podspec.GroupConfigMapName(f.group.Name, podspec.RoleServer)
@@ -283,11 +239,7 @@ func TestAnInvisibleCollisionIsRefusedToo(t *testing.T) {
 	assertRefusedOnStatus(t, group.Status.Conditions, group.Status.Phase)
 }
 
-// The rule both controllers state for a broken Network -- the budget and a
-// departing node do not depend on it -- held for the Network and not for a
-// foreign ConfigMap: the ServerGroup returned before reconcilePDB, so a
-// player joining after the collision sat on a pod the eviction API could
-// take, with minAvailable frozen at 0.
+// The budget does not depend on the group's ConfigMap.
 func TestAForeignConfigMapDoesNotStopTheServerBudget(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -299,8 +251,7 @@ func TestAForeignConfigMapDoesNotStopTheServerBudget(t *testing.T) {
 		t.Fatalf("minAvailable = %d on an empty server before the collision, want 0", got)
 	}
 
-	// The group's own ConfigMap makes way for somebody else's object under
-	// the same name: the collision arrives while the group is serving.
+	// The collision arrives while the group is serving.
 	name := podspec.GroupConfigMapName(f.group.Name, podspec.RoleServer)
 	if err := f.c.Delete(f.ctx, &corev1.ConfigMap{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns}}); err != nil {
 		t.Fatalf("delete the group's ConfigMap: %v", err)

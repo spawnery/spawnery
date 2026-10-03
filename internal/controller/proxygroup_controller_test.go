@@ -45,17 +45,11 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// recordingFleet is the Fleet double these tests need: it remembers the last
-// readiness asserted for each pod UID, which is exactly what
-// ProxyReadinessSetter's one method commits to. No pre-existing double did
-// this — Task 2's Fleet tests exercise the real proxyreg.Fleet against a live
-// stream, which these envtest-only pod-state tests have no need for.
 type recordingFleet struct {
 	mu   sync.Mutex
 	last map[string]bool
 }
 
-// SetReady implements ProxyReadinessSetter.
 func (f *recordingFleet) SetReady(_ context.Context, podUID string, ready bool) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -66,8 +60,6 @@ func (f *recordingFleet) SetReady(_ context.Context, podUID string, ready bool) 
 	return nil
 }
 
-// lastReady returns the last readiness asserted for podUID, or nil if none
-// was ever asserted.
 func (f *recordingFleet) lastReady(podUID string) *bool {
 	f.mu.Lock()
 	defer f.mu.Unlock()
@@ -78,8 +70,6 @@ func (f *recordingFleet) lastReady(podUID string) *bool {
 	return &v
 }
 
-// proxyGroupConfigMap re-reads the ConfigMap a ProxyGroupReconciler renders
-// for the named group.
 func (f *fixture) proxyGroupConfigMap(t *testing.T, group string) *corev1.ConfigMap {
 	t.Helper()
 	cm := &corev1.ConfigMap{}
@@ -90,8 +80,6 @@ func (f *fixture) proxyGroupConfigMap(t *testing.T, group string) *corev1.Config
 	return cm
 }
 
-// createProxyGroup adds a ProxyGroup to the fixture's network. Task 8's sweep
-// tests use it too — both files are in package controller.
 func (f *fixture) createProxyGroup(name string, mutate ...func(*spawneryv1alpha1.ProxyGroup)) *spawneryv1alpha1.ProxyGroup {
 	f.t.Helper()
 	group := &spawneryv1alpha1.ProxyGroup{
@@ -131,15 +119,9 @@ func proxyGroupReconciler(f *fixture) *ProxyGroupReconciler {
 		Clock:             f.clock.Now,
 		Expectations:      newExpectations(f.clock.Now),
 		Divergence:        newReadinessDivergence(f.clock.Now),
-		// Every reconciler helper in this package wires a recorder whether or
-		// not the test under it looks at one, so that a path which only fires
-		// under an unusual condition — here, a drain that ran out of time —
-		// cannot nil-dereference in a test that stumbled into it. A test that
-		// wants to read the events replaces this with its own handle.
+		// Wired whether or not the test reads events, so a rare path cannot nil-dereference.
 		Recorder: newRecorder(),
-		// The fixture's client is not cache-restricted, so this is the same
-		// object either way here -- but production must pass an uncached
-		// reader, and a reconciler built without one panics inside Reconcile.
+		// Production must pass an uncached reader; a reconciler built without one panics.
 		ClaimReader: f.c,
 	}
 }
@@ -171,10 +153,7 @@ func (f *fixture) proxyPods(group string) []corev1.Pod {
 	return live
 }
 
-// sortPodsOldestFirst orders pods the same way ProxyGroupReconciler.pods
-// orders its own live list — oldest first, ties broken by name — so "the
-// surplus pod" in a test is determined the way the reconciler determines it,
-// not guessed.
+// sortPodsOldestFirst matches the order ProxyGroupReconciler.pods gives its live list.
 func sortPodsOldestFirst(pods []corev1.Pod) {
 	sort.Slice(pods, func(i, j int) bool {
 		if pods[i].CreationTimestamp.Equal(&pods[j].CreationTimestamp) {
@@ -184,7 +163,6 @@ func sortPodsOldestFirst(pods []corev1.Pod) {
 	})
 }
 
-// setProxyReplicas updates spec.replicas on an already-created ProxyGroup.
 func (f *fixture) setProxyReplicas(name string, n int32) {
 	f.t.Helper()
 	group := f.proxyGroup(name)
@@ -203,16 +181,7 @@ func (f *fixture) proxyGroup(name string) *spawneryv1alpha1.ProxyGroup {
 	return group
 }
 
-// watchThroughGrace runs the passes a real operator would run across one
-// readinessDivergenceGrace: a reconcile every ResyncInterval, which is what
-// ProxyGroupReconciler requeues at on its successful path.
-//
-// It exists because readinessDivergence measures *watched* time. A single
-// clock.Advance past the grace followed by one reconcile is a minute during
-// which nothing observed the group, and the tracker declines to count that --
-// deliberately, since the alternative is a Warning about a stretch nobody saw.
-// Before it did, this shortcut passed, which means these tests would also have
-// passed had the divergence gone entirely unobserved for the whole grace.
+// readinessDivergence counts only watched time, so one Advance past the grace would never report.
 func (f *fixture) watchThroughGrace(t *testing.T, r *ProxyGroupReconciler, name string) {
 	t.Helper()
 	for elapsed := time.Duration(0); elapsed <= readinessDivergenceGrace; elapsed += ResyncInterval {
@@ -221,21 +190,9 @@ func (f *fixture) watchThroughGrace(t *testing.T, r *ProxyGroupReconciler, name 
 	}
 }
 
-// proxyPodHostIP is the node address markProxyPodReady puts on a ready proxy
-// pod, named so the one test that reads it back out of status.address does not
-// have to repeat the literal.
 const proxyPodHostIP = "192.168.1.10"
 
-// markProxyPodReady does to a proxy pod what a kubelet would once its probe
-// passed: Running, on a node, and Ready. f.markReady is not this — it is for
-// Servers, and goes through bringUpNamed.
-//
-// The hostIP is here because one caller needs it:
-// TestProxyGroupAddressComesFromAReadyPodsHostIP, which is where this block was
-// written inline before the rollout tests needed the same thing for every pod
-// in a group. Its address assertion reads that value back out of
-// status.address, so the constant is load-bearing there and inert everywhere
-// else — the rollout tests never look at the address.
+// markProxyPodReady does what a kubelet would once the probe passed; f.markReady is for Servers.
 func (f *fixture) markProxyPodReady(t *testing.T, pod *corev1.Pod) {
 	t.Helper()
 	pod.Status.Phase = corev1.PodRunning
@@ -249,12 +206,6 @@ func (f *fixture) markProxyPodReady(t *testing.T, pod *corev1.Pod) {
 	}
 }
 
-// setProxyPodReadyCondition flips just the PodReady condition, the way a
-// kubelet would once a probe's answer changed -- unlike markProxyPodReady it
-// does not also stamp Phase or HostIP, because the callers that need this
-// (toggling a pod between Ready and NotReady more than once, to move it in
-// and out of agreement with what the operator asserted) already ran
-// markProxyPodReady once and have no reason to touch either again.
 func (f *fixture) setProxyPodReadyCondition(t *testing.T, pod *corev1.Pod, ready bool) {
 	t.Helper()
 	status := corev1.ConditionFalse
@@ -295,8 +246,6 @@ func TestProxyGroupCreatesItsPodsAndService(t *testing.T) {
 	if svc.Spec.Ports[0].Port != podspec.MinecraftPort || svc.Spec.Ports[0].NodePort != 30001 {
 		t.Errorf("Service port = %+v, want 25565 on node port 30001", svc.Spec.Ports[0])
 	}
-	// A selector that does not match the pods produces a Service with no
-	// endpoints — reachable, silent, and wrong.
 	for k, v := range svc.Spec.Selector {
 		if pods[0].Labels[k] != v {
 			t.Errorf("Service selector %s=%q does not match the pods", k, v)
@@ -307,9 +256,7 @@ func TestProxyGroupCreatesItsPodsAndService(t *testing.T) {
 	}
 }
 
-// With NodePort the address a player needs is a node's, and the operator has
-// no right to read Node objects. hostIP on a running proxy pod is the address
-// of a node that demonstrably has a proxy on it.
+// The operator may not read Nodes, so a running proxy pod's hostIP is the NodePort address.
 func TestProxyGroupAddressComesFromAReadyPodsHostIP(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -324,20 +271,12 @@ func TestProxyGroupAddressComesFromAReadyPodsHostIP(t *testing.T) {
 
 	f.reconcileProxyGroup(r, "gateway")
 
-	// Creating past the replica count on a steady-state resync is the primary
-	// risk of a reconciler that manages pods directly rather than through a
-	// per-pod CR: ReadyReplicas alone would not catch a reconciler that
-	// created two more pods on this second pass instead of leaving the two
-	// that already exist alone.
+	// ReadyReplicas alone would not catch a second pass creating two more pods.
 	if n := len(f.proxyPods("gateway")); n != 2 {
 		t.Errorf("proxy pods = %d, want the steady-state resync to leave the count at 2", n)
 	}
 
 	group := f.proxyGroup("gateway")
-	// The host half is the hostIP markProxyPodReady puts on the pod; the port
-	// half is the node port the API server allocated, read off the Service
-	// because that is now where proxyAddress reads it. Both sides are read
-	// back from where they were written, not hardcoded twice.
 	svc := &corev1.Service{}
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: "gateway", Namespace: f.ns}, svc); err != nil {
 		t.Fatalf("get the group's Service: %v", err)
@@ -351,22 +290,7 @@ func TestProxyGroupAddressComesFromAReadyPodsHostIP(t *testing.T) {
 	}
 }
 
-// TestProxyGroupCreateCountIsCutByAReservationTheCacheHasNotShown pins the
-// correction reconcileReplicas applies on top of DecideRollout's answer: a
-// create already reserved and not yet visible in the list must not be created
-// again.
-//
-// The reservation here is a phantom -- a name no pod will ever carry --
-// rather than a real generated one, and that is deliberate: a full Reconcile
-// calls pods() twice (once before reconcileReplicas, once after for status),
-// and testenv's client talks straight to envtest's API server with no
-// informer cache in front of it, so a real reservation made during
-// reconcileReplicas would already be observed and cleared by that second
-// pods() call before this function returns. A phantom name is what stays
-// pending across both listings, which is what this test needs to observe the
-// cap actually subtract. TestProxyGroupReconcileReplicasReservesTheRealPodItCreated
-// below is the complementary test: it stops between the two pods() calls and
-// checks the real name, real key chain this one does not exercise.
+// A phantom name: the uncached client would clear a real reservation in Reconcile's second pods() call.
 func TestProxyGroupCreateCountIsCutByAReservationTheCacheHasNotShown(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -376,40 +300,13 @@ func TestProxyGroupCreateCountIsCutByAReservationTheCacheHasNotShown(t *testing.
 
 	f.reconcileProxyGroup(r, "gateway")
 
-	// DecideRollout sees 0 live pods against a target of 2 and answers
-	// Create: 2. Without the cap this pass creates both, landing on 2; the
-	// phantom reservation cuts it to one real pod.
 	if n := len(f.proxyPods("gateway")); n != 1 {
 		t.Errorf("proxy pods = %d, want 1: the phantom reservation should have "+
 			"cut DecideRollout's Create: 2 down by the one already pending", n)
 	}
 }
 
-// TestProxyGroupReconcileReplicasReservesTheRealPodItCreated exercises the
-// reservation's whole lifecycle with a name the API server actually assigned:
-// expectCreated fires with the pod's real generated name under the real
-// composite key, that reservation is still pending immediately afterward,
-// and a second pods() call -- the same one Reconcile's status pass makes --
-// clears it. Clearing is already covered structurally: the cap test's real
-// pod has to clear through the second pods() for its arithmetic to hold, and
-// the nine-victim mutation on observePods's create arm shows the rollout
-// suite cannot pass without real-name clearing working. This test names that
-// property directly, so a regression here is diagnosed as a clearing failure
-// rather than rediscovered through unrelated rollout test failures.
-//
-// Not driven through f.reconcileProxyGroup / a full Reconcile: Reconcile
-// calls pods() twice (once before reconcileReplicas, once after for status),
-// and both calls run observePods. With testenv's non-cached client and
-// reconcileReplicas completing without error -- the path both this test and
-// the one above take -- the second pods() call sees the very pods
-// reconcileReplicas just created and clears their reservations before
-// Reconcile returns, so a full Reconcile on that path cannot catch a
-// reservation mid-flight, real name or not. That is why
-// TestProxyGroupCreateCountIsCutByAReservationTheCacheHasNotShown above has
-// to use a name that can never appear in the API server: the real window this
-// test targets sits strictly between the two pods() calls, and on the
-// no-error path is only reachable by calling pods() and reconcileReplicas()
-// directly and reading pending() before anything else runs.
+// Not a full Reconcile: its second pods() call clears the reservation before Reconcile returns.
 func TestProxyGroupReconcileReplicasReservesTheRealPodItCreated(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -440,11 +337,7 @@ func TestProxyGroupReconcileReplicasReservesTheRealPodItCreated(t *testing.T) {
 			pendingCreates, len(created))
 	}
 
-	// The other half of the lifecycle: the status pass's pods() call is what
-	// actually clears a reservation once the cache -- real or, as here,
-	// immediate -- shows the pod. Without this second call the assertion
-	// above only proves expectCreated fires; it says nothing about
-	// observePods ever being satisfied by what expectCreated recorded.
+	// The status pass's pods() call is what clears the reservation.
 	if _, err := r.pods(f.ctx, group); err != nil {
 		t.Fatalf("pods (second call): %v", err)
 	}
@@ -454,9 +347,7 @@ func TestProxyGroupReconcileReplicasReservesTheRealPodItCreated(t *testing.T) {
 	}
 }
 
-// Empty is the truthful answer while nothing is ready: there is nowhere to
-// connect yet, and a node address for a proxy that is not serving would send
-// players at a closed port.
+// A node address for a proxy that is not serving would send players at a closed port.
 func TestProxyGroupAddressIsEmptyWithNoReadyPod(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -469,27 +360,7 @@ func TestProxyGroupAddressIsEmptyWithNoReadyPod(t *testing.T) {
 	}
 }
 
-// Scale-down has to remove the emptiest proxies, not a slice of the list they
-// happen to sit in.
-//
-// Which pods are surplus is DecideRollout's answer and it picks by occupancy,
-// not the tail of a list ordered by age. A count is believable only while it
-// is fresh and its stream is up -- an agent that has reported nothing and an
-// agent that died with players on it are the same zero -- so scaling three
-// down to one marks the two pods that are known empty, the oldest and the
-// newest here, and keeps the one nobody can vouch for. Both marked pods are
-// empty, so both go on the same pass and the group reaches the size that was
-// asked for, having disconnected nobody.
-//
-// The pod with no agent is what keeps the grip: it is named as the survivor
-// rather than counted, so a selection that stopped distinguishing a fresh
-// count from an untrusted one leaves a different pod standing and fails here —
-// checked by running that mutation, which also takes eight other tests with it.
-//
-// It does not pin pick's player comparison: every count here is zero or
-// unknown, so freshness alone decides the order and dropping the comparison
-// changes nothing. What holds that term is
-// TestSurplusProxyIsToldToStopTakingConnections, where the two counts differ.
+// An unreported count is untrusted, so the pod with no agent survives and both known-empty pods go.
 func TestProxyGroupScalesDown(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -501,17 +372,10 @@ func TestProxyGroupScalesDown(t *testing.T) {
 	if len(before) != 3 {
 		t.Fatalf("proxy pods = %d, want 3", len(before))
 	}
-	// Sorted the same way ProxyGroupReconciler.pods sorts its own list —
-	// oldest first, ties broken by name — so the expected survivor is
-	// determined the same way the reconciler determines it, not guessed.
 	sortPodsOldestFirst(before)
 	oldest, unreported, newest := before[0].Name, before[1].Name, before[2].Name
 	f.reportProxyPlayers(t, before[2], 0)
-	// The oldest pod gets a fresh zero too, and it is what makes this test
-	// about occupancy rather than about position: it sits at the head of the
-	// list the reconciler walks, where a rule that took its surplus off the
-	// tail would leave it, and the report is what puts it among the two that
-	// go.
+	// The oldest pod's fresh zero puts it at the list head, where a tail-based rule would keep it.
 	f.reportProxyPlayers(t, before[0], 0)
 
 	group := f.proxyGroup("gateway")
@@ -541,14 +405,7 @@ func TestProxyGroupScalesDown(t *testing.T) {
 	}
 }
 
-// TestAProxyWithAStalePlayerCountWaitsForTheDeadline is the other half of the
-// occupancy rule: the wait it buys is bounded.
-//
-// A proxy whose agent never appears, or whose stream broke and never came
-// back, would otherwise be kept forever by "unknown counts as occupied" —
-// nothing would ever arrive to say it was empty, and a scale-down would
-// silently never complete. The deadline is what makes treating unknown as
-// occupied safe to do rather than merely cautious.
+// Without the deadline, treating unknown counts as occupied would hold a pod forever.
 func TestAProxyWithAStalePlayerCountWaitsForTheDeadline(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -562,8 +419,7 @@ func TestAProxyWithAStalePlayerCountWaitsForTheDeadline(t *testing.T) {
 	sortPodsOldestFirst(before)
 	surplus := before[1]
 
-	// No agent is connected for this pod at all, so the registry reports it
-	// exactly as it reports one whose stream died with players on it.
+	// An unconnected agent reads the same as one whose stream died with players on it.
 	if snap := f.agents.Lookup(string(surplus.UID)); !snap.PlayersStale {
 		t.Fatalf("registry reports a fresh count for a proxy with no agent: %+v", snap)
 	}
@@ -583,15 +439,11 @@ func TestAProxyWithAStalePlayerCountWaitsForTheDeadline(t *testing.T) {
 	}
 }
 
-// The bootstrap has to run before the first pod, or the pod would mount a
-// ConfigMap that does not exist and never start.
+// Without the bootstrap the pod would mount a ConfigMap that does not exist and never start.
 func TestProxyGroupBootstrapsTheNamespace(t *testing.T) {
 	f := newFixture(t)
 
-	// newFixture's own Network reconcile already bootstrapped this namespace,
-	// so the CA ConfigMap and both ServiceAccounts are here before this test
-	// body runs. Remove them, or the assertion below reads the fixture's setup
-	// and stays green with this reconciler's own Ensure call deleted.
+	// newFixture's Network reconcile already bootstrapped this namespace.
 	if err := f.c.Delete(f.ctx, &corev1.ConfigMap{
 		ObjectMeta: metav1.ObjectMeta{Name: podspec.CAConfigMapName, Namespace: f.ns},
 	}); err != nil {
@@ -623,10 +475,7 @@ func TestProxyGroupBootstrapsTheNamespace(t *testing.T) {
 	}
 }
 
-// TestProxyGroupRendersConfigMap covers design section 5.4's promise for the
-// proxy side: one ConfigMap per group, owned by it, carrying the label the
-// manager's restricted cache requires, and holding exactly what spec.config
-// says — not merely a ConfigMap that exists under the right name.
+// The label is what the manager's restricted cache requires.
 func TestProxyGroupRendersConfigMap(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -661,23 +510,12 @@ func TestProxyGroupRendersConfigMap(t *testing.T) {
 	if values.Motd == nil || *values.Motd != "Welcome to Spawnery" {
 		t.Errorf("motd = %v, want %q", values.Motd, "Welcome to Spawnery")
 	}
-	// Nothing in ProxyGroupSpec could produce maxPlayers, but a future change
-	// reaching for a critical field directly on Values would slip past a
-	// test that only checked playerLimit and motd.
 	if values.MaxPlayers != nil {
 		t.Errorf("values = %+v, want maxPlayers unset — a ProxyGroup has no maxPlayers", values)
 	}
 }
 
-// TestProxyGroupWithNoConfigStillStartsAProxy covers the default shape:
-// spec.config is +optional and spec.config.playerLimit is +optional inside it,
-// so a ConfigMap rendered without a default leaves playerLimit unset while
-// podspec defaults the pod's own SPAWNERY_PLAYER_LIMIT anyway -- a ProxyGroup
-// that is Accepted, has its Service, and has pods stuck in CrashLoopBackOff
-// reading "config.yaml: playerLimit is not set", with nothing on the CR saying
-// why. This carries the ConfigMap this reconciler actually
-// writes all the way into render.Velocity, the way spawnery-config itself
-// would read it, rather than stopping at "the ConfigMap exists".
+// Without a default, playerLimit stays unset while the pod's env defaults it, and the proxy crash-loops.
 func TestProxyGroupWithNoConfigStillStartsAProxy(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -697,15 +535,7 @@ func TestProxyGroupWithNoConfigStillStartsAProxy(t *testing.T) {
 		t.Errorf("playerLimit = %d, want the default %d", *values.PlayerLimit, podspec.DefaultPlayerLimit)
 	}
 
-	// The same gap on the field where landing in it would be a security
-	// failure rather than a crash loop. spec.config.onlineMode carries a CRD
-	// default of true, but a nil spec.config never reaches that default at
-	// all, so the only thing standing between "a user wrote no config block"
-	// and "the proxy authenticates nobody" is proxyConfigValues writing the
-	// key itself. render.Velocity refuses a nil rather than guessing, so a
-	// regression here is at least loud — but loud in a CrashLoopBackOff, which
-	// is exactly the failure the playerLimit half of this test already
-	// documents as invisible from the CR.
+	// A nil spec.config never reaches the CRD default for onlineMode.
 	if values.OnlineMode == nil {
 		t.Fatal("onlineMode is nil: a ProxyGroup that sets no spec.config must still say whether its proxy authenticates players")
 	}
@@ -722,11 +552,7 @@ func TestProxyGroupWithNoConfigStillStartsAProxy(t *testing.T) {
 	}
 }
 
-// The CRD default, exercised through a real API server rather than read off
-// the marker. spec.config exists but names only playerLimit, which is the
-// shape every sample and every pre-existing ProxyGroup has: the +kubebuilder
-// default is what has to put onlineMode: true in it, and a marker that was
-// dropped or written on the wrong field would leave this nil.
+// The CRD default, exercised through a real API server rather than read off the marker.
 func TestProxyGroupDefaultsOnlineModeOnAPartialConfig(t *testing.T) {
 	f := newFixture(t)
 	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
@@ -742,10 +568,7 @@ func TestProxyGroupDefaultsOnlineModeOnAPartialConfig(t *testing.T) {
 	}
 }
 
-// And the field is a switch, not decoration: what a user sets has to reach
-// velocity.toml. A ProxyGroup that asks for an offline-mode proxy and gets an
-// authenticating one is the failure that makes the milestone's automated join
-// proof impossible, because a Go client cannot authenticate against Microsoft.
+// The join proof needs offline mode: a Go client cannot authenticate against Microsoft.
 func TestProxyGroupCarriesOnlineModeFalseIntoTheRenderedProxy(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -774,9 +597,6 @@ func TestProxyGroupCarriesOnlineModeFalseIntoTheRenderedProxy(t *testing.T) {
 	}
 }
 
-// TestProxyGroupConfigMapUpdatesOnSpecChange guards against a renderer that
-// only runs once: correct at creation but never revisited would look
-// identical until the day an operator actually edits spec.config.
 func TestProxyGroupConfigMapUpdatesOnSpecChange(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -806,12 +626,7 @@ func TestProxyGroupConfigMapUpdatesOnSpecChange(t *testing.T) {
 	}
 }
 
-// TestProxyGroupConfigMapWrittenBeforeThePods proves the ordering the design
-// depends on: a proxy pod's projected volume names this ConfigMap by group,
-// so the ConfigMap must exist before the first proxy pod. Reading back the
-// final state after a reconcile cannot distinguish "written first" from
-// "written at some point" — both leave the same objects sitting there.
-// Recording the actual Create calls can.
+// The final state cannot tell "written first" from "written at some point"; recording the Creates can.
 func TestProxyGroupConfigMapWrittenBeforeThePods(t *testing.T) {
 	f := newFixture(t)
 	recorder := &createOrderRecorder{Client: f.rc}
@@ -829,11 +644,7 @@ func TestProxyGroupConfigMapWrittenBeforeThePods(t *testing.T) {
 		Clock:             f.clock.Now,
 		Expectations:      newExpectations(f.clock.Now),
 		Divergence:        newReadinessDivergence(f.clock.Now),
-		// This literal builds its own reconciler rather than taking the
-		// fixture's, so it has to repeat what newFixture's helper does — see
-		// the comment there. Without it this test kills a mutation on the
-		// divergence event by nil-dereferencing, which is a coincidence of
-		// this literal's shape rather than anything the test asserts.
+		// Repeats newFixture's recorder wiring; see the comment there.
 		Recorder: newRecorder(),
 	}
 	f.createProxyGroup("gateway")
@@ -854,15 +665,7 @@ func TestProxyGroupConfigMapWrittenBeforeThePods(t *testing.T) {
 	}
 }
 
-// TestSurplusProxyIsToldToStopTakingConnections proves the operator asserts
-// readiness for every proxy pod, not just the ones being removed: a surplus
-// pod is told ready=false and every survivor is told ready=true, both on the
-// same pass that discovers the surplus.
-//
-// The two player counts are what decide which pod is which, rather than the
-// pods' positions: the pod the group keeps is the one with somebody on it, and
-// nothing turns on how ties between two indistinguishable pods happen to
-// break.
+// The player counts, not pod positions, decide which pod the group keeps.
 func TestSurplusProxyIsToldToStopTakingConnections(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -889,21 +692,7 @@ func TestSurplusProxyIsToldToStopTakingConnections(t *testing.T) {
 	}
 }
 
-// TestSurplusProxyIsMarkedWithWhenTheDrainStarted proves the deadline is
-// written down: without it, nothing bounds how long the drain may run.
-//
-// The surplus proxy is given a player first, and that is load-bearing rather
-// than colour. Until Task 5 these tests wrapped the client in a fake that
-// swallowed Delete, because reconcileReplicas removed the surplus pod outright
-// in the very Reconcile that stamped it — a pod here never leaves Pending,
-// envtest runs no kubelet to move it further, and envtest's apiserver does not
-// hold an unscheduled pod back for a grace period the way it would a running
-// one, so there was no object left to read the annotation off. Now the wait is
-// real, and the thing that makes a draining pod linger is the thing that makes
-// it linger in a cluster: somebody is still on it. Reporting a player is what
-// retires the fake, and it is strictly the stronger test — with Delete
-// suppressed, this test could not have told a working wait from no wait at
-// all.
+// The surplus proxy's player is what keeps the draining pod around to be read.
 func TestSurplusProxyIsMarkedWithWhenTheDrainStarted(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -931,22 +720,7 @@ func TestSurplusProxyIsMarkedWithWhenTheDrainStarted(t *testing.T) {
 	}
 }
 
-// TestMarkDrainingDoesNotMoveAnExistingMark pins markDraining's own guard: the
-// deadline runs from the first assertion, and re-stamping it on a later call
-// would push the deadline forever and the drain would never end.
-//
-// This calls markDraining directly rather than driving two full Reconcile
-// passes over a scaled-down group, and the reason is narrowness rather than
-// impossibility: two passes would work, given a reported player to hold the
-// pod open across them.
-//
-// It is a straightforward trade. The direct call is the exact call
-// reconcileReplicas makes once per live pod per pass, it exercises the guard
-// without a scale-down, a player report and two full reconciles standing
-// between the test and the thing it is testing, and it does not silently
-// depend on the deletion rule staying as it is today. The pod is re-read from
-// the API server between the two calls, so the guard still reacts to what was
-// persisted rather than to what this test holds in memory.
+// Re-stamping an existing mark would push the deadline forever.
 func TestMarkDrainingDoesNotMoveAnExistingMark(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -985,8 +759,6 @@ func TestMarkDrainingDoesNotMoveAnExistingMark(t *testing.T) {
 	}
 }
 
-// setDrainingSince writes the draining-since annotation straight onto a pod,
-// bypassing markDraining, the way anything else with pod write access could.
 func (f *fixture) setDrainingSince(name, value string) {
 	f.t.Helper()
 	pod, ok := f.pod(name)
@@ -1002,20 +774,7 @@ func (f *fixture) setDrainingSince(name, value string) {
 	}
 }
 
-// TestAnUnparsableDrainingSinceDoesNotWedgeTheGroup covers the annotation's
-// one user-writable failure: it lives on a pod, so anybody who can write a pod
-// annotation can put something in it that is not RFC 3339.
-//
-// Returning an error for that aborts the entire Reconcile — no Service, no
-// status, no other pod's readiness assertion, and the corrupt pod never
-// deleted — on every pass, permanently, because nothing downstream of the
-// error rewrites the value and controller-runtime retries forever. One pod's
-// bad annotation stops a whole group converging.
-//
-// The recovery is a re-stamp rather than tolerance: the value must end up
-// readable, or the deadline still has nothing to run from. The pod pays a
-// restarted clock for it, which is asserted below as the deletion happening
-// after a full drain timeout measured from the repair.
+// Anyone with pod write access can corrupt the annotation; the repair re-stamps it and restarts the clock.
 func TestAnUnparsableDrainingSinceDoesNotWedgeTheGroup(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1028,20 +787,13 @@ func TestAnUnparsableDrainingSinceDoesNotWedgeTheGroup(t *testing.T) {
 	}
 	sortPodsOldestFirst(before)
 	survivor, surplus := before[0], before[1]
-	// A player on the surplus pod so the wait holds it long enough to be
-	// looked at, and so the corrupt annotation is on a pod the deletion loop
-	// actually reaches rather than one it skips.
+	// A player keeps the surplus pod within the deletion loop's reach.
 	f.reportProxyPlayers(t, surplus, 1)
 	f.setDrainingSince(surplus.Name, "yesterday afternoon")
 
 	f.setProxyReplicas("gateway", 1)
-	// f.reconcileProxyGroup fails the test on a returned error, which is the
-	// wedge itself: before the fix this line never got past the pod carrying
-	// the bad stamp.
 	f.reconcileProxyGroup(r, "gateway")
 
-	// The rest of the group converged rather than being taken down with the
-	// one bad pod.
 	if got := f.proxies.lastReady(string(survivor.UID)); got == nil || !*got {
 		t.Errorf("the surviving proxy was told ready=%v, want true — one pod's bad annotation stopped the whole group",
 			got)
@@ -1062,7 +814,6 @@ func TestAnUnparsableDrainingSinceDoesNotWedgeTheGroup(t *testing.T) {
 		t.Fatalf("draining-since = %q, want a readable stamp: a value nothing rewrites is a value that stays wrong forever", at)
 	}
 
-	// And the replacement is a working deadline, not just a readable string.
 	f.clock.Advance(f.proxyGroup("gateway").DrainTimeout() + time.Second)
 	f.reconcileProxyGroup(r, "gateway")
 	if _, ok := f.pod(surplus.Name); ok {
@@ -1070,19 +821,7 @@ func TestAnUnparsableDrainingSinceDoesNotWedgeTheGroup(t *testing.T) {
 	}
 }
 
-// TestACancelledScaleDownPutsTheProxyBack proves readiness is derived, not
-// remembered: an operator restart, or simply a later pass, recomputes which
-// pods are surplus from scratch, so a scale-down that is reversed before the
-// surplus pod is actually gone corrects itself with nothing left to clean
-// up.
-//
-// The player on the surplus proxy is what keeps the same pod in play across
-// both passes, which is what makes this test about "derived, not remembered"
-// rather than about a fresh replacement pod happening to start out ready. It
-// replaces the Delete-swallowing fake this test used before Task 5, for the
-// reason TestSurplusProxyIsMarkedWithWhenTheDrainStarted spells out: the pod
-// now survives because the operator waits for it, not because a double hid
-// the deletion.
+// Readiness is derived each pass, so a reversed scale-down needs no cleanup.
 func TestACancelledScaleDownPutsTheProxyBack(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1097,9 +836,6 @@ func TestACancelledScaleDownPutsTheProxyBack(t *testing.T) {
 	f.setProxyReplicas("gateway", 1)
 	f.reconcileProxyGroup(r, "gateway")
 
-	// The mark must actually be there to begin with: otherwise the absence
-	// asserted below would pass just as well against a markDraining whose
-	// write branch had been deleted entirely.
 	drained, ok := f.pod(surplus.Name)
 	if !ok {
 		t.Fatalf("pod %s not found after the scale-down", surplus.Name)
@@ -1123,36 +859,14 @@ func TestACancelledScaleDownPutsTheProxyBack(t *testing.T) {
 	}
 }
 
-// racingPodClient simulates a pod that was evicted or deleted between the
-// informer's list and markDraining's patch: Patch on the named pod returns
-// NotFound, exactly as the real client would if the object were already gone
-// server-side.
-//
-// It overrides nothing else: Delete reaches the real client, and neither
-// surplus pod is removed on this pass — each for its own reason, and both of
-// them the operator's real behaviour rather than a fake's:
-//
-//   - the inspected pod has a player reported on it, so the wait holds it;
-//   - the racing pod has no player count at all, because nothing reports one
-//     for it, and an unknown count is treated as occupied. Its deadline has
-//     not started either: markDraining's patch is the call this fake fails, so
-//     no draining-since was ever persisted and nothing can expire.
-//
-// The second bullet is asserted at the end of the test rather than left as a
-// claim here.
-
-// fired records whether the fake ever got to do its job. Without it this test
-// cannot tell the tolerance working from the racing pod never being patched at
-// all -- and which pod is the racing one moves whenever the selection rule
-// does, silently, with every assertion still passing. A fake that is never
-// reached is a test asserting nothing, so this one says so out loud.
+// racingPodClient fails Patch with NotFound for racingPod, as if it was evicted after the list.
+// fired matters because a fake that is never reached makes the test assert nothing.
 type racingPodClient struct {
 	client.Client
 	racingPod string
 	fired     *bool
 }
 
-// Patch implements client.Client.
 func (c racingPodClient) Patch(ctx context.Context, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
 	if obj.GetName() == c.racingPod {
 		*c.fired = true
@@ -1161,37 +875,7 @@ func (c racingPodClient) Patch(ctx context.Context, obj client.Object, patch cli
 	return c.Client.Patch(ctx, obj, patch, opts...)
 }
 
-// TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile proves
-// markDraining tolerates the same race every other API call in
-// reconcileReplicas already tolerates: Create ignores AlreadyExists, Delete
-// ignores NotFound, and Fleet.SetReady is a no-op for a pod it has no
-// session for. A pod evicted or deleted between the informer's list and this
-// patch must not abort the whole reconcile — the Service, the status, and
-// the other pods' assertions along with it — over a stamp that no longer
-// matters.
-//
-// Three replicas scaled down to one puts two pods in the drain. racingPodClient
-// fails the patch for the first of them in the assertion loop's iteration
-// order, which is the order the pods were listed in, and this test's real
-// assertion is that the second — later in the same loop — still gets marked and
-// told ready=false. Without client.IgnoreNotFound around markDraining's Patch,
-// the racing pod's NotFound error propagates out of reconcileReplicas and
-// f.reconcileProxyGroup's own t.Fatalf fires before either check below ever
-// runs.
-//
-// Which pod is the racing one moves whenever the selection rule does, and the
-// test goes quietly vacuous when it does. markDraining runs for every pod on
-// every pass, but for one that is not going and carries no stamp it takes
-// neither branch of its switch and never reaches the Patch, so a racing pod
-// that is not marked leaves the tolerance this test is named for unexercised --
-// with IgnoreNotFound deleted and the suite still green.
-//
-// Naming the pod the rule currently picks would repair that only until the rule
-// moves again, and the ordering between the two unknown-count pods is not even
-// stable in the meantime: they tie on every clause including age, but only
-// while they share a creation timestamp, and three sequential creations that
-// straddle a second do not. So the fake reports whether it fired, and that is
-// asserted first.
+// Which pod races moves with the selection rule, so the fake reports whether it fired.
 func TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1206,9 +890,7 @@ func TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile(t *testing.T) {
 	}
 	sortPodsOldestFirst(before)
 	racing, other := before[0], before[2]
-	// The pod this test inspects has to still be there to inspect. A player on
-	// it is what does that now, in place of the Delete-swallowing override
-	// racingPodClient used to carry.
+	// A player keeps the inspected pod around.
 	f.reportProxyPlayers(t, other, 1)
 
 	fired := false
@@ -1232,21 +914,14 @@ func TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile(t *testing.T) {
 	if got := f.proxies.lastReady(string(otherPod.UID)); got == nil || *got {
 		t.Errorf("the pod after the racing one was told ready=%v, want false", got)
 	}
-	// The racing pod survives too, and for the reason racingPodClient's comment
-	// gives: nothing ever reported a count for it, and an unknown count is
-	// treated as occupied. Asserted rather than described, so that a future
-	// change to the deletion rule cannot make that comment false in silence —
-	// which is exactly what it did before.
+	// The racing pod survives too: an unknown count is treated as occupied.
 	if _, ok := f.pod(racing.Name); !ok {
 		t.Error("the racing pod was deleted; its player count is unknown, not zero, " +
 			"and an unknown count must be treated as occupied")
 	}
 }
 
-// TestAProxyOnACordonedNodeIsReplaced is the proxy half of the milestone. It
-// asserts the order, not just the outcome: the replacement is ready before
-// anything is withdrawn, which is what keeps the group's ready capacity from
-// dipping while a player is connected.
+// The replacement must be ready before anything is withdrawn.
 func TestAProxyOnACordonedNodeIsReplaced(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1267,7 +942,6 @@ func TestAProxyOnACordonedNodeIsReplaced(t *testing.T) {
 	f.bindPodToNode(t, &pods[1], staying.Name)
 	f.ensureNode(t, going.Name, true)
 
-	// The surge pod comes first, and nothing is marked while it is unready.
 	f.reconcileProxyGroup(r, "gateway")
 	after := f.proxyPods("gateway")
 	if len(after) != 3 {
@@ -1279,7 +953,6 @@ func TestAProxyOnACordonedNodeIsReplaced(t *testing.T) {
 		}
 	}
 
-	// Once it is ready, the pod on the departing node is the one that goes.
 	for i := range after {
 		f.markProxyPodReady(t, &after[i])
 	}
@@ -1296,22 +969,7 @@ func TestAProxyOnACordonedNodeIsReplaced(t *testing.T) {
 	}
 }
 
-// TestAnUncordonedNodeKeepsTheMarkAlreadyMade is spec §3.6's promise, driven
-// end to end: releasing a node mid-drain does not undo the drain already
-// begun.
-//
-// TestDecideRolloutCountsDrainingIndependentlyOfStale in rollout_test.go
-// pins the one clause of DecideRollout the one-at-a-time guard depends on,
-// but DecideRollout has no concept of a mark already made -- it only reads
-// this pass's Draining flag. What actually keeps the mark here is one layer
-// up: reconcileReplicas derives Stale fresh on every pass, so once the node
-// is uncordoned the marked pod reads Stale: false again, and it is the
-// surplus-marks budget documented above reconcileReplicas's staleMarks loop
-// -- the same mechanism TestARevertedSpecChangeKeepsTheMarkItAlreadyMade
-// exercises for a reverted spec.image -- that re-nominates the same pod
-// rather than releasing it. A node drain reverted mid-flight is the same
-// shape of state, and this test is what proves the shape holds for it too
-// rather than assuming the spec-image case generalizes.
+// Stale is re-derived each pass, so once uncordoned the pod keeps its mark only through the surplus budget.
 func TestAnUncordonedNodeKeepsTheMarkAlreadyMade(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1340,8 +998,7 @@ func TestAnUncordonedNodeKeepsTheMarkAlreadyMade(t *testing.T) {
 	for i := range after {
 		f.markProxyPodReady(t, &after[i])
 	}
-	// A player on the departing pod, so occupancy holds it open across the
-	// assertions below rather than it being removed the instant it is marked.
+	// A player holds the departing pod open across the assertions.
 	f.reportProxyPlayers(t, pods[0], 1)
 
 	f.reconcileProxyGroup(r, "gateway") // marks the pod on the departing node
@@ -1354,7 +1011,6 @@ func TestAnUncordonedNodeKeepsTheMarkAlreadyMade(t *testing.T) {
 		t.Fatalf("pod %s was not marked draining; nothing here would be released by the step below", pods[0].Name)
 	}
 
-	// Release the node mid-drain.
 	f.ensureNode(t, going.Name, false)
 	f.reconcileProxyGroup(r, "gateway")
 
@@ -1371,11 +1027,6 @@ func TestAnUncordonedNodeKeepsTheMarkAlreadyMade(t *testing.T) {
 			"releasing the node must not resume the withdrawal it was already mid-way through", got)
 	}
 
-	// The replacement still completes: once the marked pod is empty, it is
-	// removed like any other drain reaching zero players, and the group
-	// settles at its replica count with the mark gone from the object it was
-	// on -- not cancelled the instant the node was released, and not stuck
-	// forever either.
 	f.reportProxyPlayers(t, *stillMarked, 0)
 	f.reconcileProxyGroup(r, "gateway")
 
@@ -1388,16 +1039,7 @@ func TestAnUncordonedNodeKeepsTheMarkAlreadyMade(t *testing.T) {
 	}
 }
 
-// reportProxyPlayers puts a player count on a proxy pod the way that pod's own
-// agent would, and proves the registry took it.
-//
-// Connect comes first because Registry.ReportPlayers refuses a count for a key
-// with no live stream. The read-back afterwards is not ceremony: Lookup on a
-// key it does not know returns a zero Players, which is indistinguishable from
-// a genuinely empty proxy and is exactly the case the deletion loop acts on. A
-// test whose setup silently failed here would go on believing it had put three
-// players on a proxy while asserting against an empty one, and would pass for
-// the wrong reason.
+// ReportPlayers refuses a key with no live stream, and an unknown key also reads zero, hence the read-back.
 func (f *fixture) reportProxyPlayers(t *testing.T, pod corev1.Pod, players int32) {
 	t.Helper()
 	uid := string(pod.UID)
@@ -1409,17 +1051,12 @@ func (f *fixture) reportProxyPlayers(t *testing.T, pod corev1.Pod, players int32
 	case snap.Players != players:
 		t.Fatalf("registry holds %d players for proxy %s, want %d", snap.Players, pod.Name, players)
 	case snap.PlayersStale:
-		// The count check above cannot catch a failed report when players is
-		// zero — an unknown key reports zero too, which is the whole reason
-		// this read-back exists. Freshness is what tells the two apart, and a
-		// fresh zero is precisely what TestProxyGroupScalesDown turns on.
+		// An unknown key also reports zero; freshness tells the two apart.
 		t.Fatalf("registry holds a stale count for proxy %s; the report did not land", pod.Name)
 	}
 }
 
-// drainEvents empties a FakeRecorder and returns what it held, so a test can
-// make several assertions about the same batch. Reading the channel twice
-// would not work: each event is delivered once.
+// Each event is delivered once, so tests drain the channel and assert on the batch.
 func drainEvents(rec *nonBlockingRecorder) []string {
 	rec.mu.Lock()
 	defer rec.mu.Unlock()
@@ -1428,8 +1065,6 @@ func drainEvents(rec *nonBlockingRecorder) []string {
 	return out
 }
 
-// containsEvent reports whether any event carries the given reason. The field
-// comparison, and why it is not a substring match, is eventHasReason's.
 func containsEvent(events []string, reason string) bool {
 	for _, e := range events {
 		if eventHasReason(e, reason) {
@@ -1439,11 +1074,7 @@ func containsEvent(events []string, reason string) bool {
 	return false
 }
 
-// containsEventType reports whether any event carries the given type, matched
-// as FakeRecorder's first field for the reason containsEvent matches the
-// second: "Warning" is an ordinary English word that a message body could
-// easily contain, and a substring match over the whole line would accept one
-// that did while the event itself was Normal.
+// Matches the type field: "Warning" could appear in any message body.
 func containsEventType(events []string, eventType string) bool {
 	for _, e := range events {
 		if fields := strings.SplitN(e, " ", 2); len(fields) >= 1 && fields[0] == eventType {
@@ -1453,10 +1084,6 @@ func containsEventType(events []string, eventType string) bool {
 	return false
 }
 
-// containsSubstring reports whether any event's rendered text contains want.
-// Unlike containsEvent and containsEventType this looks at the message body,
-// which is where the cost of a timed-out drain is named and where there is no
-// field to match on.
 func containsSubstring(events []string, want string) bool {
 	for _, e := range events {
 		if strings.Contains(e, want) {
@@ -1466,14 +1093,7 @@ func containsSubstring(events []string, want string) bool {
 	return false
 }
 
-// TestADrainingProxyWithPlayersIsNotDeleted is the promise of the milestone.
-// Readiness stops the inflow — the Service drops the endpoint, so no new
-// connection arrives — and says nothing whatever about the three people
-// already connected, whose TCP sessions Kubernetes does not close. The wait is
-// therefore for empty, not for NotReady.
-//
-// The second pass, a resync interval later, is the part that matters: one pass
-// could be explained by a deletion that simply had not landed yet.
+// Kubernetes does not close connected sessions on NotReady, so the wait is for empty.
 func TestADrainingProxyWithPlayersIsNotDeleted(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1500,28 +1120,13 @@ func TestADrainingProxyWithPlayersIsNotDeleted(t *testing.T) {
 	if _, ok := f.pod(surplus.Name); !ok {
 		t.Error("the draining proxy was deleted with three players on it")
 	}
-	// It must be draining, not merely surviving: a reconciler that had stopped
-	// asserting readiness altogether would also leave two pods standing.
+	// A reconciler that stopped asserting readiness would also leave two pods standing.
 	if got := f.proxies.lastReady(string(surplus.UID)); got == nil || *got {
 		t.Errorf("the draining proxy was told ready=%v, want false", got)
 	}
 }
 
-// TestStatusCountsPlayersOnADrainingProxy pins status.connectedPlayers, the
-// CRD's "sum of players across all proxies" and the PLAYERS column.
-//
-// A draining proxy is NotReady on purpose — that is the readiness contract —
-// and it still has people on it. Summing only ready pods therefore prints
-// PLAYERS 0 with a person visibly in the game, during the one operation where
-// this number is the only thing an operator can watch: nothing logs a
-// readiness withdrawal anywhere.
-//
-// The survivor carries a player too, so the sum is 1 + 3 rather than 0 + 3 and
-// a fix that swapped the guard for "only count draining pods" fails here as
-// well. readyReplicas is asserted in the same breath because it is the count
-// that must keep the guard: the two numbers answer different questions about
-// the same pods, and moving ready++ out with the sum would make this group
-// claim two ready replicas while one of its pods is out of the Service.
+// A draining proxy is NotReady but still has players, and they must be counted.
 func TestStatusCountsPlayersOnADrainingProxy(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1537,9 +1142,7 @@ func TestStatusCountsPlayersOnADrainingProxy(t *testing.T) {
 	f.reportProxyPlayers(t, survivor, 1)
 	f.reportProxyPlayers(t, surplus, 3)
 
-	// What a kubelet would do on either side of the drain: the survivor's
-	// probe passes, and the draining proxy's agent has closed the port the
-	// probe reads, so its pod is NotReady while its three players play on.
+	// The draining proxy's agent has closed the probe port, so it is NotReady while its players play on.
 	f.setPodRunning(survivor.Name, true)
 	f.setPodRunning(surplus.Name, false)
 
@@ -1560,9 +1163,6 @@ func TestStatusCountsPlayersOnADrainingProxy(t *testing.T) {
 	}
 }
 
-// TestADrainingProxyIsDeletedOnceEmpty is the other half: the wait ends by
-// itself when the last player leaves, with no deadline involved and nothing
-// for an operator to do.
 func TestADrainingProxyIsDeletedOnceEmpty(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1591,23 +1191,7 @@ func TestADrainingProxyIsDeletedOnceEmpty(t *testing.T) {
 	}
 }
 
-// TestAZeroFromADeadStreamDoesNotDeleteTheProxy closes the gap between the
-// two halves of "known empty": the count was fresh, and the stream that
-// produced it was already gone.
-//
-// Registry.Disconnect keeps the last count and leaves lastReportAt untouched
-// on purpose, so a zero stays inside the staleness window for twice the report
-// interval after the stream died — ten seconds at the operator's configured
-// five. The pod is still Ready for that whole window, because readiness is the
-// agent's own gate and nothing closed it, so the Service still routes to it
-// and a player can join with no live stream left to report them. Believing the
-// zero there deletes a populated proxy, which is the exact failure the wait
-// exists to prevent.
-//
-// The freshness check before the scale-down is what makes this test about the
-// stream rather than about staleness: without it, the same two survivors would
-// be produced by a clock that had simply moved on, and the test would pass
-// against code that never looked at the stream at all.
+// Disconnect keeps the last count fresh for twice the report interval while the pod is still Ready.
 func TestAZeroFromADeadStreamDoesNotDeleteTheProxy(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1638,8 +1222,6 @@ func TestAZeroFromADeadStreamDoesNotDeleteTheProxy(t *testing.T) {
 			"Velocity goes on serving, and anyone who joined after the last report is invisible to the registry")
 	}
 
-	// Bounded, like every other reason this loop keeps a pod: the deadline
-	// still ends it.
 	f.clock.Advance(f.proxyGroup("gateway").DrainTimeout() + time.Second)
 	f.reconcileProxyGroup(r, "gateway")
 	if got := len(f.proxyPods("gateway")); got != 1 {
@@ -1647,16 +1229,7 @@ func TestAZeroFromADeadStreamDoesNotDeleteTheProxy(t *testing.T) {
 	}
 }
 
-// TestTheDeadlineDeletesLoudly covers the one path here that disconnects
-// anybody.
-//
-// Nobody is moved, and that is not an omission: a draining server can hand its
-// players to another backend because the connection terminates at the proxy,
-// which stays, while a draining proxy has no such option because the
-// connection terminates at the proxy being removed. So the deadline is a real
-// cost, it is configured rather than accidental, and the event has to name how
-// many were lost — a Warning that only said "timed out" would leave nobody
-// able to tell a drain of three players from a drain of three hundred.
+// A draining proxy cannot hand players on, so the Warning must name how many were lost.
 func TestTheDeadlineDeletesLoudly(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1694,15 +1267,7 @@ func TestTheDeadlineDeletesLoudly(t *testing.T) {
 	}
 }
 
-// TestAProxyThatIgnoresItsWithdrawalIsReported is what Fleet.Resync's own
-// self-healing does not cover. Resync re-sends the last asserted readiness
-// every 30 seconds, so a divergence caused by a lost SetReady call heals on
-// its own by the next pass. What does not heal is an agent that received
-// the instruction and did not act on it -- this test's pod stays Ready
-// through every reconcile because nothing in envtest ever changes it, the
-// same as a proxy whose agent heard the withdrawal and did not honor it.
-// Nothing here repairs that; the assertion is only that it gets reported,
-// and only once the grace period has actually run out.
+// Resync heals a lost SetReady; an agent that ignores the instruction must be reported.
 func TestAProxyThatIgnoresItsWithdrawalIsReported(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1721,8 +1286,6 @@ func TestAProxyThatIgnoresItsWithdrawalIsReported(t *testing.T) {
 	f.setProxyReplicas("gateway", 1)
 	f.reconcileProxyGroup(r, "gateway")
 
-	// The pod stays Ready even though its readiness was withdrawn: an agent
-	// that heard the instruction and did not act. Nothing is reported yet.
 	f.reconcileProxyGroup(r, "gateway")
 	g := f.proxyGroup("gateway")
 	if meta.IsStatusConditionTrue(g.Status.Conditions, spawneryv1alpha1.ConditionReadinessDiverged) {
@@ -1743,42 +1306,14 @@ func TestAProxyThatIgnoresItsWithdrawalIsReported(t *testing.T) {
 		t.Errorf("events = %v, want it recorded as a Warning", ev)
 	}
 
-	// The condition stays true and the mismatch is still there, but the
-	// event must not fire again: Resync repeats the same verdict every 30
-	// seconds for the life of the mismatch, and re-announcing it on every
-	// pass would drown the one flank worth telling an operator about in
-	// noise. Nothing here advances the clock or changes the pod, so the
-	// only thing this pass can prove is whether the event is gated on the
-	// transition or fired unconditionally.
+	// Resync repeats the verdict every 30 seconds, so the event must fire on the transition only.
 	f.reconcileProxyGroup(r, "gateway")
 	if ev := drainEvents(rec); len(ev) != 0 {
 		t.Errorf("events = %v, want none: a resync of an already-reported divergence must stay silent", ev)
 	}
 }
 
-// TestAProxyThatAgreesAgainClearsItsDivergenceEntry proves the half of the
-// grace-period map that no assertion on the group's condition can prove by
-// itself: that a pod's tracked start time is actually deleted once its
-// readiness agrees again, not merely made irrelevant for as long as it stays
-// agreeing. Without a real deletion, a pod that flickered once, agreed
-// again, and then disagreed a second time would resume its grace clock from
-// the *original* mismatch instead of restarting it -- reporting a span of
-// divergence nobody actually watched, in violation of the same principle
-// that makes readinessDivergence.forget correct on the early-return paths
-// above: an entry measures divergence while something was watching, and a
-// gap voids the measurement.
-//
-// The proof has to re-diverge the pod, or it proves nothing: a pod that
-// simply stays in agreement forever never reaches the branch that reads a
-// tracked entry back out of the map, so a correct delete and a delete that
-// silently no-ops would be indistinguishable to a test that only ever
-// checks agreement. Re-diverging past the point where the *original*
-// mismatch would already have crossed the grace period, and finding the
-// condition still false, is what tells a restarted clock from a merely
-// resumed one -- and the final advance-and-check below confirms it is a
-// restart and not just a clock stuck off, by showing the report does
-// eventually arrive once a fresh grace period has actually elapsed from
-// the second mismatch.
+// The pod must re-diverge, or a delete that no-ops is indistinguishable from a real one.
 func TestAProxyThatAgreesAgainClearsItsDivergenceEntry(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1794,17 +1329,9 @@ func TestAProxyThatAgreesAgainClearsItsDivergenceEntry(t *testing.T) {
 
 	f.setProxyReplicas("gateway", 1)
 	f.reconcileProxyGroup(r, "gateway")
-	// The first mismatch begins here (call it T0): the withdrawn pod is
-	// still Ready.
 
-	// Half the grace period: not enough to report on its own, and here only
-	// to prove the eventual all-clear below is not just "never got far
-	// enough."
 	f.clock.Advance(readinessDivergenceGrace/2 + time.Second)
 
-	// The withdrawal is honored before the deadline: the surplus pod goes
-	// NotReady, same as a real agent that closed its listener. This is
-	// meant to clear its entry.
 	pods = f.proxyPods("gateway")
 	sortPodsOldestFirst(pods)
 	surplus := &pods[1]
@@ -1816,14 +1343,9 @@ func TestAProxyThatAgreesAgainClearsItsDivergenceEntry(t *testing.T) {
 		t.Fatal("reported even though the pod agreed again before the grace period elapsed")
 	}
 
-	// Past the point (T0 + readinessDivergenceGrace) where the original
-	// mismatch would already have crossed the grace period, if its
-	// timestamp had survived instead of being cleared.
+	// Past T0 + grace: a surviving original timestamp would report here.
 	f.clock.Advance(readinessDivergenceGrace/2 + time.Second)
 
-	// Diverge the same pod again: still marked to leave, but Ready again, as
-	// if the agent had reopened its listener. This is the only way to reach
-	// the code path a leaked entry would betray.
 	f.setProxyPodReadyCondition(t, surplus, true)
 	f.reconcileProxyGroup(r, "gateway")
 
@@ -1833,8 +1355,6 @@ func TestAProxyThatAgreesAgainClearsItsDivergenceEntry(t *testing.T) {
 			"being cleared, so the grace period was measured from the first mismatch rather than restarting")
 	}
 
-	// The clock did restart, not just fail to fire early: a full grace
-	// period measured from the *second* mismatch does report it.
 	f.watchThroughGrace(t, r, "gateway")
 
 	g = f.proxyGroup("gateway")
@@ -1843,20 +1363,7 @@ func TestAProxyThatAgreesAgainClearsItsDivergenceEntry(t *testing.T) {
 	}
 }
 
-// TestASlowStartingProxyIsNotReportedAsDiverged pins the scope decision
-// ReadinessDiverged narrowed to: only a withdrawal the operator asserted and
-// the pod ignored is reported, never a pod that simply has not gotten
-// around to its first successful probe yet.
-//
-// Every pod is asserted ready from the moment it exists — SetReady(true) for
-// a non-draining pod runs before any kubelet has had a chance to probe it at
-// all — so a bidirectional comparison would start this pod's grace clock at
-// creation, and a proxy pulling a large image on a cold node can easily run
-// past readinessDivergenceGrace without ever having disobeyed anything. This
-// test's pods are never marked ready at all — envtest runs no kubelet — so
-// they stand in for exactly that: a proxy still starting up, not one that
-// heard an instruction and ignored it. Reporting it would misname the two as
-// identical, which is the false diagnosis this test exists to rule out.
+// Every pod is asserted ready from creation, so a slow first probe must not count as divergence.
 func TestASlowStartingProxyIsNotReportedAsDiverged(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1864,18 +1371,9 @@ func TestASlowStartingProxyIsNotReportedAsDiverged(t *testing.T) {
 	r.Recorder = rec
 	f.createProxyGroup("gateway")
 	f.reconcileProxyGroup(r, "gateway")
-	// A second pass is required before the pods this one created reach the
-	// divergence check at all -- see the comment on Reconcile's pods, err :=
-	// r.pods(ctx, group) call. Without it, the clock advance below would land
-	// before the pods' first sight rather than after, and the test would
-	// pass whether or not the scope decision held.
+	// New pods reach the divergence check only on the second pass; see Reconcile's r.pods call.
 	f.reconcileProxyGroup(r, "gateway")
 
-	// Neither pod is ever marked ready, and neither is asked to drain: both
-	// replicas are still wanted, so this is purely "still starting up," with
-	// no withdrawal anywhere in the picture.
-	// Every pass a real operator would make, not one: a pod that never diverges
-	// must stay unreported however many times it is looked at.
 	f.watchThroughGrace(t, r, "gateway")
 
 	g := f.proxyGroup("gateway")
@@ -1887,16 +1385,6 @@ func TestASlowStartingProxyIsNotReportedAsDiverged(t *testing.T) {
 	}
 }
 
-// TestASpecChangeSurgesBeforeItMarksAnything is the rollout's first move: a
-// replacement for every stale proxy is created before any proxy is
-// asked to stop taking connections. That ordering is what leaves room for the
-// ready count to hold at replicas; whether it actually holds is the readiness
-// gate's business, and that is the next test's.
-//
-// It measures the surge and nothing else. The rollout as a whole, ending on
-// the new shape, is TestTheRolloutFinishesWithEveryProxyOnTheNewShape, and the
-// readiness gate in front of the marks is
-// TestTheReplacementsMustBeReadyBeforeAnyPodIsMarked.
 func TestASpecChangeSurgesBeforeItMarksAnything(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1911,7 +1399,6 @@ func TestASpecChangeSurgesBeforeItMarksAnything(t *testing.T) {
 		f.markProxyPodReady(t, &before[i])
 	}
 
-	// A spec change every pod's digest disagrees with.
 	g := f.proxyGroup("gateway")
 	g.Spec.Image = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
 	if err := f.c.Update(f.ctx, g); err != nil {
@@ -1930,18 +1417,7 @@ func TestASpecChangeSurgesBeforeItMarksAnything(t *testing.T) {
 	}
 }
 
-// TestTheReplacementsMustBeReadyBeforeAnyPodIsMarked states the property the
-// surge exists for, and it is the one a pod count alone cannot show.
-//
-// The second reconcile with the replacements still unready is what gives this
-// test its grip, and it was added after the mutation run said so. Without it
-// this test's one pass under unready replacements is the pass that creates them,
-// where the group is below its target and the decision is a create with no
-// drain in it whatever the readiness gate says: the gate could be deleted
-// outright and the test would not notice — which is what running that mutation
-// against the version without this pass actually did. On the second pass the
-// group is at its target, so the gate is the last thing standing between a
-// stale pod and the mark.
+// On the second pass the group is at its target, so only the readiness gate stops a mark.
 func TestTheReplacementsMustBeReadyBeforeAnyPodIsMarked(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1958,12 +1434,9 @@ func TestTheReplacementsMustBeReadyBeforeAnyPodIsMarked(t *testing.T) {
 		t.Fatalf("update: %v", err)
 	}
 	f.reconcileProxyGroup(r, "gateway")
-	// A resync with the replacements still unready: the group is at its
-	// target size now, so nothing is created and nothing may be marked either.
 	f.clock.Advance(ResyncInterval)
 	f.reconcileProxyGroup(r, "gateway")
 
-	// Make the replacements ready and reconcile again.
 	pods := f.proxyPods("gateway")
 	if len(pods) != 4 {
 		t.Fatalf("proxy pods = %d, want the group's 2 replicas plus a replacement for each", len(pods))
@@ -1988,8 +1461,7 @@ func TestTheReplacementsMustBeReadyBeforeAnyPodIsMarked(t *testing.T) {
 	}
 }
 
-// TestChangingReplicasAloneRollsNothing is the reason staleness is a digest of
-// the rendered pod rather than metadata.generation.
+// Staleness is a digest of the rendered pod, not metadata.generation.
 func TestChangingReplicasAloneRollsNothing(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -2014,19 +1486,7 @@ func TestChangingReplicasAloneRollsNothing(t *testing.T) {
 	}
 }
 
-// TestADrainingProxyKeepsItsMarkWhileTheRolloutWaits pins the one piece of
-// state a rollout cannot re-derive on the pass after it decides.
-//
-// DecideRollout never names a stale pod that is already draining, so a caller
-// that rebuilt `leaving` from the decision alone would cancel its own drain on
-// the very next pass: readiness restored, annotation deleted, and then the same choice made
-// again five seconds later with the deadline running from zero. A proxy with a
-// player on it would be told to stop taking connections and to start again,
-// forever, and the drain would never end.
-//
-// Both proxies carry a player so that the one chosen is held open across the
-// passes rather than deleted the moment it is marked, which is what makes the
-// second pass observable at all.
+// DecideRollout never names an already-draining pod, so rebuilding leaving from it would cancel the drain.
 func TestADrainingProxyKeepsItsMarkWhileTheRolloutWaits(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -2048,7 +1508,6 @@ func TestADrainingProxyKeepsItsMarkWhileTheRolloutWaits(t *testing.T) {
 		t.Fatalf("update: %v", err)
 	}
 
-	// Pass one surges, pass two marks — once the replacements are ready.
 	f.reconcileProxyGroup(r, "gateway")
 	surged := f.proxyPods("gateway")
 	for i := range surged {
@@ -2083,14 +1542,6 @@ func TestADrainingProxyKeepsItsMarkWhileTheRolloutWaits(t *testing.T) {
 	}
 }
 
-// TestTheRolloutFinishesWithEveryProxyOnTheNewShape drives the whole thing:
-// one spec change, and the operator converges on a group of the new shape
-// without ever running more than one replacement per stale proxy over its
-// replica count.
-//
-// Every pod is reported empty, which is what lets a marked proxy go on the pass
-// it is marked; the point here is the sequence, not the wait, which
-// TestADrainingProxyWithPlayersIsNotDeleted already owns.
 func TestTheRolloutFinishesWithEveryProxyOnTheNewShape(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -2115,12 +1566,7 @@ func TestTheRolloutFinishesWithEveryProxyOnTheNewShape(t *testing.T) {
 		t.Fatalf("desired hash: %v", err)
 	}
 
-	// Ten passes is well over the two this rollout takes — creating both
-	// replacements, then marking both old proxies, the count checked by
-	// running the loop short — so it leaves room for the operator to be slower
-	// than expected and none for it to never finish. The passes after the
-	// second are not padding either: they are what says a settled group stays
-	// settled instead of rolling itself forever.
+	// The rollout takes two passes; the rest show a settled group stays settled.
 	for pass := 0; pass < 10; pass++ {
 		pods := f.proxyPods("gateway")
 		for i := range pods {
@@ -2148,17 +1594,7 @@ func TestTheRolloutFinishesWithEveryProxyOnTheNewShape(t *testing.T) {
 	}
 }
 
-// TestAMarkedProxyKeepsItsMarkWhenTheSurgePodIsLost covers the other half of
-// why a mark persists: the pod is stale, so it has to go whatever else happens
-// to the group around it.
-//
-// Losing the surge pod — evicted, or its node drained — puts the group back
-// below its target with a marked pod still in it. Nothing in the replica count
-// then argues for the mark, and dropping it would tell a proxy that has already
-// stopped taking connections to start again, only to mark it once more when the
-// replacement surge pod turns ready, with the drain deadline running from zero
-// each time. The mark stays; the operator brings up another surge pod
-// underneath it, which is what the create on this same pass is.
+// A lost surge pod must not release the mark: the stale pod has to go regardless.
 func TestAMarkedProxyKeepsItsMarkWhenTheSurgePodIsLost(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -2171,8 +1607,6 @@ func TestAMarkedProxyKeepsItsMarkWhenTheSurgePodIsLost(t *testing.T) {
 	}
 	for i := range before {
 		f.markProxyPodReady(t, &before[i])
-		// A player each, so whichever proxy is chosen is held open long enough
-		// for the passes below to look at it.
 		f.reportProxyPlayers(t, before[i], 1)
 	}
 
@@ -2240,21 +1674,7 @@ func TestAMarkedProxyKeepsItsMarkWhenTheSurgePodIsLost(t *testing.T) {
 	}
 }
 
-// TestAPartlyCancelledScaleDownReleasesOnlyTheMarksItHasTo is the case that
-// tells "is this pod surplus?" from "how many of these pods are surplus?".
-//
-// Four replicas taken to two marks two proxies, which is right. Raising the
-// count to three afterwards makes exactly one of those two wanted again — and
-// asking a group-level question once per marked pod cannot express that, because
-// it returns the same answer for both and keeps both marks. The cost is not
-// cosmetic: the group is not short of pods, only of ready ones, so nothing
-// creates a replacement — it serves two proxies against a requested three until
-// one of the drains finishes on its own, which the players on it can hold open
-// to the full drain timeout.
-//
-// Every proxy carries a player so the marked ones stay to be looked at, and the
-// counts are equal so that which two are marked is decided by the same rule on
-// both passes rather than by the players moving underneath the test.
+// Raising four-to-two back to three must release exactly one of the two marks.
 func TestAPartlyCancelledScaleDownReleasesOnlyTheMarksItHasTo(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -2290,8 +1710,7 @@ func TestAPartlyCancelledScaleDownReleasesOnlyTheMarksItHasTo(t *testing.T) {
 	if len(marked) != 1 {
 		t.Errorf("marked = %v, want 1 — three replicas out of four pods leaves one surplus, not two", marked)
 	}
-	// The released proxy has to be back in the Service, not merely un-annotated:
-	// the annotation dates the deadline, and readiness is what carries players.
+	// The annotation dates the deadline; readiness is what carries players.
 	for i := range pods {
 		going := false
 		for _, name := range marked {
@@ -2308,9 +1727,6 @@ func TestAPartlyCancelledScaleDownReleasesOnlyTheMarksItHasTo(t *testing.T) {
 	}
 }
 
-// markedProxies names the pods carrying a readable draining-since, so a test can
-// say how many are going and which, rather than counting annotations by hand in
-// three places.
 func markedProxies(pods []corev1.Pod) []string {
 	var out []string
 	for i := range pods {
@@ -2322,23 +1738,7 @@ func markedProxies(pods []corev1.Pod) []string {
 	return out
 }
 
-// TestAStaleMarkDoesNotSpendTheSurplusBudget is the case where the two reasons
-// a proxy carries a mark meet on the same group.
-//
-// A pod marked for being stale is already leaving. Counting it as one of the
-// surplus the group is allowed to keep counts the same departure twice: the
-// group then holds a mark for a proxy it needs back, and gets no replacement
-// for it either: it has pods enough, and only DecideRollout's create branch
-// makes more. So the budget is len(views) minus the stale marks minus
-// replicas, and here that
-// is zero — one stale mark and one surplus mark against four pods and three
-// replicas, where the stale pod's own departure is the whole of the surplus.
-//
-// The fixture is the shortest route to one stale pod among three current ones
-// with nothing draining: a single proxy, then an image change and a scale-up in
-// one update, so the three pods that come up are of the new shape and the
-// original is not. Every pod carries a player, so a marked one stays to be
-// looked at instead of going the moment it is marked.
+// A stale mark is already leaving, so it must not also count against the surplus budget.
 func TestAStaleMarkDoesNotSpendTheSurplusBudget(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -2372,9 +1772,6 @@ func TestAStaleMarkDoesNotSpendTheSurplusBudget(t *testing.T) {
 		f.reportProxyPlayers(t, pods[i], 1)
 	}
 
-	// Down to one: two pods must go, and the stale one goes first because it
-	// has to go regardless. The second is a current pod, marked for surplus
-	// alone — which is the pairing this test exists for.
 	f.setProxyReplicas("gateway", 1)
 	f.reconcileProxyGroup(r, "gateway")
 	marked := markedProxies(f.proxyPods("gateway"))
@@ -2385,8 +1782,6 @@ func TestAStaleMarkDoesNotSpendTheSurplusBudget(t *testing.T) {
 		t.Fatalf("marked = %v, want the stale proxy %s among them", marked, stale)
 	}
 
-	// And back up to three. The stale proxy is still going, and its departure
-	// is the only one the group has room for.
 	f.setProxyReplicas("gateway", 3)
 	f.clock.Advance(ResyncInterval)
 	f.reconcileProxyGroup(r, "gateway")
@@ -2414,21 +1809,7 @@ func TestAStaleMarkDoesNotSpendTheSurplusBudget(t *testing.T) {
 	}
 }
 
-// TestARevertedSpecChangeKeepsTheMarkItAlreadyMade is the one state where a
-// pod's mark outlives the reason it was made, and it is the state a rollback
-// puts a group into.
-//
-// A spec change is not one-way. Change the image, wait for the replacements,
-// let the old proxies be marked for being stale — then put the image back, and
-// those proxies match the spec again while the replacements raised for them do
-// not. The marks that were stale marks are now surplus marks, and the pods
-// nobody has marked are the stale ones.
-//
-// The group holds the marks, which is a choice and not an accident. Releasing
-// them would spend the surplus budget on the replacements' departure before
-// that departure has started — they are stale but unmarked, and are not marked
-// while no current pod is Ready. A spec that flaps would then cancel and remake
-// drains, restarting a deadline that is supposed to bound them.
+// A rollback keeps the marks: releasing them would let a flapping spec restart drain deadlines.
 func TestARevertedSpecChangeKeepsTheMarkItAlreadyMade(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -2440,9 +1821,7 @@ func TestARevertedSpecChangeKeepsTheMarkItAlreadyMade(t *testing.T) {
 		t.Fatalf("proxy pods = %d, want 2", len(before))
 	}
 	sortPodsOldestFirst(before)
-	// One proxy has a player and the other has no agent at all, which counts as
-	// occupied: both stay in the group long enough for the revert below to land
-	// on them.
+	// A proxy with no agent counts as occupied, so both stay for the revert.
 	held := before[0]
 	f.reportProxyPlayers(t, held, 1)
 	for i := range before {
@@ -2450,8 +1829,6 @@ func TestARevertedSpecChangeKeepsTheMarkItAlreadyMade(t *testing.T) {
 	}
 
 	g := f.proxyGroup("gateway")
-	// Kept so the revert below is a revert rather than a second literal that
-	// has to be checked against the fixture's default by eye.
 	shipped := g.Spec.Image
 	g.Spec.Image = "ghcr.io/spawnery/velocity:3.5.2-0.2.0"
 	if err := f.c.Update(f.ctx, g); err != nil {
@@ -2478,8 +1855,6 @@ func TestARevertedSpecChangeKeepsTheMarkItAlreadyMade(t *testing.T) {
 	}
 	at := marked.Annotations[ProxyDrainingSinceAnnotation]
 
-	// The rollback: the marked proxies match the spec again, and the
-	// replacements brought up for them do not.
 	g = f.proxyGroup("gateway")
 	g.Spec.Image = shipped
 	if err := f.c.Update(f.ctx, g); err != nil {
@@ -2542,16 +1917,7 @@ func TestProxyOccupied(t *testing.T) {
 	}
 }
 
-// TestABrokenNetworkDoesNotStopTheProxyBudget is the proxy half of the same
-// ruling, and the half that is a disconnect rather than a hang.
-//
-// syncOccupiedLabels, reconcileProxyPDB and reportNodeDraining all sat below
-// the Network and Expose early returns, so a ProxyGroup whose Network broke
-// stopped maintaining its budget entirely. The dangerous shape is the one
-// reproduced here: the proxy was empty at the last successful pass, so the
-// budget froze at minAvailable: 0 with no label on the pod, and every player
-// who joined afterwards was on a pod the eviction API could take with nothing
-// standing in the way.
+// A broken Network must not freeze the proxy budget.
 func TestABrokenNetworkDoesNotStopTheProxyBudget(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -2580,9 +1946,6 @@ func TestABrokenNetworkDoesNotStopTheProxyBudget(t *testing.T) {
 			"the assertion below could hold on a budget nobody updated", pdb.Spec.MinAvailable)
 	}
 
-	// The Network goes, a node is cordoned under one proxy, and a player joins
-	// the other. All three things this group owes its players happen on a pass
-	// that can do nothing else.
 	if err := f.c.Delete(f.ctx, f.network); err != nil {
 		t.Fatalf("delete network: %v", err)
 	}
@@ -2593,8 +1956,6 @@ func TestABrokenNetworkDoesNotStopTheProxyBudget(t *testing.T) {
 
 	f.reconcileProxyGroup(r, "gateway")
 
-	// The pass really took the missing-Network route, or nothing below is a
-	// statement about the gate.
 	group := f.proxyGroup("gateway")
 	accepted := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted)
 	if accepted == nil || accepted.Status != metav1.ConditionFalse ||
@@ -2627,21 +1988,7 @@ func TestABrokenNetworkDoesNotStopTheProxyBudget(t *testing.T) {
 	}
 }
 
-// TestProxyOccupiedForBudget is the deadline-free consumers' rule, and the
-// whole of the difference from proxyOccupied above is the unknown-pod row.
-//
-// Registry.Lookup answers for a pod it has never seen with {Known: false,
-// Connected: false, PlayersStale: true}, which proxyOccupied reads as
-// occupied. The deletion wait can afford that because
-// spec.drain.timeoutSeconds ends it; a budget cannot, so a surge pod would
-// hold minAvailable above an achievable currentHealthy until its agent
-// reported, and a crash-looping proxy would hold it there for good.
-//
-// The two unknown rows are the pair that matters, and they differ only in how
-// long the registry itself has been up: Snapshot.StreamDownFor for an unknown
-// pod is the time since the operator started, which is what keeps a fleet
-// that is Ready and full of players from reading as empty in the seconds
-// after an operator restart.
+// Unlike proxyOccupied, an unknown pod counts only within the post-restart grace: no deadline ends a budget.
 func TestProxyOccupiedForBudget(t *testing.T) {
 	tests := []struct {
 		name string
@@ -2671,12 +2018,6 @@ func TestProxyOccupiedForBudget(t *testing.T) {
 			true,
 		},
 		{
-			// The row the measurement added. A Paper agent reconnecting after
-			// a 45-second absence was timed greeting at 12.5 to 17.8 seconds,
-			// every one of four at or past the 15 seconds this used to allow
-			// -- so the fleet lost its budget protection while it was still
-			// dialling back in, and minAvailable was sized without pods that
-			// were Ready and full of players.
 			"a pod still reconnecting at eighteen seconds is protected, which fifteen did not do",
 			agent.Snapshot{Players: 0, PlayersStale: true, StreamDownFor: 18 * time.Second},
 			true,
@@ -2691,20 +2032,7 @@ func TestProxyOccupiedForBudget(t *testing.T) {
 	}
 }
 
-// TestAProxyTheRegistryHasNeverSeenDoesNotWedgeTheBudget is the same rule
-// through the reconciler, on the state that made it a defect: a proxy pod
-// whose agent never connects at all. Before the qualifier it was labelled
-// occupied and counted into minAvailable from the moment it appeared, so a
-// group with one crash-looping proxy refused every eviction of the occupied
-// proxies beside it, with no deadline anywhere to end that.
-//
-// The clock has to move past budgetReconnectGrace, and that is the point
-// rather than a fixture detail: newFixture starts the registry at the same
-// instant it starts the clock, so at the top of any test built on newFixture
-// every unknown pod is inside the post-restart grace and reads as occupied on
-// purpose. That constant is the budget's own and not phase.StreamDownGrace,
-// which answers a different question about a known server; its comment carries
-// the measurement that separated them.
+// newFixture starts the registry with the clock, so unknown pods begin inside budgetReconnectGrace.
 func TestAProxyTheRegistryHasNeverSeenDoesNotWedgeTheBudget(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -2718,12 +2046,8 @@ func TestAProxyTheRegistryHasNeverSeenDoesNotWedgeTheBudget(t *testing.T) {
 	for i := range pods {
 		f.markProxyPodReady(t, &pods[i])
 	}
-	// One proxy reports; the other's agent never connects.
 	f.reportProxyPlayers(t, pods[0], 4)
 
-	// Inside the grace both count, which is the operator-restart case and is
-	// asserted here so that the assertion after the advance is about the
-	// grace expiring rather than about anything else in the fixture.
 	f.reconcileProxyGroup(r, "gateway")
 	pdbKey := types.NamespacedName{Name: podspec.GroupPDBName("gateway", podspec.RoleProxy), Namespace: f.ns}
 	pdb := &policyv1.PodDisruptionBudget{}
@@ -2736,9 +2060,7 @@ func TestAProxyTheRegistryHasNeverSeenDoesNotWedgeTheBudget(t *testing.T) {
 			pdb.Spec.MinAvailable)
 	}
 
-	// Past the grace the silent proxy stops being paid for. The reporting one
-	// has to be kept fresh, or it would go stale on the same advance and the
-	// count would stay at 2 for a reason that has nothing to do with this.
+	// Keep the reporting proxy fresh, or it goes stale on the same advance.
 	f.clock.Advance(budgetReconnectGrace + time.Second)
 	f.reportProxyPlayers(t, pods[0], 4)
 	f.reconcileProxyGroup(r, "gateway")
@@ -2762,9 +2084,6 @@ func TestAProxyTheRegistryHasNeverSeenDoesNotWedgeTheBudget(t *testing.T) {
 	f.assertBudgetSelectsExactlyWhatItCounts(t, pdbKey.Name)
 }
 
-// TestTheOccupiedLabelFollowsTheProxyPlayerCount is what makes the budget in
-// Task 7 mean anything: the selector matches occupied pods and stops matching
-// when they empty.
 func TestTheOccupiedLabelFollowsTheProxyPlayerCount(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -2791,9 +2110,6 @@ func TestTheOccupiedLabelFollowsTheProxyPlayerCount(t *testing.T) {
 	}
 }
 
-// TestTheProxyGroupBudgetSizesToOccupiedPods is the object the eviction API
-// consults. Every assertion here is a way the budget can be present and still
-// protect nobody.
 func TestTheProxyGroupBudgetSizesToOccupiedPods(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -2816,9 +2132,6 @@ func TestTheProxyGroupBudgetSizesToOccupiedPods(t *testing.T) {
 	if pdb.Spec.MinAvailable == nil || pdb.Spec.MinAvailable.IntValue() != 1 {
 		t.Errorf("minAvailable = %v, want 1 — exactly one proxy is occupied", pdb.Spec.MinAvailable)
 	}
-	// The number above is only protection if the selector matches the same
-	// pods it was counted from; the assertions here and there are separate
-	// questions. See the helper.
 	f.assertBudgetSelectsExactlyWhatItCounts(t, pdbKey.Name)
 	if pdb.Spec.MaxUnavailable != nil {
 		t.Error("maxUnavailable is set; Kubernetes rejects it for pods with no controller carrying a scale subresource")
@@ -2830,8 +2143,7 @@ func TestTheProxyGroupBudgetSizesToOccupiedPods(t *testing.T) {
 		t.Error("the PDB carries no owner reference; it would outlive the group and block evictions forever")
 	}
 
-	// Both proxies now report a fresh zero: minAvailable has to drop back to
-	// 0, or a drained group would still block its own node.
+	// A drained group must not block its own node.
 	f.reportProxyPlayers(t, pods[0], 0)
 	f.reportProxyPlayers(t, pods[1], 0)
 	f.reconcileProxyGroup(r, "gateway")
@@ -2844,34 +2156,16 @@ func TestTheProxyGroupBudgetSizesToOccupiedPods(t *testing.T) {
 	}
 }
 
-// TestServerAndProxyGroupsSharingANameGetDistinctBudgets pins the fix for
-// task 7's review Critical 1: a ServerGroup and a ProxyGroup are different
-// Kinds, so Kubernetes lets a namespace hold one of each under the same
-// name -- podspec.GroupConfigMapName's doc comment narrates the incident this
-// repository already had from naming a per-group object after the bare group
-// name alone. Before the fix, reconcileProxyPDB named its object group.Name,
-// exactly like reconcilePDB, so the second of the two controllers to
-// reconcile here would have its SetControllerReference call fail with
-// AlreadyOwnedError, and its Reconcile would return before setStatus. The
-// error itself would have named both the object and the owning controller —
-// confirmed by mutation-testing this exact scenario, which reproduced
-// "Object .../lobby is already owned by another ServerGroup controller
-// lobby" verbatim — but the losing group's own status would carry no sign of
-// it: no condition is written for this failure, so a stale Accepted=True (or
-// whatever was last there) stays, invisible to anyone reading the CR alone.
+// A ServerGroup and a ProxyGroup may share a name, so their budgets must not.
 func TestServerAndProxyGroupsSharingANameGetDistinctBudgets(t *testing.T) {
 	f := newFixture(t)
-	// f.group is already a ServerGroup named "lobby" (see newFixture);
-	// giving the ProxyGroup the same name is the whole point of this test.
+	// f.group is a ServerGroup named "lobby" (see newFixture).
 	f.createProxyGroup(f.group.Name)
 
 	sr := groupReconciler(f)
 	pr := proxyGroupReconciler(f)
 	f.reconcileGroup(t, sr)
 	f.reconcileProxyGroup(pr, f.group.Name)
-	// Reconcile the ServerGroup again: had the ProxyGroup pass above already
-	// stolen the object's controller reference, this call would either error
-	// outright or silently leave the ServerGroup without a budget of its own.
 	f.reconcileGroup(t, sr)
 
 	serverPDB := &policyv1.PodDisruptionBudget{}
@@ -2898,33 +2192,15 @@ func TestServerAndProxyGroupsSharingANameGetDistinctBudgets(t *testing.T) {
 	}
 }
 
-// TestABudgetSelectsExactlyThePodsItCounts pairs a budget's selector against
-// the pods it counts, in the configuration that makes the difference a
-// disconnect: a ServerGroup and a ProxyGroup sharing one name in one
-// namespace, each holding occupied pods.
-//
-// Checking minAvailable against a number, or the occupied label against the
-// pods carrying it, never checks the two against each other. A ServerGroup
-// selector of {managed-by, group, occupied} with no role term matches the
-// proxies of the same-named ProxyGroup -- both kinds carry
-// spawnery.cloud/occupied -- while counting only its own servers, so
-// disruptionsAllowed goes positive and kubectl drain can evict an occupied
-// server pod.
-//
-// Both budgets are checked, through one helper, because the property belongs
-// to neither kind in particular: whichever selector loses a term next, the
-// same assertion is the one that catches it.
+// Both kinds carry spawnery.cloud/occupied, so a selector without the role term matches the other kind's pods.
 func TestABudgetSelectsExactlyThePodsItCounts(t *testing.T) {
 	f := newFixture(t)
 	sr := groupReconciler(f)
 	pr := proxyGroupReconciler(f)
-	// f.group is a ServerGroup named "lobby" (see newFixture). A ProxyGroup of
-	// the same name in the same namespace is the configuration under test, and
-	// Kubernetes permits it -- see podspec.GroupPDBName.
+	// f.group is a ServerGroup named "lobby" (see newFixture).
 	f.createProxyGroup(f.group.Name)
 
-	// One occupied server. f.reconcile runs the Server controller, which is
-	// what writes the occupied label onto the server pod.
+	// f.reconcile runs the Server controller, which writes the occupied label.
 	f.reconcileGroup(t, sr)
 	srv := f.listServers(t)[0]
 	uid := bringUpNamed(t, f, srv.Name)
@@ -2933,7 +2209,6 @@ func TestABudgetSelectsExactlyThePodsItCounts(t *testing.T) {
 	}
 	f.reconcile(srv.Name)
 
-	// Two occupied proxies under the same name.
 	f.reconcileProxyGroup(pr, f.group.Name)
 	proxies := f.proxyPods(f.group.Name)
 	if len(proxies) != 2 {
@@ -2947,9 +2222,6 @@ func TestABudgetSelectsExactlyThePodsItCounts(t *testing.T) {
 	f.reconcileProxyGroup(pr, f.group.Name)
 	f.reconcileGroup(t, sr)
 
-	// The configuration has to exist before the assertions mean anything. A
-	// run where no proxy ended up labelled occupied would satisfy the helper
-	// below for the one reason that says nothing.
 	occupiedServers, occupiedProxies := 0, 0
 	pods := &corev1.PodList{}
 	if err := f.c.List(f.ctx, pods, client.InNamespace(f.ns), client.MatchingLabels{
@@ -2976,26 +2248,7 @@ func TestABudgetSelectsExactlyThePodsItCounts(t *testing.T) {
 	f.assertBudgetSelectsExactlyWhatItCounts(t, podspec.GroupPDBName(f.group.Name, podspec.RoleProxy))
 }
 
-// stepAfterPriming is the clock TestTheProxyGroupBudgetReadsTheRegistryOnce
-// uses to reproduce task 7 review's Critical 2 deterministically, with no
-// goroutines and no real concurrency.
-//
-// ProxyGroupReconciler.Agents is a concrete *agent.Registry, not an
-// interface, so there is no seam to intercept Lookup itself or tell one call
-// site's reads from another's. The one hook agent.New exposes is the clock
-// function -- its own doc comment says "the clock is injectable so the
-// staleness rules are testable" -- and that is enough: Registry.Lookup calls
-// it fresh on every invocation and derives PlayersStale from the delta, so a
-// clock that changes its answer partway through a single Reconcile pass
-// changes what Lookup says without anything running concurrently at all.
-//
-// While priming, Now always returns the fixed instant fresh -- this is for
-// setup (Connect, ReportPlayers), which must not be counted against the
-// pass under test. Once priming stops, Now counts its own calls: the first
-// freshCalls of them still return fresh, and every one after that returns
-// fresh stepped forward by step. Choosing freshCalls precisely -- see the
-// test for the count and why -- places the step exactly between
-// syncOccupiedLabels's read and whatever runs after it.
+// stepAfterPriming steps the clock after freshCalls reads, changing Lookup's answer mid-Reconcile without concurrency.
 type stepAfterPriming struct {
 	fresh      time.Time
 	step       time.Duration
@@ -3015,24 +2268,7 @@ func (c *stepAfterPriming) Now() time.Time {
 	return c.fresh
 }
 
-// TestTheProxyGroupBudgetReadsTheRegistryOnce pins that reconcileProxyPDB
-// takes syncOccupiedLabels's evaluation rather than making a second
-// r.Agents.Lookup for the same pod: the registry's answer can change between
-// two calls a few lines apart with no concurrency at all, because Lookup
-// re-derives PlayersStale from the clock on every call.
-//
-// One Reconcile pass makes exactly two registry reads before whatever runs
-// immediately after
-// syncOccupiedLabels: reconcileReplicas builds its rollout view (one Lookup
-// per pod; this fixture uses one pod so this is one call), and
-// syncOccupiedLabels itself makes the other. freshCalls: 2 lets both see a
-// fresh count; the clock steps forward by twice the report interval starting
-// on the call after that. A second read in reconcileProxyPDB would land on the
-// stepped, now-stale side and produce minAvailable=1 while the pod carries no
-// occupied label at all. As written, that next call is setStatus's unrelated
-// read of Players, which does not care about staleness, and minAvailable is
-// sized from the one evaluation syncOccupiedLabels already made -- 0, agreeing
-// with the unlabelled pod.
+// One pass reads the registry twice before reconcileProxyPDB runs, hence freshCalls: 2.
 func TestTheProxyGroupBudgetReadsTheRegistryOnce(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -3050,8 +2286,6 @@ func TestTheProxyGroupBudgetReadsTheRegistryOnce(t *testing.T) {
 	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {
 		g.Spec.Replicas = 1
 	})
-	// Creates the one pod. The clock is still priming, so this pass cannot
-	// affect the step count the pass under test relies on.
 	f.reconcileProxyGroup(r, "gateway")
 
 	pods := f.proxyPods("gateway")
@@ -3064,8 +2298,6 @@ func TestTheProxyGroupBudgetReadsTheRegistryOnce(t *testing.T) {
 		t.Fatalf("ReportPlayers: %v", err)
 	}
 
-	// The pass under test: the clock steps from fresh to stale partway
-	// through it.
 	clk.priming = false
 	f.reconcileProxyGroup(r, "gateway")
 
@@ -3086,10 +2318,6 @@ func TestTheProxyGroupBudgetReadsTheRegistryOnce(t *testing.T) {
 	}
 }
 
-// TestNodeDrainingConditionNamesTheNodeOnAProxyGroup is the proxy half of
-// TestNodeDrainingConditionNamesTheNode: the same condition, built from the
-// same fact -- a live pod on a departing node -- reported the same way
-// regardless of which group kind noticed it.
 func TestNodeDrainingConditionNamesTheNodeOnAProxyGroup(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -3118,9 +2346,7 @@ func TestNodeDrainingConditionNamesTheNodeOnAProxyGroup(t *testing.T) {
 		t.Errorf("message %q does not name the node", cond.Message)
 	}
 
-	// Release it. The condition reports where pods are, not what has been
-	// decided about them, so it drops to False on the fact alone -- nothing
-	// here waits for the mark this pass never got around to making.
+	// The condition reports where pods are, not what was decided about them.
 	f.ensureNode(t, node.Name, false)
 	f.reconcileProxyGroup(r, "gateway")
 	cond = meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions,
@@ -3130,12 +2356,7 @@ func TestNodeDrainingConditionNamesTheNodeOnAProxyGroup(t *testing.T) {
 	}
 }
 
-// TestANodeDrainMarkFiresANodeDrainingEvent is the event half of §3.7 for the
-// ProxyGroup: Task 5 marked a proxy for its departing node without telling
-// the operator why. It has to reach the actual mark, not just the surge, so
-// this mirrors TestAProxyOnACordonedNodeIsReplaced's two-reconcile shape
-// rather than stopping at the first pass, where nothing is marked yet and the
-// event assertion below would pass for no reason.
+// Two reconciles: the first pass only surges, and nothing is marked yet.
 func TestANodeDrainMarkFiresANodeDrainingEvent(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -3187,11 +2408,7 @@ func TestANodeDrainMarkFiresANodeDrainingEvent(t *testing.T) {
 		t.Errorf("NodeDraining events = %d, want exactly 1: %v", count, events)
 	}
 
-	// A resync with the mark and the departing node both unchanged must not
-	// re-fire: the event is for the moment of decision, not a status the
-	// group repeats every pass. Without the guard against re-stamping an
-	// existing mark, this would announce the same drain once per resync for
-	// as long as the pod takes to empty.
+	// The event is for the decision, not repeated on every resync.
 	f.clock.Advance(ResyncInterval)
 	f.reconcileProxyGroup(r, "gateway")
 	if containsEvent(drainEvents(rec), spawneryv1alpha1.ReasonNodeDraining) {
@@ -3199,10 +2416,6 @@ func TestANodeDrainMarkFiresANodeDrainingEvent(t *testing.T) {
 	}
 }
 
-// TestAHashMismatchMarkDoesNotFireANodeDrainingEvent is the negative half of
-// the same gate: a rolling update marks a proxy too, and §3.7 reserves
-// NodeDraining for the occasion a departing node causes, not the occasion a
-// spec change does -- that one is already a rolling update, not a drain.
 func TestAHashMismatchMarkDoesNotFireANodeDrainingEvent(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -3250,17 +2463,7 @@ func TestAHashMismatchMarkDoesNotFireANodeDrainingEvent(t *testing.T) {
 	}
 }
 
-// TestGroupsOfNetworkWakesOnlyTheGroupsThatNameIt covers the mapper behind the
-// Watches(&Network{}) both group reconcilers now carry. A group refused because
-// its Network is missing or unaccepted has no way of hearing that the Network
-// came back — it is not an owner, and nothing about the group itself changes —
-// so it waited out the resync. docs/reference/known-issues.md measures the pair of waits
-// at roughly ninety seconds.
-//
-// The filter on NetworkRef is not a formality even under one-network-per-
-// namespace: a namespace holding a loser as well as a winner is exactly the
-// state this operator's own duplicate rule creates, and a group pointed at the
-// loser has no business being woken by the winner.
+// A namespace may hold a losing duplicate Network; groups pointed at it must not be woken by the winner.
 func TestGroupsOfNetworkWakesOnlyTheGroupsThatNameIt(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -3281,22 +2484,7 @@ func TestGroupsOfNetworkWakesOnlyTheGroupsThatNameIt(t *testing.T) {
 	}
 }
 
-// TestTheProxyPlayerLimitIsDecidedTheSameWayTwice guards one answer given in
-// two places.
-//
-// podspec.BuildProxyPod writes SPAWNERY_PLAYER_LIMIT on the container;
-// proxyConfigValues writes playerLimit into the ConfigMap the same pod mounts.
-// Both now call podspec.ProxyPlayerLimit, so they cannot disagree — but that
-// is a property of two call sites, and a call site is a thing somebody can
-// stop using. This asserts the outcome rather than the mechanism, so inlining
-// either one back into its caller fails here rather than the next time
-// somebody edits one of the two.
-//
-// The disagreement is not hypothetical: a predicate written out on both sides
-// leaves the ConfigMap's playerLimit nil whenever spec.config is nil while the
-// env var already defaults to 500, so a ProxyGroup with no spec.config comes up
-// Accepted, with its Service, and every pod crash-loops on `config.yaml:
-// playerLimit is not set` with nothing on the CR saying why.
+// Asserts the outcome, so inlining either call site of ProxyPlayerLimit fails here.
 func TestTheProxyPlayerLimitIsDecidedTheSameWayTwice(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -3359,15 +2547,7 @@ func TestTheProxyPlayerLimitIsDecidedTheSameWayTwice(t *testing.T) {
 	}
 }
 
-// The number in a drain-deadline event is not a measurement, and until now it
-// read like one.
-//
-// Registry.Lookup hands back the last report and nothing else, so a proxy whose
-// agent died with players on it reads as that count forever, and one whose
-// agent never connected reads as zero — "0 player(s) still connected" inside a
-// Warning about disconnecting people. Nothing but the event's text reads any of
-// it, which is what keeps a wrong number cosmetic; the first reader turns it
-// into a wrong input.
+// Lookup returns the last report, so a dead or never-connected agent's count is unknown, not zero.
 func TestTheDeadlineEventSaysWhatItActuallyKnows(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -3397,16 +2577,13 @@ func TestTheDeadlineEventSaysWhatItActuallyKnows(t *testing.T) {
 		})
 	}
 
-	// The unknown case must not name a count at all. Asserting the absence
-	// separately, because a phrase that both says "unknown" and prints a zero
-	// would satisfy the table above.
+	// A phrase saying "unknown" and printing a zero would satisfy the table above.
 	if got := proxyPlayerNote(agent.Snapshot{PlayersStale: true}); strings.Contains(got, "0 player") {
 		t.Errorf("proxyPlayerNote = %q for a pod no agent ever reported from; it must not "+
 			"name a count, least of all zero", got)
 	}
 }
 
-// refusingPodDeleter refuses to delete pods and does everything else normally.
 type refusingPodDeleter struct {
 	client.Client
 	err error
@@ -3419,10 +2596,7 @@ func (r refusingPodDeleter) Delete(ctx context.Context, obj client.Object, opts 
 	return r.Client.Delete(ctx, obj, opts...)
 }
 
-// A drain-deadline event describes a disconnection, so a pass that did not
-// manage to delete the pod has nothing to announce. Emitting before the Delete
-// meant a failed delete re-announced the same lost sessions on every pass for
-// as long as the refusal stood.
+// A pass that did not delete the pod has nothing to announce.
 func TestTheDeadlineIsAnnouncedOnlyOnceThePodIsGone(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -3457,25 +2631,18 @@ func TestTheDeadlineIsAnnouncedOnlyOnceThePodIsGone(t *testing.T) {
 			"announcing it again on every pass until the refusal is lifted", ev)
 	}
 
-	// And once the delete can land, exactly the one event.
 	f.reconcileProxyGroup(r, "gateway")
 	if ev := drainEvents(rec); !containsEvent(ev, "ProxyDrainTimeout") {
 		t.Errorf("events = %v once the pod could be deleted, want the deadline announced", ev)
 	}
 }
 
-// The proxy half of the same report. It costs no list of its own — the pods
-// are already in hand — but the wiring can still be wrong in the way that
-// matters most quietly: a digest taken from the wrong place would leave every
-// group permanently in sync or permanently pending, and both read as a
-// working report.
+// A digest from the wrong place would leave every group always in sync or always pending.
 func TestAProxyGroupReportsItsOwnRotationState(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
 
-	// A digest before the pods exist, so they are built carrying it. Without
-	// this they carry no stamp at all and the group reports
-	// PodsPredateTracking — true, and not what this is about.
+	// Without a digest first, the pods carry no stamp and the group reports PodsPredateTracking.
 	publishDigest := func(hash string) {
 		t.Helper()
 		net := f.getNetwork(t, f.network.Name)
@@ -3492,7 +2659,6 @@ func TestAProxyGroupReportsItsOwnRotationState(t *testing.T) {
 		t.Fatal("no proxy pods were created")
 	}
 
-	// A rotation, from those pods' point of view.
 	publishDigest("bbbbbbbbbbbbbbbb")
 
 	f.reconcileProxyGroup(r, "gateway")
@@ -3501,9 +2667,7 @@ func TestAProxyGroupReportsItsOwnRotationState(t *testing.T) {
 	if got == nil {
 		t.Fatal("the group carries no ForwardingSecretRotationPending condition at all")
 	}
-	// True/RotationPending exactly, not merely "not False": a digest taken from
-	// the wrong place reads as Unknown/SecretUnresolved, which is also not
-	// False and is also wrong.
+	// A digest from the wrong place reads as Unknown/SecretUnresolved, which is also not False.
 	if got.Status != metav1.ConditionTrue || got.Reason != spawneryv1alpha1.ReasonRotationPending {
 		t.Errorf("condition = %s/%s, want True/%s — every pod of this group was stamped before "+
 			"the digest the network now publishes",
@@ -3511,11 +2675,7 @@ func TestAProxyGroupReportsItsOwnRotationState(t *testing.T) {
 	}
 }
 
-// refusedFixture is the shape all four tests below start from: a group with
-// two ready proxies, one of them on a node that is then cordoned, and a
-// Network that is then deleted so every later reconcile takes the refusing
-// path. It returns the pods in the order proxyPods gives them, with pods[1]
-// the one on the departing node.
+// refusedFixture returns pods in proxyPods order with pods[1] on the departing node, and deletes the Network.
 func refusedFixture(t *testing.T) (*fixture, *ProxyGroupReconciler, []corev1.Pod, *corev1.Node) {
 	t.Helper()
 	f := newFixture(t)
@@ -3539,10 +2699,6 @@ func refusedFixture(t *testing.T) (*fixture, *ProxyGroupReconciler, []corev1.Pod
 	return f, r, pods, node
 }
 
-// proxyPod returns one of the group's live pods by name, or nil if it is gone.
-// A helper rather than a scan at each call site, because "is it still there"
-// is the question four of these tests ask and a loop that fell through
-// silently would answer it wrongly.
 func (f *fixture) proxyPod(t *testing.T, name string) *corev1.Pod {
 	t.Helper()
 	for _, p := range f.proxyPods("gateway") {
@@ -3553,8 +2709,6 @@ func (f *fixture) proxyPod(t *testing.T, name string) *corev1.Pod {
 	return nil
 }
 
-// assertRefused makes each test below a statement about the gate rather than
-// about whatever else the pass did.
 func assertRefused(t *testing.T, f *fixture) {
 	t.Helper()
 	accepted := meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions,
@@ -3565,12 +2719,7 @@ func assertRefused(t *testing.T, f *fixture) {
 	}
 }
 
-// TestARefusedGroupDrainsAProxyOffADepartingNode is the defect. Such a group
-// published NodeDraining: True naming the node, sized minAvailable to cover
-// every occupied proxy so the eviction API refused the pod, and then never
-// marked it draining, never withdrew its readiness and never started its
-// removal deadline. `kubectl drain` could not finish until somebody repaired
-// the Network -- the budget refused the disruption, nothing acted on it.
+// A refused group must still drain a proxy off a departing node, or kubectl drain cannot finish.
 func TestARefusedGroupDrainsAProxyOffADepartingNode(t *testing.T) {
 	f, r, pods, _ := refusedFixture(t)
 	going := pods[1]
@@ -3580,22 +2729,15 @@ func TestARefusedGroupDrainsAProxyOffADepartingNode(t *testing.T) {
 	f.reconcileProxyGroup(r, "gateway")
 	assertRefused(t, f)
 
-	// Readiness withdrawn, so no further player is routed to a pod that is
-	// about to go. This is the half the budget cannot do.
 	if got := f.proxies.lastReady(string(going.UID)); got == nil || *got {
 		t.Errorf("lastReady(%s) = %v, want false: the proxy on the departing node is still taking players",
 			going.Name, got)
 	}
-	// And the survivor is untouched, which is what says the drain is aimed
-	// rather than applied to the group.
 	if got := f.proxies.lastReady(string(pods[0].UID)); got == nil || !*got {
 		t.Errorf("lastReady(%s) = %v, want true", pods[0].Name, got)
 	}
 
-	// Reported empty on a live stream, which is what "empty" has to mean here:
-	// a proxy whose agent has never spoken reads as occupied on purpose, so
-	// that a pod whose stream broke is not deleted with people on it. So the
-	// deletion is immediate and costs nobody anything.
+	// A live-stream zero: a silent agent would read as occupied.
 	live := f.proxyPods("gateway")
 	for _, p := range live {
 		if p.Name == going.Name {
@@ -3604,11 +2746,6 @@ func TestARefusedGroupDrainsAProxyOffADepartingNode(t *testing.T) {
 	}
 }
 
-// TestARefusedGroupWaitsOutTheDeadlineForAnOccupiedProxy is the other side of
-// the same loop, and the one that decides whether this fix is safe. An
-// occupied proxy is not deleted on the pass that marks it -- that would
-// disconnect exactly the players the readiness contract exists to protect --
-// and goes only when spec.drain.timeoutSeconds has passed.
 func TestARefusedGroupWaitsOutTheDeadlineForAnOccupiedProxy(t *testing.T) {
 	f, r, pods, _ := refusedFixture(t)
 	going := pods[1]
@@ -3628,8 +2765,7 @@ func TestARefusedGroupWaitsOutTheDeadlineForAnOccupiedProxy(t *testing.T) {
 		t.Errorf("lastReady = %v, want false", got)
 	}
 
-	// Past the deadline, which is DrainTimeout's five minutes here -- the
-	// fixture's ProxyGroup sets no spec.drain, so the default is what runs.
+	// DrainTimeout's default: the fixture sets no spec.drain.
 	f.clock.Advance(6 * time.Minute)
 	f.reconcileProxyGroup(r, "gateway")
 
@@ -3638,10 +2774,7 @@ func TestARefusedGroupWaitsOutTheDeadlineForAnOccupiedProxy(t *testing.T) {
 	}
 }
 
-// TestARefusedGroupLeavesASurplusProxyAlone keeps the new behaviour as narrow
-// as its reasoning. Surplus and a stale hash both need a replacement the group
-// cannot build without its Network, and both can wait for the Network at no
-// cost to anybody; only a departing node cannot wait.
+// Surplus and a stale hash can wait for the Network; only a departing node cannot.
 func TestARefusedGroupLeavesASurplusProxyAlone(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -3655,7 +2788,6 @@ func TestARefusedGroupLeavesASurplusProxyAlone(t *testing.T) {
 		f.markProxyPodReady(t, &pods[i])
 	}
 
-	// Replicas down to one and the Network gone, with no node going anywhere.
 	group := f.proxyGroup("gateway")
 	group.Spec.Replicas = 1
 	if err := f.c.Update(f.ctx, group); err != nil {
@@ -3679,15 +2811,10 @@ func TestARefusedGroupLeavesASurplusProxyAlone(t *testing.T) {
 	}
 }
 
-// TestUncordoningRestoresARefusedGroupsProxy is the cancellation. leaving is
-// recomputed from the node on every pass and never read back off the
-// annotation, which matters most here: a refused group cannot create a
-// replacement, so a drain it could not undo would cost it a proxy for nothing.
+// A refused group cannot create a replacement, so leaving must be recomputed from the node.
 func TestUncordoningRestoresARefusedGroupsProxy(t *testing.T) {
 	f, r, pods, node := refusedFixture(t)
 	going := pods[1]
-	// Occupied, so the pod survives the marking pass and there is something
-	// left to restore.
 	f.reportProxyPlayers(t, going, 2)
 
 	f.reconcileProxyGroup(r, "gateway")
@@ -3713,14 +2840,6 @@ func TestUncordoningRestoresARefusedGroupsProxy(t *testing.T) {
 	}
 }
 
-// TestACrashLoopingProxyIsReportedOnTheGroup closes the silence a ProxyGroup
-// kept about its own pods.
-//
-// A group whose pods crash-loop reported Accepted, had its Service up, and
-// published no reason anywhere -- proxyConfigValues' own comment names that
-// shape as the cost of guessing a player limit wrong, and it is what a proxy
-// that cannot bind its ready port produced too. The ServerGroup controller has
-// reported CrashLoopBackoff since 4d; this is its counterpart.
 func TestACrashLoopingProxyIsReportedOnTheGroup(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -3757,10 +2876,7 @@ func TestACrashLoopingProxyIsReportedOnTheGroup(t *testing.T) {
 	if cond.Reason != spawneryv1alpha1.ReasonCrashLoopBackoff {
 		t.Errorf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonCrashLoopBackoff)
 	}
-	// The name, and what killed it. The waiting message says only "back-off
-	// 5m0s restarting failed container", which is true of every crash loop
-	// there has ever been; the previous run's exit code is what an operator
-	// can act on.
+	// The waiting message is generic; the previous exit code is what an operator can act on.
 	for _, want := range []string{pods[0].Name, "exit 1", "Error"} {
 		if !strings.Contains(cond.Message, want) {
 			t.Errorf("message %q does not mention %q", cond.Message, want)
@@ -3768,9 +2884,6 @@ func TestACrashLoopingProxyIsReportedOnTheGroup(t *testing.T) {
 	}
 }
 
-// TestAHealthyProxyGroupIsNotReportedAsCrashLooping keeps the check off the
-// ordinary path. Every pod in this fixture is running, and a Degraded that
-// fired here would be on every group in every cluster.
 func TestAHealthyProxyGroupIsNotReportedAsCrashLooping(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)

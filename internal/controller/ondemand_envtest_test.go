@@ -37,20 +37,15 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// The group must not size its own members. Every other group type answers
-// "how many", and the one thing that must never happen here is that an
-// answer of zero -- which is what every sizing rule computes for a group
-// with no sizing fields -- is acted on.
+// Every sizing rule computes zero for a group with no sizing fields, and that
+// zero must never be acted on.
 func TestOnDemandGroupCreatesAndDeletesNothing(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	group := f.createOnDemandGroup(t, "private-servers", 50)
 	member := f.createOnDemandMember(t, group, "c0ffee")
-	// And one carrying an ordinal beside its key. The persistent rule skips
-	// the views that have none, so a group of ordinary members alone would
-	// survive that rule being reached and hold nothing about the switch at
-	// all; this is the member it does see, and at spec.replicas nil the
-	// ordinal it reads is surplus.
+	// The persistent rule only sees members with an ordinal; at spec.replicas
+	// nil this one is surplus.
 	stray := f.createOnDemandMemberWithOrdinal(t, group, "decaf", 0)
 
 	for i := 0; i < 3; i++ {
@@ -71,15 +66,12 @@ func TestOnDemandGroupCreatesAndDeletesNothing(t *testing.T) {
 	}
 }
 
-// A departing node takes a private world's server with it, like any other
-// server on that node -- and leaves the world itself alone, which is what makes
-// the removal survivable: the key is free and its owner starts it again.
+// The world stays, so the key is free and its owner can start it again.
 func TestOnDemandMemberOnADepartingNodeGoesWithoutItsWorld(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	group := f.createOnDemandGroup(t, "private-servers", 50)
 	member := f.createOnDemandMember(t, group, "c0ffee")
-	// The Server controller is what gives the member its claim and its pod.
 	f.reconcile(member.Name)
 	claim := podspec.DataClaimName(member.Name)
 	if f.claim(claim) == nil {
@@ -103,8 +95,7 @@ func TestOnDemandMemberOnADepartingNodeGoesWithoutItsWorld(t *testing.T) {
 	}
 }
 
-// A member that said its round was over and stopped is gone: its world is on
-// the claim, and the object holds the one name its owner needs to start again.
+// The world is on the claim; deleting the object loses nothing.
 func TestOnDemandFinishedMemberIsSwept(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -124,9 +115,7 @@ func TestOnDemandFinishedMemberIsSwept(t *testing.T) {
 	}
 }
 
-// Nothing rolls. An image bump reaches a world the next time its owner starts
-// it, and throwing a player out of their own world to apply one is the
-// opposite of what a private server is for.
+// An image bump reaches a world the next time its owner starts it.
 func TestOnDemandMemberIsNotRolledBySpecChange(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -150,7 +139,6 @@ func TestOnDemandMemberIsNotRolledBySpecChange(t *testing.T) {
 	}
 }
 
-// A broken world is kept, because somebody has to be able to look at it.
 func TestOnDemandFailedMemberIsKeptForDiagnosis(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -166,17 +154,13 @@ func TestOnDemandFailedMemberIsKeptForDiagnosis(t *testing.T) {
 	}
 }
 
-// The cap is the group's and not each key's: a second broken world prunes the
-// first, so an operator reading a private-server group finds one corpse to
-// look at rather than as many as the group has keys.
+// The cap is the group's, not each key's.
 func TestOnDemandFailedMembersArePrunedPastTheCap(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	group := f.createOnDemandGroup(t, "private-servers", 50)
-	// The survivor is created first and fails first, so that the rule -- the
-	// earliest failure of the newest generation, the one that says what broke
-	// -- and the alphabetical last resort disagree about it. Spelling alone
-	// would keep c0ffee.
+	// Created and failed first, so the pruning rule and the alphabetical last
+	// resort disagree: spelling alone would keep c0ffee.
 	kept := f.createOnDemandMember(t, group, "decaf")
 	pruned := f.createOnDemandMember(t, group, "c0ffee")
 	f.failMember(t, kept, f.clock.Now())
@@ -191,18 +175,15 @@ func TestOnDemandFailedMembersArePrunedPastTheCap(t *testing.T) {
 	}
 }
 
-// Progressing is about members coming up, not about the render they carry.
-// Nothing replaces an on-demand member, so a group whose worlds predate an
-// image bump has arrived where it decided to be, and a condition that said
-// otherwise would say it for as long as somebody kept playing.
+// Nothing replaces an on-demand member, so an older render is no reason to
+// stay Progressing.
 func TestOnDemandProgressingIgnoresAnEarlierSpec(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
 	group := f.createOnDemandGroup(t, "private-servers", 50)
 	member := f.createOnDemandMember(t, group, "c0ffee")
 	f.setPhase(t, member, phase.Ready)
-	// The pass that stamps the member with the group's current render, which is
-	// what the bump below makes it older than.
+	// Stamps the member with the render the bump below makes stale.
 	f.reconcileNamedGroup(t, r, group.Name)
 	f.bumpOnDemandImage(t, group)
 	f.reconcileNamedGroup(t, r, group.Name)
@@ -212,10 +193,8 @@ func TestOnDemandProgressingIgnoresAnEarlierSpec(t *testing.T) {
 		t.Fatalf("Progressing = True (%s) for a group that replaces nothing: %s",
 			settled.Reason, settled.Message)
 	}
-	// c0ffee is a bump behind, and this line is what an admin reads when they
-	// go looking for why their new image is not running. It has to report the
-	// half that was checked -- the phase -- and not the half the loop above
-	// declined to check.
+	// The message must report the phase that was checked, not the render the
+	// loop declined to check.
 	if strings.Contains(settled.Message, "current spec") {
 		t.Fatalf("Progressing says every member carries the current spec, and c0ffee does not: %s",
 			settled.Message)
@@ -224,7 +203,6 @@ func TestOnDemandProgressingIgnoresAnEarlierSpec(t *testing.T) {
 		t.Fatalf("Progressing does not say what it did check: %s", settled.Message)
 	}
 
-	// And a member that is coming up is progress, whatever render it carries.
 	second := f.createOnDemandMember(t, group, "decaf")
 	f.setPhase(t, second, phase.Pending)
 	f.reconcileNamedGroup(t, r, group.Name)
@@ -273,11 +251,9 @@ func (f *fixture) createOnDemandMember(t *testing.T, g *spawneryv1alpha1.ServerG
 	return srv
 }
 
-// createOnDemandMemberWithOrdinal builds the member no rule forbids: one
-// carrying spec.ordinal as well as its key, which a restored object or a
-// hand-written one can be, since nothing cross-checks the two fields against
-// the group's type. It is the shape that makes the persistent sizing rule see
-// an on-demand member at all.
+// createOnDemandMemberWithOrdinal builds a member carrying spec.ordinal beside
+// its key, which nothing forbids; it is the shape the persistent sizing rule
+// sees.
 func (f *fixture) createOnDemandMemberWithOrdinal(
 	t *testing.T,
 	g *spawneryv1alpha1.ServerGroup,
@@ -294,11 +270,8 @@ func (f *fixture) createOnDemandMemberWithOrdinal(
 	return srv
 }
 
-// failMember puts a member in phase Failed at a time of the caller's choosing.
-// The time is not decoration: selectFailedForPruning orders failures of one
-// generation by creationTimestamp and then by status.failedAt, and a
-// creationTimestamp has second resolution, so for members created in one breath
-// this is the field that decides which corpse is kept.
+// failMember's time matters: creationTimestamp has second resolution, so for
+// members created together status.failedAt decides which one pruning keeps.
 func (f *fixture) failMember(t *testing.T, srv *spawneryv1alpha1.Server, at time.Time) {
 	t.Helper()
 	srv.Status.Phase = string(phase.Failed)
@@ -317,9 +290,8 @@ func (f *fixture) setPhase(t *testing.T, srv *spawneryv1alpha1.Server, p phase.P
 	}
 }
 
-// bumpOnDemandImage moves the group's image, re-reading it first: a reconcile
-// pass has written the group's status since it was created, so an update from
-// the caller's copy is refused.
+// bumpOnDemandImage re-reads the group first: a reconcile pass has written its
+// status since, so an update from the caller's copy is refused.
 func (f *fixture) bumpOnDemandImage(t *testing.T, g *spawneryv1alpha1.ServerGroup) {
 	t.Helper()
 	if err := f.c.Get(f.ctx, client.ObjectKeyFromObject(g), g); err != nil {
@@ -331,8 +303,6 @@ func (f *fixture) bumpOnDemandImage(t *testing.T, g *spawneryv1alpha1.ServerGrou
 	}
 }
 
-// progressing is the group's Progressing condition, which has to be published
-// for an assertion to be about anything.
 func (f *fixture) progressing(t *testing.T, name string) *metav1.Condition {
 	t.Helper()
 	g := &spawneryv1alpha1.ServerGroup{}
@@ -346,9 +316,8 @@ func (f *fixture) progressing(t *testing.T, name string) *metav1.Condition {
 	return cond
 }
 
-// A deleted world must stay deleted while its member still drains: the
-// Server controller keeps reconciling a Server that carries a deletion
-// timestamp, and must not give it its claim back.
+// The Server controller keeps reconciling a Server that carries a deletion
+// timestamp.
 func TestADeletingOnDemandMemberDoesNotRecreateItsWorld(t *testing.T) {
 	f := newFixture(t)
 	group := f.createOnDemandGroup(t, "private-servers", 50)
@@ -383,10 +352,8 @@ func TestADeletingOnDemandMemberDoesNotRecreateItsWorld(t *testing.T) {
 	}
 }
 
-// A world made before claims carried their key keeps its labels as they are:
-// the chart's admission policy refuses the operator any change to them, so a
-// patch here would fail every pass, and adding the key would put a claim in
-// deletion's reach that was not created as an on-demand world.
+// The chart's admission policy refuses the operator any label change, and
+// adding the key would put a claim not created as a world in deletion's reach.
 func TestAnOnDemandMembersOldWorldIsNotRelabelled(t *testing.T) {
 	f := newFixture(t)
 	group := f.createOnDemandGroup(t, "private-servers", 50)
@@ -408,8 +375,6 @@ func TestAnOnDemandMembersOldWorldIsNotRelabelled(t *testing.T) {
 	}
 }
 
-// Lowering spec.storage.size changes what a new claim asks for and nothing
-// about a claim that exists: growClaim only ever raises.
 func TestALoweredSizeReachesOnlyNewClaims(t *testing.T) {
 	f := newFixture(t)
 	group := f.createOnDemandGroup(t, "private-servers", 50)
@@ -452,8 +417,6 @@ func TestALoweredSizeReachesOnlyNewClaims(t *testing.T) {
 	}
 }
 
-// rejectClaimCreates makes every PVC create fail the way the API server does
-// for an invalid object.
 type rejectClaimCreates struct{ client.Client }
 
 func (r rejectClaimCreates) Create(ctx context.Context, obj client.Object, opts ...client.CreateOption) error {
@@ -463,8 +426,7 @@ func (r rejectClaimCreates) Create(ctx context.Context, obj client.Object, opts 
 	return r.Client.Create(ctx, obj, opts...)
 }
 
-// A claim that exists is not created again, so nothing the API server would
-// refuse on create can keep its server from getting a pod.
+// So nothing the API server would refuse on create can keep the pod away.
 func TestAnExistingClaimIsNotCreatedAgain(t *testing.T) {
 	f := newFixture(t)
 	group := f.createOnDemandGroup(t, "private-servers", 50)
@@ -481,8 +443,6 @@ func TestAnExistingClaimIsNotCreatedAgain(t *testing.T) {
 	}
 }
 
-// A claim the API server refuses leaves the Server without a pod and says why
-// on its status and in an event, instead of a bare reconcile error.
 func TestARefusedClaimCreateIsReported(t *testing.T) {
 	f := newFixture(t)
 	rec := newRecorder()

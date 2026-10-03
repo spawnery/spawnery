@@ -8,12 +8,10 @@ import (
 	"k8s.io/utils/ptr"
 )
 
-// failedAt builds a Failed server that failed at t.
 func failedAt(name string, t time.Time) ServerView {
 	return ServerView{Name: name, Phase: phase.Failed, FailedAt: t}
 }
 
-// readyAt builds a Ready server that became ready at t.
 func readyAt(name string, t time.Time) ServerView {
 	return ServerView{Name: name, Phase: phase.Ready, ReadySince: t, Slots: 100}
 }
@@ -30,24 +28,14 @@ func TestCountFailuresCountsANewCorpseOnce(t *testing.T) {
 		t.Errorf("newest = %v, want %v", newest, base)
 	}
 
-	// The same corpse on the next pass. Without the FailedAt > since test this
-	// would climb by one every five-second resync forever, which is the whole
-	// reason a counter can survive at all.
+	// Without the FailedAt > since watermark this would climb on every resync.
 	got, _ = CountFailures(views, got, newest, 0)
 	if got != 1 {
 		t.Errorf("count = %d after re-observing the same corpse, want 1", got)
 	}
 }
 
-// TestCountFailuresCountsOneRoundHoweverManyFailInIt is the rule milestone 4d
-// left undecided and 2026-08-24 decided: the count is rounds, not corpses.
-//
-// Counting corpses spent the budget of six in ceil(6 / servers-per-round)
-// rounds, and servers-per-round is not one even at minReplicas 1 — DecideSize
-// runs the group above its floor to cover spareSlots, so a real group builds
-// two and loses two. A transient scheduler, registry or quota problem that
-// failed a whole round at once therefore took the group most of the way to a
-// terminal give-up that only a spec edit clears.
+// A transient problem that fails a whole round must not spend the budget per corpse.
 func TestCountFailuresCountsOneRoundHoweverManyFailInIt(t *testing.T) {
 	base := time.Now()
 	views := []ServerView{failedAt("a", base), failedAt("b", base.Add(time.Second))}
@@ -60,9 +48,6 @@ func TestCountFailuresCountsOneRoundHoweverManyFailInIt(t *testing.T) {
 		t.Error("newest is not the newer of the two failures")
 	}
 
-	// A later round still counts, and counts once: the watermark is what keeps
-	// the first round's corpses from being counted again, so a second round is
-	// distinguishable from re-observing the first.
 	later := base.Add(time.Minute)
 	views = append(views, failedAt("c", later), failedAt("d", later.Add(time.Second)))
 	got, _ = CountFailures(views, got, newest, 0)
@@ -73,7 +58,6 @@ func TestCountFailuresCountsOneRoundHoweverManyFailInIt(t *testing.T) {
 
 func TestCountFailuresResetsOnASuccessAfterTheLastFailure(t *testing.T) {
 	base := time.Now()
-	// Three failures already counted, then a server came up.
 	views := []ServerView{readyAt("b", base.Add(time.Minute))}
 
 	got, _ := CountFailures(views, 3, base, 0)
@@ -83,11 +67,7 @@ func TestCountFailuresResetsOnASuccessAfterTheLastFailure(t *testing.T) {
 }
 
 func TestCountFailuresIgnoresASuccessOlderThanTheLastFailure(t *testing.T) {
-	// The rule that a plausible implementation gets wrong. "Any server is
-	// Ready" would hold the counter at zero forever for a group with one
-	// healthy server and one that crash-loops — a bad node, or a resource
-	// request only some nodes satisfy — and the group would hammer
-	// indefinitely. The success has to be *since* the failure.
+	// "Any server is Ready" would let a group with one crash-looping server retry forever.
 	base := time.Now()
 	views := []ServerView{
 		readyAt("healthy", base.Add(-time.Hour)),
@@ -101,8 +81,6 @@ func TestCountFailuresIgnoresASuccessOlderThanTheLastFailure(t *testing.T) {
 }
 
 func TestCountFailuresStartsAFreshStreakAfterASuccess(t *testing.T) {
-	// A success breaks the old streak, and a failure after that success starts
-	// a new one at 1 rather than continuing the old count.
 	base := time.Now()
 	views := []ServerView{
 		readyAt("recovered", base.Add(time.Minute)),
@@ -118,33 +96,11 @@ func TestCountFailuresStartsAFreshStreakAfterASuccess(t *testing.T) {
 	}
 }
 
-// TestCountFailuresTakesASuccessFromAnyPhaseAndWhyThatIsSafe writes down the
-// half of CountFailures' stated safety property that lives in another file.
-//
-// backoff.go says: "A Failed server carries no ReadySince (the Server
-// controller clears it on the way out of Ready), so a corpse can never look
-// like the success that ends its own streak." That is load-bearing — without
-// it a corpse whose own readySince post-dates the watermark would reset the
-// streak it belongs to, and the count could never climb past 1 for the
-// Ready -> Failed class — and nothing else checks it: every fixture in this
-// package reaches Failed through Starting, which clears readySince anyway, so
-// deleting `case phase.Failed: srv.Status.ReadySince = nil` from
-// server_controller.go leaves the whole suite green.
-//
-// This test pins the *dependency*, and does so honestly: CountFailures' search
-// for the newest success reads ReadySince off every view regardless of phase,
-// so handed a Failed view carrying one it resets the streak. That is the
-// behaviour, and asserting it is what makes the invariant's location explicit
-// — the guarantee is not in this function, it is upstream, in the Server
-// controller's clearing of readySince on entry to Failed. Its direct pin is
-// TestServerFailedStraightFromReadyClearsReadySince in
-// server_controller_test.go, over the one transition that reaches Failed
-// without passing through Starting; a reader who breaks that one should land
-// here to see what it costs.
+// The guarantee that a corpse never ends its own streak is upstream: the Server
+// controller clears readySince on entry to Failed.
 func TestCountFailuresTakesASuccessFromAnyPhaseAndWhyThatIsSafe(t *testing.T) {
 	base := time.Now()
-	// The state the Server controller must never produce: Failed, and carrying
-	// a readySince newer than the watermark the streak is counted from.
+	// The state the Server controller must never produce.
 	corpse := ServerView{
 		Name:       "broken",
 		Phase:      phase.Failed,
@@ -158,22 +114,13 @@ func TestCountFailuresTakesASuccessFromAnyPhaseAndWhyThatIsSafe(t *testing.T) {
 			"phase, so a corpse carrying one ends its own streak and the new failure starts a fresh one", got)
 	}
 
-	// The same corpse as the Server controller actually stamps it — readySince
-	// cleared on the way into Failed — continues the streak, which is what the
-	// group's six-failure budget depends on.
+	// The corpse as the Server controller stamps it, readySince cleared.
 	corpse.ReadySince = time.Time{}
 	if got, _ := CountFailures([]ServerView{corpse}, 3, base, 0); got != 4 {
 		t.Errorf("count = %d, want 4: with readySince cleared the corpse is a failure and nothing else", got)
 	}
 }
 
-// A broken ordinal must reach the give-up threshold however often a healthy
-// sibling flaps. The old rule took the maximum ReadySince across all views, so
-// a neighbour that regained readiness faster than failures arrived reset the
-// count more often than it incremented and six was never reached.
-//
-// One ordinal cannot show this, which is why the existing
-// TestAPersistentGroupSaysItIsBackingOffAndThenGivesUp could not.
 func TestAFlappingSiblingDoesNotClearABrokenOrdinalsStreak(t *testing.T) {
 	base := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 
@@ -181,8 +128,7 @@ func TestAFlappingSiblingDoesNotClearABrokenOrdinalsStreak(t *testing.T) {
 	since := time.Time{}
 	for i := 0; i < 6; i++ {
 		failedAt := base.Add(time.Duration(i) * time.Hour)
-		// g-1 blips ready halfway through every interval -- more often than
-		// g-0 fails, which is the rate comparison that broke the old rule.
+		// g-1 blips ready more often than g-0 fails.
 		siblingReady := failedAt.Add(30 * time.Minute)
 
 		views := []ServerView{
@@ -197,8 +143,7 @@ func TestAFlappingSiblingDoesNotClearABrokenOrdinalsStreak(t *testing.T) {
 	}
 }
 
-// The ephemeral rule must not move: interchangeable servers are exactly the
-// case the maximum is right for.
+// Interchangeable servers are exactly the case the maximum is right for.
 func TestAnEphemeralGroupKeepsTheMaximumRule(t *testing.T) {
 	base := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	views := []ServerView{
@@ -211,8 +156,6 @@ func TestAnEphemeralGroupKeepsTheMaximumRule(t *testing.T) {
 	}
 }
 
-// The group is not recovered while an ordinal is missing entirely, so the
-// streak must not reset then either.
 func TestAMissingOrdinalDoesNotCountAsRecovered(t *testing.T) {
 	base := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	views := []ServerView{
@@ -224,17 +167,8 @@ func TestAMissingOrdinalDoesNotCountAsRecovered(t *testing.T) {
 	}
 }
 
-// TestTheGroupRecoveredWhenItsLastRequiredOrdinalDid pins which of the two
-// timestamps is taken, as opposed to the missing-ordinal shortcut above it.
-// Both required ordinals are Ready here, so there is no missing entry to fall
-// back on: the choice between the earlier ReadySince and the later one is the
-// whole content of "the maximum over the required ordinals", and this is the
-// only case in this file where that choice is actually made.
-//
-// g-0 is the sibling that never restarted -- its ReadySince predates the last
-// counted failure and will not advance. g-1 came back after that failure. The
-// group is recovered, so the streak resets; taking g-0's answer over g-1's
-// would hold the count at 4 for as long as g-0 stayed up.
+// g-0's ReadySince predates the last failure; taking it over g-1's would hold
+// the count for as long as g-0 stayed up.
 func TestTheGroupRecoveredWhenItsLastRequiredOrdinalDid(t *testing.T) {
 	base := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	since := base.Add(time.Hour)
@@ -250,16 +184,8 @@ func TestTheGroupRecoveredWhenItsLastRequiredOrdinalDid(t *testing.T) {
 	}
 }
 
-// TestRecoveredFailuresDoNotAccumulateAcrossAStableSibling is the steady-state
-// counterpart to the flapping-sibling test above, and the case a rule with no
-// reset path for replicas >= 2 gets wrong: six isolated failures, each fully
-// recovered long before the next arrived, would still give the group up, and
-// only a spec edit would clear it.
-//
-// g-0 comes up once and stays up, which is the whole mechanism: its
-// ReadySince never advances past the group's first start, so the earliest
-// ReadySince over the required ordinals is always older than the last counted
-// failure. The latest is not, and that is what breaks each streak.
+// g-0 stays up throughout, so only the latest ReadySince over the required
+// ordinals can break each streak.
 func TestRecoveredFailuresDoNotAccumulateAcrossAStableSibling(t *testing.T) {
 	base := time.Date(2026, 8, 16, 12, 0, 0, 0, time.UTC)
 	stable := base // g-0 started here and never restarted.
@@ -269,8 +195,7 @@ func TestRecoveredFailuresDoNotAccumulateAcrossAStableSibling(t *testing.T) {
 	for i := 0; i < 6; i++ {
 		failedAt := base.Add(time.Duration(i+1) * time.Hour)
 
-		// The pass that sees the corpse. g-1 holds its ordinal while Failed,
-		// so no replacement exists yet and the group is not recovered.
+		// g-1 holds its ordinal while Failed, so the group is not recovered yet.
 		count, since = CountFailures([]ServerView{
 			{Name: "g-0", Ordinal: ptr.To(int32(0)), Phase: phase.Ready, ReadySince: stable},
 			{Name: "g-1", Ordinal: ptr.To(int32(1)), Phase: phase.Failed, FailedAt: failedAt},
@@ -279,8 +204,6 @@ func TestRecoveredFailuresDoNotAccumulateAcrossAStableSibling(t *testing.T) {
 			t.Fatalf("failure %d: count = %d, want 1; each of these is a streak of its own", i+1, count)
 		}
 
-		// The pass after the replacement is ready, well before the next
-		// failure arrives.
 		count, since = CountFailures([]ServerView{
 			{Name: "g-0", Ordinal: ptr.To(int32(0)), Phase: phase.Ready, ReadySince: stable},
 			{Name: "g-1", Ordinal: ptr.To(int32(1)), Phase: phase.Ready, ReadySince: failedAt.Add(10 * time.Minute)},
@@ -359,21 +282,13 @@ func TestDecideBackoffGivesUpAtTheThreshold(t *testing.T) {
 }
 
 func TestBackoffDelayIsCapped(t *testing.T) {
-	// The cap is not reached at the shipped threshold — the largest delay
-	// before giving up is 160s, well under five minutes. It exists so that
-	// raising backoffGiveUpAt, the one of these four numbers somebody might
-	// plausibly want larger, cannot turn the doubling into an unbounded wait.
-	// So this case has to construct a count past the threshold rather than
-	// assert the cap against the default, which would never reach it.
+	// The cap is unreachable at the shipped threshold, so the count is built past it.
 	if got := backoffDelay(20); got != backoffCap {
 		t.Errorf("backoffDelay(20) = %v, want the cap %v", got, backoffCap)
 	}
 }
 
-// TestCorpsesFirstSeenTogetherAreOneRound: a persistent group counts over
-// every ordinal, so a pass can meet several corpses no count has seen yet --
-// the first pass after an operator restart with an empty status, say. They
-// are one round however many of them there are.
+// Several unseen corpses in one pass, e.g. after an operator restart, are one round.
 func TestCorpsesFirstSeenTogetherAreOneRound(t *testing.T) {
 	base := time.Now()
 	corpses := []ServerView{
@@ -390,10 +305,7 @@ func TestCorpsesFirstSeenTogetherAreOneRound(t *testing.T) {
 }
 
 func TestAFinishedRoundSpendsNoneOfTheBackoffBudget(t *testing.T) {
-	// Six consecutive failures end a group's attempts for good. A group that
-	// plays six rounds has not failed once, and this is what keeps the two
-	// apart -- CountFailures reads the phase, so Finished has to be its own
-	// phase for this to hold.
+	// CountFailures reads the phase, so Finished must stay a phase of its own.
 	ended := time.Unix(2000, 0)
 	views := []ServerView{
 		{Name: "a", Phase: phase.Finished, FailedAt: ended},

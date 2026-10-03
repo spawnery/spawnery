@@ -28,12 +28,9 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// The bounds on a group's attributes are the API server's, so they hold
-// against every writer -- kubectl, a GitOps controller, anything -- rather than
-// against the one path a reconciler happens to read them through.
-//
-// One test per bound, each asserting the refusal names it: a single "it was
-// refused" test passes when the wrong bound fired.
+// The bounds are the API server's, so they hold against every writer. Each
+// test asserts the refusal names its bound: a bare refusal passes when the
+// wrong one fired.
 
 func attributedGroup(ns string, attributes map[string]string) *spawneryv1alpha1.ServerGroup {
 	return &spawneryv1alpha1.ServerGroup{
@@ -58,8 +55,6 @@ func TestTheAPIServerAdmitsAGroupsAttributes(t *testing.T) {
 		t.Fatalf("an ordinary pair of attributes was refused: %v", err)
 	}
 
-	// And they are readable back as written, which is the whole of what the
-	// operator promises to do with them.
 	var read spawneryv1alpha1.ServerGroup
 	if err := c.Get(ctx, client.ObjectKeyFromObject(group), &read); err != nil {
 		t.Fatalf("get: %v", err)
@@ -91,8 +86,6 @@ func TestTheAPIServerRefusesAnOversizedAttribute(t *testing.T) {
 	if err == nil {
 		t.Fatal("an oversized attribute value was admitted")
 	}
-	// The message has to name the bound, because the person who meets it is
-	// editing a file and has nothing else to go on.
 	if !strings.Contains(err.Error(), "256") {
 		t.Errorf("refusal did not name the bound: %v", err)
 	}
@@ -104,8 +97,7 @@ func TestTheAPIServerRefusesAnOversizedAttribute(t *testing.T) {
 }
 
 func TestAProxyGroupCarriesAttributesToo(t *testing.T) {
-	// Both group kinds appear in the same picture, and a plugin reading one
-	// list should not find that half of it can be described and half cannot.
+	// Both group kinds appear in one network picture.
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
 

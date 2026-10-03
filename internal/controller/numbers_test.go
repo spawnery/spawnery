@@ -32,8 +32,7 @@ func TestNextNumber(t *testing.T) {
 		{"counting up", map[int32]bool{1: true}, 2},
 		{"a gap in the middle is filled first", map[int32]bool{1: true, 3: true}, 2},
 		{"a gap at the bottom is filled first", map[int32]bool{2: true, 3: true}, 1},
-		// Zero is not a number this rule hands out, so a set carrying it says
-		// nothing about where to start.
+		// Zero is not a number this rule hands out.
 		{"zero holds nothing back", map[int32]bool{0: true}, 1},
 	}
 
@@ -46,13 +45,11 @@ func TestNextNumber(t *testing.T) {
 	}
 }
 
-// takenNumbers is what the create loop feeds NextNumber: the numbers its
-// group's servers hold, plus the ones its own unobserved creates reserved.
 func TestTakenNumbers(t *testing.T) {
 	views := []ServerView{
 		{Name: "hub-dvjk", Number: 1},
 		{Name: "hub-pgqg", Number: 3},
-		// A server from before the field existed holds nothing back.
+		// From before the field existed.
 		{Name: "hub-old1", Number: 0},
 	}
 
@@ -128,16 +125,8 @@ func TestAGroupFillsTheLowestGapInItsNumbers(t *testing.T) {
 	}
 }
 
-// TestAReservedNumberIsNotHandedToTheCreateThatFollowsIt pins size's call to
-// r.Expectations.pendingNumbers(key): a reservation for a server the cache
-// will never show still holds its number, so the create the same pass makes
-// gets the next one up rather than colliding with it.
-//
-// The phantom reservation also counts against MinReplicas, the same way
-// TestProxyGroupCreateCountIsCutByAReservationTheCacheHasNotShown's phantom
-// counts against a ProxyGroup's replicas -- so MinReplicas is raised to 2
-// here, or the reservation alone satisfies it and no real create happens for
-// this test to inspect.
+// A reservation the cache never shows still holds its number. MinReplicas is
+// 2 because the phantom reservation alone would satisfy 1.
 func TestAReservedNumberIsNotHandedToTheCreateThatFollowsIt(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)
@@ -162,10 +151,7 @@ func TestAReservedNumberIsNotHandedToTheCreateThatFollowsIt(t *testing.T) {
 	}
 }
 
-// TestAPersistentServersNumberIsItsOrdinal pins createPersistentServer's
-// assignment of spec.number. It must cover an ordinal of at least 1: number 0
-// on the ordinal-0 server is indistinguishable from the field never having
-// been set, so a group of one ordinal would prove nothing.
+// The ordinal is at least 1: number 0 is indistinguishable from unset.
 func TestAPersistentServersNumberIsItsOrdinal(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)

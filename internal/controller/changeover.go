@@ -33,8 +33,6 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// ChangeoverView is what AdmitChangeovers needs of one group to decide
-// whether it may change over.
 type ChangeoverView struct {
 	Kind       string // "ServerGroup" or "ProxyGroup"
 	Name       string
@@ -132,8 +130,7 @@ func AdmitChangeovers(groups []ChangeoverView, budget int32) map[string]bool {
 	return admitted
 }
 
-// ChangeoverWait is why a group that must change over was not admitted; the
-// zero value means it was.
+// ChangeoverWait's zero value means the group was admitted.
 type ChangeoverWait struct {
 	Reason  string
 	Message string
@@ -169,11 +166,9 @@ func serverChangeoverWait(group *spawneryv1alpha1.ServerGroup, siblings []Change
 	return describeWait(append(slices.Clip(siblings), self), budget, self)
 }
 
-// changeoverRefused reports whether self, a group that must change over, may
-// not begin. Without a budget, and for a persistent self, which takes no
-// place, only the stage gate refuses: a failing self is admitted by nothing,
-// and the pass on which its backoff has just expired still reads BackingOff
-// True from the last one.
+// changeoverRefused: without a budget, and for a persistent self (which takes
+// no place), only the stage gate refuses. A failing self is admitted by
+// nothing, since the pass on which its backoff expires still reads BackingOff.
 func changeoverRefused(siblings []ChangeoverView, budget int32, self ChangeoverView) bool {
 	if self.State != spawneryv1alpha1.ChangeoverWaiting {
 		return false
@@ -190,9 +185,7 @@ func changeoverFailing(conditions []metav1.Condition) bool {
 		meta.IsStatusConditionTrue(conditions, spawneryv1alpha1.ConditionDegraded)
 }
 
-// changeoverSiblings is every server and proxy group of the network in the
-// namespace except the caller and those being deleted, as AdmitChangeovers
-// sees them.
+// changeoverSiblings excludes the caller and groups being deleted.
 func changeoverSiblings(
 	ctx context.Context, c client.Reader, namespace, network, selfKind, selfName string,
 ) ([]ChangeoverView, error) {
@@ -250,16 +243,11 @@ func changeoverHolders(groups []ChangeoverView, admitted map[string]bool, selfKi
 	return names
 }
 
-// ownServerChangeover is a server group's changeover state from its own
-// servers. Only an ephemeral group surges, so only its views are passed here.
-// A stale server that is leaving still counts: until it is gone it is the
-// group's extra server. A WhenEmpty group with a Ready current server is
-// Deferred instead: what remains waits for its players, not for the budget.
-// It stays Deferred while any current server still counts, Ready or not, so a
-// readiness loss does not take a budget place nobody admitted it to. A
-// RollingUpdate group is Deferred the same way once every stale server is
-// retiring and a current one is up, so the last retiree's own drain does not
-// hold a budget place nobody still needs.
+// ownServerChangeover: a stale server that is leaving still counts as the
+// group's extra server. A WhenEmpty group with a Ready current server, and a
+// RollingUpdate group whose every stale server is retiring with a current one
+// up, is Deferred, and stays so through a readiness loss, so it holds no budget
+// place nobody admitted it to.
 func ownServerChangeover(views []ServerView, podHash string, pendingCreates int32, whenEmpty bool, was spawneryv1alpha1.ChangeoverState) spawneryv1alpha1.ChangeoverState {
 	var stale, staleServing, current, readyCurrent, unreadyCurrent bool
 	for _, v := range views {
@@ -298,9 +286,8 @@ func ownServerChangeover(views []ServerView, podHash string, pendingCreates int3
 	}
 }
 
-// ownPersistentChangeover is a persistent group's changeover state. It begins
-// with its first stale takedown and stays begun while stale ordinals remain; a
-// current ordinal added meanwhile does not begin it.
+// ownPersistentChangeover begins with the first stale takedown; a current
+// ordinal added meanwhile does not begin it.
 func ownPersistentChangeover(views []ServerView, podHash string, pendingDeletes map[string]bool, replicas int32, was spawneryv1alpha1.ChangeoverState) spawneryv1alpha1.ChangeoverState {
 	stale, takedown := false, false
 	for _, v := range views {
@@ -324,12 +311,9 @@ func ownPersistentChangeover(views []ServerView, podHash string, pendingDeletes 
 	}
 }
 
-// ownProxyChangeover is a proxy group's changeover state from every pod of the
-// group that still exists: a stale one that is draining or terminating is
-// still the group's extra pod. It is Deferred once at least replicas current
-// pods are Ready and every stale pod still present is leaving (draining or
-// terminating); it stays Deferred while that holds, so a readiness blip does
-// not take a budget place nobody admitted it to.
+// ownProxyChangeover counts a draining or terminating stale pod as the
+// group's extra pod. It is Deferred once replicas current pods are Ready and
+// every remaining stale pod is leaving, and stays so through a readiness blip.
 func ownProxyChangeover(pods []corev1.Pod, wantHash string, pendingCreates, replicas int32, was spawneryv1alpha1.ChangeoverState) spawneryv1alpha1.ChangeoverState {
 	var stale, staleServing, current bool
 	var readyCurrent int32
@@ -363,8 +347,6 @@ func ownProxyChangeover(pods []corev1.Pod, wantHash string, pendingCreates, repl
 	}
 }
 
-// proxyChangeover is a proxy group's own changeover state, whether it may
-// surge, and, when it may not, why.
 func proxyChangeover(
 	ctx context.Context, c client.Reader, network *spawneryv1alpha1.Network,
 	group *spawneryv1alpha1.ProxyGroup, wantHash string, pendingCreates int32,

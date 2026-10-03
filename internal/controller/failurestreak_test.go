@@ -26,7 +26,6 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
-// oneFailedRound leaves the fixture's group with a streak of one.
 func oneFailedRound(t *testing.T, f *fixture, r *ServerGroupReconciler) {
 	t.Helper()
 	f.setMinReplicas(t, 1)
@@ -174,8 +173,8 @@ func TestASuccessClearsTheKeyWithTheStreak(t *testing.T) {
 	}
 }
 
-// Before the key, the reset set lastFailureAt to nil and the persistent
-// count, which is not filtered by attempt, counted the corpse straight back.
+// The persistent count is not filtered by attempt, so a reset that cleared
+// lastFailureAt would count the corpse straight back.
 func TestAPersistentGroupsRetryLandsAtZero(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)

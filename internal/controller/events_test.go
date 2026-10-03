@@ -19,34 +19,14 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// eventHasReason reports whether one of FakeRecorder's rendered event strings
-// carries exactly the given reason.
-//
-// FakeRecorder renders an event as "<type> <reason> <note>", so the reason is
-// the second space-separated field, and it is compared as a field rather than
-// as a substring of the whole line. The difference is not theoretical: a
-// substring match accepts a note that merely mentions the reason in prose, and
-// it accepts a *longer* reason that contains the wanted one -- so a reason
-// mutated from "ServerRetiring" to "ServerRetiringMUTATED" slides straight past
-// a test that was written to pin it. Two helpers in this package matched that
-// way until this was fixed, and the mutation above passed against both.
-//
-// Note what this deliberately cannot do: the action the events API also takes
-// is dropped by FakeRecorder entirely (client-go's tools/events/fake.go emits
-// eventtype, reason and note and nothing else), so no assertion over these
-// strings can say anything about it. That gap is closed by
-// TestEveryEventfCallSitePassesAKnownAction and
-// TestTheRealAPIServerRefusesAnEventWithNoAction below, not here.
+// eventHasReason compares the second field of FakeRecorder's "<type> <reason> <note>",
+// so neither a longer reason nor a note mentioning it matches.
 func eventHasReason(rendered, reason string) bool {
 	fields := strings.SplitN(rendered, " ", 3)
 	return len(fields) >= 2 && fields[1] == reason
 }
 
-// TestEventNoteLeavesAShortNoteAlone is the half that protects the other 18
-// call sites. eventNote sits in front of text this operator did not write, so
-// the overwhelmingly common case is a note well inside the limit -- and if the
-// helper reworded, re-wrapped or re-encoded those, every event assertion in
-// this package would be reading something other than what the controller said.
+// Every event assertion in this package reads notes eventNote passed through.
 func TestEventNoteLeavesAShortNoteAlone(t *testing.T) {
 	for _, note := range []string{
 		"",
@@ -60,13 +40,9 @@ func TestEventNoteLeavesAShortNoteAlone(t *testing.T) {
 	}
 }
 
-// TestEventNoteTruncatesAndSaysSo pins both halves of the contract: the result
-// fits, and it admits to being cut. A silently shortened API server message is
-// worse than a long one, because a reader cannot tell a sentence the API server
-// ended from one this operator cut.
+// A silently cut note cannot be told from a sentence the API server ended.
 func TestEventNoteTruncatesAndSaysSo(t *testing.T) {
-	// A stand-in for a PodSecurity violation list, which is the real case:
-	// long, and worth reading precisely because the remedy is in its wording.
+	// A stand-in for a PodSecurity violation list, whose wording carries the remedy.
 	long := "the API server refused a proxy pod: " + strings.Repeat("violates PodSecurity restricted:v1; ", 60)
 	got := eventNote("%s", long)
 
@@ -79,16 +55,12 @@ func TestEventNoteTruncatesAndSaysSo(t *testing.T) {
 	if !strings.Contains(got, "status conditions") {
 		t.Errorf("got = %q, want the marker to point at where the full text is", got)
 	}
-	// The head must still be the API server's own words, unaltered.
 	if !strings.HasPrefix(got, "the API server refused a proxy pod: violates PodSecurity") {
 		t.Errorf("got = %q, want the surviving head to be the original text", got)
 	}
 }
 
-// TestEventNoteCutsOnARuneBoundary guards the byte/character trap. The limit is
-// counted in bytes, so a note of multi-byte runes hits it at well under 1024
-// characters -- and a cut that lands mid-rune produces invalid UTF-8, trading a
-// too-long event for a differently-invalid one.
+// The limit is in bytes; a mid-rune cut would trade a too-long event for invalid UTF-8.
 func TestEventNoteCutsOnARuneBoundary(t *testing.T) {
 	// Em-dashes are 3 bytes each, so this is 1500 bytes of 500 characters.
 	got := eventNote("%s", strings.Repeat("—", 500))
@@ -100,15 +72,7 @@ func TestEventNoteCutsOnARuneBoundary(t *testing.T) {
 	}
 }
 
-// TestTheRealAPIServerAcceptsATruncatedNoteAndRefusesAnUntruncatedOne is the
-// assertion that would actually have caught this regression.
-//
-// Every other event assertion in this package reads FakeRecorder, which
-// validates nothing and would accept a note of any length -- which is exactly
-// why the migration onto events.k8s.io/v1 could introduce a dropped-event bug
-// that the whole suite stayed green through. This one goes to envtest's real
-// API server, so it fails if the limit moves, if eventNote stops enforcing it,
-// or if the note ever again reaches Eventf unbounded.
+// FakeRecorder accepts a note of any length; only a real API server enforces the limit.
 func TestTheRealAPIServerAcceptsATruncatedNoteAndRefusesAnUntruncatedOne(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
@@ -129,8 +93,7 @@ func TestTheRealAPIServerAcceptsATruncatedNoteAndRefusesAnUntruncatedOne(t *test
 		})
 	}
 
-	// The note the refused-proxy-pod site would build from a long admission
-	// refusal, before eventNote sees it.
+	// The note the refused-proxy-pod site would build, before eventNote sees it.
 	raw := "the API server refused a proxy pod: " +
 		strings.Repeat("violates PodSecurity restricted:v1; ", 60)
 	if len(raw) <= maxEventNote {
@@ -150,14 +113,7 @@ func TestTheRealAPIServerAcceptsATruncatedNoteAndRefusesAnUntruncatedOne(t *test
 	}
 }
 
-// TestAnUnschedulableProxyPodsEventStaysWithinTheNoteLimit is the wiring test.
-//
-// The three tests above prove eventNote is correct; none of them proves any
-// controller calls it, and a correct helper nobody reaches would leave the
-// regression exactly where it was. This drives a real call site --
-// reportBlockedProxies, whose note carries the scheduler's own explanation, one
-// of the five the review named -- with a message far over the limit, and reads
-// what the recorder was actually handed.
+// The tests above prove eventNote; this proves a real call site goes through it.
 func TestAnUnschedulableProxyPodsEventStaysWithinTheNoteLimit(t *testing.T) {
 	rec := newRecorder()
 	r := &ProxyGroupReconciler{Recorder: rec}
@@ -183,8 +139,7 @@ func TestAnUnschedulableProxyPodsEventStaysWithinTheNoteLimit(t *testing.T) {
 		t.Fatal("no event was recorded")
 	}
 	got := recorded[0]
-	// FakeRecorder emits "<type> <reason> <note>", so the note is what follows
-	// the second space -- the part the API server length-checks.
+	// The note is what follows the second space, the part the API server length-checks.
 	prefix := "Warning ProxyPodBlocked "
 	if !strings.HasPrefix(got, prefix) {
 		t.Fatalf("event = %q, want it to start %q", got, prefix)
@@ -207,12 +162,7 @@ func TestAnUnschedulableProxyPodsEventStaysWithinTheNoteLimit(t *testing.T) {
 	}
 }
 
-// knownActions is every action constant in events.go, keyed by the identifier
-// the call sites spell. The map is written out rather than derived so that both
-// halves are checked: the value side is the constant itself, so a constant that
-// loses its value fails to compile into a non-empty string here, and the key
-// side is the name TestEveryEventfCallSitePassesAKnownAction looks for in the
-// source.
+// Written out rather than derived: the keys are the names the source scan matches.
 var knownActions = map[string]string{
 	"actionAdoptPod":       actionAdoptPod,
 	"actionCreatePod":      actionCreatePod,
@@ -228,52 +178,12 @@ var knownActions = map[string]string{
 	"actionSyncStatus": actionSyncStatus,
 }
 
-// wantEventfSites is how many Eventf call sites this package has.
-//
-// Asserted rather than logged, because a count that is only printed cannot
-// notice its own coverage shrinking: a deleted call site, or a controller
-// moved into a subpackage, leaves a t.Logf green. Changing this number is
-// therefore a deliberate act with a diff, which is what it should be -- adding
-// an event is a change to the operator's output.
+// Asserted rather than logged, so a shrinking corpus fails.
 const wantEventfSites = 37
 
-// TestEveryEventfCallSitePassesAKnownAction reads this package's own source.
-//
-// It is here because nothing else in the repository can see the action at all.
-// events.FakeRecorder renders an event as eventtype, reason and note and drops
-// the action entirely (client-go v0.36.0, tools/events/fake.go), so every
-// event assertion in this package is blind to it; envtest's tests go through
-// the same fake; and go vet cannot help either, because it cannot see through
-// the events.EventRecorder interface to know Eventf's note is a format string
-// -- a missing argument at one of these call sites produces no diagnostic.
-// Replacing the four action constants with garbage leaves the whole package
-// green.
-//
-// What is at stake is not cosmetic. events.k8s.io/v1 rejects an event with an
-// empty action outright (TestTheRealAPIServerRefusesAnEventWithNoAction below
-// measures that against a real API server), the broadcaster classifies the
-// refusal as non-retryable and abandons the event with a klog line, and
-// nothing on the reconciled object says an event was lost. A new call site
-// that passes "" would go green through unit tests, envtest and e2e alike.
-//
-// A source-level check rather than one assertion per call site: what needs
-// guarding is a property of every call site, not the particular string any one
-// of them passes, and a table restating every literal would be a second copy
-// of the code that goes stale the first time somebody adds a call site. This
-// reads whatever is there.
-//
-// Three assertions, and the second and third exist because the first alone was
-// weaker than it looked. It requires every Eventf's action argument to be an
-// identifier named in knownActions. It requires the number of call sites found
-// to be wantEventfSites, because a count that is only logged cannot notice its
-// own corpus shrinking. And it
-// requires that no local anywhere in the package shadows one of those ten
-// names, which is what makes matching by name mean anything at all: without
-// it, `actionCreatePod := ""` above a call site passes. See shadowedActions.
-//
-// What none of the three reaches, said here rather than left to be assumed: it
-// cannot tell whether the constant a call site chose is the right one for that
-// call site. actionSyncStatus where actionCreatePod was meant passes.
+// FakeRecorder drops the action and go vet cannot see through EventRecorder, while
+// events.k8s.io/v1 refuses an empty action with nothing on the object to show it; only
+// a source scan sees it. It cannot tell whether a call site chose the right constant.
 func TestEveryEventfCallSitePassesAKnownAction(t *testing.T) {
 	for name, value := range knownActions {
 		if value == "" {
@@ -283,24 +193,18 @@ func TestEveryEventfCallSitePassesAKnownAction(t *testing.T) {
 
 	fset := token.NewFileSet()
 	var files []*ast.File
-	// Recursive, not one directory deep. A non-recursive scan makes this
-	// test's coverage a function of where the controllers happen to live: move
-	// one into a subpackage of internal/controller and its call sites leave
-	// the corpus with nothing saying so.
+	// Recursive, so a controller moved into a subpackage stays covered.
 	err := filepath.WalkDir(".", func(path string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
 		if d.IsDir() {
-			// testdata is not compiled and may hold anything.
 			if d.Name() == "testdata" {
 				return filepath.SkipDir
 			}
 			return nil
 		}
-		// Test files are excluded on purpose: a fixture may legitimately drive
-		// a recorder with a literal, and what this guards is the operator's
-		// own output.
+		// Test fixtures may drive a recorder with a literal.
 		if !strings.HasSuffix(path, ".go") || strings.HasSuffix(path, "_test.go") {
 			return nil
 		}
@@ -358,8 +262,6 @@ func TestEveryEventfCallSitePassesAKnownAction(t *testing.T) {
 			sites, wantEventfSites)
 	}
 
-	// The other half of matching by name, and the reason matching by name is
-	// sound at all. See shadowedActions.
 	for _, file := range files {
 		for _, shadow := range shadowedActions(fset, file) {
 			t.Errorf("%s: %s shadows one of events.go's action constants. "+
@@ -371,34 +273,13 @@ func TestEveryEventfCallSitePassesAKnownAction(t *testing.T) {
 	}
 }
 
-// shadow is one local declaration that takes an action constant's name.
 type shadow struct {
 	name string
 	pos  token.Position
 }
 
-// shadowedActions finds locals that shadow one of events.go's action
-// constants.
-//
-// This is what makes the name-matching in the test above sound. That test asks
-// whether the action argument is an identifier called, say, actionCreatePod;
-// it does not and cannot resolve what that identifier refers to, because
-// resolving it means running a type checker over the package, which is a great
-// deal of machinery to answer one question. So the identifier's meaning is
-// pinned from the other side instead: the ten names are package-level
-// constants, nothing in the package has any business declaring a local of the
-// same name, and if nothing does then the name determines the constant.
-// Without it, `actionCreatePod := ""` above a call site passes -- exactly the
-// shape the test claims to catch.
-//
-// The remaining limit, stated rather than papered over: none of this says the
-// constant a call site chose is the *right* one for that call site.
-// actionSyncStatus where actionCreatePod was meant passes both halves, and
-// only a reader applying events.go's own rule can tell.
-//
-// Declarations, not uses: a parameter, a `:=`, a `var`/`const` inside a
-// function, a range variable, a function literal's parameter. A package-level
-// redeclaration is not checked because the compiler refuses it.
+// shadowedActions finds locals named like an action constant; without them the name
+// match above stands in for a type checker.
 func shadowedActions(fset *token.FileSet, file *ast.File) []shadow {
 	var found []shadow
 	report := func(idents ...*ast.Ident) {
@@ -423,9 +304,7 @@ func shadowedActions(fset *token.FileSet, file *ast.File) []shadow {
 	for _, decl := range file.Decls {
 		fn, ok := decl.(*ast.FuncDecl)
 		if !ok {
-			// A package-level var or const of one of these names is a
-			// redeclaration the compiler rejects, so there is nothing here to
-			// find.
+			// A package-level redeclaration is the compiler's to refuse.
 			continue
 		}
 		fields(fn.Recv)
@@ -460,13 +339,7 @@ func shadowedActions(fset *token.FileSet, file *ast.File) []shadow {
 	return found
 }
 
-// TestTheRealAPIServerRefusesAnEventWithNoAction measures the premise the test
-// above rests on, against envtest's real API server rather than a comment.
-//
-// If events.k8s.io/v1 ever stopped refusing an empty action, the source-level
-// check would still be worth having for legibility, but it would no longer be
-// guarding a dropped event -- and a reader deserves to be told which of those
-// two things it is. This is what tells them.
+// Pins the source scan's premise: events.k8s.io/v1 refuses an empty action.
 func TestTheRealAPIServerRefusesAnEventWithNoAction(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)

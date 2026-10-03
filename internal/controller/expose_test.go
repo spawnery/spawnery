@@ -35,9 +35,8 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// A LoadBalancer Service names no node port. One is allocated regardless, by
-// the API server, and naming one here would add a second way for two groups
-// in different namespaces to collide over a number no player ever dials.
+// No node port named: the API server allocates one anyway, and naming one invites
+// collisions between groups in different namespaces.
 func TestLoadBalancerServiceShape(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -75,11 +74,8 @@ func TestLoadBalancerServiceShape(t *testing.T) {
 	}
 }
 
-// The CRD defaults externalTrafficPolicy to Local because bans and rate
-// limits are built on the client's real IP, and Cluster SNATs it away. A
-// ProxyGroup built in a unit test never passes through the API server's
-// defaulting, so the default has to exist in the code as well as in the
-// marker -- the same hazard podspec.DefaultDrainTimeoutSeconds exists for.
+// A unit-built ProxyGroup skips API-server defaulting, so the Local default must exist
+// in code as well as in the marker.
 func TestLoadBalancerDefaultsToLocalWithoutTheAPIServer(t *testing.T) {
 	group := &spawneryv1alpha1.ProxyGroup{
 		Spec: spawneryv1alpha1.ProxyGroupSpec{
@@ -99,11 +95,7 @@ func TestLoadBalancerDefaultsToLocalWithoutTheAPIServer(t *testing.T) {
 	}
 }
 
-// Nothing inside the cluster dials a proxy: players arrive from outside,
-// agents dial the operator, and Velocity dials backends. A Service left
-// behind after a switch to HostPort would still hold its node port and still
-// select the same pods, so the group would stay reachable by exactly the
-// route the switch was meant to end.
+// A Service left behind would keep the group reachable by the route the switch ended.
 func TestSwitchingToHostPortDeletesTheService(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -138,11 +130,6 @@ func TestSwitchingToHostPortDeletesTheService(t *testing.T) {
 	}
 }
 
-// The operator deletes a Service because it owns it, not because it knows
-// the name. A Service somebody else put at the group's name -- an ingress
-// shim, a hand-written override -- is not this operator's to remove, and
-// removing it would be an unrecoverable action taken on somebody else's
-// object.
 func TestSwitchingToHostPortLeavesAForeignServiceAlone(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -175,13 +162,8 @@ func TestSwitchingToHostPortLeavesAForeignServiceAlone(t *testing.T) {
 	}
 }
 
-// spec.expose.loadBalancer.annotations is the only place a user writes into
-// an object a third-party controller also writes into -- MetalLB and kube-vip
-// both annotate the Service they act on. So the operator cannot treat the
-// spec's map as the whole truth and delete whatever is not in it, and it
-// cannot simply never delete either: a user who removes a pool annotation
-// would see nothing happen, permanently, with no message anywhere. It
-// records the keys it set and removes only those.
+// Load-balancer controllers annotate the same Service, so the operator records the keys
+// it set and removes only those.
 func TestLoadBalancerAnnotationsAreOwnedAndReleased(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -201,8 +183,7 @@ func TestLoadBalancerAnnotationsAreOwnedAndReleased(t *testing.T) {
 		t.Fatalf("reconcileService: %v", err)
 	}
 
-	// A third party annotates the Service the way a real load balancer
-	// controller does. Nothing the operator does afterwards may remove it.
+	// A third party annotates the Service as a load-balancer controller would.
 	var svc corev1.Service
 	if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "gateway"}, &svc); err != nil {
 		t.Fatalf("get the Service: %v", err)
@@ -240,9 +221,7 @@ func TestLoadBalancerAnnotationsAreOwnedAndReleased(t *testing.T) {
 	}
 }
 
-// A group that leaves LoadBalancer behind takes its annotations with it, and
-// the bookkeeping key goes too -- otherwise the Service carries a record of
-// keys nobody owns, and the next LoadBalancer group at that name inherits it.
+// The bookkeeping key goes too, or the next LoadBalancer group at that name inherits it.
 func TestLeavingLoadBalancerReleasesTheAnnotations(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -278,19 +257,9 @@ func TestLeavingLoadBalancerReleasesTheAnnotations(t *testing.T) {
 	}
 }
 
-// The API server's enum makes the false branch unreachable for any object
-// that exists. The guard is here for the day a fifth value is added to the
-// enum without a branch in reconcileService: a refusal on the object is a
-// message a user can read, carried on the group where a user looks, while
-// reconcileService's error reaches only the log.
-//
-// The failure mode without it is reconcileService's named error, not a panic,
-// and the two are not redundant: only this one puts the refusal somewhere a
-// user can read it.
-//
-// A pure function rather than an inline default arm because the enum is
-// closed: no ProxyGroup carrying an unknown type can be created through
-// envtest, so the branch is reachable from a test only here.
+// The enum makes the false branch unreachable for a real object. The guard puts an
+// unhandled future value on the group where a user reads it; only a pure function lets
+// a test reach it.
 func TestExposeImplementedCoversTheEnumAndNothingElse(t *testing.T) {
 	for _, known := range []spawneryv1alpha1.ExposeType{
 		spawneryv1alpha1.ExposeNodePort,
@@ -313,19 +282,8 @@ func TestExposeImplementedCoversTheEnumAndNothingElse(t *testing.T) {
 	}
 }
 
-// The four strategies end to end, through Reconcile rather than through the
-// pieces.
-//
-// ClusterIP is here for a reason the other rows do not need stated. Every
-// other ClusterIP test in this file calls reconcileService or proxyAddress
-// directly, so without this row nothing drives exposeImplemented admitting
-// the type and Reconcile reaching reconcileService for it.
-//
-// What this row does not cover is the rest of that path. It never reads
-// status.address and cannot: no pod here is made ready, so proxyAddress
-// returns "" for every row, and severing its ClusterIP arm leaves all four
-// green. TestTheClusterIPAddressAppearsOnceAProxyIsReady is where
-// that half is driven, and it is red under the same severance.
+// No pod is made ready here, so status.address is covered by
+// TestTheClusterIPAddressAppearsOnceAProxyIsReady instead.
 func TestReconcileAcceptsEveryStrategy(t *testing.T) {
 	for _, tc := range []struct {
 		name         string
@@ -410,13 +368,7 @@ func TestReconcileAcceptsEveryStrategy(t *testing.T) {
 	}
 }
 
-// A HostPort group in a namespace enforcing Pod Security baseline never gets
-// a pod: the API server refuses the create outright. Before this, the error
-// went to the log and the group reported Pending with no reason at all --
-// for as long as the namespace's policy stood, which is forever.
-//
-// envtest runs the PodSecurity admission plugin, so the label below is
-// enforced here exactly as it is in a cluster.
+// envtest runs PodSecurity admission, so the label below is enforced as in a cluster.
 func TestARejectedProxyPodIsReportedOnTheGroup(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -428,8 +380,7 @@ func TestARejectedProxyPodIsReportedOnTheGroup(t *testing.T) {
 		}
 	})
 
-	// The reconcile returns the API server's error, so reconcileProxyGroup --
-	// which fails the test on any error -- is the wrong helper here.
+	// The reconcile returns the API server's error, so reconcileProxyGroup is the wrong helper.
 	_, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
 		NamespacedName: types.NamespacedName{Name: "gateway", Namespace: f.ns},
 	})
@@ -446,12 +397,7 @@ func TestARejectedProxyPodIsReportedOnTheGroup(t *testing.T) {
 	if cond.Reason != spawneryv1alpha1.ReasonProxyPodRejected {
 		t.Errorf("reason = %q, want %q", cond.Reason, spawneryv1alpha1.ReasonProxyPodRejected)
 	}
-	// Both substrings, not just the first. PodSecurity alone would stay green
-	// if the proxy pod acquired some unrelated baseline violation and the
-	// container host port were dropped entirely -- and the host port is the
-	// strategy under test. This pair, with its counterpart in
-	// test/e2e/expose_test.go, is the whole evidentiary basis for the one
-	// thing this milestone observed being enforced.
+	// Both substrings: PodSecurity alone would stay green if the host port were dropped.
 	for _, want := range []string{"PodSecurity", "hostPort"} {
 		if !strings.Contains(cond.Message, want) {
 			t.Errorf("message = %q, want it to name %q; it must carry the API server's "+
@@ -464,14 +410,7 @@ func TestARejectedProxyPodIsReportedOnTheGroup(t *testing.T) {
 	}
 }
 
-// TestAGroupSwitchedIntoARefusedStrategyStopsAdvertisingTheOldAddress is the
-// scenario docs/reference/known-issues.md's milestone 6c entry describes, driven rather
-// than reasoned: a NodePort group publishing an address is switched to
-// HostPort in a namespace that forbids host ports, reconcileService deletes
-// the Service, the replacement pods are refused, and before this test existed
-// Reconcile returned before setStatus and left status.address naming the node
-// port of a Service that no longer existed -- for as long as the namespace
-// label stood, which is forever.
+// The refused switch deletes the Service, so its node-port address must not stay published.
 func TestAGroupSwitchedIntoARefusedStrategyStopsAdvertisingTheOldAddress(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -483,7 +422,6 @@ func TestAGroupSwitchedIntoARefusedStrategyStopsAdvertisingTheOldAddress(t *test
 		}
 	})
 
-	// Bring the group up and get an address on it.
 	f.reconcileProxyGroup(r, "gateway")
 	pods := f.proxyPods("gateway")
 	if len(pods) != 1 {
@@ -498,7 +436,6 @@ func TestAGroupSwitchedIntoARefusedStrategyStopsAdvertisingTheOldAddress(t *test
 			"cannot show one being withdrawn")
 	}
 
-	// Now forbid host ports and ask for them.
 	f.enforcePodSecurity(t, "baseline")
 	group := f.proxyGroup("gateway")
 	group.Spec.Expose = spawneryv1alpha1.ExposeSpec{
@@ -515,9 +452,7 @@ func TestAGroupSwitchedIntoARefusedStrategyStopsAdvertisingTheOldAddress(t *test
 		t.Fatal("the reconcile succeeded in a namespace that forbids host ports")
 	}
 
-	// The premise: an old ready pod is still there. Without this, an empty
-	// address might only mean "no pod is ready", which is a different and much
-	// weaker statement than the one this test is making.
+	// Premise: an old ready pod remains, so an empty address is not just "no pod is ready".
 	stillReady := 0
 	for _, p := range f.proxyPods("gateway") {
 		if isPodReady(&p) {
@@ -535,9 +470,7 @@ func TestAGroupSwitchedIntoARefusedStrategyStopsAdvertisingTheOldAddress(t *test
 			"and the Service that node port belonged to has been deleted -- a player "+
 			"dialing it reaches nothing", after.Status.Address, before)
 	}
-	// The empty address on its own would be its own defect: a group with no
-	// address and no reason is indistinguishable from one that has not come up
-	// yet.
+	// An empty address alone would look like a group that has not come up yet.
 	cond := meta.FindStatusCondition(after.Status.Conditions, spawneryv1alpha1.ConditionDegraded)
 	if cond == nil || cond.Status != metav1.ConditionTrue {
 		t.Fatalf("Degraded = %+v, want True beside the empty address", cond)
@@ -550,12 +483,7 @@ func TestAGroupSwitchedIntoARefusedStrategyStopsAdvertisingTheOldAddress(t *test
 	}
 }
 
-// TestABrokenNetworkLeavesAWorkingAddressAlone pins the other half of the
-// rule. Reconcile returns on a missing Network before it reads a single pod or
-// Service, and the address must survive that: the proxies are still running,
-// the Service is still there, and people are still connected through it. A
-// deleted Network does not make an address wrong, and clearing it here would
-// be a regression caused by the fix rather than a part of it.
+// The proxies, the Service and its players survive a deleted Network, so the address does too.
 func TestABrokenNetworkLeavesAWorkingAddressAlone(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -583,8 +511,6 @@ func TestABrokenNetworkLeavesAWorkingAddressAlone(t *testing.T) {
 		t.Fatalf("delete Network: %v", err)
 	}
 
-	// This path returns cleanly with a requeue, so reconcileProxyGroup is the
-	// right helper.
 	f.reconcileProxyGroup(r, "gateway")
 
 	after := f.proxyGroup("gateway")
@@ -599,25 +525,9 @@ func TestABrokenNetworkLeavesAWorkingAddressAlone(t *testing.T) {
 	}
 }
 
-// TestAFailureInsideReconcileObservedLeavesTheAddressAlone is the other half
-// of what TestABrokenNetworkLeavesAWorkingAddressAlone leaves unproven: that
-// test drives a missing Network, which refuses before reconcileObserved is
-// ever called, so obs.observed is never set at all. This drives a failure
-// *inside* reconcileObserved -- one that happens after the group's Service
-// and ready pod already exist -- and checks that obs.observed staying false
-// still leaves status.address alone.
-//
-// The failure is reconcileService's own SetControllerReference call refusing
-// to proceed: reconcileService ends with
-// controllerutil.SetControllerReference(group, svc, r.Scheme), and that
-// returns an AlreadyOwnedError once the Service already carries a controller
-// owner reference naming something else. Giving the Service such a reference
-// by hand touches nothing this test cares about keeping intact -- not the
-// group, not its pods, not the Service's ports or selector -- and
-// CreateOrUpdate aborts the mutate before ever calling Update, so the
-// Service on the server is not changed by the failing pass either. The only
-// effect is that reconcileService, and therefore reconcileObserved, returns
-// an error before setting observed.
+// reconcileService's SetControllerReference refuses a Service controlled by something
+// else, failing reconcileObserved after the Service and ready pod exist without
+// changing the Service.
 func TestAFailureInsideReconcileObservedLeavesTheAddressAlone(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -657,9 +567,7 @@ func TestAFailureInsideReconcileObservedLeavesTheAddressAlone(t *testing.T) {
 		t.Fatalf("give the Service a foreign controller reference: %v", err)
 	}
 
-	// reconcileProxyGroup is the wrong helper here for the same reason it is
-	// wrong in TestARejectedProxyPodIsReportedOnTheGroup: it fails the test on
-	// any error, and an error is exactly what this pass must return.
+	// An error is exactly what this pass must return, so not reconcileProxyGroup.
 	if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
 		NamespacedName: types.NamespacedName{Name: "gateway", Namespace: f.ns},
 	}); err == nil {
@@ -674,15 +582,8 @@ func TestAFailureInsideReconcileObservedLeavesTheAddressAlone(t *testing.T) {
 	}
 }
 
-// With hostPort the kube-scheduler places at most one pod of a group per
-// node, so replicas is capped by the node count -- the likeliest HostPort
-// mistake there is. The surplus pod exists and stays Pending, and the
-// scheduler's own message on it is the only thing that explains why.
-//
-// envtest runs no scheduler, so the condition is written here the way one
-// would write it. That is the honest shape of this test: it asserts the
-// operator's reading of PodScheduled=False, not the scheduler's decision to
-// set it.
+// hostPort allows one pod of a group per node, so surplus replicas stay Pending.
+// envtest runs no scheduler, so the condition is written by hand.
 func TestAnUnschedulableProxyPodIsReportedOnTheGroup(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -731,8 +632,7 @@ func TestAnUnschedulableProxyPodIsReportedOnTheGroup(t *testing.T) {
 	}
 }
 
-// A group whose pods all exist says so, or the condition would latch True
-// after any transient refusal and never come back.
+// Otherwise the condition would latch True after any transient refusal.
 func TestAGroupWithItsPodsIsNotDegraded(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -752,13 +652,6 @@ func TestAGroupWithItsPodsIsNotDegraded(t *testing.T) {
 	}
 }
 
-// TestARecoveredProxyGroupFiresAnEventOnlyOnTheFlank pins the review's
-// finding on Task 5: reportBlockedProxies's all-clear write must follow the
-// same read-before/write/compare-after shape as ServerGroupReconciler's
-// BackingOff/Degraded pair and this file's own reportReadinessDivergence, or
-// a group recovering from a blocked proxy pod does so silently -- and a
-// group that stays recovered must not repeat the event on every five-second
-// resync the way a bare unconditional Eventf would.
 func TestARecoveredProxyGroupFiresAnEventOnlyOnTheFlank(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -771,8 +664,7 @@ func TestARecoveredProxyGroupFiresAnEventOnlyOnTheFlank(t *testing.T) {
 		}
 	})
 	f.reconcileProxyGroup(r, "gateway")
-	// Whatever fired getting the group to its first steady state is not what
-	// this test is about.
+	// Events from reaching the first steady state are not under test.
 	drainEvents(rec)
 
 	pods := f.proxyPods("gateway")
@@ -800,11 +692,7 @@ func TestARecoveredProxyGroupFiresAnEventOnlyOnTheFlank(t *testing.T) {
 		t.Fatalf("Degraded = %+v, want True before the recovery this test is about", cond)
 	}
 
-	// What actually clears this in a cluster is the scheduler placing the
-	// pod (or, on the rejected-create path, the namespace's policy
-	// changing); here the pod's own condition is cleared directly, the same
-	// honest-about-envtest shape TestAnUnschedulableProxyPodIsReportedOnTheGroup
-	// already uses to get into the blocked state in the first place.
+	// envtest runs no scheduler, so the pod's condition is cleared directly.
 	pods[0].Status.Conditions = nil
 	if err := f.c.Status().Update(f.ctx, &pods[0]); err != nil {
 		t.Fatalf("clear the pod's PodScheduled condition: %v", err)
@@ -824,18 +712,14 @@ func TestARecoveredProxyGroupFiresAnEventOnlyOnTheFlank(t *testing.T) {
 		t.Fatalf("Degraded = %+v, want False/ProxyPodsAdmitted after the recovery", cond)
 	}
 
-	// Steady state: nothing transitions on this pass, so nothing should
-	// fire -- the whole reason every condition pair in this file is written
-	// on the flank rather than on every resync.
+	// Steady state: nothing transitions, so nothing fires.
 	f.reconcileProxyGroup(r, "gateway")
 	if steady := drainEvents(rec); containsEvent(steady, "ProxyPodsAdmitted") {
 		t.Errorf("events = %v, want no ProxyPodsAdmitted on a pass where nothing changed", steady)
 	}
 }
 
-// enforcePodSecurity labels the fixture's namespace so the API server's
-// PodSecurity admission plugin enforces a profile on it. envtest runs that
-// plugin, so this is the real control, not a stand-in for one.
+// envtest runs the PodSecurity admission plugin, so this is the real control.
 func (f *fixture) enforcePodSecurity(t *testing.T, profile string) {
 	t.Helper()
 	var ns corev1.Namespace
@@ -851,21 +735,9 @@ func (f *fixture) enforcePodSecurity(t *testing.T, profile string) {
 	}
 }
 
-// A refused create must leave the group's status alone on every pass after
-// the first, and this test fails if it does not.
-//
-// The API server names the pod it refused, and NewProxyName draws a fresh
-// random suffix for every attempt, so the refusal text differs on every pass.
-// Storing it each time bumps resourceVersion; For(&ProxyGroup{}) carries no
-// predicate, so the update event re-enqueues the group immediately, ahead of
-// the rate-limited retry, and the group spins -- hundreds of refusals a minute
-// where the backoff alone predicts a handful.
-//
-// The second half of this test is not decoration. The stored message has to
-// stay the API server's own words -- the remedy is in them and nothing else
-// knows it -- so a fix that stopped the churn by paraphrasing the refusal
-// into words of its own would pass the resourceVersion assertion while
-// breaking something worse. Both are asserted here for that reason.
+// NewProxyName draws a fresh suffix per attempt, so the refusal text differs every
+// pass; storing it re-enqueues the group (For() has no predicate) and it spins. The
+// stored message must still be the API server's own words: the remedy is in them.
 func TestARefusedProxyPodStopsRewritingTheGroup(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -880,9 +752,7 @@ func TestARefusedProxyPodStopsRewritingTheGroup(t *testing.T) {
 	const passes = 4
 	var versions, messages []string
 	for i := 1; i <= passes; i++ {
-		// Every pass fails: the namespace forbids host ports for as long as
-		// its label stands, which is forever. reconcileProxyGroup fails the
-		// test on any error, so it is the wrong helper here.
+		// Every pass fails while the label stands; reconcileProxyGroup fails on any error.
 		if _, err := r.Reconcile(f.ctx, ctrlreconcile.Request{
 			NamespacedName: types.NamespacedName{Name: "gateway", Namespace: f.ns},
 		}); err == nil {
@@ -899,9 +769,7 @@ func TestARefusedProxyPodStopsRewritingTheGroup(t *testing.T) {
 		messages = append(messages, cond.Message)
 	}
 
-	// From the second pass on, nothing about the group changes: the first
-	// pass is where the refusal is recorded, and every pass after it has
-	// nothing new to say.
+	// From the second pass on, nothing about the group changes.
 	for i := 2; i < passes; i++ {
 		if versions[i] != versions[1] {
 			t.Fatalf("resourceVersion by pass = %v, want no change after the second. "+
@@ -915,9 +783,7 @@ func TestARefusedProxyPodStopsRewritingTheGroup(t *testing.T) {
 		}
 	}
 
-	// The stored text is the cluster's, verbatim: the object it names, the
-	// verb the API server used, the policy that refused it, and the field
-	// that violated it. Nothing here is this operator's wording.
+	// The stored text is the cluster's, verbatim.
 	got := messages[len(messages)-1]
 	for _, want := range []string{`pods "`, "is forbidden:", "PodSecurity", "hostPort"} {
 		if !strings.Contains(got, want) {
@@ -927,9 +793,7 @@ func TestARefusedProxyPodStopsRewritingTheGroup(t *testing.T) {
 	}
 }
 
-// sameRefusal is the one thing standing between "stop rewriting the object"
-// and "report a stale remedy forever", so it is pinned on its own rather than
-// only through the reconcile above.
+// sameRefusal decides between rewriting the object and reporting a stale remedy.
 func TestSameRefusalSeparatesThePodNameFromTheRemedy(t *testing.T) {
 	const first = `pods "gateway-kt84" is forbidden: violates PodSecurity ` +
 		`"baseline:latest": hostPort (container "velocity" uses hostPort 25565)`
@@ -958,17 +822,8 @@ func TestSameRefusalSeparatesThePodNameFromTheRemedy(t *testing.T) {
 	}
 }
 
-// The delete guard has two halves and both are load-bearing, because
-// cmd/spawnery-operator does not narrow the manager's cache for Services the
-// way it does for ConfigMaps, ServiceAccounts and PVCs -- so this guard is
-// the only thing between a stray object at the group's name and a delete
-// that cannot be undone.
-//
-// TestSwitchingToHostPortLeavesAForeignServiceAlone above covers the Service
-// with no owner at all. These are the two cases it does not: a Service
-// controlled by a different object, and one carrying this group's controller
-// reference without the operator's own label. Narrowing the guard to
-// `owner == nil` left the whole package green before these existed.
+// The manager's Service cache is not narrowed by label, so this guard alone stands
+// between a stray object at the group's name and a delete that cannot be undone.
 func TestSwitchingToHostPortLeavesAServiceItDoesNotOwnAlone(t *testing.T) {
 	t.Run("controlled by a different object", func(t *testing.T) {
 		f := newFixture(t)
@@ -980,11 +835,8 @@ func TestSwitchingToHostPortLeavesAServiceItDoesNotOwnAlone(t *testing.T) {
 			}
 		})
 
-		// A ProxyGroup of the same name that was deleted and recreated: the
-		// old Service still carries the old object's UID, and the garbage
-		// collector has not caught up with it yet. Same kind, same name,
-		// different object -- which is exactly what the UID comparison is
-		// for, and what a name comparison could never tell apart.
+		// A deleted-and-recreated ProxyGroup: the old Service keeps the old UID until garbage
+		// collection catches up, and only the UID tells the two apart.
 		predecessor := &corev1.Service{
 			ObjectMeta: metav1.ObjectMeta{
 				Name:      "gateway",
@@ -1025,9 +877,7 @@ func TestSwitchingToHostPortLeavesAServiceItDoesNotOwnAlone(t *testing.T) {
 		r := proxyGroupReconciler(f)
 		group := f.createProxyGroup("gateway")
 
-		// Built the way the operator builds it, so the owner reference is
-		// genuinely this group's, and then stripped of the one other thing
-		// design section 4 requires the guard to see.
+		// Built as the operator builds it, then stripped of the operator's label.
 		if _, err := r.reconcileService(f.ctx, group); err != nil {
 			t.Fatalf("reconcileService as NodePort: %v", err)
 		}
@@ -1056,23 +906,8 @@ func TestSwitchingToHostPortLeavesAServiceItDoesNotOwnAlone(t *testing.T) {
 	})
 }
 
-// TestTheLoadBalancerAddressAppearsOnceAProxyIsReady is design section 12's
-// third acceptance criterion, and the only place in this repository where the
-// LoadBalancer address is driven through a live reconcile rather than through
-// the pure function that computes it.
-//
-// envtest can do this precisely because it runs no kubelet and no load
-// balancer controller: the test writes both halves itself -- the Service's
-// ingress entry the way MetalLB would, and the pod's readiness the way a
-// kubelet would -- and then asks the reconciler what it publishes. Nothing
-// here pretends a load balancer ran, and nothing here says a client reached
-// anything. What it proves is the wiring: reconcileService's returned Service
-// reaching setStatus, and status.address coming out of it.
-//
-// The mutation that has to fail: severing that wiring in Reconcile, by
-// passing setStatus a Service stripped of its status
-// (`if svc != nil { svc = &corev1.Service{} }`). Without this test the whole
-// package stays green under it.
+// envtest runs no kubelet or load-balancer controller, so the test writes the ingress
+// and pod readiness itself; what it proves is the Service reaching setStatus.
 func TestTheLoadBalancerAddressAppearsOnceAProxyIsReady(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1094,10 +929,7 @@ func TestTheLoadBalancerAddressAppearsOnceAProxyIsReady(t *testing.T) {
 		t.Fatalf("assign an ingress address the way a load balancer controller would: %v", err)
 	}
 
-	// An assigned address alone publishes nothing. This is the same gate the
-	// E2E's own LoadBalancer scenario is able to observe, restated here
-	// because the pass that follows would otherwise prove only that some
-	// address appeared, not that both conditions were required.
+	// An assigned address alone publishes nothing.
 	f.reconcileProxyGroup(r, "gateway")
 	if addr := f.proxyGroup("gateway").Status.Address; addr != "" {
 		t.Fatalf("status.address = %q with an assigned ingress and no ready proxy, want "+
@@ -1125,23 +957,7 @@ func TestTheLoadBalancerAddressAppearsOnceAProxyIsReady(t *testing.T) {
 	}
 }
 
-// The configured ClusterIP address reaches status.address through Reconcile,
-// and only once a proxy is ready.
-//
-// TestReconcileAcceptsEveryStrategy's ClusterIP row drives the first half of
-// that wiring -- exposeImplemented admitting the type, Reconcile reaching
-// reconcileService for it -- and cannot drive this half: no pod in that table
-// is ever made ready, so proxyAddress returns "" for every row there and an
-// address assertion would pass just as well with the ClusterIP arm deleted.
-// Making the pod ready is what gives the assertion something to fail on, and
-// it is why this is a separate test rather than another column on the table:
-// the other three rows would each need their own readiness and their own
-// expected address, and LoadBalancer's would need an ingress written by hand.
-//
-// The mutation that has to fail: return "" from proxyAddress's ClusterIP arm.
-// The same severance on the LoadBalancer side once went unnoticed, with the
-// Service disconnected from the status it is read out of and the package
-// green throughout.
+// Separate from the strategy table: only a ready pod lets proxyAddress return anything.
 func TestTheClusterIPAddressAppearsOnceAProxyIsReady(t *testing.T) {
 	const want = "mc.example.test"
 
@@ -1155,10 +971,8 @@ func TestTheClusterIPAddressAppearsOnceAProxyIsReady(t *testing.T) {
 	})
 	f.reconcileProxyGroup(r, "gateway")
 
-	// The gate matters more here than anywhere else: this is the one strategy
-	// that already knows its whole answer before any pod exists, so without
-	// the gate it would publish on the very first reconcile, for a group that
-	// may never serve anyone.
+	// ClusterIP knows its address before any pod exists, so without the gate it would
+	// publish on the first reconcile.
 	if addr := f.proxyGroup("gateway").Status.Address; addr != "" {
 		t.Fatalf("status.address = %q with no ready proxy, want empty -- a configured "+
 			"address is not evidence that anything is serving it", addr)
@@ -1178,10 +992,7 @@ func TestTheClusterIPAddressAppearsOnceAProxyIsReady(t *testing.T) {
 	}
 }
 
-// A ClusterIP group gets a Service the thing in front of it can route to, and
-// nothing that reaches outside the cluster on its own. The absence of a node
-// port is half the point: the strategy exists because the NodePort workaround
-// left one allocated that nobody dialled and a firewall had to cover.
+// No node port: ClusterIP exists to avoid one that nobody dials and a firewall must cover.
 func TestClusterIPServiceShape(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1223,44 +1034,10 @@ func TestClusterIPServiceShape(t *testing.T) {
 	}
 }
 
-// A group moving from NodePort to ClusterIP was suspected of carrying two
-// fields forward into a Service where neither belongs: externalTrafficPolicy,
-// which the API server should refuse, and the allocated node port, which
-// nothing would dial any more. Both come back cleared, but the two halves are
-// not the same kind of assertion, and the difference is worth being exact
-// about.
-//
-// externalTrafficPolicy is the straightforward half. It lives on svc.Spec,
-// the object CreateOrUpdate fetched before this arm ran, and the ClusterIP
-// arm never assigns it -- so a stale Local really would go out on the wire
-// unless something else stripped it. Measured against the envtest API server,
-// Kubernetes v1.36.3: the API server normalises it away on the update to a
-// type that does not support it. That half genuinely observes the API server,
-// and would go red if the normalisation stopped.
-//
-// The node port is overdetermined, and that is the whole finding. Two
-// independent mechanisms each force it to zero:
-//
-//   - reconcileService builds `port` as a fresh corev1.ServicePort literal
-//     with no NodePort set and replaces svc.Spec.Ports wholesale in every arm,
-//     so the update already carries nodePort: 0 and leaves nothing stale for
-//     anyone to normalise;
-//   - and the API server would clear it anyway, on the type change, if the
-//     operator did send one.
-//
-// Either alone is sufficient, so this assertion is insensitive to both: it
-// cannot go red unless the operator starts carrying a stale port forward AND
-// the API server stops normalising. Patching the ClusterIP arm to carry the
-// stored port forward leaves this test passing, with the operator observably
-// sending a nonzero port and the API server undoing it -- so neither mechanism
-// can be called the one under test.
-//
-// Neither arm sets these fields explicitly, and that stays true. This
-// repository's standing position is that a mechanism reporting nothing is
-// indistinguishable from an absent one: an explicit `ExternalTrafficPolicy =
-// ""` or `NodePort = 0` in the ClusterIP arm would be unfalsifiable, since no
-// test could fail without it, and would be decoration wearing the shape of a
-// fix.
+// The API server clears externalTrafficPolicy on the type change; the node port is
+// cleared both by reconcileService replacing Ports wholesale and by the API server, so
+// that half cannot fail on either alone. Neither arm sets these fields explicitly: no
+// test could fail without such a line.
 func TestNeitherNodePortNorTrafficPolicySurvivesTheMoveToClusterIP(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1301,10 +1078,6 @@ func TestNeitherNodePortNorTrafficPolicySurvivesTheMoveToClusterIP(t *testing.T)
 	}
 }
 
-// LoadBalancer -> ClusterIP releases exactly the annotations the operator set
-// and leaves every foreign key alone. Milestone 6c built that mechanism;
-// this is the first strategy to leave LoadBalancer for something other than
-// NodePort.
 func TestSwitchingFromLoadBalancerToClusterIPReleasesTheAnnotations(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1350,8 +1123,6 @@ func TestSwitchingFromLoadBalancerToClusterIPReleasesTheAnnotations(t *testing.T
 	}
 }
 
-// HostPort -> ClusterIP has to create a Service where the HostPort strategy
-// deleted one.
 func TestSwitchingFromHostPortToClusterIPCreatesTheService(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1388,12 +1159,7 @@ func TestSwitchingFromHostPortToClusterIPCreatesTheService(t *testing.T) {
 	}
 }
 
-// TestAGroupSaysWhenItsPodsNoLongerMatchWhatTheOperatorRenders is the outward
-// half of docs/reference/known-issues.md's milestone 4c-2 entry: "upgrading the operator
-// can roll every proxy in the cluster, with nobody having edited a spec." The
-// roll itself was already implemented and already correct. What was missing was
-// any way to tell from the objects that it was happening — pods churning and
-// readyReplicas dipping is what a dozen unrelated faults look like too.
+// A roll after an operator upgrade looks like any unrelated fault unless the group says why.
 func TestAGroupSaysWhenItsPodsNoLongerMatchWhatTheOperatorRenders(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -1418,11 +1184,8 @@ func TestAGroupSaysWhenItsPodsNoLongerMatchWhatTheOperatorRenders(t *testing.T) 
 		t.Errorf("reason = %q, want %q", settled.Reason, spawneryv1alpha1.ReasonPodShapeCurrent)
 	}
 
-	// What an operator upgrade does, reduced to its effect on one group: the
-	// shape the operator renders moves, so the running pod's stamped hash stops
-	// matching. Editing the label is how a unit-level test reaches that state
-	// without rebuilding the operator — the controller compares the label
-	// against what it renders now, and does not care which side moved.
+	// Editing the label stands in for an operator upgrade moving the rendered shape; the
+	// controller does not care which side moved.
 	stale, ok := f.pod(pods[0].Name)
 	if !ok {
 		t.Fatalf("pod %s is gone", pods[0].Name)
@@ -1442,17 +1205,13 @@ func TestAGroupSaysWhenItsPodsNoLongerMatchWhatTheOperatorRenders(t *testing.T) 
 	if rolling.Reason != spawneryv1alpha1.ReasonPodShapeChanged {
 		t.Errorf("reason = %q, want %q", rolling.Reason, spawneryv1alpha1.ReasonPodShapeChanged)
 	}
-	// The count is the half an event could not carry, and the sentence about a
-	// whole cluster saying this at once is the half a reader needs to tell an
-	// upgrade from an edit.
 	for _, want := range []string{"1 of", "operator upgrade"} {
 		if !strings.Contains(rolling.Message, want) {
 			t.Errorf("message = %q, want it to contain %q", rolling.Message, want)
 		}
 	}
 
-	// It must clear on its own once the replacement carries the current shape,
-	// or it would be a condition that latches and stops meaning anything.
+	// It must clear on its own, or the condition latches.
 	f.reconcileProxyGroup(r, "gateway")
 	for _, p := range f.proxyPods("gateway") {
 		if p.Labels[podspec.LabelPodHash] == "0000000000000000" {

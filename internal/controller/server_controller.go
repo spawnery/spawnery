@@ -52,49 +52,34 @@ const MaxContainerRestarts int32 = 3
 const ReasonPodNameConflict = "PodNameConflict"
 
 // ReasonNamespaceNotBootstrapped says a namespace does not yet hold the CA
-// bundle and the agent ServiceAccounts that the pods in it mount. Two
-// controllers report it, and they mean it about different objects: the Server
-// controller sets it as a condition on a Server whose pod it is therefore not
-// creating, and the Network controller records it as an event on a Network
-// whose namespace it could not keep current. One name, because an operator
-// reading either is looking at the same obstacle in the same namespace.
+// bundle and the agent ServiceAccounts its pods mount. The Server controller
+// sets it as a condition, the Network controller as an event.
 const ReasonNamespaceNotBootstrapped = "NamespaceNotBootstrapped"
 
-// ReasonPodNameTerminating marks a Server whose pod name is still held by the
-// pod of an earlier server of the same name that has not finished terminating.
-// Its neighbour ReasonPodNameConflict is the same question about a pod this
-// Server does not control; this one is about a pod its own predecessor left.
+// ReasonPodNameTerminating marks a Server whose pod name is still held by its
+// predecessor's terminating pod.
 const ReasonPodNameTerminating = "PodNameTerminating"
 
-// ReasonServerPodRejected marks a Server whose pod the API server refused. It
-// is the Server-level twin of ReasonProxyPodRejected on a ProxyGroup, and it
-// exists for the same reason: the remedy is at the namespace's policy or
-// quota, not at anything this operator can retry its way out of.
+// ReasonServerPodRejected marks a Server whose pod the API server refused; the
+// remedy is the namespace's policy or quota, not a retry.
 const ReasonServerPodRejected = "ServerPodRejected"
 
 // ReasonServerClaimRejected marks a Server whose data claim the API server
-// refused. It is ReasonServerPodRejected for the claim that goes in first.
+// refused.
 const ReasonServerClaimRejected = "ServerClaimRejected"
 
-// These mirror the kubebuilder defaults on ServerGroupSpec. They are what a
-// Server falls back to when its group is gone, so drain and cleanup keep sane
-// timings. TestTheFallbackGroupCarriesEveryCrdDefault reads the markers out of
-// the API source and fails when one of these drifts from it.
+// These mirror the kubebuilder defaults on ServerGroupSpec, for a Server whose
+// group is gone. TestTheFallbackGroupCarriesEveryCrdDefault keeps them in step.
 const (
 	defaultDrainTimeoutSeconds      int32 = 60
 	defaultFailedRetentionSeconds   int32 = 3600
 	defaultFinishedRetentionSeconds int32 = 300
 )
 
-// ResyncInterval is how often a Server is re-examined even without an event.
-// The state machine has time-driven transitions (startup deadline, drain
-// deadline, stream grace period) that no watch reports.
-//
-// Exported because it bounds more than this file: an operator can only act on
-// a time-driven transition at a resync, so a deadline the operator is racing
-// has to be more than one of these away or it may be met after the fact. See
-// cmd/spawnery-operator's rescue-window check, which is that comparison for
-// the one deadline somebody can misconfigure.
+// ResyncInterval is how often a Server is re-examined even without an event:
+// the state machine has time-driven transitions no watch reports. A deadline
+// the operator races has to be more than one of these away;
+// cmd/spawnery-operator checks the rescue window against it.
 const ResyncInterval = 5 * time.Second
 
 // ServerReconciler drives one Server through the state machine.
@@ -103,21 +88,18 @@ type ServerReconciler struct {
 	Scheme   *runtime.Scheme
 	Recorder events.EventRecorder
 
-	// Agents is the runtime state reported by the in-game agents.
 	Agents *agent.Registry
-	// Clock is injectable so the time rules are testable.
-	Clock func() time.Time
+	Clock  func() time.Time
 	// StartupDeadline is how long a server may take to reach Ready.
 	StartupDeadline time.Duration
 	// PlayerStatusInterval throttles player-count writes into etcd.
 	PlayerStatusInterval time.Duration
-	// Registrar reaches the proxies.
-	Registrar Registrar
+	Registrar            Registrar
 	// Bootstrap puts the CA bundle and the agent ServiceAccount into a
 	// namespace before the first pod is created there. Required.
 	Bootstrap *Bootstrapper
-	// AgentEndpoint is the address the in-game agent dials to reach the
-	// operator's gRPC endpoint, e.g. "spawnery-operator.spawnery-system.svc:9443".
+	// AgentEndpoint is the address the in-game agent dials, e.g.
+	// "spawnery-operator.spawnery-system.svc:9443".
 	AgentEndpoint string
 }
 
@@ -129,26 +111,10 @@ type ServerReconciler struct {
 // +kubebuilder:rbac:groups="",resources=pods,verbs=get;list;watch;create;patch;delete
 // +kubebuilder:rbac:groups="",resources=persistentvolumeclaims,verbs=get;list;watch;create;patch;delete
 
-// The two event grants are not the same right twice, and only one of them is
-// cluster-wide.
-//
-// events.k8s.io is where every controller in this package writes, through
-// events.EventRecorder, and it regards objects in whatever namespace a Network
-// put its game servers -- so it has to be cluster-wide.
-//
-// The core group is not left over from before the migration off tools/record:
-// controller-runtime's leader election still builds its resource lock with the
-// deprecated GetEventRecorderFor, and that recorder writes core events. But
-// leader election locks on a Lease in the operator's own namespace and its
-// events regard that Lease, so the right it needs is namespaced -- the same
-// argument, and the same spawnery-system placeholder, as the lease grant at
-// internal/controller/setup.go:77. Granting it cluster-wide would let the
-// operator write a core event into any namespace in the cluster for a lock it
-// can only ever take in one.
-//
-// spawnery-system is not where the operator runs; it is the literal
-// controller-gen requires to emit a namespaced Role at all, rewritten to
-// Helm's release namespace by hack/chart-templates.sh.
+// Core events are only for leader election's recorder, which regards a Lease
+// in the operator's own namespace, so that grant is namespaced. spawnery-system
+// is the literal controller-gen needs to emit a Role; hack/chart-templates.sh
+// rewrites it to the release namespace.
 // +kubebuilder:rbac:groups="",namespace=spawnery-system,resources=events,verbs=create;patch
 // +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
 
@@ -162,11 +128,9 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
-	// Only pod creation needs the group and the network. Everything else — the
-	// finalizer, the drain, the occupied label, releasing the object — has to
-	// keep running without them, or a Server whose group was deleted would stay
-	// Ready forever with its pod alive and its finalizer held, and the orphan
-	// sweep of Task 11 would deadlock on that finalizer.
+	// Only pod creation needs the group and the network. The finalizer, the
+	// drain and the occupied label keep running without them, or the orphan
+	// sweep would deadlock on the finalizer.
 	group := &spawneryv1alpha1.ServerGroup{}
 	groupKey := types.NamespacedName{Name: srv.Spec.GroupRef.Name, Namespace: srv.Namespace}
 	groupFound := true
@@ -190,19 +154,13 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	// Last step before the status is touched. Everything from here down writes
-	// to srv.Status, and nothing above this line does; see ensureFinalizer for
-	// why the boundary exists.
+	// Before anything writes to srv.Status; see ensureFinalizer.
 	if err := r.ensureFinalizer(ctx, srv); err != nil {
 		return ctrl.Result{}, err
 	}
 
-	// The clock starts when this operator began trying, which is this pass --
-	// not when a pod appeared. Stamped only beside the pod, as it was until
-	// 2026-08-24, a Server whose pod is refused had no clock at all: nothing
-	// could fail it, so it sat in Pending occupying its group's slot for as
-	// long as the refusal stood. The pod-creation branch below re-stamps it,
-	// so the ordinary path still measures from the pod.
+	// Stamped on acceptance, not only beside the pod, so a Server whose pod is
+	// refused can still fail. Pod creation below re-stamps it.
 	if srv.Status.StartedAt == nil && srv.DeletionTimestamp.IsZero() {
 		started := metav1.NewTime(r.Clock())
 		srv.Status.StartedAt = &started
@@ -227,10 +185,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		return ctrl.Result{}, err
 	}
 
-	// Recover from a status write lost between Create(pod) and Status().Update:
-	// the pod is there but status.podName is empty, so without adoption the
-	// creation branch would be skipped forever while the startup deadline could
-	// never fire and PodLost could never be detected.
+	// Recover from a status write lost between Create(pod) and Status().Update.
 	nameConflict := false
 	if podFound && srv.Status.PodName == "" {
 		if metav1.IsControlledBy(pod, srv) {
@@ -242,9 +197,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			r.Recorder.Eventf(srv, nil, corev1.EventTypeNormal, "PodAdopted", actionAdoptPod,
 				"adopted existing pod %s after a lost status write", pod.Name)
 		} else {
-			// Someone else's pod holds this name. Adopting it would put this
-			// Server in charge of a workload it never created, and deleting it
-			// is not ours to do. Stand off and say so.
+			// Someone else's pod holds this name: neither adopt nor delete it.
 			r.Recorder.Eventf(srv, nil, corev1.EventTypeWarning, "PodNameConflict", actionAdoptPod,
 				"pod %s exists but is not controlled by this Server", pod.Name)
 			setAccepted(srv, false, ReasonPodNameConflict,
@@ -253,38 +206,19 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	// A pod of this name that the API server still holds, even one on its way
-	// out. fetchPod reports a pod carrying a deletion timestamp as gone, and
-	// that is right for every decision the state machine makes about a pod —
-	// its players are leaving with it and nothing can bring it back. It is
-	// wrong for the one decision below that is about the *name*, because the
-	// object is still there and a Create against it returns AlreadyExists.
-	//
-	// A persistent server is what reaches this in practice. Its name is derived
-	// from its ordinal and is therefore reused across every generation of the
-	// Server object, so a recreated ordinal meets the pod its predecessor left
-	// behind. An ephemeral name would have to have NewServerName's random
-	// four-character suffix come up twice running for the same collision — not
-	// the case this was written for, and covered anyway, since the test below
-	// reads the name and not the type.
-	// Without this test the create fires, the pod Create's AlreadyExists is
-	// tolerated below, and the block goes on to record status.podName and emit
-	// PodCreated for a pod this controller did not create — whose absence one
-	// reconcile later is PodLost, which deletes this fresh Server. The group
-	// then rebuilds the ordinal into the same collision, once per resync,
-	// reaching Failed at no point and so counted by no backoff.
+	// fetchPod reports a terminating pod as gone, but its name is still taken
+	// and a Create would return AlreadyExists, which is tolerated below and would
+	// record a pod this controller did not create. A recreated persistent ordinal
+	// reuses its predecessor's name, so this is the ordinary case there.
 	nameStillHeld := !podFound && pod != nil
 
-	// Create the pod once, and only for a server that has not been asked to go
-	// away. status.podName is the record that a pod once existed; it is never
-	// reused for a different pod, which is what makes PodLost detectable.
+	// status.podName is never reused for a different pod, which is what makes
+	// PodLost detectable.
 	createPod := groupFound && networkFound && !nameConflict && !nameStillHeld &&
 		!podFound && srv.Status.PodName == "" && srv.DeletionTimestamp.IsZero()
 
-	// Checked on every pass, not only the one that creates the pod: a
-	// persistent server's pod usually already exists, so createPod is false
-	// for the reconcile that actually has to notice spec.storage.size grew,
-	// or the claim's FileSystemResizePending condition.
+	// Every pass: a persistent server's pod usually already exists when its
+	// claim needs to grow.
 	claimExists := false
 	if !group.IsEphemeral() {
 		var err error
@@ -296,24 +230,9 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	// Say so on the object, and only where nothing above has already put a
-	// truer reason there: a Server whose group or network is missing carries
-	// one from the switch above, and one that has itself been deleted is not
-	// waiting for anything. status.podName being empty is what makes this the
-	// fresh Server rather than the one whose pod is terminating. Nothing below
-	// overwrites it while the wait lasts either — the bootstrap check is inside
-	// `if createPod`, which this case is exactly what turns off.
-	//
-	// A condition and no event, deliberately. The wait is one termination
-	// grace period in the ordinary case and unbounded when the pod cannot
-	// finish terminating — a node gone NotReady — and it is the unbounded case
-	// that needs a name: phase.Decide leaves the server Pending with "waiting
-	// for the pod", which reads exactly like a slow image pull.
-	// meta.SetStatusCondition writes no new transition while the reason and
-	// message are unchanged, so a five-second resync stays quiet for the whole
-	// wait, and an operator sees the two transitions that matter on the object
-	// the rest of this server's state is already on. An event would announce an
-	// ordinary pod replacement as a warning, once per pass.
+	// A condition and no event: an event would announce an ordinary pod
+	// replacement as a warning on every pass, and the wait is unbounded when the
+	// old pod cannot finish terminating.
 	if nameStillHeld && groupFound && networkFound && !nameConflict &&
 		srv.Status.PodName == "" && srv.DeletionTimestamp.IsZero() {
 		setAccepted(srv, false, ReasonPodNameTerminating,
@@ -321,21 +240,10 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				"once that name is free", pod.Name))
 	}
 
-	// The namespace has to hold the CA and the ServiceAccount before the pod
-	// does, not after: the kubelet mounts both at container start, and a pod
-	// that comes up against a missing or empty ca.crt does not wait — it fails
-	// its TLS handshake against the operator and burns the startup deadline.
-	//
-	// Ensure fails for as long as no CA is published, which is exactly the
-	// window between process start and the leader's first certificate, so the
-	// requeue below is a retry and not an error. But it fails just as well when
-	// the write itself is refused — an admission webhook, a ResourceQuota on
-	// ConfigMaps, a policy in a customer namespace — and that state does not
-	// pass on its own. Nothing else here would ever say so: status.startedAt is
-	// only set once a pod exists, so StartupDeadlineReached can never fire and
-	// the Server would sit in Pending forever with an empty condition and no
-	// event. Say it on the object, then fall through to the status update; the
-	// requeue still lets it recover by itself once the obstacle is gone.
+	// The kubelet mounts the CA and the ServiceAccount at container start; a pod
+	// that comes up without them fails its TLS handshake and burns the startup
+	// deadline. Ensure also fails while no CA is published yet, so the requeue is
+	// the retry; a refused write does not pass on its own and gets a condition.
 	if createPod {
 		if err := r.Bootstrap.Ensure(ctx, srv.Namespace); err != nil {
 			logger.Info("waiting to bootstrap the namespace before creating the pod",
@@ -349,29 +257,17 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	// The claim goes in before the pod that mounts it, and nothing here
-	// waits for it to reach Bound. Under volumeBindingMode:
-	// WaitForFirstConsumer, the default of most topology-aware storage
-	// classes and of the node-local ones, a volume binds only once a pod
-	// demands it, so waiting
-	// for Bound would deadlock against the pod this block goes on to
-	// create.
-	//
-	// An ordinal recreated after its server was deleted is *supposed* to
-	// find the claim it had before, so an existing claim is never
-	// created again: anything the API server would refuse on create
-	// must not keep an existing server from getting a pod. growClaim
-	// above is what grows it. AlreadyExists still covers a claim that
-	// appeared since that read.
+	// Not waiting for Bound: under WaitForFirstConsumer a volume binds only once
+	// a pod demands it. An existing claim is never created again; growClaim grows
+	// it.
 	if createPod && !group.IsEphemeral() && !claimExists {
 		claim := podspec.BuildDataClaim(group, srv)
 		err := r.Create(ctx, claim)
 		switch {
 		case err == nil, apierrors.IsAlreadyExists(err):
 		case apierrors.IsForbidden(err), apierrors.IsInvalid(err):
-			// The same report the pod create below gives a refusal: a quota,
-			// a webhook, or storage.annotations over the API server's total
-			// annotation size. No pod is created without its claim.
+			// A quota, a webhook, or storage.annotations over the API server's total
+			// annotation size.
 			r.Recorder.Eventf(srv, nil, corev1.EventTypeWarning, ReasonServerClaimRejected,
 				actionCreatePod, "%s",
 				eventNote("the API server refused this server's data claim: %v", err))
@@ -398,7 +294,6 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			srv.Status.PodName = built.Name
 			now := metav1.NewTime(r.Clock())
 			srv.Status.StartedAt = &now
-			// A fresh pod has never been registered and carries no flap history.
 			srv.Status.WasRegistered = false
 			srv.Status.ReadinessLosses = 0
 			if srv.Status.Phase == "" {
@@ -410,27 +305,9 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			return ctrl.Result{RequeueAfter: ResyncInterval}, nil
 
 		case apierrors.IsForbidden(err), apierrors.IsInvalid(err):
-			// A create the API server refused is the Server's business and not
-			// only the log's, and this is the same branch
-			// proxygroup_controller.go takes one layer up for the same two
-			// error kinds: IsForbidden covers a Pod Security profile that
-			// forbids the pod's shape and an RBAC grant the operator does not
-			// have, IsInvalid a pod the API server rejects outright, a quota
-			// or a webhook among them.
-			//
-			// Returning the error alone left nothing on the object at all.
-			// status.podName stays empty, so the pod-lost path never applies;
-			// status.startedAt is only set beside a pod that exists, so
-			// StartupDeadlineReached can never fire; and the Server therefore
-			// sat in Pending with an empty condition and no event for as long
-			// as the refusal stood, while still counting against its group's
-			// replicas. That is the same silence the namespace-bootstrap
-			// branch above was given a condition for, arriving through the
-			// call one line further down.
-			//
-			// Falling through rather than returning: the tail writes the
-			// status, and the resync requeue there lets this recover by itself
-			// once the obstacle is gone.
+			// Pod Security, RBAC, quota or a webhook. Without a condition the Server
+			// would sit in Pending silently, since no deadline runs without a pod. Falls
+			// through so the tail writes the status and requeues.
 			r.Recorder.Eventf(srv, nil, corev1.EventTypeWarning, ReasonServerPodRejected,
 				actionCreatePod, "%s",
 				eventNote("the API server refused this server's pod: %v", err))
@@ -470,9 +347,8 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 			}
 			return ctrl.Result{}, nil
 		}
-		// Terminating without a deletion request means the state machine
-		// decided the server is finished. Remove the object so the group
-		// creates a replacement.
+		// Terminating without a deletion request: the state machine decided the
+		// server is finished, and the group creates a replacement.
 		if err := r.Delete(ctx, srv); err != nil && !apierrors.IsNotFound(err) {
 			return ctrl.Result{}, err
 		}
@@ -482,60 +358,23 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	return ctrl.Result{RequeueAfter: ResyncInterval}, nil
 }
 
-// persistedServer reports a write to the Server object, with its disappearance
-// treated as done rather than as a failure.
-//
-// The recreate path deletes the Server itself and lets the group build a
-// replacement. A reconcile that read the object through the informer cache
-// just before that delete landed then writes to an object the API server no
-// longer has. Unwrapped, that NotFound reaches controller-runtime as an
-// `error` with a stacktrace and a requeue, on a pass where nothing is wrong --
-// the replacement Server is already being built and the requeued pass finds
-// the object gone at the top of Reconcile and returns cleanly. A false error
-// line on the happy path is worse than noise here, because `make e2e` reads
-// this log for real refusals.
-//
-// Deliberately not a blanket ignore at the top of Reconcile: a NotFound there
-// could be the *ServerGroup* rather than this object, and swallowing that
-// would turn a group that vanished mid-pass into a silent no-op. This is only
-// ever handed a write to srv, where the object being gone means there is
-// nothing left for this pass to accomplish.
+// persistedServer treats the Server's disappearance during a write as done:
+// the recreate path deletes the Server itself, and a NotFound from a cached
+// read would log as a false error that `make e2e` reads for real refusals.
+// Only for writes to srv; a NotFound on the group must not be swallowed.
 func persistedServer(err error) error {
 	return client.IgnoreNotFound(err)
 }
 
-// growClaim reports whether the claim exists, and raises the claim's
-// storage request to match spec.storage.size, and never lowers it. It is the only write this operator makes to an
-// *existing* claim — the reconcile above creates one alongside the pod, and
-// nothing anywhere deletes one — and the RBAC it needs is patch, not update,
-// which would replace the whole object for one field, and never delete, which
-// is the verb that destroys a world.
+// growClaim reports whether the claim exists and raises its storage request
+// to spec.storage.size, never lowering it; a claim grown by hand is left alone.
+// It is the operator's only write to an existing claim, by patch.
 //
-// A claim already at or above the size asked for is left untouched, byte for
-// byte: that covers both the ordinary case (nothing to do) and the one a
-// controller has no business correcting: a claim grown by hand or by
-// another controller; the API server's refusal to shrink a PVC is the
-// backstop.
-//
-// A resize can fail two different ways, and this function is where the
-// choice was made to catch both rather than only the one Design §4 names.
-// allowVolumeExpansion: false is the ordinary way the patch below fails
-// synchronously, right here, with the API server's own admission error — but
-// IsInvalid/IsForbidden covers other causes of the same shape too: Task 7's
-// own report found "only dynamically provisioned pvc can be resized" from an
-// unbound, class-less claim, which has nothing to do with
-// allowVolumeExpansion. This function cannot tell those apart from the error
-// alone, so the message it records below says what happened and names
-// allowVolumeExpansion as the first thing to check, not as the established
-// cause. A driver that accepts the resize and fails it later says so only on
-// the claim itself, as a ControllerResizeError or NodeResizeError condition,
-// with nothing synchronous to catch at all; resizeConditionError is what
-// reads that, both below and on the pass where nothing needed to grow.
-// Reporting only the synchronous half would leave the asynchronous one
-// looking like a resize still in progress rather than one that failed. Both
-// land on status.storageResizeError, and ServerGroupReconciler folds either
-// into the group's StorageResize condition without needing to know which
-// kind it was.
+// A synchronous refusal is usually allowVolumeExpansion: false but has other
+// causes of the same error kind (an unbound, class-less claim), so the message
+// names the class as the first thing to check, not as the cause. A driver that
+// fails the resize later says so only in the claim's conditions, read by
+// resizeConditionError. Both land on status.storageResizeError.
 func (r *ServerReconciler) growClaim(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
@@ -564,20 +403,8 @@ func (r *ServerReconciler) growClaim(
 		if !apierrors.IsInvalid(err) && !apierrors.IsForbidden(err) {
 			return true, err
 		}
-		// Refused synchronously by the API server's own resize admission,
-		// rather than returned as a reconcile error: returning it here would
-		// fail this whole pass before readResizePending below ever ran, and
-		// retrying an admission rejection every five seconds would not
-		// change its outcome. Recording it on the status is what lets
-		// ServerGroupReconciler say so on the group instead of this staying
-		// a line in the reconcile log.
-		//
-		// The message names what happened and what to check, not why: see
-		// this function's doc comment for why IsInvalid/IsForbidden alone
-		// cannot tell an unexpandable storage class apart from Task 7's
-		// unbound-claim rejection, or from any other cause the same two error
-		// kinds cover. err is carried verbatim because it is the only part of
-		// this that actually identifies the cause.
+		// Recorded rather than returned: retrying an admission rejection changes
+		// nothing, and returning would skip readResizePending.
 		className := "(the cluster default)"
 		if claim.Spec.StorageClassName != nil {
 			className = *claim.Spec.StorageClassName
@@ -592,17 +419,9 @@ func (r *ServerReconciler) growClaim(
 	return true, nil
 }
 
-// resizeConditionError names the reason a claim's resize did not go through,
-// read off the two conditions a CSI driver sets only after admission already
-// let a resize patch through: PersistentVolumeClaimControllerResizeError and
-// PersistentVolumeClaimNodeResizeError. This is the asynchronous half of what
-// growClaim's own doc comment describes; growClaim calls this both after a
-// patch it just made and on a pass where the claim was already at or above
-// spec.storage.size, since a driver can fail a resize well after the pass
-// that requested it.
-//
-// Returns "" when neither condition is set to True, which is the ordinary
-// case: most CSI drivers that accept a resize also complete it.
+// resizeConditionError reads the resize-error conditions a CSI driver sets
+// after admission let a resize through, which can come well after the pass
+// that asked for it. "" when neither is True.
 func resizeConditionError(claim *corev1.PersistentVolumeClaim) string {
 	for _, c := range claim.Status.Conditions {
 		if c.Status != corev1.ConditionTrue {
@@ -616,15 +435,9 @@ func resizeConditionError(claim *corev1.PersistentVolumeClaim) string {
 	return ""
 }
 
-// readResizePending mirrors the claim's FileSystemResizePending condition
-// onto status.storageResizePending, which is what DecidePersistentSize's
-// lowest-priority candidate class reads. Most CSI drivers expand a volume
-// online and the pod never has to restart for it; the ones that do not set
-// the condition until the resize actually needs a restart to take effect,
-// so this is false for the ordinary case.
-//
-// A claim that no longer exists clears the flag rather than leaving a stale
-// true behind -- there is nothing left asking for a restart.
+// readResizePending mirrors the claim's FileSystemResizePending condition onto
+// status.storageResizePending, for DecidePersistentSize. A missing claim clears
+// it.
 func (r *ServerReconciler) readResizePending(
 	ctx context.Context,
 	srv *spawneryv1alpha1.Server,
@@ -649,21 +462,12 @@ func (r *ServerReconciler) readResizePending(
 	return nil
 }
 
-// ensureFinalizer puts the drain finalizer on the object. It exists as a step
-// of its own so that the order it has to run in is visible in Reconcile's call
-// structure instead of only in a comment above an inline block.
+// ensureFinalizer puts the drain finalizer on the object before the pod
+// exists, or a deletion in between skips the drain.
 //
-// The finalizer must sit on the object before the pod exists, otherwise a
-// deletion between pod creation and the next reconcile skips the drain.
-//
-// It must also run before anything writes to srv.Status, and that is the part
-// worth a function: Update returns the persisted object, and the API server
-// does not take the status from us because status is a subresource, so
-// controller-runtime writes the persisted — on a first reconcile, empty —
-// status back over srv. Every condition set before this call is silently lost,
-// and the Status().Update at the end of applyDecision then persists an object
-// that never had them. Nothing here reads or writes srv.Status; keep it that
-// way, and keep the call ahead of the first status write in Reconcile.
+// It must run before anything writes to srv.Status: Update writes the
+// persisted status (empty on a first reconcile) back over srv, because status
+// is a subresource, and every condition set earlier would be lost.
 func (r *ServerReconciler) ensureFinalizer(ctx context.Context, srv *spawneryv1alpha1.Server) error {
 	if !srv.DeletionTimestamp.IsZero() || slices.Contains(srv.Finalizers, ServerFinalizer) {
 		return nil
@@ -673,15 +477,9 @@ func (r *ServerReconciler) ensureFinalizer(ctx context.Context, srv *spawneryv1a
 }
 
 // fetchPod returns the pod of a server. A pod carrying a deletion timestamp
-// counts as gone: it is on its way out, its players are leaving with it, and
-// nothing we could decide would bring it back. Without this rule the Server
-// object would wait for a pod that only the kubelet can finally remove — and
-// in envtest, where no kubelet runs, it would wait forever.
-//
-// It still hands the caller that pod rather than nil, and the difference
-// between the two returns is load-bearing in exactly one place: Reconcile's
-// nameStillHeld, which asks whether the *name* is free rather than whether the
-// pod is usable. Keep the object on this path.
+// counts as gone: its players are leaving with it, and in envtest no kubelet
+// would ever remove it. The pod is still returned, because nameStillHeld asks
+// whether the name is free.
 func (r *ServerReconciler) fetchPod(ctx context.Context, srv *spawneryv1alpha1.Server) (*corev1.Pod, bool, error) {
 	name := srv.Status.PodName
 	if name == "" {
@@ -734,12 +532,8 @@ func (r *ServerReconciler) collectInputs(
 		PodExists:         podFound,
 		PodLost:           !podFound && srv.Status.PodName != "",
 		ReadinessLosses:   srv.Status.ReadinessLosses,
-		// Whether the server was ever registered is recorded state, not
-		// something to re-derive here: a Starting server that fell out of Ready
-		// may still have players connected from before the readiness loss (the
-		// fallback deregisters to stop new joins, it does not move anyone off),
-		// and only status.wasRegistered still knows that. The controller writes
-		// it wherever it registers and resets it when it creates a fresh pod.
+		// Recorded state: a Starting server that fell out of Ready may still
+		// have players from before, and only status.wasRegistered knows.
 		WasRegistered:       srv.Status.WasRegistered,
 		RetirementRequested: srv.Spec.Retire,
 		Registered:          srv.Status.Registered,
@@ -760,88 +554,40 @@ func (r *ServerReconciler) collectInputs(
 	in.AgentConnected = snap.Connected
 	in.AgentStreamDownFor = snap.StreamDownFor
 	in.AgentUnheard = !snap.Known
-	// A stream that is up and has gone quiet. Never-reported is excluded on
-	// purpose: a server that has just become Ready may not have sent its first
-	// count yet, and reading that as silence would fail it on the pass that
-	// made it.
+	// Never-reported is excluded: a server just Ready may not have sent its
+	// first count yet.
 	in.AgentSilent = snap.Connected && !snap.PlayersReportedAt.IsZero() && snap.PlayersStale
 	in.PlayersOnline = snap.Players
 	in.PlayersStale = snap.PlayersStale
 	in.Slots = snap.Slots
 	stampRoundEnd(srv, snap, now)
-	// The object and not the snapshot: the registry is memory, and this
-	// decision has to hold across an operator restart.
+	// The object, not the snapshot, so it holds across an operator restart.
 	in.RoundEnded = srv.Status.RoundEndedAt != nil
 
-	// What the proxies say about this server, which is the half its own agent
-	// cannot see: a player still completing the configuration phase is
-	// counted by neither the backend nor the proxy's own player list, so a
-	// drain reading either would find the server empty and delete the pod
-	// under them.
-	//
-	// Asked of the Server's own namespace and name, which is exactly how the
-	// proxies were told about it (proxyreg.registeredServer uses srv.Name), so
-	// nothing translates between the two vocabularies and nothing can drift.
-	//
-	// The drain's start is the moment every count has to be about. A report
-	// taken before it cannot say whether the drain has finished, however fresh
-	// it is -- so a zero from before the drain is not an answer, and both
-	// sources are held to the same rule: the proxies through AttachedTo's
-	// since, and this server's own count through CountPredatesDrain below.
-	//
-	// Zero when the server is not draining, which is the ordinary case and
-	// asks a different question entirely: "is anybody on it", which any fresh
-	// report answers.
+	// The proxies count a player still in the configuration phase, which
+	// neither the backend nor the proxy's own player list does. During a drain
+	// both sources must report from after its start, or a pre-drain zero would
+	// read as empty. Zero outside a drain, where any fresh report answers.
 	var since time.Time
 	if srv.Status.DrainStartedAt != nil {
-		// Plus a second, because the stamp is a metav1.Time and those are
-		// truncated to whole seconds on the way through the API server, so
-		// sub-second precision is lost. The value read back is up
-		// to a second *earlier* than the drain actually started, and comparing
-		// against it as it stands would believe a report taken up to a second
-		// before the drain: precisely the report this rule exists to refuse.
-		// Adding a second puts the threshold back at or after the real moment.
-		//
-		// What it costs is that second, on top of the report interval the rule
-		// already costs, against a drain timeout measured in minutes.
+		// metav1.Time truncates to whole seconds, so the stamp reads up to a
+		// second early.
 		since = srv.Status.DrainStartedAt.Add(time.Second)
 	}
 	in.ProxyAttached, in.ProxyAttachStale = r.Agents.AttachedTo(srv.Namespace, srv.Name, since)
-	// Not After rather than Before, so a report landing exactly on the
-	// threshold counts as predating it. A tie is ambiguous and the reading
-	// that keeps a pod is the one to take.
+	// A tie counts as predating: the reading that keeps a pod.
 	in.CountPredatesDrain = !since.IsZero() && !snap.PlayersReportedAt.After(since)
 
-	// Only once a pod has existed. The stamp is written on acceptance now, so
-	// without this guard the startup deadline would fire for a Server whose
-	// pod was refused and report it as "did not become ready in time" -- a
-	// server that never had a pod did not fail to become ready. That case is
-	// the one below, with its own bound and its own reason.
+	// Only once a pod has existed; a server that never had a pod gets the
+	// creation deadline below instead.
 	if srv.Status.StartedAt != nil && (podFound || srv.Status.PodName != "") {
 		in.StartupDeadlineReached = now.Sub(srv.Status.StartedAt.Time) > r.StartupDeadline
 	}
-	// The wait a Server with no pod at all is allowed.
-	//
-	// Not while its pod's *name* is held by another pod -- a predecessor still
-	// terminating, or somebody else's pod on a derived ordinal name. Failing
-	// there makes things worse rather than better: for a persistent ordinal
-	// the replacement is derived from the same name and hits the same wall, a
-	// Failed server holds its ordinal (DecidePersistentSize's held map) and
-	// pruneFailed does not run for a persistent group, so the object stays for
-	// its full failedRetentionSeconds -- an hour by default -- even after
-	// somebody force-deletes the stuck pod that caused it, where without the
-	// bound the Server recovers the moment the name comes free. Both cases
-	// already name the obstacle on the object, PodNameTerminating and
-	// PodNameConflict, so nothing is silent here either.
-	//
-	// The bound itself is derived from the group rather than configured:
-	// drain.timeoutSeconds is how long a predecessor's termination may take,
-	// and the startup deadline on top is the slack every other attempt gets.
-	// With the guard above that is margin rather than the mechanism -- the
-	// clock does not run during the wait at all -- and it is kept as the
-	// second line: if nameTaken were ever computed wrongly, a bound sized
-	// below a legitimate termination would fail Servers that are doing the
-	// right thing.
+	// The wait a Server with no pod at all is allowed. Not while its name is
+	// held by another pod: a Failed persistent server holds its ordinal for the
+	// whole failed retention, and its replacement would hit the same name anyway.
+	// PodNameTerminating and PodNameConflict already say so. The bound is the
+	// drain timeout (a predecessor's termination) plus the startup deadline.
 	if srv.Status.StartedAt != nil && !podFound && !nameTaken && srv.Status.PodName == "" {
 		in.PodCreationDeadlineReached =
 			now.Sub(srv.Status.StartedAt.Time) >= group.DrainTimeout()+r.StartupDeadline
@@ -852,11 +598,8 @@ func (r *ServerReconciler) collectInputs(
 	if srv.Status.DrainStartedAt != nil {
 		in.DrainDeadlineReached = now.Sub(srv.Status.DrainStartedAt.Time) >= group.DrainTimeout()
 	}
-	// Measured from the wait in soft drain, not from the group's generation
-	// change: a server still queued behind maxUnavailable is not failing to
-	// empty, it has not been asked yet. Zero means never, which is the CRD
-	// default and the promise that nobody is moved unless somebody asked for
-	// it.
+	// Measured from the soft drain, not the spec change: a server queued behind
+	// maxUnavailable has not been asked yet. Zero means never.
 	if srv.Status.RetiringSince != nil {
 		if window := group.UpdateMaxStale(); window > 0 {
 			in.MaxStaleReached = now.Sub(srv.Status.RetiringSince.Time) >= window
@@ -873,11 +616,7 @@ func (r *ServerReconciler) collectInputs(
 }
 
 // stampRoundEnd records the first time a server said its round was over, and
-// reports whether it wrote anything.
-//
-// Once, never moved: the field answers "when did this end", and a later pass
-// re-reading the same live word must not turn it into "when was this last
-// observed".
+// reports whether it wrote anything. Never moved afterwards.
 func stampRoundEnd(srv *spawneryv1alpha1.Server, snap agent.Snapshot, now time.Time) bool {
 	if !snap.RoundEnded || srv.Status.RoundEndedAt != nil {
 		return false
@@ -890,20 +629,8 @@ func stampRoundEnd(srv *spawneryv1alpha1.Server, snap agent.Snapshot, now time.T
 // defaults, so a Server that outlives its group still drains and cleans up on
 // sane timings instead of freezing. It is never used to build a pod.
 func fallbackGroup(srv *spawneryv1alpha1.Server) *spawneryv1alpha1.ServerGroup {
-	// The type is read off the Server rather than assumed, and each of the
-	// three has its own marker: spec.ordinal is set by createPersistentServer
-	// and by nothing else, spec.key by the on-demand create and by nothing
-	// else, and a Server with neither is ephemeral. No Server carries both, so
-	// the order of the arms decides nothing; the exhaustiveness does. An
-	// on-demand member read as ephemeral is the one wrong answer about its
-	// world, because it loses the !IsEphemeral() branch in Reconcile, which is
-	// the one that grows its claim.
-	//
-	// The deadlines do not depend on it: DrainTimeout, FailedRetention and
-	// UpdateMaxStale all read fields this function fills with the CRD's own
-	// defaults. On this path that branch only refreshes
-	// status.storageResizeError -- growClaim returns on nil storage anyway --
-	// so a truthful answer breaks nothing here.
+	// spec.ordinal marks a persistent server and spec.key an on-demand one;
+	// an on-demand member read as ephemeral would lose its claim handling.
 	groupType := spawneryv1alpha1.ServerGroupEphemeral
 	switch {
 	case srv.Spec.Ordinal != nil:
@@ -926,9 +653,8 @@ func fallbackGroup(srv *spawneryv1alpha1.Server) *spawneryv1alpha1.ServerGroup {
 	}
 }
 
-// setAccepted records whether the operator can fully manage this Server. It is
-// written onto the object; applyDecision persists it with the rest of the
-// status in a single update.
+// setAccepted records whether the operator can fully manage this Server;
+// applyDecision persists it with the rest of the status.
 func setAccepted(srv *spawneryv1alpha1.Server, ok bool, reason, message string) {
 	meta.SetStatusCondition(&srv.Status.Conditions, metav1.Condition{
 		Type:    spawneryv1alpha1.ConditionAccepted,
@@ -945,10 +671,8 @@ func podUID(pod *corev1.Pod, found bool) string {
 	return string(pod.UID)
 }
 
-// podTerminal reports whether the pod is finished for good: the process is
-// down and every session it held went with it. It is the single definition of
-// that question — the state machine reads it to refuse a pointless drain, and
-// the occupied label reads it to stop protecting a pod that has nobody on it.
+// podTerminal reports whether the pod is finished for good, its sessions gone
+// with it. Both the state machine and the occupied label read it.
 func podTerminal(pod *corev1.Pod) bool {
 	return pod.Status.Phase == corev1.PodFailed ||
 		pod.Status.Phase == corev1.PodSucceeded ||
@@ -956,9 +680,8 @@ func podTerminal(pod *corev1.Pod) bool {
 }
 
 // crashLooping reports whether the Minecraft container is stuck restarting.
-// The check is deliberately scoped to that one container: PodTerminal aborts a
-// running drain, so a crash-looping sidecar must never be able to cut short the
-// drain of a healthy server that still has players on it.
+// Only that container: PodTerminal aborts a drain, and a crash-looping sidecar
+// must not cut short the drain of a server with players.
 func crashLooping(pod *corev1.Pod) bool {
 	for _, cs := range pod.Status.ContainerStatuses {
 		if cs.Name != podspec.ContainerName {
@@ -991,23 +714,9 @@ func (r *ServerReconciler) applyDecision(
 		srv.Status.Registered = false
 	}
 	if d.Register {
-		// Persisted before the side effect, not after. Remembered for the life
-		// of this pod: from here on a deletion has to drain, even if the server
-		// falls back out of Ready first. Writing it afterwards means a lost
-		// status update in this window makes a later deletion take the "never
-		// registered, terminate immediately" branch — with players already on
-		// the server, because the proxies were told about it a moment ago.
-		//
-		// This ordering has a cost of its own, and it is worth stating rather
-		// than only the upside above: if Register itself fails after the flag
-		// is already persisted, a later deletion takes the drain branch for a
-		// server no proxy was actually told about. With a stale agent stream,
-		// isOccupied still counts it occupied, so that drain runs out its full
-		// deadline instead of terminating immediately. Bounded — it ends on its
-		// own once the deadline passes — and the safe direction to err in, but
-		// not free.
-		//
-		// One extra status write, at the single transition into Ready.
+		// Persisted before Register: a lost status write afterwards would let a
+		// later deletion skip the drain with players already on. The cost is that a
+		// failed Register leaves a drain that runs out its deadline.
 		if !srv.Status.WasRegistered {
 			srv.Status.WasRegistered = true
 			if err := persistedServer(r.Status().Update(ctx, srv)); err != nil {
@@ -1020,11 +729,8 @@ func (r *ServerReconciler) applyDecision(
 		srv.Status.Registered = true
 	}
 	// The drain clock starts with the drain, not with phase Draining: a Failed
-	// server is drained while staying Failed, and without this its deadline
-	// would never be reached. Both the clock and the broadcast happen exactly
-	// once — the Failed branch repeats StartDrain on every pass, and re-sending
-	// the command to every proxy each resync would be pure noise. A proxy that
-	// reconnects is re-synced from the phase in the CR status.
+	// server is drained while staying Failed. The broadcast happens once; a
+	// reconnecting proxy is re-synced from the phase.
 	if d.StartDrain && srv.Status.DrainStartedAt == nil {
 		if err := r.Registrar.Drain(ctx, srv); err != nil {
 			return fmt.Errorf("drain %s: %w", srv.Name, err)
@@ -1041,8 +747,8 @@ func (r *ServerReconciler) applyDecision(
 		srv.Status.ReadinessLosses = 0
 	}
 
-	// Phase bookkeeping. These timestamps are what the time-driven inputs are
-	// derived from, so they have to survive an operator restart.
+	// These timestamps feed the time-driven inputs and must survive an operator
+	// restart.
 	if d.Next != current {
 		r.Recorder.Eventf(srv, nil, corev1.EventTypeNormal, d.Reason, actionSyncStatus,
 			"phase %s -> %s: %s", current, d.Next, d.Message)
@@ -1054,12 +760,8 @@ func (r *ServerReconciler) applyDecision(
 		}
 		srv.Status.RetiringSince = nil
 	case phase.Starting:
-		// Re-arm the startup deadline. It bounds the current attempt to become
-		// playable, not the age of the pod: entering Starting from Pending arms
-		// it, and entering it from Ready after a readiness loss re-arms it for
-		// the recovery attempt. Without this a server older than the deadline
-		// would be failed by the first blip; with it, one that cannot recover is
-		// still failed a deadline later.
+		// The startup deadline bounds the current attempt, not the pod's age, so
+		// entering Starting from Ready re-arms it.
 		if current != phase.Starting {
 			srv.Status.StartedAt = &now
 		}
@@ -1094,9 +796,7 @@ func (r *ServerReconciler) applyDecision(
 	snap := r.Agents.Lookup(podUID(pod, podFound))
 	r.mirrorPlayerCount(srv, snap, group.Spec.MaxPlayers, group.Spec.PlayableSlots, now)
 
-	// Which pod this status is about. See ServerStatus.PodUID: it is what
-	// tells one run of a server apart from the next under the same name, and
-	// it is written wherever the pod is seen rather than where it was made.
+	// Written wherever the pod is seen; see ServerStatus.PodUID.
 	if podFound {
 		srv.Status.PodUID = string(pod.UID)
 	}
@@ -1137,11 +837,8 @@ func (r *ServerReconciler) mirrorPlayerCount(
 	if !snap.Known {
 		return
 	}
-	// Clamped like the scaler's view, because the status is not only read by
-	// people: netstate carries it into every agent's picture and the connect
-	// router picks a group's target by playable seats minus players. Zero is
-	// the fallback group standing in for one that is gone; it carries no
-	// capacity, so there is nothing to clamp to and the report stands.
+	// Clamped like the scaler's view: netstate carries the status into every
+	// agent's picture. maxPlayers is zero on the fallback group.
 	players, slots := snap.Players, snap.Slots
 	playable := slots
 	if maxPlayers > 0 {
@@ -1162,15 +859,7 @@ func (r *ServerReconciler) mirrorPlayerCount(
 }
 
 // syncOccupiedLabel keeps the label the group's PodDisruptionBudget selects on
-// in step with reality. The label means "this pod may be carrying players",
-// which is a narrower question than "is the count stale".
-//
-// The rule itself is isOccupied, shared with the ServerGroup controller, which
-// sizes minAvailable from the same answer. This function only supplies the four
-// facts from the Kubernetes side: the reported count, whether it is stale,
-// whether the proxies ever routed to this server, and whether its pod is
-// finished. A terminal pod counts as sessions gone — the state machine refuses
-// to drain one for exactly that reason.
+// in step with isOccupied.
 func (r *ServerReconciler) syncOccupiedLabel(
 	ctx context.Context,
 	srv *spawneryv1alpha1.Server,

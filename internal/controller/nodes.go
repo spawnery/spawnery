@@ -33,57 +33,23 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
-// IsDeparting reports whether this node is on its way out of service, and the
-// pods on it should be moved before somebody else moves them the hard way.
-//
-// Two ways in. spec.unschedulable is what kubectl cordon and kubectl drain
-// set, and it is the criterion the master design names (§5.1); it is hardwired
-// and not configurable. A taint key from the operator's -drain-taint list is
-// the second, for autoscalers that taint before they cordon.
-//
-// The effect is part of the taint test and not decoration. A PreferNoSchedule
-// taint does not stop the scheduler putting the replacement pod back on this
-// same node: we would condemn a pod, rebuild it here, condemn that one next
-// pass, and rotate for as long as the taint stands. Restricting the match to
-// the two effects that actually repel a pod closes that loop by construction
-// rather than with a guard somewhere downstream.
-//
-// A nil node is not departing. The caller reaches that case when a node cannot
-// be read at all, and failing towards "not departing" keeps an unreadable Node
-// from emptying a group; the watch and the resync bring the answer back within
-// seconds.
+// IsDeparting: cordoned, or carrying a -drain-taint key with an effect that
+// repels pods. A PreferNoSchedule taint would let the replacement land on the
+// same node and be condemned again, forever.
 func IsDeparting(node *corev1.Node, taintKeys []string) bool {
 	departing, _ := departingWithHint(node, taintKeys)
 	return departing
 }
 
-// wellKnownDrainTaints are keys other projects use to mark a node they are
-// about to remove. This operator does not act on them and will not: a default
-// that reacted to another project's taint key would couple it to a vocabulary
-// that project is free to rename, which is exactly the coupling a configurable
-// -drain-taint list exists to avoid.
-//
-// Noticing is a different thing from reacting, and the coupling it risks is
-// different too. A key that gets renamed here costs a warning that stops
-// appearing; a key that got renamed in the list above would cost a node drain
-// that stops working. So this is a list of things to mention, and nothing
-// downstream branches on it.
-//
-// What it answers is the one thing an operator running an autoscaler cannot
-// find out from here: whether they forgot the flag. An unset -drain-taint and
-// a genuinely quiet cluster look identical from inside this operator -- until
-// a node turns up carrying a taint that plainly means "this node is going" and
-// is not in the list it was told about.
+// wellKnownDrainTaints are only warned about, never acted on: acting would tie
+// node drains to another project's key names. The warning catches a forgotten
+// -drain-taint flag.
 var wellKnownDrainTaints = map[string]string{
 	"ToBeDeletedByClusterAutoscaler": "cluster-autoscaler",
 	"karpenter.sh/disrupted":         "Karpenter",
 	"karpenter.sh/disruption":        "Karpenter",
 }
 
-// departingWithHint is IsDeparting plus the name of a project whose drain
-// taint this node carries and this operator was not configured for. The hint
-// is empty whenever the node is departing by a route this operator does
-// honour, because there is then nothing missing to report.
 func departingWithHint(node *corev1.Node, taintKeys []string) (bool, string) {
 	if node == nil {
 		return false, ""
@@ -106,15 +72,8 @@ func departingWithHint(node *corev1.Node, taintKeys []string) (bool, string) {
 	return false, hint
 }
 
-// nodeDeparting resolves a pod's node and asks IsDeparting about it.
-//
-// Every failure answers false. An empty name is an unscheduled pod, which is
-// on no node; a Get that fails is a node we cannot read, and a group must not
-// be emptied on the strength of a cache miss. The next reconcile asks again,
-// so a false answer here costs at most a delay and never a wrong deletion.
-// ServerGroupReconciler and ProxyGroupReconciler each watch Node and map an
-// event onto the groups with pods on it, so that delay is the time a cordon
-// or taint takes to reach the cache rather than a whole resync interval.
+// nodeDeparting answers false on every failure: a cache miss must not empty a
+// group, and the Node watch asks again soon.
 func nodeDeparting(ctx context.Context, reader client.Reader, nodeName string, taintKeys []string) bool {
 	if nodeName == "" {
 		return false
@@ -125,15 +84,7 @@ func nodeDeparting(ctx context.Context, reader client.Reader, nodeName string, t
 	}
 	departing, hint := departingWithHint(node, taintKeys)
 	if hint != "" {
-		// Once per node, not once per pod on it and not once per pass. This
-		// runs for every pod of every group on every reconcile, so an
-		// ungated log would be several lines a second for as long as the
-		// node stood -- and the thing it reports does not change while it
-		// stands.
-		//
-		// A log line and not a condition: what is wrong is the operator's own
-		// flags, which belong to whoever deployed it, and no group's status is
-		// the place to report a mistake no group's owner can fix.
+		// A log line, not a condition: the operator's flags are no group owner's to fix.
 		warnedMissingDrainTaint.Do(nodeName, func() {
 			log.FromContext(ctx).Info(
 				"a node carries a drain taint this operator was not configured for; its pods will not be moved",
@@ -144,46 +95,15 @@ func nodeDeparting(ctx context.Context, reader client.Reader, nodeName string, t
 	return departing
 }
 
-// warnedMissingDrainTaint remembers which nodes have already been reported, so
-// the warning above is one line per node rather than one per pod per pass.
-//
-// Never pruned. The keys are node names, so the set is bounded by the nodes
-// this cluster has ever had that carried an unconfigured drain taint -- which
-// is at most the cluster's node count, and in the case this exists for is one
-// or two. A node that comes back after its taint was cleared is not warned
-// about again, which is the right way round: the flag is still missing, and
-// the line already stands in the log.
+// Never pruned: bounded by the cluster's node count.
 var warnedMissingDrainTaint once
 
-// drainingCondition builds the NodeDraining condition from the names of
-// departing nodes carrying at least one of this group's live pods. Both
-// ServerGroupReconciler.Reconcile and ProxyGroupReconciler.reconcileReplicas
-// call this over names collected from a fact they have already computed this
-// pass -- ServerView.Condemned and reconcileReplicas's own per-pod
-// nodeDeparting check, respectively -- rather than asking nodeDeparting about
-// any pod a second time. Duplicates and empty names (an unresolvable pod) are
-// tolerated here so neither caller has to dedupe or filter before calling.
-// blockedReplacement says why a group cannot build what it is about to
-// condemn, or is empty when it can. It is the second half of the NodeDraining
-// message.
-//
-// A group in create-backoff, or one whose Network is unusable, still condemns
-// the pods on a departing node -- deliberately, and the ruling is sound: those
-// players are evicted off that node whatever the group does, so moving them to
-// a fallback beats being kicked with nowhere chosen for them. What the ruling
-// costs is capacity the group cannot rebuild, for a backoff window in the
-// first case and for an unbounded wait in the second.
-//
-// Both facts sit on the object separately -- NodeDraining: True naming the
-// node, and Accepted: False or BackingOff: True beside it -- and neither
-// carries the combination. An operator reading "pods are on nodes that are on
-// their way out of service" would otherwise have no way to see that this
-// particular group comes back smaller and stays that way.
+// blockedReplacement says why a group cannot rebuild what it condemns off a
+// departing node (backoff, unusable Network). It still condemns, since those
+// players are evicted anyway; the message says the group will run short.
 type blockedReplacement struct {
-	// Reason is a short clause naming what stops the creates, or empty.
 	Reason string
-	// Bounded is whether the wait ends on its own. A backoff window does; a
-	// broken Network waits for a person.
+	// A backoff window ends on its own; a broken Network waits for a person.
 	Bounded bool
 }
 
@@ -191,8 +111,6 @@ func drainingCondition(nodeNames []string) metav1.Condition {
 	return drainingConditionBlocked(nodeNames, blockedReplacement{})
 }
 
-// drainingConditionBlocked is drainingCondition plus what the caller knows
-// about its own ability to replace what it condemns.
 func drainingConditionBlocked(nodeNames []string, blocked blockedReplacement) metav1.Condition {
 	cond := metav1.Condition{
 		Type:    spawneryv1alpha1.ConditionNodeDraining,
@@ -218,11 +136,6 @@ func drainingConditionBlocked(nodeNames []string, blocked blockedReplacement) me
 	cond.Message = fmt.Sprintf("pods are on node(s) %s, which are on their way out of service",
 		strings.Join(names, ", "))
 	if blocked.Reason != "" {
-		// The bounded and unbounded cases read differently on purpose. One is
-		// "this group will be short for a while", which needs no action; the
-		// other is "this group will be short until you fix something", which
-		// is the only one worth waking up for, and an operator cannot tell
-		// them apart from the reason alone.
 		ends := "until that is fixed"
 		if blocked.Bounded {
 			ends = "until that clears on its own"
@@ -234,12 +147,8 @@ func drainingConditionBlocked(nodeNames []string, blocked blockedReplacement) me
 	return cond
 }
 
-// once is a set of keys each of which runs its function the first time only.
-//
-// sync.Once is per value and this needs per key; sync.Map plus LoadOrStore
-// would run the function on every caller that raced the first. This is the
-// small, obvious version: one mutex, one map, and the function called under it
-// so two goroutines with the same key produce one call.
+// once is sync.Once per key. f runs under the lock so racing callers with the
+// same key produce one call.
 type once struct {
 	mu   sync.Mutex
 	seen map[string]bool

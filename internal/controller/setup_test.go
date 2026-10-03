@@ -72,28 +72,15 @@ func TestSetupAllRegistersEveryController(t *testing.T) {
 		t.Fatalf("SetupAll: %v", err)
 	}
 
-	// Registering the same controllers twice must fail: controller-runtime
-	// rejects duplicate names. That proves SetupAll really registered them.
+	// controller-runtime rejects duplicate names, so a second SetupAll failing
+	// proves the first one registered them.
 	if err := SetupAll(mgr, opts); err == nil {
 		t.Fatal("SetupAll succeeded twice, so it registered nothing the first time")
 	}
 }
 
-// TestSetupAllThreadsTheDrainTaintKeys covers the Options field nothing else
-// did: Options.DrainTaintKeys is what makes acceptance criterion 4
-// true — a node carrying a configured taint key is treated like a cordoned
-// one — and it was set nowhere outside SetupAll and cmd/spawnery-operator. No
-// fixture reconciler sets it, so IsDeparting's taint branch was exercised
-// only by nodes_test.go's table passing keys straight in, and deleting either
-// assignment in SetupAll left the whole suite green: a `-drain-taint` an
-// operator configured would have reached nothing, silently, which is the
-// failure mode known-issues already warns is indistinguishable from a quiet
-// node.
-//
-// It asserts through the two constructors SetupAll builds the reconcilers
-// with rather than through SetupAll itself, because a registered controller
-// is not reachable from outside the manager. That is the whole reason those
-// constructors exist; see their doc comment.
+// A node carrying a configured drain taint key counts as cordoned. Asserted
+// through the constructors, since a registered controller is not reachable.
 func TestSetupAllThreadsTheDrainTaintKeys(t *testing.T) {
 	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	clock := &testClock{now: start}
@@ -124,9 +111,7 @@ func TestSetupAllThreadsTheDrainTaintKeys(t *testing.T) {
 		DrainTaintKeys: keys,
 	}
 
-	// Both reconcilers, because both read node state and either one left
-	// unwired is half a drain: the ServerGroup would condemn nothing on a
-	// tainted node while the ProxyGroup replaced its proxies, or the reverse.
+	// Either reconciler left unwired is half a drain.
 	if got := newServerGroupReconciler(mgr, opts).DrainTaintKeys; !slices.Equal(got, keys) {
 		t.Errorf("ServerGroupReconciler.DrainTaintKeys = %v, want %v: a configured -drain-taint "+
 			"would never reach IsDeparting, and a tainted node would condemn no server", got, keys)
@@ -136,9 +121,7 @@ func TestSetupAllThreadsTheDrainTaintKeys(t *testing.T) {
 			"would never reach IsDeparting, and a tainted node would replace no proxy", got, keys)
 	}
 
-	// The empty default has to travel too, and nil is the value that means
-	// "only cordoned nodes count" — a constructor that substituted something
-	// of its own would make the flag's documented default a lie.
+	// nil means "only cordoned nodes count" and must travel unchanged.
 	opts.DrainTaintKeys = nil
 	if got := newServerGroupReconciler(mgr, opts).DrainTaintKeys; got != nil {
 		t.Errorf("ServerGroupReconciler.DrainTaintKeys = %v with none configured, want nil", got)
@@ -148,20 +131,8 @@ func TestSetupAllThreadsTheDrainTaintKeys(t *testing.T) {
 	}
 }
 
-// TestSetupAllThreadsTheOperatorNamespace covers the Options field 6b added
-// and nothing observed: Options.OperatorNamespace is the one value the
-// per-Network policy cannot derive from the Network it protects, and deleting
-// the assignment in SetupAll left this whole package green.
-//
-// The failure it guards is silent in both halves. The egress peer would render
-// `kubernetes.io/metadata.name: ""`, which is a legal selector that matches no
-// namespace, so under an enforcing CNI every agent in every game namespace
-// stops reaching the operator at once — while the Network, the policy and
-// every condition still read as correct. There is nothing to look at.
-//
-// It asserts through the constructor SetupAll builds the reconciler with,
-// exactly as TestSetupAllThreadsTheDrainTaintKeys does and for the same
-// reason: a registered controller is not reachable from outside the manager.
+// An empty OperatorNamespace renders a legal selector that matches no
+// namespace, silently cutting every agent off from the operator.
 func TestSetupAllThreadsTheOperatorNamespace(t *testing.T) {
 	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	clock := &testClock{now: start}
@@ -197,9 +168,6 @@ func TestSetupAllThreadsTheOperatorNamespace(t *testing.T) {
 			"per-Network policy's egress peer would name no namespace at all", got, ns)
 	}
 
-	// The value has to survive as far as the rendered object, or the field is
-	// threaded to a reconciler that does nothing with it. This is the selector
-	// the agents' traffic is matched against.
 	policy := podspec.BuildNetworkPolicy(
 		&spawneryv1alpha1.Network{
 			ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: "minecraft"},
@@ -224,9 +192,8 @@ func TestSetupAllThreadsTheOperatorNamespace(t *testing.T) {
 	}
 }
 
-// Without the Bootstrapper the Server controller would panic on the first pod
-// it creates — in a reconcile goroutine, long after start. Refusing at setup
-// turns that into a startup error nobody can miss.
+// Without it the Server controller would panic on its first pod, in a
+// reconcile goroutine long after start.
 func TestSetupAllRefusesWithoutABootstrapper(t *testing.T) {
 	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	clock := &testClock{now: start}
@@ -235,8 +202,7 @@ func TestSetupAllRefusesWithoutABootstrapper(t *testing.T) {
 		Scheme:         testenv.Scheme(t),
 		Metrics:        metricsserver.Options{BindAddress: "0"},
 		LeaderElection: false,
-		// So the only possible reason to fail is the missing Bootstrapper and
-		// not a controller name this test binary already used.
+		// So a controller name this binary already used cannot be the failure.
 		Controller: config.Controller{SkipNameValidation: ptr.To(true)},
 	})
 	if err != nil {
@@ -251,8 +217,7 @@ func TestSetupAllRefusesWithoutABootstrapper(t *testing.T) {
 		OrphanInterval:       time.Minute,
 		Registrar:            NoopRegistrar{},
 		AgentEndpoint:        "spawnery-operator.spawnery-system.svc:9443",
-		// Proxies is set so the only possible reason to fail is the missing
-		// Bootstrapper, not the (equally refused) missing Proxies.
+		// Set so the (equally refused) missing Proxies cannot be the failure.
 		Proxies: &recordingFleet{},
 	})
 	if err == nil {
@@ -263,10 +228,8 @@ func TestSetupAllRefusesWithoutABootstrapper(t *testing.T) {
 	}
 }
 
-// Without Proxies the ProxyGroup controller would panic the first time it
-// tries to assert readiness on a pod — in a reconcile goroutine, long after
-// start, exactly like the missing-Bootstrapper case above. Refusing at setup
-// turns that into a startup error nobody can miss.
+// Without Proxies the ProxyGroup controller would panic on its first pod, in
+// a reconcile goroutine long after start.
 func TestSetupAllRefusesWithoutProxies(t *testing.T) {
 	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	clock := &testClock{now: start}
@@ -275,8 +238,7 @@ func TestSetupAllRefusesWithoutProxies(t *testing.T) {
 		Scheme:         testenv.Scheme(t),
 		Metrics:        metricsserver.Options{BindAddress: "0"},
 		LeaderElection: false,
-		// So the only possible reason to fail is the missing Proxies and not a
-		// controller name this test binary already used.
+		// So a controller name this binary already used cannot be the failure.
 		Controller: config.Controller{SkipNameValidation: ptr.To(true)},
 	})
 	if err != nil {
@@ -304,11 +266,8 @@ func TestSetupAllRefusesWithoutProxies(t *testing.T) {
 	}
 }
 
-// readerlessManager is a manager whose GetAPIReader returns nil. No manager
-// controller-runtime builds does that, which is why the guard needs this to be
-// reachable at all: what it refuses is a manager some later caller assembles,
-// and the cost of getting it wrong is a nil-interface panic on the first
-// Network the operator reconciles rather than an error at start.
+// readerlessManager returns a nil API reader. No manager controller-runtime
+// builds does that, so the guard is reachable only through this.
 type readerlessManager struct{ ctrl.Manager }
 
 func (readerlessManager) GetAPIReader() client.Reader { return nil }
@@ -321,8 +280,7 @@ func TestSetupAllRefusesWithoutAnAPIReader(t *testing.T) {
 		Scheme:         testenv.Scheme(t),
 		Metrics:        metricsserver.Options{BindAddress: "0"},
 		LeaderElection: false,
-		// So the only possible reason to fail is the missing reader and not a
-		// controller name this test binary already used.
+		// So a controller name this binary already used cannot be the failure.
 		Controller: config.Controller{SkipNameValidation: ptr.To(true)},
 	})
 	if err != nil {
@@ -351,17 +309,6 @@ func TestSetupAllRefusesWithoutAnAPIReader(t *testing.T) {
 	}
 }
 
-// TestManagerReconcilesEndToEnd is the one thing no earlier task has proven:
-// that a real, running manager — leader election on, exactly as the binary
-// starts it — turns a Network and a ServerGroup into Servers and pods without
-// any test ever calling Reconcile itself. Task 12's brief called for a k3d
-// smoke test instead, but this environment has no container runtime, so this
-// test is the substitute against the envtest control plane.
-//
-// It also stands in for "does a single-replica deployment start promptly with
-// leader election on": the manager here has nobody to contend the lease with,
-// so if election itself were slow or broken, mgr.Elected() would not close
-// within the deadline below and the test would fail on that wait, not later.
 func TestManagerReconcilesEndToEnd(t *testing.T) {
 	c, setupCtx := testenv.Client(t)
 	ns := testenv.Namespace(t, setupCtx, c)
@@ -376,11 +323,8 @@ func TestManagerReconcilesEndToEnd(t *testing.T) {
 		LeaderElection:          true,
 		LeaderElectionNamespace: ns,
 		LeaderElectionID:        "spawnery-e2e-test",
-		// controller-runtime tracks controller names in a process-global set to
-		// catch metric collisions. TestSetupAllRegistersEveryController already
-		// registered "network"/"servergroup"/"server"/"proxygroup" once in this
-		// test binary; this manager is a separate instance with its own metrics,
-		// so the collision the check guards against does not apply here.
+		// controller-runtime's name-collision check is process-global; this
+		// manager has its own metrics, so the collision cannot happen.
 		Controller: config.Controller{SkipNameValidation: ptr.To(true)},
 	})
 	if err != nil {
@@ -420,8 +364,7 @@ func TestManagerReconcilesEndToEnd(t *testing.T) {
 		}
 	})
 
-	// A single-replica manager has no competition for the lease: election has
-	// to complete quickly, or something about the wiring is wrong.
+	// Nobody contends the lease, so election must complete quickly.
 	select {
 	case <-mgr.Elected():
 	case <-time.After(15 * time.Second):
@@ -438,10 +381,8 @@ func TestManagerReconcilesEndToEnd(t *testing.T) {
 		t.Fatalf("create network: %v", err)
 	}
 
-	// Wait for the Network to be Accepted before creating the group: the group
-	// controller only sizes itself against an already-accepted Network, and
-	// otherwise falls back to its own 30s retry, which this test does not need
-	// to exercise.
+	// The group controller only sizes against an accepted Network and would
+	// otherwise fall back to its 30s retry.
 	networkAccepted := false
 	for i := 0; i < 40; i++ {
 		var got spawneryv1alpha1.Network
@@ -472,8 +413,6 @@ func TestManagerReconcilesEndToEnd(t *testing.T) {
 		t.Fatalf("create server group: %v", err)
 	}
 
-	// Loop-driven, not a single sleep: the manager reacts to events on its own
-	// schedule, and the resync interval alone can take several seconds.
 	var servers spawneryv1alpha1.ServerList
 	found := false
 	for i := 0; i < 60; i++ {

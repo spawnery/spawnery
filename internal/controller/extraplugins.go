@@ -29,16 +29,8 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
-// checkExtraPlugins decides whether a group's spec.extraPlugins can be served.
-//
-// One function for both group kinds. A ServerGroup and a ProxyGroup ask the
-// identical question of the identical field, and two copies would be two
-// answers the day somebody improves one message.
-//
-// It returns the condition reason and the sentence for a person, or ok when
-// there is nothing wrong. It reports rather than writes, so the caller decides
-// where the answer lands -- which is what lets both controllers put it in
-// their own Accepted chain, in the position each one thinks right.
+// checkExtraPlugins returns the condition reason and message, or ok. It reports
+// rather than writes, so each controller places it in its own Accepted chain.
 func checkExtraPlugins(
 	ctx context.Context,
 	reader client.Reader,
@@ -50,15 +42,10 @@ func checkExtraPlugins(
 		return "", "", true
 	}
 	if ep.Image != "" {
-		// An image is pulled, not mounted from a claim, so neither the volume
-		// switch nor the claim check applies.
 		return "", "", true
 	}
 	if !allowed {
-		// Before the claim is read, so an installation with the feature off
-		// never touches a PersistentVolumeClaim -- and so the message sends
-		// somebody whose claim is perfectly good to the operator's arguments
-		// rather than to their own storage.
+		// Before the claim is read, so a disabled feature never touches a PVC.
 		return spawneryv1alpha1.ReasonPluginVolumesDisabled,
 			"spec.extraPlugins is set, and this operator was started without " +
 				"--allow-plugin-volumes so it renders no plugin volume",
@@ -79,21 +66,9 @@ func checkExtraPlugins(
 	return "", "", true
 }
 
-// checkGroupVolumes is every storage question a group's spec asks, answered in
-// one call so that both controllers keep one branch rather than two identical
-// ones. spec.extraPlugins is asked first: it is the older field and the one
-// more installations set, and when a group has both wrong there is no reason
-// to prefer the other. spec.extraFiles is asked next, then spec.mounts.
-//
-// Each field has its own flag -- pluginsAllowed, filesAllowed, mountsAllowed
-// -- because each is a separate statement an installation might want to make:
-// "runs no third-party plugins" is not "mounts no administrator claim", and
-// folding them together said one flag governed a field its name never
-// mentioned.
-//
-// The reasons stay distinct -- see ReasonMountVolumeUnusable -- so the caller
-// puts the answer on the object without having to know which field produced
-// it.
+// checkGroupVolumes asks spec.extraPlugins, then spec.extraFiles, then
+// spec.mounts. Each has its own flag because "runs no third-party plugins" is
+// not "mounts no administrator claim".
 func checkGroupVolumes(
 	ctx context.Context,
 	reader client.Reader,
@@ -114,15 +89,9 @@ func checkGroupVolumes(
 	return checkMountClaims(ctx, reader, namespace, mounts, mountsAllowed)
 }
 
-// checkClaimMountable answers the one question both spec.extraPlugins and a
-// spec.mounts claim ask of a PersistentVolumeClaim: can every pod of a group
-// mount it. It returns a clause a caller puts after "claim %q, which ...", so
-// that each field names itself in its own message while the rule stays in one
-// place.
-//
-// Refused here rather than left to the scheduler. Kubernetes would leave every
-// pod of the group Pending on a claim that does not exist, and the answer
-// would be in a pod event rather than on the group somebody is looking at.
+// checkClaimMountable returns a clause to follow "claim %q, which ...". It
+// refuses here rather than leaving every pod Pending, where the answer would
+// be in a pod event instead of on the group.
 func checkClaimMountable(
 	ctx context.Context,
 	reader client.Reader,
@@ -135,15 +104,12 @@ func checkClaimMountable(
 	case apierrors.IsNotFound(err):
 		return "does not exist in this namespace", false, nil
 	case err != nil:
-		// Not a verdict. The reader is uncached, so this is an API server
-		// that did not answer, and a group must not be emptied on the
-		// strength of one missed round trip -- nodeDeparting makes the same
-		// choice for a cache miss.
+		// An API server that did not answer is no verdict: one missed round trip
+		// must not empty a group.
 		return "", false, err
 	}
 
-	// The whole list, not the first entry: a claim may carry several modes,
-	// and one that is both RWO and RWX is mountable by every node.
+	// A claim that is both RWO and RWX is mountable by every node.
 	for _, m := range pvc.Spec.AccessModes {
 		if m == corev1.ReadWriteMany {
 			return "", true, nil
@@ -153,20 +119,8 @@ func checkClaimMountable(
 		"which needs ReadWriteMany", pvc.Spec.AccessModes), false, nil
 }
 
-// checkMountClaims decides whether the claims a group's spec.mounts names can
-// be served. ConfigMap and Secret mounts are not its business: they need no
-// storage class, no access mode and no flag, and a group made of nothing but
-// those never reaches a single API call here.
-//
-// Gated by its own --allow-mount-volumes rather than --allow-plugin-volumes:
-// the two fields are different statements an installation might make, and
-// borrowing the plugin flag's name for a mount left its refusal naming a
-// switch spec.mounts does not mention.
-//
-// One function for both group kinds, for the reason checkExtraPlugins gives.
-// It reports the first mount that fails rather than collecting every one: the
-// condition holds a sentence, and a person fixing three broken claims fixes
-// them one reconcile at a time either way.
+// checkMountClaims checks only claim-backed mounts; ConfigMap and Secret mounts
+// need no storage class, access mode or flag. It reports the first failure only.
 func checkMountClaims(
 	ctx context.Context,
 	reader client.Reader,
@@ -179,11 +133,7 @@ func checkMountClaims(
 			continue
 		}
 		if !allowed {
-			// Before the claim is read, exactly as checkExtraPlugins does it,
-			// so an installation with the feature off touches no
-			// PersistentVolumeClaim at all -- and so somebody whose claim is
-			// perfectly good is sent to the operator's arguments rather than
-			// to their own storage.
+			// Before the claim is read, as in checkExtraPlugins.
 			return spawneryv1alpha1.ReasonMountVolumesDisabled,
 				fmt.Sprintf("mount %q names claim %q, and this operator was started without "+
 					"--allow-mount-volumes so it mounts no claim",
@@ -207,16 +157,12 @@ func checkMountClaims(
 	return "", "", true
 }
 
-// reasonClaimUnreadable is checkGroupVolumes' answer when the API server did
-// not answer about a claim. It reaches no condition: keepLastVolumeDecision
-// turns it into whatever the group was last told.
+// reasonClaimUnreadable reaches no condition: keepLastVolumeDecision turns it
+// into whatever the group was last told.
 const reasonClaimUnreadable = "ClaimUnreadable"
 
-// keepLastVolumeDecision replaces a "could not read" verdict with the
-// group's previous one. A group that was accepted stays accepted; one that
-// was refused for a claim keeps the refusal and its message, so a refusal is
-// not lifted by an outage either. The round trip is retried on the next
-// pass, which is seconds away.
+// keepLastVolumeDecision replaces a "could not read" verdict with the group's
+// previous one, so an outage neither grants nor lifts a refusal.
 func keepLastVolumeDecision(
 	conditions []metav1.Condition, reason, message string, ok bool,
 ) (string, string, bool) {

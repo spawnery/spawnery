@@ -34,29 +34,21 @@ func view(name string, p phase.Phase, players, slots int32, stale bool, gen int6
 		Players: players,
 		Slots:   slots,
 		Stale:   stale,
-		// A server that walked the normal path was registered once it reached
-		// Ready and never before. The cases where the two come apart — a server
-		// that fell back out of Ready with its players still on it — are built
-		// with registered() below.
+		// The normal walk; registered() builds the cases where phase and registration part.
 		WasRegistered: p == phase.Ready,
-		// And still is, for the same walk. A Ready server that is *not*
-		// registered is its own case -- a shut door, or a registration that
-		// failed -- and the tests about that build it by hand.
+		// A Ready server that is not registered (a shut door) is built by hand.
 		Registered: p == phase.Ready,
 		Generation: gen,
 		CreatedAt:  base.Add(time.Duration(ageSeconds) * time.Second),
 	}
 }
 
-// registered marks a view as one the proxies routed to at some point in the
-// life of its pod, whatever phase it is in now.
+// registered marks a view as routed to at some point, whatever its phase now.
 func registered(v ServerView) ServerView {
 	v.WasRegistered = true
 	return v
 }
 
-// sessionsGone marks a view whose pod is terminal or has disappeared, so
-// whatever it was carrying is already gone.
 func sessionsGone(v ServerView) ServerView {
 	v.SessionsGone = true
 	return v
@@ -125,10 +117,8 @@ func TestSelectDeletionCandidates(t *testing.T) {
 			want:  []string{"ready"},
 		},
 		{
-			// The phase says Starting, but the server was Ready until its probe
-			// went red and its players are still connected — deregistering only
-			// stopped new joins. Its count is unreadable, so it must be left
-			// alone even though the empty peer is older.
+			// Was Ready until its probe went red and its players are still on it; the count is
+			// unreadable, so it is left alone even though the empty peer is older.
 			name: "never picks a server that kept its players after a readiness loss",
 			views: []ServerView{
 				registered(view("recovering", phase.Starting, 0, 100, true, 1, 60)),
@@ -138,10 +128,7 @@ func TestSelectDeletionCandidates(t *testing.T) {
 			want:  []string{"empty"},
 		},
 		{
-			// A Failed server is not part of the group's size, so removing it
-			// does nothing for the size — and it is being kept on purpose so
-			// somebody can look at it. Its cleanup is the Server controller's
-			// job once the group's failed retention has elapsed.
+			// A Failed server is kept for diagnosis; the Server controller removes it after retention.
 			name: "leaves a failed server to its retention",
 			views: []ServerView{
 				view("failed", phase.Failed, 0, 100, false, 1, 60),
@@ -167,9 +154,6 @@ func TestSelectDeletionCandidates(t *testing.T) {
 	}
 }
 
-// TestSelectNeverReturnsAnOccupiedServer is the core invariant at the
-// selection layer: no combination of inputs may nominate a server carrying
-// players, or one whose count we cannot trust.
 func TestSelectNeverReturnsAnOccupiedServer(t *testing.T) {
 	views := []ServerView{
 		view("a", phase.Ready, 1, 100, false, 1, 0),
@@ -189,10 +173,7 @@ func TestSelectNeverReturnsAnOccupiedServer(t *testing.T) {
 	}
 }
 
-// hashed stamps a render hash on a view built by view(), which sets only the
-// generation. AggregateGroup and the sizing rules read the hash since 7a; the
-// generation is still what selectFailedForPruning orders corpses by, so both
-// fields stay on the type and tests set whichever they are about.
+// view() sets only the generation, which selectFailedForPruning still orders by.
 func hashed(v ServerView, hash string) ServerView {
 	v.PodHash = hash
 	return v
@@ -218,9 +199,8 @@ func TestAggregateGroup(t *testing.T) {
 	if got.OnlinePlayers != 75 {
 		t.Errorf("OnlinePlayers = %d, want 75 across every server that has players", got.OnlinePlayers)
 	}
-	// 80 free on current-a plus 90 on current-b. The old spec does not count,
-	// otherwise a rolling update would never create replacements, and neither
-	// do the starting and draining servers.
+	// 80 free on current-a plus 90 on current-b; old-spec, starting and draining servers
+	// do not count.
 	if got.FreeSlots != 170 {
 		t.Errorf("FreeSlots = %d, want 170 from the current spec only", got.FreeSlots)
 	}
@@ -236,11 +216,8 @@ func TestAggregateIgnoresStaleCountsForFreeSlots(t *testing.T) {
 	}
 }
 
-// TestCountsTowardSize pins which servers hold the group at its floor. A server
-// on its way out no longer does, and neither does a Failed or a Finished one:
-// both are kept a while — one for diagnosis, one for its finished retention —
-// and neither can take a player, so counting either would leave the group
-// below its floor for the whole of that window.
+// Failed and Finished servers linger but take no players; counting them would leave
+// the group below its floor for that window.
 func TestCountsTowardSize(t *testing.T) {
 	cases := []struct {
 		p    phase.Phase
@@ -263,19 +240,15 @@ func TestCountsTowardSize(t *testing.T) {
 	}
 }
 
-// TestOccupiedPodsCountsEveryProtectedPod pins the number the group's
-// PodDisruptionBudget is built from. It has to match the rule the Server
-// controller labels pods with, pod for pod. Counting fewer leaves the eviction
-// API with a disruption to spend on a pod that still carries players; counting
-// more pins minAvailable above a budget that can never be met.
+// Must match the Server controller's occupied-pod label pod for pod: the group's
+// PodDisruptionBudget is built from this number.
 func TestOccupiedPodsCountsEveryProtectedPod(t *testing.T) {
 	views := []ServerView{
 		view("ready-busy", phase.Ready, 4, 100, false, 1, 0),
 		view("ready-empty", phase.Ready, 0, 100, false, 1, 10),
 		view("ready-stale", phase.Ready, 0, 100, true, 1, 20),
 		view("draining-busy", phase.Draining, 2, 100, false, 1, 30),
-		// Registered, so its players outlived the readiness loss that put it
-		// back in Starting.
+		// Registered, so its players outlived the readiness loss.
 		registered(view("starting-stale", phase.Starting, 0, 100, true, 1, 40)),
 		view("terminating-empty", phase.Terminating, 0, 100, false, 1, 50),
 	}
@@ -284,34 +257,24 @@ func TestOccupiedPodsCountsEveryProtectedPod(t *testing.T) {
 	}
 }
 
-// TestOccupiedPodsReleasesPodsThatCarryNobody is the other direction of the
-// same rule. A pod the label has released must not be counted, or minAvailable
-// sits above a budget that can never be met and the eviction API refuses to
-// release the pod for a kubectl drain that then never finishes.
 func TestOccupiedPodsReleasesPodsThatCarryNobody(t *testing.T) {
 	cases := []struct {
 		name string
 		v    ServerView
 	}{
 		{
-			// Failed with a dead pod: the state machine refuses to drain it
-			// because its sessions went down with the process.
+			// Failed with a dead pod: its sessions went down with the process.
 			name: "failed with a terminal pod",
 			v:    sessionsGone(registered(view("dead", phase.Failed, 0, 100, true, 1, 0))),
 		},
 		{
-			// The same dead pod, but the registry still holds the count it
-			// reported just before it died. Nothing ever tells the registry to
-			// forget a pod, so that seven survives for the whole retention
-			// window. Sessions that went down with the process are gone whatever
-			// the last count said — otherwise this one pod pins minAvailable at
-			// 1 against a currentHealthy of 0 and wedges an operator's drain.
+			// The registry never forgets a dead pod's last count; its sessions are gone whatever
+			// that count said.
 			name: "failed with a terminal pod and seven players last seen on it",
 			v:    sessionsGone(registered(view("dead-busy", phase.Failed, 7, 100, false, 1, 0))),
 		},
 		{
-			// Never registered, so the proxies never routed anybody to it, so
-			// an unreadable count hides nothing.
+			// Never registered, so an unreadable count hides nobody.
 			name: "starting and never registered",
 			v:    view("cold", phase.Starting, 0, 100, true, 1, 0),
 		},
@@ -329,10 +292,7 @@ func TestOccupiedPodsReleasesPodsThatCarryNobody(t *testing.T) {
 	}
 }
 
-// TestSelectFailedForPruning pins the retention cap and, above all, which
-// failure survives it: the newest generation's, and the oldest within it,
-// because the first failure after a change is the one that says what broke and
-// a generation bump is the largest change a group can undergo.
+// The newest generation's first failure survives: it is the one that says what broke.
 func TestSelectFailedForPruning(t *testing.T) {
 	cases := []struct {
 		name  string
@@ -380,14 +340,7 @@ func TestSelectFailedForPruning(t *testing.T) {
 			want: []string{"b"},
 		},
 		{
-			// This is the sole surviving cover for selectFailedForPruning's
-			// generation clause (candidates.go: `failed[i].Generation !=
-			// failed[j].Generation`) — drop that clause and this case is one of
-			// exactly two that fail, both halves of the newest-generation-first
-			// ordering. The reason is the diagnosis argument in
-			// selectFailedForPruning's doc: a generation bump is a change, and
-			// the first failure after it is the one that says what broke. The
-			// inherited corpse says nothing about the new image; this one does.
+			// The inherited corpse says nothing about the new image; this one does.
 			name: "keeps the newest generation's failure over an inherited older one",
 			views: []ServerView{
 				view("f-old", phase.Failed, 0, 100, false, 3, 0),
@@ -397,8 +350,7 @@ func TestSelectFailedForPruning(t *testing.T) {
 			want: []string{"f-old"},
 		},
 		{
-			// The generation ordering must not cost the original rule. Within
-			// one generation the first failure is still the survivor.
+			// Within one generation the first failure still survives.
 			name: "still keeps the oldest within the newest generation",
 			views: []ServerView{
 				view("new-second", phase.Failed, 0, 100, false, 4, 7260),
@@ -409,15 +361,8 @@ func TestSelectFailedForPruning(t *testing.T) {
 			want: []string{"new-second", "old"},
 		},
 		{
-			// "Servers already on their way out are left alone" used to be
-			// carried by the phase filter on its own: Draining, Terminating and
-			// Retiring are mutually exclusive with Failed, so the case above
-			// ("never prunes a server that is not failed") was the whole of it.
-			// leaving() is now leavingByPhase() || Condemned, and a Failed
-			// server on a departing node is both — collected here as well as
-			// condemned, and deleted and announced twice for one removal,
-			// because size() and pruneFailed run over the same in-memory map in
-			// one pass and r.Delete stamps nothing back onto the local object.
+			// A Failed server on a departing node is also Condemned; pruning it too would delete
+			// and announce it twice in one pass.
 			name: "leaves a condemned failure to the node drain that is already taking it",
 			views: []ServerView{
 				view("kept", phase.Failed, 0, 100, false, 1, 0),
@@ -432,10 +377,7 @@ func TestSelectFailedForPruning(t *testing.T) {
 			want: []string{"prunable"},
 		},
 		{
-			// And it drops out of the count as well as the list, which is the
-			// same sentence the doc comment already made about the phases:
-			// counting a departure that is already under way would let a
-			// second failure through while the first drains.
+			// Counting a departure already under way would let a second failure through.
 			name: "a condemned failure does not push another failure past the cap",
 			views: []ServerView{
 				view("kept", phase.Failed, 0, 100, false, 1, 0),
@@ -466,9 +408,7 @@ func TestSelectFailedForPruning(t *testing.T) {
 }
 
 func TestRetiringDoesNotCountTowardSize(t *testing.T) {
-	// This one line is the whole surge mechanism: a retiring server drops
-	// out of the group's size, so the existing spare-slot rule orders its
-	// replacement when — and only when — capacity actually needs one.
+	// Retiring dropping out of the size is the whole surge mechanism.
 	v := ServerView{Name: "a", Phase: phase.Retiring}
 	if v.countsTowardSize() {
 		t.Error("a retiring server still holds the group at its floor")
@@ -479,9 +419,7 @@ func TestRetiringDoesNotCountTowardSize(t *testing.T) {
 }
 
 func TestRetiringServerIsNeverNominatedForDeletion(t *testing.T) {
-	// The invariant everything rests on. A retiring server has players on
-	// it by definition — that is what it is waiting for — and the group
-	// removes it by letting it empty, never by deleting it.
+	// A retiring server has players by definition; the group removes it by letting it empty.
 	views := []ServerView{
 		{Name: "retiring", Phase: phase.Retiring, Players: 5, WasRegistered: true},
 	}
@@ -491,11 +429,8 @@ func TestRetiringServerIsNeverNominatedForDeletion(t *testing.T) {
 }
 
 func TestRetiringServerStaysInsideTheDisruptionBudget(t *testing.T) {
-	// occupiedPods is deliberately not phase-based: the pod still carries
-	// the occupied label while anyone is on it, and minAvailable has to
-	// match that pod for pod or kubectl drain gets an eviction to spend on
-	// a pod with players. Nothing else in the tree would catch this
-	// changing.
+	// occupiedPods is deliberately not phase-based: the pod keeps the occupied label while
+	// anyone is on it.
 	views := []ServerView{
 		{Name: "a", Phase: phase.Retiring, Players: 2, WasRegistered: true},
 		{Name: "b", Phase: phase.Retiring, WasRegistered: true},
@@ -529,22 +464,12 @@ func TestClampReport(t *testing.T) {
 	}
 }
 
-// TestPruningKeepsTheFirstFailureWhenTwoShareASecond closes the tiebreak item
-// in docs/reference/known-issues.md: "keep the oldest failure of the newest generation
-// does not carry when two failures of one generation share a creationTimestamp
-// (second resolution); the tiebreak falls to the random suffix instead of
-// status.failedAt."
-//
-// Sharing a second is the ordinary case rather than the exotic one: a group
-// whose replicas all fail on the same broken image creates them together and
-// they fail together. With the name as tiebreak, which corpse survived to be
-// diagnosed from was decided by a random suffix — so the rule this selector
-// documents held only by luck, half the time.
+// Replicas failing on one broken image routinely share a creationTimestamp second;
+// failedAt, not the name, must break the tie.
 func TestPruningKeepsTheFirstFailureWhenTwoShareASecond(t *testing.T) {
 	sameSecond := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 
-	// zzz failed first; aaa failed a moment later. Named so that a name-based
-	// tiebreak keeps the wrong one, which is what makes this test able to fail.
+	// zzz failed first, named so a name-based tiebreak keeps the wrong one.
 	views := []ServerView{
 		{
 			Name: "lobby-aaa", Phase: phase.Failed, Generation: 7,
@@ -573,11 +498,8 @@ func TestStaleSpec(t *testing.T) {
 	}{
 		{"same hash is current", "abc123", "abc123", false},
 		{"different hash is stale", "abc123", "def456", true},
-		// Both directions of adoption. A server that predates spec.podHash
-		// carries "", and so does the desired hash on a pass that could not
-		// compute one -- an unresolvable Network, for instance. Neither is
-		// evidence that this server is out of date, and treating it as such
-		// would retire the whole group on the first pass after an upgrade.
+		// An empty hash on either side is adopted, not stale; otherwise the first pass after an
+		// upgrade would retire every group.
 		{"view without a hash is adopted", "", "def456", false},
 		{"no desired hash compares nothing", "abc123", "", false},
 		{"both empty is not stale", "", "", false},
@@ -593,10 +515,7 @@ func TestStaleSpec(t *testing.T) {
 	}
 }
 
-// A capacity edit does not move the render hash, so every server still counts
-// toward the published free slots. Before 7a this published zero, because the
-// generation had moved and the filter read that as "everything is stale" -- a
-// healthy group reporting FREE SLOTS 0 on its own printcolumn.
+// A capacity edit does not move the render hash, so no server turns stale.
 func TestAggregateGroupCapacityEditKeepsFreeSlots(t *testing.T) {
 	views := []ServerView{
 		{Name: "a", Phase: phase.Ready, Registered: true, PodHash: "same", Slots: 100, Players: 30},
@@ -607,8 +526,8 @@ func TestAggregateGroupCapacityEditKeepsFreeSlots(t *testing.T) {
 	}
 }
 
-// The filter's original job survives: a stale server's free slots must not
-// satisfy the scaler, or a rolling update would never build a replacement.
+// A stale server's free slots must not satisfy the scaler, or a rolling update never
+// builds a replacement.
 func TestAggregateGroupExcludesStaleFreeSlots(t *testing.T) {
 	views := []ServerView{
 		{Name: "old", Phase: phase.Ready, Registered: true, PodHash: "old", Slots: 100, Players: 0},
@@ -618,18 +537,14 @@ func TestAggregateGroupExcludesStaleFreeSlots(t *testing.T) {
 	if got.FreeSlots != 60 {
 		t.Fatalf("FreeSlots = %d, want 60 (only the current server counts)", got.FreeSlots)
 	}
-	// The other three totals count every server whatever its hash, and always
-	// did. Asserting them here is what keeps this change from narrowing them
-	// by accident.
+	// The other totals count every server whatever its hash.
 	if got.Replicas != 2 || got.ReadyReplicas != 2 || got.OnlinePlayers != 40 {
 		t.Fatalf("totals = %+v, want Replicas 2, ReadyReplicas 2, OnlinePlayers 40", got)
 	}
 }
 
 func TestAClosedServersSeatsAreNotCapacity(t *testing.T) {
-	// The half of a shut door that the group has to see. Without it a group
-	// could sit at its floor while every server in it had closed -- the scaler
-	// reading plenty of room and the players finding none.
+	// Otherwise a group could sit at its floor while every server in it had closed.
 	views := []ServerView{
 		{Name: "playing", Phase: phase.Ready, Registered: false, PodHash: "same", Slots: 100},
 		{Name: "waiting", Phase: phase.Ready, Registered: true, PodHash: "same", Slots: 100},
@@ -640,16 +555,13 @@ func TestAClosedServersSeatsAreNotCapacity(t *testing.T) {
 	if got.FreeSlots != 100 {
 		t.Errorf("FreeSlots = %d, want 100 — only the server anybody can be sent to", got.FreeSlots)
 	}
-	// It is still one of the group's servers, and still ready. Only its seats
-	// stopped counting.
 	if got.Replicas != 2 || got.ReadyReplicas != 2 {
 		t.Errorf("replicas = %d/%d, want both servers still counted", got.ReadyReplicas, got.Replicas)
 	}
 }
 
 func TestAClosedDoorIsNotFreeCapacity(t *testing.T) {
-	// A running round holds seats nobody can take. Counting them let a group
-	// sit at its floor while every server in it was playing.
+	// A running round holds seats nobody can take.
 	views := []ServerView{
 		{Name: "a", Phase: phase.Ready, Registered: true, JoinsClosed: true, Players: 2, Slots: 80},
 		{Name: "b", Phase: phase.Ready, Registered: true, Players: 0, Slots: 80},
