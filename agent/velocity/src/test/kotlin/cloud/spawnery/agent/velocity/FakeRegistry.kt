@@ -10,14 +10,9 @@ import com.velocitypowered.api.proxy.server.ServerPing
 import java.util.concurrent.CompletableFuture
 
 /**
- * A [ProxyRegistry] backed by an in-memory map instead of a running proxy.
- *
- * Keyed by the lower-cased name, matching Velocity's own case-insensitive
- * `getServer(String)` — see [ServerDirectory]'s lookup rule. [calls] records
- * every [register]/[unregister] in the order they happened, which is the only
- * way [ServerDirectoryTest] can assert that a changed address produces an
- * unregister *and then* a register rather than the reverse or a single
- * register.
+ * A [ProxyRegistry] backed by an in-memory map, keyed by the lower-cased name
+ * like Velocity's `getServer(String)`. [calls] records every
+ * [register]/[unregister] in order.
  */
 class FakeRegistry : ProxyRegistry {
     private val servers = LinkedHashMap<String, FakeServer>()
@@ -25,14 +20,8 @@ class FakeRegistry : ProxyRegistry {
     val calls = mutableListOf<Call>()
 
     /**
-     * When set, thrown by [register] instead of registering anything.
-     *
-     * [ServerDirectory] does not catch it — it has no reason to, every
-     * decision it makes about a bad entry is made before the registry is
-     * touched — so this is how [ProxyRoleTest] produces a real exception on
-     * the path a `FullSync` takes, which is the only way to show that
-     * [ProxyRole]'s guard covers the branches that do work rather than only
-     * the ones that return a directive.
+     * When set, thrown by [register]: how [ProxyRoleTest] gets a real
+     * exception on the `FullSync` path.
      */
     var failRegisterWith: Throwable? = null
 
@@ -42,10 +31,8 @@ class FakeRegistry : ProxyRegistry {
     }
 
     /**
-     * Puts a server directly into the registry, bypassing [ServerDirectory]
-     * entirely. This is how a test represents a server this agent never
-     * registered — a `configOverlay` entry in `velocity.toml`, for instance —
-     * so that a full sync can be shown to leave it alone.
+     * Puts a server into the registry bypassing [ServerDirectory], like a
+     * `configOverlay` entry this agent never registered.
      */
     fun seed(info: ServerInfo, players: List<Player> = emptyList()): FakeServer {
         val server = FakeServer(info).apply { this.players = players }
@@ -70,22 +57,9 @@ class FakeRegistry : ProxyRegistry {
 }
 
 /**
- * A [RegisteredServer] that does nothing but hold a [ServerInfo] and a player
- * list. Only [getServerInfo], [getPlayersConnected] and the four methods
- * `RegisteredServer` inherits abstract from [com.velocitypowered.api.proxy.messages.ChannelMessageSink]
- * and its own `ping` overloads are abstract on the interface — everything
- * `Audience` and `Pointered` contribute already has a default implementation,
- * measured 2026-08-11 against velocity 3.5.1 build 615 with `javap -p`.
- *
- * [ping] and [sendPluginMessage] throw [UnsupportedOperationException] rather
- * than returning a plausible value. [ServerDirectory] never calls either one;
- * a fake that answered them anyway would let some later task's test pass
- * against this double's made-up behaviour instead of against Velocity's real
- * one.
- *
- * [players] is a mutable `var` rather than fixed at construction, because
- * task 6's router is driven by player counts and needs to change them mid-test
- * without replacing the server.
+ * A [RegisteredServer] that only holds a [ServerInfo] and a player list.
+ * [ping] and [sendPluginMessage] throw rather than invent behaviour Velocity's
+ * real one may not have.
  */
 class FakeServer(private val info: ServerInfo) : RegisteredServer {
     var players: List<Player> = emptyList()

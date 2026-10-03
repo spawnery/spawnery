@@ -73,9 +73,6 @@ class MirrorApiTest {
 
     @Test
     fun `a lookup for something absent is empty rather than null`() {
-        // Optional and not null, because a plugin that forgot a null check
-        // gets an NPE at some later line while an empty Optional refuses at
-        // the point of use.
         val api = MirrorApi(NetworkMirror(), serverSelf(), connector(), CloudEvents())
 
         assertTrue(api.server("nothing-here").isEmpty)
@@ -89,16 +86,11 @@ class MirrorApiTest {
         val api = MirrorApi(NetworkMirror(), self, connector(), CloudEvents())
 
         assertSame(self, api.self())
-        // The type is how a plugin asks which side it is on, so it has to
-        // survive the round trip rather than being flattened to Self.
+        // The type is how a plugin asks which side it is on.
         assertTrue(api.self() is ServerSelf)
     }
 
-    // The spec's symmetry invariant. One implementation makes it structural,
-    // so this is what is left to assert: given one state, the answers do not
-    // depend on which side the API is running on. It would catch a future
-    // `if (self is ProxySelf)` in a read method, which is the only way the two
-    // sides could still come apart.
+    // Given one state, the answers do not depend on which side the API runs on.
     @Test
     fun `both sides answer every read identically from one state`() {
         val mirror = NetworkMirror().also { it.apply(aRichState()) }
@@ -113,10 +105,7 @@ class MirrorApiTest {
         assertEquals(onServer.player(richPlayer), onProxy.player(richPlayer))
     }
 
-    // connect too, and it is the read the symmetry could most easily lose:
-    // a proxy could answer it locally and a backend could not, which is
-    // exactly the asymmetry section 3.1 refuses. Both must produce the same
-    // request for the same arguments.
+    // A proxy could answer connect locally and a backend could not.
     @Test
     fun `both sides build the same request for the same connect`() {
         val mirror = NetworkMirror().also { it.apply(aRichState()) }
@@ -124,17 +113,11 @@ class MirrorApiTest {
         MirrorApi(mirror, proxySelf(), connector(), CloudEvents()).connect(richPlayer, Target.group("lobby"))
 
         assertEquals(2, requested.size)
-        // The verb's own payload and not the envelope: the envelope carries a
-        // correlation id, which is per-connector state rather than part of
-        // "the same request", and comparing whole envelopes would pass here
-        // only by the coincidence that both connectors start counting at one.
+        // The envelope's correlation id is per-connector state.
         assertEquals(requested[0].connect, requested[1].connect)
         assertEquals("lobby", requested[0].connect.group)
     }
 
-    // And retire, for the same reason: it is the first verb that writes, and
-    // a backend and a proxy have to ask for it identically or a plugin author
-    // moving between them has to relearn it.
     @Test
     fun `both sides build the same request for the same retire`() {
         val mirror = NetworkMirror().also { it.apply(aRichState()) }
@@ -174,11 +157,7 @@ class MirrorApiTest {
         assertEquals("private-servers-c0ffee", requested[2].stopServer.server)
     }
 
-    // Announcing is the one verb only one side can succeed at, and it is still
-    // built identically on both: the refusal is the operator's answer rather
-    // than a branch in here. A client that decided for itself which side may
-    // announce would be a second place the rule lives, and the two would come
-    // to disagree the first time the operator's changed.
+    // Only one side can announce, but which one is the operator's rule, not this client's.
     @Test
     fun `both sides build the same request for the same announcement`() {
         val mirror = NetworkMirror().also { it.apply(aRichState()) }
@@ -195,9 +174,7 @@ class MirrorApiTest {
 
     @Test
     fun `both sides build the same request for the same door`() {
-        // Refused on one of them, and still built identically: which side may
-        // close a door is the operator's rule, and a client that decided it
-        // here would be a second place for that rule to live.
+        // Which side may close a door is the operator's rule.
         val mirror = NetworkMirror().also { it.apply(aRichState()) }
         MirrorApi(mirror, serverSelf(), connector(), CloudEvents()).acceptJoins(false)
         MirrorApi(mirror, proxySelf(), connector(), CloudEvents()).acceptJoins(false)
@@ -209,9 +186,7 @@ class MirrorApiTest {
 
     @Test
     fun `both sides build the same request for the same round end`() {
-        // Refused on one of them, and still built identically: which side may
-        // end a round is the operator's rule, and a client that decided it
-        // here would be a second place for that rule to live.
+        // Which side may end a round is the operator's rule.
         val mirror = NetworkMirror().also { it.apply(aRichState()) }
         MirrorApi(mirror, serverSelf(), connector(), CloudEvents()).endRound()
         MirrorApi(mirror, proxySelf(), connector(), CloudEvents()).endRound()
@@ -236,9 +211,7 @@ class MirrorApiTest {
 
     @Test
     fun `holdReadiness refuses on a proxy`() {
-        // Unlike acceptJoins, which the operator refuses: this one never
-        // leaves the process, so there is no stage to fail and nothing but a
-        // throw would tell the caller it held nothing.
+        // Never leaves the process, so there is no stage to fail.
         val api = MirrorApi(NetworkMirror(), proxySelf(), connector(), CloudEvents())
 
         assertFailsWith<UnsupportedOperationException> { api.holdReadiness("mappings") }
@@ -246,9 +219,7 @@ class MirrorApiTest {
 
     @Test
     fun `an announcement with nothing in it is what clears a description`() {
-        // Not filtered out as a no-op on the way: an empty announcement is how
-        // a game says it has stopped doing whatever it was doing, and dropping
-        // it here would leave the last thing it said standing forever.
+        // An empty announcement clears the previous one.
         MirrorApi(NetworkMirror(), serverSelf(), connector(), CloudEvents())
             .announce("", emptyMap())
 

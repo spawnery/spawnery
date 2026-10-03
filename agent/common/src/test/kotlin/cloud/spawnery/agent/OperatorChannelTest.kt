@@ -44,24 +44,9 @@ class OperatorChannelTest {
     }
 
     /**
-     * The claim the operator's own guard is built on, pinned here rather than
-     * left as prose in a Go comment.
-     *
-     * `internal/certs`' `parsableCert` refuses to publish a rotation slot that
-     * is anything other than the PEM encoding of one certificate, and the
-     * reason recorded for it was "the agent throws for the whole stream rather
-     * than skipping the offending block". That was measured and found wrong in
-     * both directions: `X509Factory.readOneBlock` steps over stray bytes that
-     * do not begin a line with five hyphens, so a good CA followed by plain
-     * garbage parses fine — while a five-hyphen run that opens no valid block
-     * kills the stream, taking the certificates already read with it.
-     *
-     * This is the second half, and the half the guard exists for: a *good*
-     * `ca.crt` followed by a PEM envelope around something that is not a
-     * certificate leaves the agent with no trust store at all, not with the
-     * one good CA. A slot like this reaching the bundle is a fleet-wide
-     * outage, which is why the operator repairs or clears it rather than
-     * publishing it.
+     * The claim `internal/certs`' `parsableCert` guards against: a good CA
+     * followed by a PEM envelope around a non-certificate leaves the agent
+     * with no trust store at all, not with the one good CA.
      */
     @Test
     fun `a PEM envelope around a non-certificate kills the whole bundle`() {
@@ -85,16 +70,8 @@ class OperatorChannelTest {
     }
 
     /**
-     * grpc-okhttp chooses its ConnectionSpec by platform, and on every JDK
-     * that choice is a TLS-1.2-only one; the 1.3 spec is reserved for Android.
-     * internal/agentserver serves with MinVersion: VersionTLS13, so the
-     * default leaves the agent unable to reach the operator at all — the
-     * handshake dies with a protocol_version alert, and no unit test built on
-     * the in-process transport can see it, because that transport does no TLS.
-     *
-     * The server here offers both versions rather than only 1.3 on purpose: a
-     * regression then shows up as "expected TLSv1.3, was TLSv1.2" instead of
-     * an SSLHandshakeException whose message names neither side's intent.
+     * The server offers 1.2 as well, so a regression reads "expected TLSv1.3,
+     * was TLSv1.2" rather than an opaque SSLHandshakeException.
      */
     @Test
     fun `negotiates TLS 1_3, the only version the operator will accept`() {
@@ -132,10 +109,8 @@ class OperatorChannelTest {
 
         val channel = OperatorChannel.build("localhost:${listener.localPort}", ca.pem())
         try {
-            // The RPC is only what makes the channel connect. Nothing on the
-            // other end speaks HTTP/2, so it cannot survive — but the TLS
-            // handshake is complete before gRPC discovers that, and the
-            // handshake is the whole subject here.
+            // Nothing on the other end speaks HTTP/2; the RPC only makes the
+            // channel connect, and the handshake completes before it fails.
             AgentServiceGrpc.newStub(channel).serverSession(
                 object : StreamObserver<OperatorToServer> {
                     override fun onNext(value: OperatorToServer) = Unit

@@ -19,9 +19,7 @@ package cloud.spawnery.agent.api;
 /**
  * Where a server is in its life, in the operator's own vocabulary.
  *
- * <p>{@link #UNKNOWN} is not a failure case, it is forward compatibility: the
- * operator may publish a phase this jar predates, and a plugin that threw on
- * one would break on an operator upgrade it had nothing to do with. Use
+ * <p>{@link #UNKNOWN} is a phase this jar predates. Use
  * {@link #fromWire(String)} rather than {@code valueOf}, which throws.
  */
 public enum ServerPhase {
@@ -35,9 +33,8 @@ public enum ServerPhase {
     /**
      * The round is over: the server said so with {@link SpawneryApi#endRound()}
      * and its pod then stopped. Terminal like {@link #FAILED} and replaced by
-     * its group at once, but not a fault — it costs the group no failure and
-     * it is kept for a short retention rather than the long one a failure gets
-     * for diagnosis.
+     * its group at once, but not a fault: it costs the group no failure and
+     * is kept for a shorter retention than a failure.
      */
     FINISHED,
     UNKNOWN;

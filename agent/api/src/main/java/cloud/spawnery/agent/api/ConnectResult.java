@@ -21,18 +21,11 @@ import java.util.Objects;
 /**
  * What the operator did with a {@link SpawneryApi#connect} call.
  *
- * <p><b>{@code ordered} is not {@code moved}, and the difference is not
- * pedantry.</b> The proxy that carries a move calls Velocity's
- * {@code connectWithIndication} and does not wait on the future it returns:
- * blocking a network callback on a round trip to a backend is a cost the agent
- * cannot pay, and that decision is what keeps a drain from stalling. So no
- * proxy in this system can report whether a player arrived, and an operator
- * claiming to would be inventing the answer.
- *
- * <p>What to do with that: {@code ordered} says the instruction reached a
- * proxy holding the player. If you need to know they arrived, read
- * {@link SpawneryApi#player} a moment later — the mirror is what carries that,
- * and it is the only honest source.
+ * <p><b>{@code ordered} is not {@code moved}.</b> The proxy that carries a move
+ * does not wait for the connection to finish, so nothing can report whether a
+ * player arrived. {@code ordered} says the instruction reached a proxy holding
+ * the player; to know they arrived, read {@link SpawneryApi#player} a moment
+ * later.
  *
  * @param alreadyThere the one case where nothing was ordered and nothing is
  *     wrong: the player was on {@code target} when the request arrived.

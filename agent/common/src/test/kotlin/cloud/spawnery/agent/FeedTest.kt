@@ -49,8 +49,6 @@ class FeedTest {
 
     @Test
     fun `somebody without the permission is never sent a line`() {
-        // The permission is the bound. An opt-out set that happened to be
-        // empty must not be what stands between a player and the feed.
         audience.online += alice
         // and permitted stays empty
 
@@ -63,7 +61,6 @@ class FeedTest {
 
     @Test
     fun `nobody watching means the agent says it wants nothing`() {
-        // What the operator reads to decide whether to send anything at all.
         assertTrue(!feed.wanted(0), "an empty server claimed to want events")
 
         audience.online += alice
@@ -92,10 +89,7 @@ class FeedTest {
 
     @Test
     fun `a blank format falls back to the built-in one rather than printing nothing`() {
-        // Blank is what an operator older than the field sends, and what the
-        // mirror holds before the first NetworkState arrives. Reading it as
-        // "print nothing" would make a feed silently empty on exactly the
-        // upgrade that introduces it.
+        // Blank: an operator older than the field, or no NetworkState yet.
         audience.online += alice
         audience.permitted += alice
         format = ""
@@ -112,11 +106,7 @@ class FeedTest {
 
     @Test
     fun `the format is read per delivery, not captured once`() {
-        // The format arrives in the NetworkState the operator resends on every
-        // resync. A value captured at construction would hold whatever the
-        // first message said, and an edit would take effect at the next pod
-        // rather than at the next resync -- which is the rolling this design
-        // put the format on the wire to avoid.
+        // The format arrives with every resync; an edit must not wait for a new pod.
         audience.online += alice
         audience.permitted += alice
         format = "<gray>FIRST</gray> ${Feed.MESSAGE_TOKEN}"
@@ -136,20 +126,13 @@ class FeedTest {
 
     @Test
     fun `a subscribed plugin keeps events flowing even with nobody in chat`() {
-        // The case a backend is always in: its audience is empty by design,
-        // because every player on it is behind a proxy that delivers the same
-        // line. Without the subscriber count the operator would stop sending
-        // it events entirely, and a plugin that subscribed through the API
-        // would receive nothing -- silently.
+        // A backend's audience is always empty: its players read the feed on the proxy.
         assertTrue(!feed.wanted(0), "an empty agent with no subscriber asked for events")
         assertTrue(feed.wanted(1), "a subscribed plugin did not keep events flowing")
     }
 
     @Test
     fun `an event with nobody to read it is still collapsed and dropped quietly`() {
-        // It must not accumulate: an agent nobody watches would otherwise hold
-        // every event of its lifetime and deliver them all at once the moment
-        // an administrator logged in.
         feed.onEvent(anEvent("lobby-a"))
         now = 1_000
         feed.tick()

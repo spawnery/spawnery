@@ -52,8 +52,7 @@ fun newServingCertificate(ca: TestCa, dnsName: String): TestServingCertificate {
         X500Name("CN=$dnsName"),
         keyPair.public,
     ).addExtension(
-        // The name, not the subject: gRPC's hostname verifier reads the SAN
-        // and ignores the common name, exactly as a browser would.
+        // gRPC's hostname verifier reads the SAN and ignores the common name.
         Extension.subjectAlternativeName,
         false,
         GeneralNames(GeneralName(GeneralName.dNSName, dnsName)),

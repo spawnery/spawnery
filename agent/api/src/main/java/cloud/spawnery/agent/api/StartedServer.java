@@ -23,7 +23,7 @@ package cloud.spawnery.agent.api;
  *     the key — this is what {@link SpawneryApi#servers()} calls it and what
  *     {@link SpawneryApi#stopServer} takes
  * @param alreadyRunning whether it was already there, which is a success and
- *     not a refusal: what you asked for is the case. It says nothing about
- *     whether the server is ready for players.
+ *     not a refusal. It says nothing about whether the server is ready for
+ *     players.
  */
 public record StartedServer(String name, boolean alreadyRunning) {}

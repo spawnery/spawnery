@@ -21,15 +21,8 @@ import kotlin.test.assertFalse
 import kotlin.test.assertTrue
 
 /**
- * What the connector does about a description outliving the session that
- * carried it.
- *
- * The operator remembers an announcement for as long as it has the session
- * that made it. An operator that restarts has therefore forgotten every
- * description on the network while every game that published one is still
- * running and has no reason to publish it again -- so the agent restates it,
- * exactly as readiness and event interest are restated, and for the same
- * reason.
+ * The operator forgets an announcement with the session that made it, so the
+ * agent restates it on every new stream.
  */
 class CloudConnectorTest {
     private val requested = mutableListOf<CloudRequest>()
@@ -66,9 +59,6 @@ class CloudConnectorTest {
 
     @Test
     fun `a new stream is told again that this server's door is shut`() {
-        // Sharper than the description: the operator's default for a session
-        // it has never seen is open, so a closed door that went unrestated
-        // would put players into a round that had already started.
         val connector = connector()
         connector.acceptJoins(false)
         requested.clear()
@@ -105,10 +95,8 @@ class CloudConnectorTest {
 
     @Test
     fun `a new stream is told again that this server's round has ended`() {
-        // The sharper of the two defaults: the operator's default for a
-        // session it has never seen is that the round has not ended, so an
-        // ended round that went unrestated would put the server back in the
-        // routing table and record its pod as Failed rather than Finished.
+        // Unrestated, the server would be routed again and its pod recorded
+        // as Failed rather than Finished.
         val connector = connector()
         connector.endRound()
         requested.clear()
@@ -122,8 +110,6 @@ class CloudConnectorTest {
 
     @Test
     fun `a server that never spoke about its door says nothing about it`() {
-        // Never having spoken is not the same as having said "open": there is
-        // nothing to restate, and the operator's own default already agrees.
         val connector = connector()
         connector.announce("running", emptyMap())
         requested.clear()
@@ -136,8 +122,6 @@ class CloudConnectorTest {
 
     @Test
     fun `a server that never announced says nothing on a new stream`() {
-        // Never having described itself is not the same as having described
-        // itself as nothing, and only the second is worth a message.
         val connector = connector()
 
         connector.onStreamChanged()
@@ -147,9 +131,6 @@ class CloudConnectorTest {
 
     @Test
     fun `a cleared description is restated as cleared`() {
-        // The empty announcement is a description like any other: a game that
-        // finished and said so must not come back, after a reconnect, still
-        // claiming to be running.
         val connector = connector()
         connector.announce("running", mapOf("map" to "arena"))
         connector.announce("", emptyMap())
@@ -164,8 +145,6 @@ class CloudConnectorTest {
 
     @Test
     fun `an announcement that could not be sent is still what the next stream carries`() {
-        // Remembered before it is sent, so a send that failed because there
-        // was no session is exactly the one whose replacement should carry it.
         val failing = CloudConnector(
             Requests(timeoutMillis = 1_000, clock = System::currentTimeMillis),
         ) { throw IllegalStateException("this agent has no session to the operator") }
@@ -324,8 +303,7 @@ class CloudConnectorTest {
         )
     }
 
-    // The Javadoc on startServer tells plugin authors when to unwrap, so the
-    // shape it describes is pinned here rather than inferred.
+    // The shape SpawneryApi.startServer's Javadoc describes.
     private fun refusedStart(): java.util.concurrent.CompletionStage<cloud.spawnery.agent.api.StartedServer> {
         val connector = connector()
         val stage = connector.startServer("lobby", "c0ffee")
@@ -357,10 +335,8 @@ class CloudConnectorTest {
         }
     }
 
-    // The wrapping is the JDK's, so this cannot go red short of a JDK change --
-    // and that is its subject. SpawneryApi.startServer's javadoc tells plugin
-    // authors to call getCause() on a derived stage, and this is the only place
-    // that advice meets a real JDK rather than being asserted in prose.
+    // Tests the JDK rather than this code: it pins the getCause() advice in
+    // SpawneryApi.startServer's Javadoc.
     @Test
     fun `a dependent stage sees the exception wrapped in a CompletionException`() {
         val seen = refusedStart()

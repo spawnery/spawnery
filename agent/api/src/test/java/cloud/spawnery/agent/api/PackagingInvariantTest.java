@@ -43,8 +43,6 @@ import org.junit.jupiter.api.Test;
  * the shipped jar has moved out from under a plugin compiled against the real
  * one -- a {@code NoSuchMethodError} at the call, with nothing failing at
  * compile time on either side.
- *
- * <p>A build file's comment does not stop a dependency being added. This does.
  */
 class PackagingInvariantTest {
     private static final Path CLASSES = Path.of("build/classes/java/main");
@@ -57,8 +55,6 @@ class PackagingInvariantTest {
     @Test
     void everyPublicSignatureUsesOnlyJavaOrThisModulesOwnTypes() throws Exception {
         List<Class<?>> classes = compiledClasses();
-        // A scanner that finds nothing passes every assertion below it, which
-        // is the one way this test could lie about the thing it exists for.
         assertFalse(
                 classes.isEmpty(),
                 "no compiled classes under " + CLASSES.toAbsolutePath()
@@ -97,11 +93,8 @@ class PackagingInvariantTest {
      * annotation is relocated with the rest of the stdlib, and a compiler
      * reading the shipped jar then finds no metadata at all.
      *
-     * <p>Unlike its neighbour, this one has not been mutation-checked. Making
-     * it fail means adding the Kotlin plugin to this module, which changes
-     * dependency resolution and would need agent/deps.json regenerated against
-     * a real Maven Central. It is asserted, not measured, and this sentence is
-     * here so nobody reads it as the stronger thing.
+     * <p>Not mutation-checked: making it fail needs the Kotlin plugin and a
+     * regenerated agent/deps.json.
      */
     @Test
     void nothingHereIsCompiledFromKotlin() throws Exception {

@@ -17,8 +17,6 @@ class CloudFeedBufferTest {
 
     @Test
     fun `nothing is delivered before the window closes`() {
-        // The whole reason the buffer exists. Delivering on arrival is ten
-        // lines for a rolling update, which is what section 5.4 refuses.
         val b = buffer()
         b.add(anEvent("lobby-a"))
         now = 999
@@ -41,8 +39,6 @@ class CloudFeedBufferTest {
 
     @Test
     fun `an empty window delivers nothing at all`() {
-        // Not an empty batch: a deliver call with no lines would have every
-        // implementation of it writing a guard this one can write once.
         val b = buffer()
         now = 5_000
         b.tick()
@@ -52,9 +48,6 @@ class CloudFeedBufferTest {
 
     @Test
     fun `the window starts at the first event and not at the last tick`() {
-        // Otherwise a steady trickle -- one event every 900ms -- would never
-        // close a window, and the feed would go silent exactly when something
-        // is happening.
         val b = buffer()
         b.add(anEvent("lobby-a"))
         now = 900
@@ -68,9 +61,6 @@ class CloudFeedBufferTest {
 
     @Test
     fun `a delivered window is emptied rather than resent`() {
-        // A buffer that kept its events would repeat the whole batch on every
-        // tick for the rest of the process, which is worse than the ten lines
-        // it exists to prevent.
         val b = buffer()
         b.add(anEvent("lobby-a"))
         now = 1_000

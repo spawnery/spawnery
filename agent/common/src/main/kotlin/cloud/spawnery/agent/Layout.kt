@@ -1,12 +1,6 @@
 package cloud.spawnery.agent
 
-/**
- * The shapes every /cloud answer is built from: a heading, sections, entries
- * and members under them, labelled fields, and bars for what has a capacity.
- *
- * Chat is not monospaced, so nothing here pads to line up; order and ` · `
- * carry the structure instead.
- */
+/** Chat is not monospaced, so nothing here pads to line up. */
 object Layout {
     const val SEGMENTS = 20
 

@@ -14,18 +14,9 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
 
 /**
- * The role [SessionLoop]'s own tests drive the loop with.
- *
- * It speaks the real `ServerMessage`/`OperatorToServer` types and the real
- * `serverSession` rpc, so [FakeOperator] and every assertion about wire content
- * mean what they meant before the loop became generic. What it adds over the
- * production `ServerRole` is a record of what the loop asked it for, and a
- * [decide] hook so a test can dictate a [Directive] independently of which
- * message produced it — the seam the Velocity role will rely on.
- *
- * Its counters are its own rather than a `ServerState`. `ServerState` lives in
- * `:paper` now, and `:paper` depends on `:common`; reaching for it here would
- * reintroduce the project cycle the move exists to avoid.
+ * The role [SessionLoop]'s own tests drive the loop with: the real wire types,
+ * a record of what the loop asked for, and a [decide] hook to dictate a
+ * [Directive]. Its counters are its own because `ServerState` is in `:paper`.
  */
 class FakeRole(
     private val decide: (OperatorToServer) -> Directive = ::asServerRoleWould,
@@ -34,18 +25,15 @@ class FakeRole(
     private val playerCount = AtomicInteger(0)
     private val slotCount = AtomicInteger(0)
 
-    /** Every message this role built, in the order the loop asked for it. */
     val hellos: MutableList<ServerMessage> = Collections.synchronizedList(mutableListOf())
     val reports: MutableList<ServerMessage> = Collections.synchronizedList(mutableListOf())
 
-    /** Every directive this role returned, including [Directive.None]. */
     val directives: MutableList<Directive> = Collections.synchronizedList(mutableListOf())
 
     val ready: Boolean get() = readyFlag.get()
     val players: Int get() = playerCount.get()
     val slots: Int get() = slotCount.get()
 
-    /** Returns true only for the call that made the transition. */
     fun markReady(): Boolean = readyFlag.compareAndSet(false, true)
 
     fun sample(players: Int, slots: Int) {
@@ -75,37 +63,17 @@ class FakeRole(
     override fun onMessage(message: OperatorToServer): Directive =
         decide(message).also { directives.add(it) }
 
-    /** The immediate readiness notification. Readiness itself rides on Hello. */
+    /** Readiness itself rides on Hello. */
     fun ready(): ServerMessage =
         ServerMessage.newBuilder().setReady(Ready.getDefaultInstance()).build()
 }
 
 /**
- * A hand-maintained copy of `ServerRole.onMessage`, repeated here because
- * `ServerRole` is in `:paper` and out of this project's reach.
- *
- * Nothing enforces the copy. `ServerRoleTest` pins `ServerRole` to an
- * expectation table of its own and never sees this function, so the two are
- * coupled only by whoever remembers. A case added to `ServerRole.onMessage` and
- * not to this one therefore fails no test anywhere: the [SessionLoopTest] cases
- * that drive a report interval or a session deadline execute the two branches
- * below and assert nothing about which branches exist, so they would go on
- * passing against a mapping production had already left behind -- and go on
- * reading as though they were facts about `ReportInterval` and
- * `SessionDeadline` rather than about this copy of them.
- *
- * Which is exactly what [AgentRole]'s own KDoc warns about -- "two readers of
- * the same messageCase in two files is how the two halves drift" -- now true of
- * the test double rather than of the loop. It is the price of keeping the loop's
- * tests in the project the loop lives in; see the plan's Step 5 for the
- * alternative that was rejected. `ServerRole.onMessage` carries a note pointing
- * back here.
+ * A hand-maintained copy of `ServerRole.onMessage`, which is in `:paper`.
+ * Nothing enforces the copy: a case added there and not here fails no test.
+ * NETWORK_STATE falls to `else` because ServerRole's branch also returns
+ * Directive.None; its effect is on the mirror, which this does not model.
  */
-// NETWORK_STATE is deliberately absent below and falls to `else`, which is the
-// right answer rather than an omission: ServerRole's own branch for it returns
-// Directive.None too, and its whole effect is a side effect on the mirror --
-// something this copy does not model and the loop cannot observe. The two
-// agree on the only thing this function claims to say.
 private fun asServerRoleWould(message: OperatorToServer): Directive =
     when (message.messageCase) {
         OperatorToServer.MessageCase.REPORT_INTERVAL ->

@@ -19,10 +19,8 @@ package cloud.spawnery.agent.api;
 /**
  * A hold that keeps this server out of readiness until it is released.
  *
- * <p>Narrows {@link AutoCloseable#close()} to throw nothing, so a plugin can
- * write {@code try (var hold = api.holdReadiness("..."))} with no catch, and
- * can equally keep the handle and close it from a callback when its own
- * executor finishes.
+ * <p>{@link #close()} throws nothing, so it works in try-with-resources without
+ * a catch, or kept and closed later from a callback.
  *
  * <p>Closing twice releases once.
  */

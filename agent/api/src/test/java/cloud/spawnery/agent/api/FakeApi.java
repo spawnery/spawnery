@@ -135,13 +135,10 @@ final class FakeApi implements SpawneryApi {
         };
     }
 
-    /** The reasons of the holds still open. For tests of this package. */
     List<String> heldReasons() {
         return List.copyOf(held);
     }
 
-    // A bus nobody publishes to, which is what every test here wants: the
-    // subscription is real and the handle closes, and no event ever arrives.
     @Override
     public EventBus events() {
         return listener -> () -> { };

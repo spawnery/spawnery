@@ -27,25 +27,9 @@ import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.CompletionStage
 
 /**
- * Turns a plugin's `connect` call into a request on the wire, and the answer
- * back into what the plugin waits on.
- *
- * **Shared between the two platforms, with exactly one line of platform in
- * it**: [sendRequest], which wraps a finished [CloudRequest] in whichever
- * message this side speaks. Everything else -- correlation, the failure
- * mapping, what a renewal does -- lives here once, because two copies would
- * come to disagree about what a plugin sees and that difference is the one
- * thing this API promises does not exist.
- *
- * The seam takes a whole CloudRequest rather than one verb's request, and that
- * is what keeps it one line as verbs are added: the platforms know how to put
- * a request on their own wire and nothing about which requests exist. The
- * first draft passed a ConnectRequest and made both plugins spell `setId` and
- * `setConnect` themselves, so retire would have had to be added in three
- * places, two of them platform files that have no business knowing the verb.
- *
- * @param sendRequest wraps the request in a ProxyMessage or a ServerMessage
- *   and hands it to the session loop. The whole platform seam.
+ * Shared between both platforms; [sendRequest] is the whole platform seam. It
+ * takes a whole [CloudRequest] so the platforms never need to know which verbs
+ * exist.
  */
 class CloudConnector(
     private val requests: Requests,
@@ -61,16 +45,7 @@ class CloudConnector(
             sendRequest(CloudRequest.newBuilder().setId(id).setConnect(request).build())
         }
 
-    /**
-     * Asks that one server stop taking joins and empty out.
-     *
-     * The future carries no value because the operator's answer carries none
-     * worth passing on: it echoes the name the caller already has. What the
-     * caller learns is which of the two things happened -- it completed, or it
-     * failed with the operator's reason, and "that server is already retiring"
-     * is a failure rather than a quiet success on purpose. See the operator's
-     * own RetireResult for why.
-     */
+    /** "Already retiring" fails rather than succeeding quietly; see the operator's RetireResult. */
     fun retire(server: String): CompletionStage<Void> =
         requests.start<Void> { id ->
             sendRequest(
@@ -81,7 +56,6 @@ class CloudConnector(
             )
         }
 
-    /** Takes a server's retirement back; fails with the operator's reason. */
     fun unretire(server: String): CompletionStage<Void> =
         requests.start<Void> { id ->
             sendRequest(
@@ -92,7 +66,6 @@ class CloudConnector(
             )
         }
 
-    /** The network's usage and tick rates, for the whole network or one target. */
     fun status(target: String): CompletionStage<NetworkStatus> =
         requests.start<NetworkStatus> { id ->
             sendRequest(
@@ -104,14 +77,8 @@ class CloudConnector(
         }
 
     /**
-     * Asks for extra capacity on a group, for a while.
-     *
-     * A duration on the wire and never an instant: the two sides do not share
-     * a clock, and an expiry computed here would be wrong by this pod's clock
-     * error with nothing on either side able to see it. Null means the
-     * operator's default, which is why zero is what goes on the wire -- the
-     * proto documents zero as "the operator decides", and a duration this
-     * agent invented would take that choice away from the side that owns it.
+     * A duration, never an instant: the two sides do not share a clock. Null
+     * sends zero, which the proto defines as "the operator decides".
      */
     fun boost(group: String, replicas: Int, forHowLong: Duration?): CompletionStage<BoostResult> =
         requests.start<BoostResult> { id ->
@@ -128,7 +95,6 @@ class CloudConnector(
             )
         }
 
-    /** Asks for the private server that carries this key. */
     fun startServer(group: String, key: String): CompletionStage<StartedServer> =
         requests.start<StartedServer> { id ->
             sendRequest(
@@ -143,7 +109,7 @@ class CloudConnector(
             )
         }
 
-    /** Stops one private server; its world stays. The answer echoes the name and carries no value. */
+    /** Its world stays. */
     fun stopServer(server: String): CompletionStage<Void> =
         requests.start<Void> { id ->
             sendRequest(
@@ -154,7 +120,6 @@ class CloudConnector(
             )
         }
 
-    /** Deletes one private server and its world. The answer carries no value. */
     fun deleteServer(group: String, key: String): CompletionStage<Void> =
         requests.start<Void> { id ->
             sendRequest(
@@ -166,66 +131,30 @@ class CloudConnector(
         }
 
     /**
-     * The last description this server published, re-sent on every new stream.
-     *
-     * The operator remembers an announcement for as long as it has the session
-     * that made it and no longer -- so an operator that restarts has forgotten
-     * every description in the network, while every game that published one is
-     * still running and has no reason to publish it again. Holding it here is
-     * what closes that: the agent re-asserts on each new session, exactly as
-     * readiness and event interest are re-asserted, and for the same reason.
-     *
-     * Null until something announces. A server that has never described itself
-     * has nothing to restate, which is not the same as one that described
-     * itself as nothing.
+     * Re-sent on every new stream: the operator forgets an announcement with
+     * the session that made it. Null until something announces.
      */
     private val lastAnnouncement = AtomicReference<AnnounceRequest?>(null)
 
-    /**
-     * Publishes what this server is doing.
-     *
-     * The whole description each time: the operator replaces rather than
-     * merges, so what is sent here is what other agents will see and anything
-     * left out is taken back.
-     */
+    /** The operator replaces rather than merges, so anything left out is taken back. */
     fun announce(state: String, attributes: Map<String, String>): CompletionStage<Void> {
         val announcement = AnnounceRequest.newBuilder()
             .setState(state)
             .putAllAttributes(attributes)
             .build()
-        // Remembered before it is sent, not after. A send that fails is still
-        // this server's intent, and the stream it failed on is exactly the one
-        // whose replacement should carry it.
+        // Remembered before sending: a failed send is still this server's intent.
         lastAnnouncement.set(announcement)
         return send(announcement)
     }
 
     /**
-     * The last accept-joins request this server made, restated on every new
-     * stream.
-     *
-     * Held whole, as one message, rather than as two separately-tracked
-     * flags: `accept` and `round_ended` are one field on the wire, and
-     * rebuilding a restatement from two independent values could recombine
-     * them into a pair that was never actually sent -- a round marked ended
-     * next to a door marked open, say. Keeping the built request itself makes
-     * that impossible rather than merely avoided.
-     *
-     * Null until it asks, and null is not "open": a server that has never
-     * spoken about its door has nothing to restate, while one that closed it,
-     * or ended its round, deliberately has something to say after a
-     * reconnect. The operator's own defaults for a session it has never
-     * seen -- door open, round not ended -- agree with null in both halves.
+     * Held as the built message, not two flags, so a restatement cannot
+     * recombine `accept` and `round_ended` into a pair never sent. Null means
+     * never asked, which matches the operator's defaults for a new session.
      */
     private val lastAcceptJoins = AtomicReference<AcceptJoinsRequest?>(null)
 
-    /**
-     * Opens or closes this server's door.
-     *
-     * Closing is not retiring. Nobody is moved, nothing is ended, and it can
-     * be taken back; what changes is that the proxies stop sending new players
-     * here. See [SpawneryApi.acceptJoins].
-     */
+    /** Closing is not retiring: nobody is moved and it can be taken back. */
     fun acceptJoins(accept: Boolean): CompletionStage<Void> {
         val request = AcceptJoinsRequest.newBuilder().setAccept(accept).build()
         lastAcceptJoins.set(request)
@@ -233,12 +162,8 @@ class CloudConnector(
     }
 
     /**
-     * Says this server's round is over.
-     *
-     * Sent as a closed door and an ended round together, in one message,
-     * because the operator does not distinguish "round over, still taking
-     * joins" from a mistake -- it deregisters and ends the round from the
-     * same field. See [SpawneryApi.endRound].
+     * A closed door and an ended round in one message: the operator ends the
+     * round from the same field it deregisters on. See [SpawneryApi.endRound].
      */
     fun endRound(): CompletionStage<Void> {
         val request = AcceptJoinsRequest.newBuilder().setAccept(false).setRoundEnded(true).build()
@@ -258,7 +183,6 @@ class CloudConnector(
             sendRequest(CloudRequest.newBuilder().setId(id).setAnnounce(announcement).build())
         }
 
-    /** Ends every boost on a group and reports how many there were. */
     fun stopBoosts(group: String): CompletionStage<Int> =
         requests.start<Int> { id ->
             sendRequest(
@@ -269,14 +193,7 @@ class CloudConnector(
             )
         }
 
-    /**
-     * Routes an answer to whoever is waiting on it.
-     *
-     * An answer for an id nobody holds is dropped by [Requests], which is what
-     * makes calling this from a gRPC callback safe: a late answer to a request
-     * that already reached its deadline is ordinary, and throwing on one would
-     * end the session and cost every other request outstanding.
-     */
+    /** An answer for an id nobody holds is dropped by [Requests]; a late answer is ordinary. */
     fun answer(response: CloudResponse) {
         when {
             response.hasError() -> requests.fail(response.id, asException(response.error))
@@ -310,9 +227,7 @@ class CloudConnector(
             response.hasStopBoost() -> requests.complete(response.id, response.stopBoost.removed)
             response.hasAnnounce() -> requests.complete(response.id, null)
             response.hasAcceptJoins() -> requests.complete(response.id, null)
-            // A result kind this agent does not know. Failed rather than
-            // ignored: a plugin holding a future to its deadline learns
-            // nothing, where a failure names the version skew.
+            // Failed rather than ignored, so the version skew has a name.
             else -> requests.fail(
                 response.id,
                 IllegalStateException("the operator answered with a result this agent does not know"),
@@ -320,44 +235,24 @@ class CloudConnector(
         }
     }
 
-    /** Fails everything outstanding. Called when this agent's stream changes. */
     fun onStreamChanged() {
         requests.failAll(IllegalStateException("the session was renewed while this request was in flight"))
-        // And then say again what this server is, on the stream that just
-        // became current -- the loop installs it before calling this, so this
-        // send goes to the new one.
-        //
-        // Nobody is waiting on the answer, and the future is dropped rather
-        // than logged: the only caller is this agent restating something it
-        // already knows, and a refusal here would say what the original call
-        // was already told. requests.start never throws, so a send between
-        // sessions fails that future instead of this hook.
+        // Restated on the new stream: the operator forgets a session's
+        // announcement and defaults to door open, round not ended.
         lastAnnouncement.get()?.let { send(it) }
-        // The door and the round's end too, and for a sharper reason than
-        // the description: the operator's default for a session it has never
-        // seen is that the door is open and the round has not ended, so
-        // either one going unrestated would put players into a round that
-        // had already finished -- or worse, one it had already recorded as
-        // Failed rather than Finished.
         lastAcceptJoins.get()?.let { send(it) }
     }
 
-    /** Fails everything past its deadline. Called from the reporting timer. */
     fun expire() = requests.expire()
 
     private fun asException(error: RequestError): Throwable =
-        // The reason and the message both, because a caller branches on one
-        // and a person reads the other -- and a plugin author with only the
-        // enum has nothing to put in a log.
         IllegalStateException("${error.reason}: ${error.message}")
 
     companion object {
-        /** How long an unanswered request lives. */
         const val TIMEOUT_MILLIS: Long = 10_000
     }
 }
 
-/** A connector that refuses, for an agent with no session. */
 fun dormantConnector(): CloudConnector =
     CloudConnector(Requests(timeoutMillis = 1, clock = { 0L })) { _ ->
         throw IllegalStateException("this agent has no session to the operator")

@@ -1,33 +1,14 @@
 package cloud.spawnery.agent
 
 /**
- * The palette the `/cloud` tree writes in, and the escaping that makes it safe.
- *
- * **MiniMessage tags in a plain String, and no Adventure type anywhere here.**
- * `:common` has no Adventure on its compile classpath at all -- see
- * agent/common/build.gradle.kts -- so this file could not import one if it
- * wanted to, which is the constraint [SourceAdapter] states enforced by the
- * build rather than by discipline. Each platform adapter deserialises at the
- * last moment, exactly as it already converted a plain String before.
- *
- * MiniMessage and not the legacy section-sign codes: those are deprecated by
- * Adventure, and `§` in a value would inject formatting where `<` can be
- * escaped. Both platforms carry it -- measured 2026-08-29, Paper's
- * paper-repo/libraries ships adventure-text-minimessage 5.2.0 and the pinned
- * velocity jar bundles its own copy.
- *
- * **Colour carries meaning here or it is not used.** The one field that earns
- * it most is whether a server takes joins: that is the question somebody is
- * actually asking, and it disagrees with the phase during a drain.
+ * MiniMessage tags in plain Strings: `:common` has no Adventure on its compile
+ * classpath. Not legacy `§` codes, which cannot be escaped.
  */
 internal object Style {
-    /** A server or group name, so a line can be scanned for the one you want. */
     fun name(value: String): String = "<aqua>${escape(value)}</aqua>"
 
-    /** Something that went right. */
     fun good(value: String): String = "<green>${escape(value)}</green>"
 
-    /** Something somebody should look at. */
     fun bad(value: String): String = "<red>${escape(value)}</red>"
 
     fun title(value: String): String = "<white><bold>${escape(value)}</bold></white>"
@@ -36,37 +17,15 @@ internal object Style {
 
     fun warn(value: String): String = "<yellow>${escape(value)}</yellow>"
 
-    /** Context rather than news: the sentences that explain a result. */
     fun quiet(value: String): String = "<gray>${escape(value)}</gray>"
 
-    /** A figure worth the eye landing on. */
     fun number(value: Any): String = "<white>${escape(value.toString())}</white>"
 
-    /**
-     * The bracketed sign that opens every feed line.
-     *
-     * The brackets take the prefix's own `dark_gray`, so the sign sits in the
-     * line the way `|` does and the column reads as part of the frame rather
-     * than as four different decorations. Only the sign carries colour;
-     * colouring the sentence behind it would leave nothing for a warning to be
-     * louder than.
-     */
+    /** Only the sign carries colour, so a warning's sentence stays the loudest thing on the line. */
     fun marker(sign: String, colour: String): String =
         "<dark_gray>[</dark_gray><$colour>${escape(sign)}</$colour><dark_gray>]</dark_gray>"
 
-    /**
-     * Plain text that must not be read as markup.
-     *
-     * Every value this file interpolates goes through it. Server and group
-     * names are Kubernetes object names and can hold neither `<` nor `\`, but
-     * the operator's own refusal messages reach chat verbatim -- see
-     * CloudCommand's `reason` -- and one containing a `<` would otherwise be
-     * eaten by the parser or make it throw inside a network callback.
-     *
-     * The backslash goes first. Escaping `<` first would then have its own
-     * backslash escaped again, turning `\<` into `\\<` and printing the
-     * backslash.
-     */
+    /** The operator's refusal messages reach chat verbatim and may hold a `<`. */
     fun escape(value: String): String =
         value.replace("\\", "\\\\").replace("<", "\\<")
 }

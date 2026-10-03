@@ -17,28 +17,11 @@ import io.grpc.CallCredentials
 import io.grpc.ManagedChannel
 import io.grpc.stub.StreamObserver
 
-/** Paper's half of the channel. */
 class ServerRole(
     private val state: ServerState,
-    /**
-     * Where the operator's picture of the network is kept for the plugin API
-     * to read.
-     *
-     * Last, and that position is deliberate: every call site in this package
-     * passes positionally, so a parameter added above would rebind them --
-     * silently, wherever the types happen to match.
-     */
     private val mirror: NetworkMirror,
-    /** Where an answer to this agent's own request goes. */
     private val connector: CloudConnector,
-    /** Where a cloud event goes on its way to somebody's chat. */
     private val feed: Feed,
-    /**
-     * Where the same event goes on its way to a plugin. Separate from the
-     * feed on purpose: the feed collapses ten transitions into one readable
-     * line, and a plugin should get the facts rather than somebody else's
-     * editorial decision. Last, as ever.
-     */
     private val events: CloudEvents,
 ) : AgentRole<ServerMessage, OperatorToServer> {
     override fun open(
@@ -69,15 +52,7 @@ class ServerRole(
             .build()
     }
 
-    /**
-     * `:common`'s test double copies this `when` by hand, as
-     * `FakeRole.asServerRoleWould`, because `SessionLoopTest` drives the loop
-     * from `:common` and cannot see this class. Nothing enforces the copy, so a
-     * case added here has to be added there too. Nothing fails if it is not:
-     * those tests assert what the two existing branches do, never which
-     * branches exist, so they go on passing against a mapping that no longer
-     * matches production.
-     */
+    /** Copied by hand as `FakeRole.asServerRoleWould`; nothing fails when the two drift. */
     override fun onMessage(message: OperatorToServer): Directive =
         when (message.messageCase) {
             OperatorToServer.MessageCase.REPORT_INTERVAL ->
@@ -88,10 +63,6 @@ class ServerRole(
                     message.sessionDeadline.hardDeadlineSeconds,
                 )
             OperatorToServer.MessageCase.NETWORK_STATE -> {
-                // The whole effect is the side effect. The loop is told
-                // nothing, which is why FakeRole's hand copy of this mapping
-                // needs no branch for it: `else -> Directive.None` is already
-                // the right answer to the only question that copy models.
                 mirror.apply(message.networkState)
                 Directive.None
             }
@@ -100,9 +71,6 @@ class ServerRole(
                 Directive.None
             }
             OperatorToServer.MessageCase.CLOUD_EVENT -> {
-                // Buffered rather than sent. This runs on a gRPC callback
-                // thread, and the window that turns ten Ready transitions into
-                // one line closes on the plugin's own timer.
                 feed.onEvent(message.cloudEvent)
                 events.publish(message.cloudEvent)
                 Directive.None
@@ -110,7 +78,7 @@ class ServerRole(
             else -> Directive.None
         }
 
-    /** The immediate readiness notification. Readiness itself rides on Hello. */
+    /** Readiness itself rides on Hello. */
     fun ready(): ServerMessage =
         ServerMessage.newBuilder().setReady(Ready.getDefaultInstance()).build()
 }

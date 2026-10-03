@@ -34,8 +34,6 @@ class SpawneryTest {
     void withNoAgentTheFailureNamesTheRemedy() {
         assertFalse(Spawnery.isAvailable());
         var e = assertThrows(SpawneryUnavailableException.class, Spawnery::api);
-        // The two cases have different remedies -- the plugin is missing, or
-        // it has not finished enabling -- and a null return could say neither.
         assertTrue(e.getMessage().contains("spawnery"),
                 "the message must name the plugin a server owner has to install: " + e.getMessage());
         assertTrue(e.getMessage().contains("enabl"),
@@ -56,8 +54,6 @@ class SpawneryTest {
         assertThrows(IllegalStateException.class, () -> Spawnery.install(new FakeApi()));
     }
 
-    // The refusal above must not have cost the first one its place: half the
-    // plugins holding a handle to a dead agent is the failure being avoided.
     @Test
     void aRefusedSecondInstallLeavesTheFirstStanding() {
         SpawneryApi first = new FakeApi();

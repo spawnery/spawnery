@@ -23,9 +23,7 @@ import java.util.concurrent.atomic.AtomicReference;
  * How a plugin gets a {@link SpawneryApi}, in one line and the same line on
  * both platforms.
  *
- * <p>A static holder rather than each platform's service registry, and that is
- * the point: Bukkit has {@code ServicesManager}, Velocity has Guice, and a
- * plugin author moving between them should not have to learn which.  The agent
+ * <p>A static holder rather than each platform's service registry. The agent
  * calls {@link #install} once as it enables; everybody else calls
  * {@link #api()}.
  */
@@ -60,9 +58,8 @@ public final class Spawnery {
     /**
      * Installs the implementation. Called by the agent and by nothing else.
      *
-     * <p>Refuses a second install rather than replacing the first: two agents
-     * on one server is a misconfiguration, and the failure mode of letting the
-     * second win is that half the plugins hold a handle to a dead one.
+     * <p>Refuses a second install rather than replacing the first, which
+     * would leave plugins holding a handle to a dead agent.
      *
      * @throws IllegalStateException if one is already installed
      */

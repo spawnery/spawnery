@@ -8,12 +8,6 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.net.InetSocketAddress
 
-/**
- * Every test builds its own [FakeRegistry] and, unless a test cares about log
- * output, a no-op log callback -- [ServerDirectory] never throws on a
- * malformed entry, so a test that ignored the log would still see the skip in
- * [FakeRegistry.calls] and in [ServerDirectory.names].
- */
 class ServerDirectoryTest {
     @Test
     fun `a full sync registers every server it carries`() {
@@ -47,10 +41,6 @@ class ServerDirectoryTest {
 
         directory.apply(servers)
 
-        // The obvious wrong implementation -- one that calls register()
-        // unconditionally instead of consulting registry.server(name) first
-        // -- leaves this list non-empty. That is exactly what this asserts
-        // against.
         assertTrue(registry.calls.isEmpty(), registry.calls.toString())
     }
 
@@ -74,10 +64,7 @@ class ServerDirectoryTest {
     @Test
     fun `a full sync leaves a server this agent never registered alone`() {
         val registry = FakeRegistry()
-        // A configOverlay entry velocity.toml carried before this agent ever
-        // ran, represented directly in the registry rather than through the
-        // directory -- exactly the case a naive "unregister everything not in
-        // this sync" implementation would destroy.
+        // A configOverlay entry this agent never registered.
         val foreign = registry.seed(serverInfo("hub", "10.0.0.9", 25565))
         val directory = ServerDirectory(registry) { _, _ -> }
 
@@ -96,10 +83,7 @@ class ServerDirectoryTest {
 
         directory.apply(listOf(Backend("lobby-1", "10.0.0.2:25565", "lobby")))
 
-        // Order matters here, not just membership: a list equality check is
-        // what catches an implementation that registered the new address
-        // before unregistering the old one, which for two minutes is two
-        // RegisteredServer entries claiming the same name.
+        // Order matters: unregister the old address before registering the new.
         assertEquals(
             listOf(
                 FakeRegistry.Call.Unregister(serverInfo("lobby-1", "10.0.0.1", 25565)),
@@ -124,19 +108,9 @@ class ServerDirectoryTest {
     }
 
     /**
-     * The two tests below are the only ones in this class that start from a
-     * *non-empty* directory, and that is the whole point of them.
-     *
-     * Every other test that touches [ServerDirectory.add] or
-     * [ServerDirectory.remove] begins with nothing registered, where an
-     * incremental update and a one-element full sync are indistinguishable. So
-     * `fun add(backend: Backend) = apply(listOf(backend))` and `fun
-     * remove(name: String) = apply(emptyList())` pass all of them -- while in
-     * production, where the operator broadcasts `RegisterServer` every time a
-     * `Server` becomes ready, each one would unregister every other backend
-     * this proxy has, and the next periodic `FullSync` would put them back
-     * about thirty seconds later. The level-2 harness cannot see it either:
-     * `cmd/spawnery-stubop` only ever sends `FullSync`.
+     * The only two tests starting from a *non-empty* directory, where an
+     * incremental update and a one-element full sync differ: they catch
+     * `add` or `remove` implemented as `apply`.
      */
     @Test
     fun `an incremental register leaves the backends already registered alone`() {
@@ -189,11 +163,6 @@ class ServerDirectoryTest {
 
         directory.remove("hub")
 
-        // The obvious wrong implementation -- remove() looks the name up in
-        // the registry directly, instead of checking its own names() first --
-        // unregisters a server this agent never touched. Both assertions
-        // catch it: the server would be gone, and calls would carry an
-        // Unregister.
         assertSame(foreign, registry.server("hub"))
         assertTrue(registry.calls.isEmpty(), registry.calls.toString())
     }

@@ -21,10 +21,7 @@ import java.util.Objects;
 /**
  * Where a player is to be sent.
  *
- * <p>A server or a group, and the difference matters: naming a server says
- * exactly where, while naming a group says "wherever that group has room" and
- * hands the choice to the operator — which is the only side that can compare
- * every backend's occupancy without racing the mirror a plugin reads.
+ * <p>A server says exactly where; a group hands the choice to the operator.
  */
 public sealed interface Target {
     /** That exact server, by the name {@link ServerInfo#name()} carries. */

@@ -6,11 +6,7 @@ import cloud.spawnery.agent.pb.ServerMessage
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
 
-/**
- * The Kotlin counterpart of internal/agentpb/contract_test.go. It does not test
- * protobuf; it tests that the checked-in stubs were generated from the .proto
- * this repository holds, which is the thing that silently rots.
- */
+/** Kotlin counterpart of internal/agentpb/contract_test.go: the checked-in stubs match the .proto. */
 class ContractTest {
     @Test
     fun `a server message round-trips through the wire format`() {

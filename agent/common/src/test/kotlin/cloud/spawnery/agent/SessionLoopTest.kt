@@ -26,14 +26,9 @@ import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
 
 /**
- * A [ManagedChannel] that reports, in program order, exactly when a message is
- * sent on it and when it is shut down.
- *
- * It says what the agent did locally, which is enough to catch an outgoing
- * stream retired for a replacement that never got off the ground. It is not
- * enough to establish make before break: that is a claim about what the
- * operator saw, and the tests below make it by holding the operator's answer
- * back and watching the outgoing stream stay up.
+ * A [ManagedChannel] that reports, in program order, when a message is sent on
+ * it and when it is shut down. That is what the agent did locally, not what the
+ * operator saw, so it cannot establish make before break on its own.
  */
 private class TrackingChannel(
     private val delegate: ManagedChannel,
@@ -66,11 +61,9 @@ private class TrackingChannel(
 }
 
 /**
- * A channel whose calls fail the instant they are started — synchronously, from
- * inside `stub.serverSession()`, before [SessionLoop] has had the chance to
- * install the session anywhere. It stands in for every way a stream can die
- * before it is established: an operator that is rolling out, a DNS name that
- * does not resolve yet, a rejected token.
+ * A channel whose calls fail synchronously from inside `stub.serverSession()`,
+ * before [SessionLoop] has installed the session: any stream that dies before
+ * it is established.
  */
 private class FailingChannel : ManagedChannel() {
     override fun <ReqT, RespT> newCall(
@@ -108,19 +101,10 @@ class SessionLoopTest {
         role: FakeRole,
         dir: Path,
         channels: () -> ManagedChannel = { operator.newChannel() },
-        // Identity, so a test's delays are the delays it wrote down. The
-        // production default spreads them by ±10 %, which would make every
-        // assertion about timing approximate.
+        // Identity, so a test's delays are exactly the ones it wrote down.
         jitter: (Long) -> Long = { it },
-        // The production value is five minutes, which is the point of it — see
-        // SessionLoop.FALLBACK_ANSWER_BOUND_MILLIS. Only the test that is about
-        // that bound overrides it, and every other test here is answered long
-        // before it could matter.
         fallbackAnswerBoundMillis: Long = SessionLoop.FALLBACK_ANSWER_BOUND_MILLIS,
         onStreamChanged: () -> Unit = {},
-        // Silent unless a test is about what the agent says. The two that are
-        // pass a collector: a renewal is not a failure, and the log is the only
-        // place that distinction is visible to anybody.
         log: (String, Throwable?) -> Unit = { _, _ -> },
         note: (String) -> Unit = { },
     ): SessionLoop<ServerMessage, OperatorToServer> {
@@ -231,10 +215,8 @@ class SessionLoopTest {
                 val first = operator.awaitStream(0)
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
 
-                // Get the first session reporting, so a leaked session (the
-                // bug) keeps firing on the shared scheduler after a second
-                // connect() -- proof that retirement actually happened, not
-                // just that a message was sent.
+                // Get the first session reporting, so a leaked session would
+                // keep firing on the shared scheduler after the second connect().
                 first.toAgent.onNext(
                     OperatorToServer.newBuilder()
                         .setReportInterval(ReportInterval.newBuilder().setSeconds(1))
@@ -242,24 +224,21 @@ class SessionLoopTest {
                 )
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.PLAYER_COUNT }
 
-                // Reconnect while the first session is still live -- no stop()
-                // in between, exactly the case the leak was missed on.
+                // Reconnect while the first session is still live, no stop()
+                // in between.
                 loop.start()
                 val second = operator.awaitStream(1)
                 second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
 
-                // Half 1: make before break. The operator has the new stream's
-                // Hello and has not answered it, and until it does the outgoing
-                // stream has to stay up. Waiting on the latch rather than
-                // sleeping keeps the failure fast: a regression closes the
-                // stream at once and this returns immediately.
+                // Make before break: until the operator answers the new
+                // stream, the outgoing one stays up.
                 assertFalse(
                     first.closed.await(1, TimeUnit.SECONDS),
                     "the previous session was retired before the operator answered the new one",
                 )
 
-                // Half 2: once it does answer, the previous session is actually
-                // retired -- its stream closes and its reporting future stops.
+                // Once it answers, the previous stream closes and its reporting
+                // stops.
                 second.toAgent.onNext(
                     OperatorToServer.newBuilder()
                         .setReportInterval(ReportInterval.newBuilder().setSeconds(1))
@@ -313,14 +292,6 @@ class SessionLoopTest {
                 // Supersede has something to carry across the handover.
                 assertTrue(hello.hello.ready, "the renewed stream greeted as not ready")
 
-                // Make before break, stated as what the operator sees rather
-                // than as what the agent does: the renewed stream is greeted
-                // and unanswered, and for as long as that is true the outgoing
-                // stream must still be there. An agent that retires it on its
-                // own Hello passes a local-ordering check and still hands the
-                // operator a disconnect followed by a connect, because the
-                // replacement's TLS handshake takes longer than the outgoing
-                // stream's close.
                 assertFalse(
                     first.closed.await(1, TimeUnit.SECONDS),
                     "break before make: the outgoing stream was retired before the " +
@@ -338,9 +309,7 @@ class SessionLoopTest {
                     "the outgoing stream was never closed",
                 )
 
-                // Retiring the outgoing stream is not a breakage, so it must not
-                // start a reconnect of its own. Bounded wait: the shortest
-                // backoff is a second.
+                // The shortest backoff is a second.
                 Thread.sleep(2000)
                 assertEquals(
                     2,
@@ -376,20 +345,9 @@ class SessionLoopTest {
                 val second = operator.awaitStream(1)
                 second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
 
-                // The real operator's order, and the whole point of this test.
-                // internal/agentserver cancels the displaced stream's context
-                // inside sessions.enter(), at the handler entry of the
-                // replacement -- before Supersede and before either Send -- and
-                // the cancelled handler answers Unavailable. So the outgoing
-                // stream fails while the replacement is still unanswered, and
-                // it is not the agent's stream to mourn: the replacement is
-                // already on its way and owes the agent whatever comes next.
-                //
-                // An agent that books a reconnect here books one on every
-                // renewal, and because the replacement's first message resets
-                // the backoff to its 1 s floor, that reconnect supersedes the
-                // replacement a second later and the whole thing repeats,
-                // forever.
+                // The real operator's order: it cancels the displaced stream at
+                // the replacement's handler entry, so the outgoing stream fails
+                // with Unavailable before the replacement is answered.
                 first.toAgent.onError(
                     Status.UNAVAILABLE
                         .withDescription("session ended, reconnect with a fresh token")
@@ -449,13 +407,8 @@ class SessionLoopTest {
                 val second = operator.awaitStream(1)
                 second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
 
-                // The operator's own order, and the reason this is not an
-                // error: it cancels the displaced stream at the handler entry
-                // of the replacement, so the agent sees Unavailable on every
-                // renewal, by design. streamEnded already knows -- it skips
-                // the reconnect on exactly this -- and the log did not, so a
-                // healthy fleet wrote a warning per server per renewal about a
-                // handover that worked.
+                // The operator ends the displaced stream with Unavailable on
+                // every renewal, by design.
                 first.toAgent.onError(
                     Status.UNAVAILABLE
                         .withDescription("session ended, reconnect with a fresh token")
@@ -490,8 +443,7 @@ class SessionLoopTest {
                 val first = operator.awaitStream(0)
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
 
-                // No replacement was ever opened, so this one is the agent's to
-                // mourn and its cause is the only clue anybody gets.
+                // No replacement was ever opened.
                 first.toAgent.onError(
                     Status.UNAVAILABLE.withDescription("connection reset").asRuntimeException(),
                 )
@@ -518,10 +470,8 @@ class SessionLoopTest {
                 val first = operator.awaitStream(0)
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
 
-                // A hard deadline far past the end of this test: what is under
-                // test here is the terminal callbacks, and an answer deadline
-                // firing in the middle of it would be a second reconnect from
-                // somewhere else.
+                // A hard deadline past the end of this test, so no answer
+                // deadline adds a reconnect of its own.
                 first.toAgent.onNext(
                     OperatorToServer.newBuilder()
                         .setSessionDeadline(
@@ -535,27 +485,21 @@ class SessionLoopTest {
                 val second = operator.awaitStream(1)
                 second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
 
-                // The operator cancels the displaced stream at the handler entry
-                // of the replacement, so the agent hears about the outgoing
-                // stream first and skips the reconnect: the replacement owes it.
+                // The outgoing stream fails first and skips the reconnect: the
+                // replacement owes it.
                 first.toAgent.onError(
                     Status.UNAVAILABLE
                         .withDescription("session ended, reconnect with a fresh token")
                         .asRuntimeException(),
                 )
-                // And then the replacement dies too, still unanswered, which is
-                // where the obligation now lives. This differs from `keeps the
-                // outgoing stream when the renewal's replacement dies at once`
-                // in the two ways that matter: the outgoing stream was already
-                // cancelled by the operator, and the replacement dies
-                // asynchronously rather than from inside serverSession().
+                // Then the replacement dies too, asynchronously and still
+                // unanswered.
                 second.toAgent.onError(
                     Status.UNAVAILABLE.withDescription("connection reset").asRuntimeException(),
                 )
 
-                // Exactly one reconnect. None at all would be permanent silence
-                // - both streams are gone and nothing else is owed - and two
-                // would be the storm the skip exists to prevent.
+                // Exactly one reconnect: none would be permanent silence, two
+                // the storm the skip exists to prevent.
                 val third = operator.awaitStream(2)
                 third.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
                 Thread.sleep(2500)
@@ -580,8 +524,7 @@ class SessionLoopTest {
                 val first = operator.awaitStream(0)
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
 
-                // The operator's own numbers, and the hard deadline is the one
-                // the agent has to bound the wait below with.
+                // The hard deadline is what bounds the wait below.
                 first.toAgent.onNext(
                     OperatorToServer.newBuilder()
                         .setSessionDeadline(
@@ -595,24 +538,16 @@ class SessionLoopTest {
                 val second = operator.awaitStream(1)
                 second.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
 
-                // The operator retires the displaced stream where it always
-                // does, at the replacement's handler entry - and then says
-                // nothing at all on the replacement. That is an operator
-                // goroutine blocked in Agents.Supersede, which sits between the
-                // cancel and the first Send, and its own hard-deadline rescue is
-                // armed after both Sends, so it never arms.
+                // The operator retires the displaced stream and then says
+                // nothing on the replacement, as when it blocks between the
+                // cancel and its first Send.
                 first.toAgent.onError(
                     Status.UNAVAILABLE
                         .withDescription("session ended, reconnect with a fresh token")
                         .asRuntimeException(),
                 )
 
-                // Everything the agent could still be waiting for is now gone:
-                // the outgoing stream was cancelled and skipped because a
-                // replacement exists, and the replacement is accepted, mute, and
-                // holds an obligation nothing will ever discharge. Without a
-                // bound of its own the agent is silent for the life of the TCP
-                // connection - no renewal, no reports, no reconnect.
+                // Only the agent's own answer bound can open the next stream.
                 val third = operator.awaitStream(2)
                 third.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
 
@@ -625,26 +560,11 @@ class SessionLoopTest {
     }
 
     /**
-     * The give-up has to end the call, not merely stop talking on it.
-     *
-     * `close()` half-closes and shuts the channel down gracefully, which is
-     * right everywhere else: the operator finishes the call and the channel
-     * terminates behind it. On this one path the operator is by definition not
-     * answering — in production its handler is blocked before it starts
-     * receiving — so it never finishes anything, and a graceful shutdown waits
-     * for that forever. The channel stays in SHUTDOWN holding a connection and
-     * a reader thread, once per give-up, for as long as the operator stalls.
-     *
-     * What this proves: the operator observes a cancellation rather than a
-     * half-close, and the channel actually reaches TERMINATED against an
-     * operator that answers neither.
-     *
-     * What it does not prove: that a socket and an OkHttp reader thread are
-     * released. The in-process transport has neither. Termination is the
-     * property those hang off, so this is the closest a unit test gets, and the
-     * `closed` latch on its own is no pin at all — it counts down on a
-     * half-close and on a cancellation alike, which is why the existing
-     * give-up test above passes either way.
+     * The give-up has to cancel the call, not half-close it: an operator that is
+     * not answering never finishes the call, so a graceful shutdown would leave
+     * the channel in SHUTDOWN forever. The `closed` latch counts down on both,
+     * so this checks the terminal state and that the channel terminates. The
+     * in-process transport has no socket or reader thread to check directly.
      */
     @Test
     fun `cancels the attempt it gives up on instead of waiting for an answer that is not coming`(
@@ -707,23 +627,8 @@ class SessionLoopTest {
     }
 
     /**
-     * The same bound, on the attempt that has no operator number to use.
-     *
-     * `hardDeadlineMillis` is zero until the operator has sent a
-     * `SessionDeadline`, so before this the first attempt of a fresh process
-     * was bounded by nothing. That is the worse half of the case, not a corner
-     * of it: `internal/agentserver` calls `Agents.Connect` before both `Send`s
-     * and before its receive goroutine, so any operator that accepts a stream
-     * and stalls there hangs every pod that starts during the stall — with no
-     * reports, no readiness, and the Hello unread, so the pod is invisible to
-     * the control plane rather than merely quiet.
-     *
-     * What this proves: with no `SessionDeadline` ever sent, the agent still
-     * gives up and opens another stream. What it does not prove: anything about
-     * the production value of the bound, which is five minutes and is what this
-     * test overrides. The test above and `gives up on a replacement the
-     * operator accepts and never answers` are what pin the operator's own
-     * number taking over as soon as there is one.
+     * The same bound before the operator has sent any `SessionDeadline`, which
+     * is the fallback; this test shortens it from its production five minutes.
      */
     @Test
     fun `bounds a first attempt the operator has not given it a deadline for`(
@@ -735,9 +640,7 @@ class SessionLoopTest {
             loopAgainst(operator, role, dir, fallbackAnswerBoundMillis = 500).use { loop ->
                 loop.start()
 
-                // Accepted, greeted, and never answered — no ReportInterval and
-                // no SessionDeadline, so the agent has no number of the
-                // operator's to bound the wait with.
+                // Accepted, greeted, and never answered.
                 val first = operator.awaitStream(0)
                 first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
 
@@ -766,13 +669,9 @@ class SessionLoopTest {
             val order = Collections.synchronizedList(mutableListOf<String>())
             var connectCount = 0
 
-            // The renewal's attempt dies from inside stub.serverSession(), the
-            // way a rejected token or a briefly unreachable operator does. The
-            // outgoing stream is untouched by that and still has the gap between
-            // renewAfterSeconds and hardDeadlineSeconds left to live, so
-            // retiring it for a replacement that never existed would be break
-            // before make -- the readiness loss the overlap exists to prevent,
-            // reached by a different route.
+            // The renewal's attempt dies from inside stub.serverSession(). The
+            // outgoing stream still lives until its hard deadline, so retiring
+            // it for that replacement would be break before make.
             val loop = loopAgainst(
                 operator,
                 role,
@@ -801,15 +700,10 @@ class SessionLoopTest {
                         .build(),
                 )
 
-                // The failed renewal owes itself a reconnect, and that one
-                // succeeds: arriving at all is the assertion that a renewal
-                // failing is not the end of the agent's session.
+                // The failed renewal books a reconnect, and that one succeeds.
                 val replacement = operator.awaitStream(1)
                 replacement.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
 
-                // The outgoing stream survived the failed attempt: it is still
-                // open here, one whole renewal later, and only the operator
-                // answering the replacement retires it.
                 assertFalse(
                     first.closed.await(1, TimeUnit.SECONDS),
                     "the outgoing stream was retired for a replacement that had already died",
@@ -852,26 +746,9 @@ class SessionLoopTest {
     }
 
     /**
-     * The quantity nothing else on either side of the wire measures: how many
-     * channels the agent leaves behind.
-     *
-     * Every other reconnect test here counts `operator.streams.size`, and
-     * hack/agent-test.sh counts `stream_opened` — both taken on the operator's
-     * side, where a channel the agent never shut down is invisible. A channel
-     * is built per attempt, so an operator that is unreachable for the length
-     * of a rolling update used to leave one behind per attempt: strongly
-     * reachable through the `replaces` chain, so not collectable, and still
-     * running gRPC's own reconnect loop underneath, aimed at the operator that
-     * is trying to come back.
-     *
-     * The stream count below is asserted too, and deliberately: it is what
-     * makes "every channel terminated" mean "every channel behind a stream
-     * that broke" rather than "no channel was ever built".
-     *
-     * What this does not prove: that a socket and a reader thread are released.
-     * The in-process transport has neither, and termination is the property
-     * those hang off — the same limit `cancels the attempt it gives up on`
-     * records.
+     * Counts the channels the agent leaves behind, which the operator's side
+     * cannot see. The channel count makes "every channel terminated" mean
+     * "every channel behind a broken stream", not "no channel was built".
      */
     @Test
     fun `shuts down the channel behind every stream that breaks`(@TempDir dir: Path) {
@@ -884,17 +761,14 @@ class SessionLoopTest {
                 role,
                 dir,
                 channels = { operator.newChannel().also { opened.add(it) } },
-                // The backoff sequence is asserted by the test below; here it
-                // only has to be short enough that three failures fit in one
-                // test, and it must not be zero, or the reconnects would race
-                // the assertions rather than follow them.
+                // Not zero, or the reconnects would race the assertions rather
+                // than follow them.
                 jitter = { 50L },
             ).use { loop ->
                 loop.start()
 
-                // Three breakages in a row, each on a channel of its own, and
-                // never answered — so nothing takes the handover path and every
-                // channel here is one only the reconnect path can release.
+                // Never answered, so only the reconnect path can release these
+                // channels.
                 repeat(3) { attempt ->
                     val stream = operator.awaitStream(attempt)
                     stream.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
@@ -918,18 +792,8 @@ class SessionLoopTest {
     }
 
     /**
-     * The one assertion design section 9 names and nothing had: that the delay
-     * between reconnects is `backoffMillis(attempt)` and that `attempt` moves.
-     *
-     * `backoff grows and is capped` tests the pure function and never runs the
-     * loop; `reconnects with backoff after the stream breaks` runs the loop and
-     * makes no timing assertion. Between them, pinning `attempt` at zero passed
-     * everything — and a permanently unreachable operator dialled once a second
-     * per pod, forever, which is the 1 Hz churn by another route.
-     *
-     * Both directions are here, because each is a separate defect. Growth is
-     * the first three bases; the reset on the operator's answer — and not on a
-     * Hello merely handed to the transport — is the fourth.
+     * The loop itself, not just `backoffMillis`: `attempt` grows with every
+     * failure and only the operator's answer resets it.
      */
     @Test
     fun `grows the backoff with every failed attempt and starts over once the operator answers`(
@@ -937,10 +801,8 @@ class SessionLoopTest {
     ) {
         FakeOperator("backoff-sequence").use { operator ->
             val role = FakeRole()
-            // The base handed to jitter is backoffMillis(attempt) exactly, so
-            // recording it reads the sequence without waiting it out. The
-            // return value collapses the wait: what is under test is the number
-            // the loop computed, not the scheduler's ability to sleep on it.
+            // jitter receives backoffMillis(attempt) exactly; returning 1 ms
+            // reads the sequence without waiting it out.
             val bases = LinkedBlockingQueue<Long>()
             var connectCount = 0
 
@@ -960,10 +822,8 @@ class SessionLoopTest {
                         "permanently unreachable operator is dialled at the floor rate forever",
                 )
 
-                // The fourth attempt reaches the operator, and the operator
-                // answers it. Waiting for the report rather than for the send
-                // is what makes this the operator's answer having been
-                // processed, not merely dispatched.
+                // Waiting for the report means the answer was processed, not
+                // merely sent.
                 val stream = operator.awaitStream(0)
                 stream.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
                 stream.toAgent.onNext(
@@ -995,11 +855,8 @@ class SessionLoopTest {
             val role = FakeRole()
             var connectCount = 0
 
-            // The first attempt fails from inside stub.serverSession(), which is
-            // before connect() reaches the point where the session becomes the
-            // current one. A reconnect guarded on `current` would skip this case
-            // and the agent would sit silent forever -- the one outcome worse
-            // than reconnecting too eagerly.
+            // The first attempt fails before connect() installs the session, so
+            // a reconnect guarded on `current` would never fire.
             val loop = loopAgainst(
                 operator,
                 role,
@@ -1021,11 +878,6 @@ class SessionLoopTest {
             val role = FakeRole()
             var connectCount = 0
 
-            // Every other call site of connect() is a scheduled one that
-            // reschedules itself. start() is not, so a first attempt that throws
-            // before the stream exists -- an endpoint that will not parse, a CA
-            // bundle that will not load -- has to be caught here or the agent
-            // never opens a session at all and never says why.
             loopAgainst(
                 operator,
                 role,
@@ -1046,12 +898,9 @@ class SessionLoopTest {
     fun `does not reconnect after stop`(@TempDir dir: Path) {
         FakeOperator("stopped").use { operator ->
             val role = FakeRole()
-            // The delay has to be long enough that stop() lands before the
-            // reconnect fires, and short enough that the wait below outlives it:
-            // a window that ends before the reconnect was due would pass whether
-            // or not stop() suppressed anything. Half a second of headroom
-            // against the microseconds stop() needs, and a full second of
-            // observation after the reconnect should have opened a stream.
+            // Long enough for stop() to land first, short enough that the wait
+            // below outlives it; otherwise this passes whether or not stop()
+            // suppressed anything.
             loopAgainst(operator, role, dir, jitter = { 500L }).use { loop ->
                 loop.start()
                 val first = operator.awaitStream(0)
@@ -1071,21 +920,9 @@ class SessionLoopTest {
     }
 
     /**
-     * The assertion is on the channel and not on the operator's view of the
-     * stream, and the difference is the whole of what `stop()` now does.
-     *
-     * An attempt the operator has never answered is one it will never finish,
-     * so `stop()` cancels it rather than half-closing it — the same choice
-     * `answerOverdue` makes, for the same reason. A cancelled call that had not
-     * yet been handed a transport never reaches the operator at all, so
-     * `awaitStream(1)` is no longer something this test may wait for. That is
-     * not a weaker statement: a stream nobody opened cannot outlive the plugin,
-     * and termination covers the case where it did open as well.
-     *
-     * It is also strictly stronger than the close latch it replaces. Under a
-     * graceful shutdown the channel waits for a call this operator never
-     * finishes, so it would sit in SHUTDOWN forever while the latch — which
-     * counts down on a half-close just as happily — reported success.
+     * Asserts on the channels, not on the operator's view: `stop()` cancels an
+     * unanswered attempt, and a call cancelled before it had a transport never
+     * reaches the operator, so `awaitStream(1)` cannot be waited for.
      */
     @Test
     fun `leaves no channel running when stop lands mid-connect`(@TempDir dir: Path) {
@@ -1096,11 +933,8 @@ class SessionLoopTest {
             val opened = Collections.synchronizedList(mutableListOf<ManagedChannel>())
             var connectCount = 0
 
-            // stop() runs after connect() has passed its entry check but before
-            // the session is installed, so stop() finds nothing in `current` to
-            // retire. Without connect()'s re-check at the end, the attempt would
-            // outlive the plugin with nothing left holding a reference to close
-            // it -- and its channel would still be running underneath.
+            // stop() runs after connect()'s entry check but before the session
+            // is installed, so only connect()'s re-check at the end retires it.
             val loop = loopAgainst(
                 operator,
                 role,
@@ -1146,12 +980,6 @@ class SessionLoopTest {
 
     @Test
     fun `every stream that becomes current tells the agent it changed`(@TempDir dir: Path) {
-        // The hook two per-stream things depend on: the requests in flight,
-        // which CloudConnector fails rather than resends, and any state the
-        // operator does not remember across a renewal. Both were written
-        // before anything called them -- CloudConnector.onStreamChanged had no
-        // caller at all until this parameter existed -- so the count is the
-        // assertion.
         val changes = java.util.concurrent.atomic.AtomicInteger(0)
         FakeOperator("stream-changed").use { operator ->
             val role = FakeRole().apply { markReady() }

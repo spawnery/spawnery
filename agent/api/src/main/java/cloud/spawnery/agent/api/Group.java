@@ -23,19 +23,15 @@ import java.util.Objects;
  * A group of servers, as the operator last described it.
  *
  * @param freeSlots the operator's own figure, which counts only ready servers
- *     of the group's current spec. It is what the scaler publishes rather than
- *     a sum a plugin could compute from {@link SpawneryApi#servers()}, and the
- *     two can disagree while a rolling update is in flight.
+ *     of the group's current spec. It can disagree with a sum over
+ *     {@link SpawneryApi#servers()} while a rolling update is in flight.
  * @param attributes what whoever runs this network wrote down about this group
- *     in its own definition, empty until somebody writes something. The
- *     counterpart of {@link ServerInfo#attributes()}, and the difference is who
- *     writes it: that one is a server saying what it is doing right now, this
- *     one is a person saying what the group is. Immutable.
- * @param displayName what this group is called where a person reads it. A
- *     group's {@link #name()} is a DNS label -- lowercase, no spaces -- and a
- *     name people say out loud rarely is, so a scoreboard shows this one.
- *     Never empty: a group nobody has named is displayed by its own name, and
- *     a plugin does not have to check which of the two it got.
+ *     in its own definition, empty until somebody writes something. Unlike
+ *     {@link ServerInfo#attributes()}, a person writes these, not a server.
+ *     Immutable.
+ * @param displayName what this group is called where a person reads it, for
+ *     example on a scoreboard; {@link #name()} is a DNS label. Never empty: a
+ *     group nobody has named is displayed by its own name.
  */
 public record Group(
         String name,
@@ -49,12 +45,9 @@ public record Group(
     public Group {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(kind, "kind");
-        // Absent and "nobody wrote anything" are the same group to a plugin,
-        // so both arrive as the empty map rather than as null.
         attributes = attributes == null ? Map.of() : Map.copyOf(attributes);
-        // The substitution happens here and not in the operator, so a picture
-        // from an operator that predates the field reads like one that left
-        // it out.
+        // Here and not in the operator, so an operator that predates the field
+        // reads like one that left it out.
         displayName = displayName == null || displayName.isEmpty() ? name : displayName;
     }
 

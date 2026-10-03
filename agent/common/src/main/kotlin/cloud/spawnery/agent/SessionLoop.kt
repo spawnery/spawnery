@@ -16,18 +16,9 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * One attempt at a stream to the operator, and everything scheduled on it.
  *
- * The session is constructed before the stub call rather than after it: the
- * in-process transport can hand the response observer its first callback — a
- * message, or a terminal one — synchronously from inside `stub.serverSession()`,
- * before that call has returned a value anything could have captured. Attaching
- * the outbound observer afterwards means no callback can arrive with nowhere to
- * route it. That matters most for the operator's opening `SessionDeadline`:
- * dropping it would leave the agent with no renewal scheduled at all, which is
- * the one failure this whole class exists to prevent.
- *
- * The scheduler is injected rather than created here so tests drive time
- * instead of sleeping through it, and so the renewal and backoff timers share
- * the same clock as reporting.
+ * Constructed before the stub call and attached afterwards: the in-process
+ * transport can deliver the first callback, such as the opening
+ * `SessionDeadline`, from inside `stub.serverSession()` before it returns.
  */
 private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?) {
     private val toOperator = AtomicReference<StreamObserver<Req>?>(null)
@@ -35,37 +26,28 @@ private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?)
     private var retired = false
 
     /**
-     * The attempt this one replaces, cleared by whichever of [takeOver] and
-     * [abandon] runs first. Clearing it is what makes both idempotent, and it
-     * is also the only thing that stops the chain: holding the reference for
-     * the life of the session would keep every stream the agent ever opened —
-     * and every `ManagedChannel` behind it — reachable from `current`, one
-     * link per renewal, for as long as the JVM runs.
+     * Cleared by whichever of [takeOver] and [abandon] runs first. That makes
+     * both idempotent and keeps the chain of replaced sessions, each with its
+     * channel, from staying reachable from `current` for the life of the JVM.
      */
     private val replaces = AtomicReference(replaces)
 
     /**
-     * Set once an attempt has been opened to replace this one, which is also
-     * the moment the reconnect obligation passes to that attempt. See
-     * [SessionLoop.streamEnded] for why the outgoing stream cannot keep it.
+     * Set once a replacement attempt has been opened; from then on the
+     * replacement owes the reconnect. See [SessionLoop.streamEnded].
      */
     private val replaced = AtomicBoolean(false)
 
     /**
-     * Claimed exactly once, by whichever of the three ends this attempt first:
-     * [close], after which nobody owes this stream a reconnect because a
-     * replacement already exists, the stream's own terminal callback, which
-     * owes it one unless [replaced] says a replacement is already under way, or
-     * the answer deadline below, which owes it one because nothing else will.
+     * Claimed exactly once, by whichever ends this attempt first: [close] (no
+     * reconnect owed), the stream's terminal callback (owed unless [replaced]),
+     * or the answer deadline (owed).
      */
     val ended = AtomicBoolean(false)
 
     /**
-     * Whether the operator has said anything at all on this stream, and the
-     * one-shot timer that bounds the wait until it does. Both are here rather
-     * than in [SessionLoop] because the timer has to be disarmed by the same
-     * monitor that retires the session: a timer left armed on a stream the
-     * agent has already given up on is a second claim on [ended].
+     * The timer lives here so the monitor that retires the session also
+     * disarms it; one left armed would be a second claim on [ended].
      */
     private val answered = AtomicBoolean(false)
     private var answerDeadline: ScheduledFuture<*>? = null
@@ -75,9 +57,8 @@ private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?)
     }
 
     /**
-     * Serialized against [close] and against every other send: gRPC's request
-     * observer is not thread-safe, and the greeting, the readiness push and the
-     * reporting timer now reach it from three different threads.
+     * gRPC's request observer is not thread-safe, and the greeting, the
+     * readiness push and the reporting timer send from different threads.
      */
     @Synchronized
     fun send(message: Req) {
@@ -85,14 +66,8 @@ private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?)
     }
 
     /**
-     * Installs the reporting timer, unless this session has already been
-     * retired — a `ReportInterval` racing with retirement would otherwise leave
-     * a timer firing forever against a channel nobody will shut down again.
-     *
-     * `reporting` is written from a gRPC callback thread and read from whichever
-     * thread retires the session, and since renewal those are genuinely
-     * different threads; the monitor is what makes the write visible to the
-     * reader.
+     * A no-op once retired: a `ReportInterval` racing retirement would
+     * otherwise leave a timer firing forever against a dead channel.
      */
     @Synchronized
     fun report(schedule: () -> ScheduledFuture<*>) {
@@ -102,11 +77,8 @@ private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?)
     }
 
     /**
-     * Retires the stream this one replaced, once.
-     *
-     * Called when the operator first answers on this stream, and from nowhere
-     * else: see [SessionLoop] for why the handover cannot be timed off
-     * anything the agent does locally.
+     * Retires the stream this one replaced, once. Called only when the operator
+     * first answers on this stream; see [SessionLoop].
      */
     fun takeOver() {
         replaces.getAndSet(null)?.close()
@@ -114,32 +86,25 @@ private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?)
 
     /**
      * Gives up the handover without performing it. The replaced stream keeps
-     * running — it still has the gap between `renewAfterSeconds` and
-     * `hardDeadlineSeconds` left, and retiring it for an attempt that is
-     * already gone would be break before make by another route.
+     * running until its own hard deadline.
      */
     fun abandon() {
         replaces.set(null)
     }
 
     /**
-     * Records that an attempt has been opened to replace this one. Called
-     * before that attempt's stream exists, because the operator can end this
-     * one the instant it does.
+     * Called before the replacement's stream exists, because the operator can
+     * end this one the instant it does.
      */
     fun replacementOpened() {
         replaced.set(true)
     }
 
-    /** Whether an attempt has been opened to replace this one. */
     fun hasReplacement(): Boolean = replaced.get()
 
     /**
-     * Arms the bound on how long this attempt may go unanswered, unless there
-     * is nothing left to wait for: the operator can answer before connect()
-     * gets here — synchronously from inside `serverSession()` on the in-process
-     * transport, and on any transport if the answer overtakes the rest of
-     * connect() — and the session can already have been retired.
+     * The operator can answer before connect() gets here, synchronously from
+     * inside `serverSession()` on the in-process transport.
      */
     @Synchronized
     fun awaitAnswer(arm: () -> ScheduledFuture<*>?) {
@@ -147,55 +112,22 @@ private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?)
         answerDeadline = arm()
     }
 
-    /**
-     * Records that the operator has said something on this stream — every
-     * message after the first says the same thing — and disarms the bound.
-     */
     fun answerArrived() {
         answered.set(true)
         stopAwaitingAnswer()
     }
 
-    /**
-     * Whether the operator ever said anything on this stream.
-     *
-     * Read by [SessionLoop.stop], which has to choose between the two ways of
-     * ending a call for exactly the reason [close] describes: an attempt the
-     * operator never answered is one it will never finish either.
-     */
     fun wasAnswered(): Boolean = answered.get()
 
     /**
-     * Shuts the channel down without retiring the session, for a stream that
-     * ended on its own.
-     *
-     * [close] is the wrong tool on that path and not by a little: it ends with
-     * [takeOver], which would retire the stream this one replaced — break
-     * before make, by the one route the renewal tests exist to forbid. So the
-     * reconnect path could not use it, and used nothing instead. A channel is
-     * built per attempt ([SessionLoop.connect] calls `channels()` every time,
-     * and AgentPlugin's factory memoises nothing), so every failed attempt left
-     * one behind: strongly reachable from `current` down the [replaces] chain,
-     * therefore not collectable, and — never having been shut down — still
-     * running gRPC's own reconnect loop underneath. At the 30 s backoff cap
-     * that is about 120 of them an hour, per pod, every one of them dialling
-     * the operator that is trying to come back.
-     *
-     * Graceful is right here, unlike on the give-up path: by the time a
-     * terminal callback has fired the call underneath is finished, so
-     * `shutdown()` has nothing left to wait for and the channel terminates at
-     * once. A later [close] on the same session stays correct, because a second
-     * shutdown of an already-shut-down channel is a no-op.
+     * For a stream that ended on its own. [close] would also [takeOver] and so
+     * retire the stream this one replaced. Graceful is enough here because the
+     * call underneath has already finished.
      */
     fun releaseChannel() {
         channel.shutdown()
     }
 
-    /**
-     * Drops the bound without answering: the stream ended by some other route,
-     * and the timer would otherwise sit on the scheduler until it fired on a
-     * session that has already been accounted for.
-     */
     @Synchronized
     fun stopAwaitingAnswer() {
         answerDeadline?.cancel(false)
@@ -203,51 +135,28 @@ private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?)
     }
 
     /**
-     * Retires this attempt. [cancel] chooses how the call underneath it ends,
-     * and that choice is not cosmetic.
+     * Retires this attempt. Graceful by default: the agent half-closes, the
+     * operator finishes the call, and `shutdown()` can terminate.
      *
-     * The default is the graceful one, and it is what makes a handover a
-     * handover: the agent half-closes, the operator finishes the call and sends
-     * trailers, and `ManagedChannel.shutdown()` — which is graceful, letting
-     * pre-existing calls run to completion — terminates the channel once it
-     * has. Every path that reaches this with a call the operator has answered
-     * is a path where graceful is right.
-     *
-     * On a call the operator has *not* answered it is wrong by construction,
-     * and there are two such paths: the give-up ([SessionLoop.answerOverdue]),
-     * and a [SessionLoop.stop] that lands on an attempt still waiting for its
-     * first message. The call being ended is by definition one the operator is
-     * not answering. Its handler is blocked before it starts its receive
-     * goroutine (`internal/agentserver/server.go:228`), so it never observes
-     * the half-close, and a half-close is not a cancellation, so nothing sends
-     * `RST_STREAM`. A graceful shutdown then waits on a call that will never
-     * complete: the channel sits in SHUTDOWN forever, holding its connection
-     * and its reader thread, inside a Paper server's JVM for as long as the
-     * operator stalls. Cancelling ends the call on both sides, so the channel
-     * can actually terminate.
-     *
-     * A stream that ended on its own reaches neither: it needs its channel
-     * released without the retirement, which is [releaseChannel].
+     * [cancel] is for a call the operator never answered. Its handler is
+     * blocked before it reads, so it never sees the half-close, and a graceful
+     * shutdown would wait on that call forever.
      */
     @Synchronized
     fun close(cancel: Boolean = false) {
         if (retired) return
         retired = true
-        // Set before anything below can provoke a terminal callback: this
-        // closing is deliberate, so it must not be mistaken for a stream that
-        // broke and owes the agent a reconnect.
+        // Before anything below can provoke a terminal callback, so a
+        // deliberate close is not taken for a broken stream owing a reconnect.
         ended.set(true)
         reporting?.cancel(false)
         reporting = null
         stopAwaitingAnswer()
         val observer = toOperator.get()
         if (cancel) {
-            // The cast is what the async stub really returns for a
-            // bidi-streaming call, and cancelling through it is what puts
-            // RST_STREAM on the wire. shutdownNow() behind it is the part that
-            // does not depend on the cast holding: this channel carries this
-            // one call and nothing else, so there is nothing else it could cut
-            // short.
+            // Cancelling through the call's observer puts RST_STREAM on the
+            // wire; shutdownNow() covers the cast failing, and this channel
+            // carries no other call.
             runCatching {
                 @Suppress("UNCHECKED_CAST")
                 (observer as? ClientCallStreamObserver<Req>)
@@ -258,17 +167,10 @@ private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?)
             runCatching { observer?.onCompleted() }
             channel.shutdown()
         }
-        // Nothing this stream replaced may outlive it: stop() closes only the
-        // current session, and a handover still in flight at that point would
-        // otherwise leave the outgoing one running with nobody holding it. The
-        // stillborn path calls abandon() first, so this is a no-op there. It
-        // retires gracefully whichever way this one went, including the
-        // give-up: the stream being handed over from is one the operator did
-        // answer. That is the second thing resting on the unreachability
-        // argument in [SessionLoop.answerOverdue] rather than a fact about this
-        // method — were a session ever both unanswered and replaced, this line
-        // would hand a graceful shutdown a call the operator will never finish
-        // and park the transport one link away from where it was just fixed.
+        // stop() closes only the current session, so a handover still in
+        // flight must not leave the outgoing one running. Graceful even after a
+        // give-up, because the replaced stream was answered; that rests on the
+        // argument in [SessionLoop.answerOverdue].
         takeOver()
     }
 }
@@ -278,63 +180,20 @@ private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?)
  * the operator dictates, and renews the session before the operator's deadline
  * expires.
  *
- * Renewal is make-before-break, and that is the point of the class rather than
- * a detail of it: the operator carries readiness across a handover only if the
- * replacement stream has reached it before the outgoing one goes away. Break
- * before make would drop every server out of `Ready` on the rhythm of the hard
- * deadline, deregister it from its proxies and book a readiness loss — a
- * self-inflicted flap counter, every ten minutes, forever.
+ * Renewal is make-before-break: the operator carries readiness across a
+ * handover only if the replacement stream has reached it before the outgoing
+ * one goes away. Break before make would drop every server out of `Ready` on
+ * every renewal.
  *
- * "Reached it" is the operator's first message on the new stream, and nothing
- * earlier. Handing the Hello to the transport and retiring the outgoing stream
- * on the next line reads like make before break and is not: the replacement
- * needs a fresh TCP connection and a TLS handshake, while the retirement
- * travels an established one, so the close reliably overtakes the greeting and
- * the operator sees a disconnect followed by a connect. That is not a race lost
- * occasionally — hack/agent-test.sh measured it losing every time, against an
- * operator-shaped server on the same host. The unit tests could not: the
- * in-process transport delivers the Hello synchronously, so both orders look
- * identical there. The same argument is already why the backoff resets on the
- * operator's answer rather than on a Hello that was merely sent.
+ * "Reached it" means the operator's first message on the new stream. Retiring
+ * the outgoing stream right after handing the Hello to the transport loses that
+ * race every time on a real network, because the replacement still needs a TCP
+ * and TLS handshake. The in-process transport the unit tests use hides this.
  *
- * A broken stream is always retried, with backoff and without a give-up point.
- * There is nothing useful for the agent to do other than keep trying: the pod
- * stays up either way, and an operator that is rolling out or briefly
- * unreachable must not cost the agent its session permanently.
- *
- * How long that takes depends entirely on how the stream ended, and the three
- * distributions are nothing like each other. Measured 2026-08-26, timed from
- * the moment the fault lifted:
- *
- * | what happened                                   | greeted again after |
- * |-------------------------------------------------|---------------------|
- * | the operator went away and came back (sockets closed) | 12.5 – 17.8 s |
- * | the operator stopped reading without closing (`SIGSTOP`) | 1.0 – 1.3 s |
- * | a black hole: packets dropped, socket held open  | see below           |
- *
- * The third used to be over 200 seconds and twice not at all within 213, and
- * it was never this class's backoff that governed it — that caps at 30
- * seconds, an order of magnitude short. A partitioned agent's sends succeed
- * into the kernel's buffer, so nothing in the application learns anything at
- * all, and what finally ended the wait was TCP's own retransmission giving up.
- * That is also the explanation for the unexplained 85-second reconnect
- * observed during milestone 4c-2, and it explains it as the *fast* end of that
- * range rather than the slow one.
- * [OperatorChannel.KEEPALIVE_SECONDS] is what bounds it now.
- *
- * A stream that never breaks and is never answered is retried too, and that is
- * not the same statement. Nothing this class arms has a clock of its own: the
- * calls have no deadline, and every timer here is armed by something the
- * operator said. So an operator that accepts a stream and then goes quiet —
- * see [SessionLoop.awaitAnswer] for the one way that really happens — would
- * otherwise hold the agent for the life of the TCP connection.
- *
- * The case this class still cannot see is a stream that *was* answered and
- * then goes silent, because every timer it would need has already been
- * satisfied. That one is the channel's, not this class's:
- * [OperatorChannel.KEEPALIVE_SECONDS] is the only clock on a connection that
- * is up and going nowhere, and its doc comment says why the operator
- * deliberately has no matching one.
+ * A broken stream is retried with backoff and never given up on. A stream that
+ * is accepted and never answered is bounded by [awaitAnswer]. A stream that was
+ * answered and then goes silent is bounded only by
+ * [OperatorChannel.KEEPALIVE_SECONDS].
  */
 class SessionLoop<Req, Resp>(
     private val channels: () -> ManagedChannel,
@@ -344,42 +203,24 @@ class SessionLoop<Req, Resp>(
     private val version: String,
     private val log: (String, Throwable?) -> Unit,
     /**
-     * Where a thing that happened goes, as opposed to a thing that went wrong.
-     *
-     * Its own channel rather than a level on [log], because the level cannot be
-     * read off the arguments: `log(..., null)` covers both the operator closing
-     * a stream and the operator accepting one and never answering it, and those
-     * are not the same news. And rather than a level enum on every call site,
-     * because exactly one message here is routine -- a renewal, which the
-     * operator performs on a schedule and which used to arrive as a warning
-     * with a stack trace, per server, every few minutes.
+     * Routine events, as opposed to [log]'s problems. A separate channel
+     * because `log(..., null)` already carries non-routine events that have no
+     * throwable.
      */
     private val note: (String) -> Unit,
     private val jitter: (Long) -> Long = { base ->
         // ±10 %, so the pods of one group neither renew nor reconnect in the
-        // same instant. An operator restart breaks every agent's stream at once,
-        // so the reconnect delay needs this as much as the renewal delay does.
+        // same instant; an operator restart breaks every stream at once.
         base + (Math.random() * 0.2 * base).toLong() - (0.1 * base).toLong()
     },
-    /**
-     * The bound on an unanswered attempt while the operator has not yet stated
-     * one of its own — see [FALLBACK_ANSWER_BOUND_MILLIS] and [awaitAnswer].
-     * Injected only so tests need not wait it out.
-     */
+    /** Injectable only so tests need not wait out [FALLBACK_ANSWER_BOUND_MILLIS]. */
     private val fallbackAnswerBoundMillis: Long = FALLBACK_ANSWER_BOUND_MILLIS,
     /**
-     * Called once for every stream that becomes this loop's current one.
-     *
-     * The hook exists because two things an agent holds are per-stream and
-     * nothing else could tell them a renewal happened: the requests in flight,
-     * which [CloudConnector.onStreamChanged] fails rather than resends because
-     * only the caller knows whether repeating one is safe, and any state the
-     * operator does not remember across a changeover -- EventInterest being
-     * the first of those.
-     *
-     * Last, with a default that does nothing, so no existing construction
-     * changes. It runs on the thread that installed the stream, before the
-     * agent sends anything on it.
+     * Called once for every stream that becomes current, on the installing
+     * thread before anything is sent on it. Per-stream state hangs off it: the
+     * requests in flight, which [CloudConnector.onStreamChanged] fails rather
+     * than resends because only the caller knows whether that is safe, and
+     * state the operator forgets across a changeover, such as EventInterest.
      */
     private val onStreamChanged: () -> Unit = {},
 ) : AutoCloseable {
@@ -388,11 +229,8 @@ class SessionLoop<Req, Resp>(
     private val stopped = AtomicBoolean(false)
 
     /**
-     * The operator's own `hardDeadlineSeconds`, as of the last `SessionDeadline`
-     * it sent, in milliseconds. Zero until the operator has said one, and while
-     * it is zero [awaitAnswer] falls back to [FALLBACK_ANSWER_BOUND_MILLIS]:
-     * the bound is the operator's number wherever there is one, and a finite
-     * number rather than none where there is not.
+     * The operator's last `hardDeadlineSeconds`, in milliseconds. Zero until it
+     * has sent one, and then [awaitAnswer] uses [FALLBACK_ANSWER_BOUND_MILLIS].
      */
     private val hardDeadlineMillis = AtomicLong(0)
 
@@ -402,23 +240,9 @@ class SessionLoop<Req, Resp>(
             minOf(30_000L, 1_000L shl minOf(attempt, 20))
 
         /**
-         * How long the first attempt of a fresh process may go unanswered
-         * before the operator has stated a deadline of its own.
-         *
-         * Deliberately loose. It is not an estimate of how fast a healthy
-         * operator answers — that is microseconds, one mutex-guarded map write
-         * after the handler starts — only a finite number in place of no number
-         * at all, five orders of magnitude clear of anything a working operator
-         * does. It is used at most once per process: the first
-         * `SessionDeadline` replaces it, and from then on every bound is the
-         * operator's own.
-         *
-         * Without it the first attempt of a fresh process is unbounded, and an
-         * operator that accepts a stream and stalls before its first `Send`
-         * hangs every pod that starts during the stall, permanently. That is
-         * the strictly worse half of the case [awaitAnswer] describes: on the
-         * non-superseded path the operator has not even read the Hello, so the
-         * pod is invisible to the control plane rather than merely silent.
+         * The answer bound before the operator has stated a deadline, so at
+         * most once per process. Deliberately loose: a healthy operator answers
+         * in microseconds, and this is only a finite number in place of none.
          */
         const val FALLBACK_ANSWER_BOUND_MILLIS = 5L * 60 * 1000
     }
@@ -429,21 +253,17 @@ class SessionLoop<Req, Resp>(
         try {
             connect()
         } catch (e: Exception) {
-            // Every other call site of connect() is a scheduled one that
-            // reschedules itself on failure. This one is not, so a first attempt
-            // that throws before the stream exists — an endpoint that will not
-            // parse, an unreadable CA bundle — would otherwise end the agent
-            // before it ever started.
+            // Every other connect() caller reschedules itself on failure; without
+            // this a first attempt that throws, say on an unparseable endpoint,
+            // would end the agent before it started.
             log("the first connect to the operator failed", e)
             reconnectLater()
         }
     }
 
     /**
-     * Sends one message on the current stream if there is one, and does nothing
-     * if there is not. The agent's own state is the caller's business: this is
-     * the immediate notification, not the state itself, and every Hello carries
-     * the state anyway.
+     * Does nothing if there is no stream. This is the immediate notification,
+     * not the state: every Hello carries the state anyway.
      */
     fun send(message: Req) {
         val session = current.get() ?: return
@@ -455,13 +275,9 @@ class SessionLoop<Req, Resp>(
         // cannot open a stream the plugin has no way left to close.
         stopped.set(true)
         val session = current.getAndSet(null) ?: return
-        // The same choice [answerOverdue] makes, and for the same reason: an
-        // attempt the operator has never answered is one it will never finish,
-        // so a half-close leaves the call open and the graceful shutdown behind
-        // it waits on it forever. onDisable() gives the scheduler two seconds
-        // and returns, so a parked channel here outlives the plugin inside a
-        // JVM that keeps running. Where the operator has answered, graceful is
-        // still right: that call ends the moment the agent half-closes.
+        // The same choice as [answerOverdue]: an unanswered call never finishes,
+        // and onDisable() gives the scheduler only two seconds, so a parked
+        // channel would outlive the plugin inside a running JVM.
         session.close(cancel = !session.wasAnswered())
     }
 
@@ -470,38 +286,26 @@ class SessionLoop<Req, Resp>(
     private fun connect() {
         if (stopped.get()) return
         val channel = channels()
-        // The stream this attempt is replacing is captured here, before the
-        // stub call, for the same reason the session itself is: on the
-        // in-process transport the operator's first message can arrive from
-        // inside serverSession(), and the handover below has to know what it
-        // is handing over from by then.
+        // Captured before the stub call: the operator's first message can
+        // arrive from inside serverSession(), and the handover has to know its
+        // predecessor by then.
         val outgoing = current.get()
         val session = Session(channel, outgoing)
-        // Marked before the stream exists, and deliberately so: the operator
-        // ends the displaced stream at the *entry* of the replacement's
-        // handler, so the outgoing stream's terminal callback can fire while
-        // the call below is still returning. From here on the replacement owes
-        // the agent its next stream — see streamEnded.
+        // Before the stream exists: the operator ends the displaced stream at
+        // the entry of the replacement's handler, so its terminal callback can
+        // fire while the call below is still returning. See streamEnded.
         outgoing?.replacementOpened()
 
         val fromOperator = object : StreamObserver<Resp> {
             override fun onNext(value: Resp) {
-                // The operator answering is what proves the stream reached it;
-                // a Hello handed to the transport proves nothing. Three things
-                // here wait for that proof and nothing weaker.
-                //
-                // The bound on an unanswered attempt is discharged by it: the
-                // attempt is established, so it is no longer a stream the agent
-                // has to give up on.
+                // The operator's answer, not a Hello handed to the transport, is
+                // what proves the stream reached it. The answer bound, the
+                // backoff and the handover all wait for it.
                 session.answerArrived()
-                // Resetting the backoff at the end of connect() instead would
-                // turn a stream that always dies just after it opens into a
-                // reconnect every second, for as long as the operator stays
-                // broken.
+                // Resetting at the end of connect() instead would turn a stream
+                // that always dies just after opening into a reconnect every
+                // second.
                 attempt.set(0)
-                // And the same proof is what the handover waits for. Make
-                // before break is a claim about what the operator saw, so it
-                // can only be timed off something the operator sent.
                 session.takeOver()
                 when (val directive = role.onMessage(value)) {
                     is Directive.Report -> startReporting(session, directive.seconds)
@@ -516,25 +320,9 @@ class SessionLoop<Req, Resp>(
             }
 
             override fun onError(t: Throwable) {
-                // A renewal ends this stream, every time and by design: the
-                // operator cancels the displaced stream's context at the
-                // handler entry of its replacement, and the cancelled handler
-                // answers Unavailable. See [streamEnded], which skips the
-                // reconnect on exactly this.
-                //
-                // So the throwable here is the operator doing its job, and
-                // logging it as a failure wrote a stack trace per server per
-                // renewal into a healthy fleet's logs -- roughly one every
-                // eight minutes, on every pod, saying "the operator stream
-                // failed" about a handover that worked. Anything that reads a
-                // server log for real trouble had to learn to skip them, which
-                // is the habit that hides the next real one.
-                //
-                // [Session.replacementOpened] is set before the replacement's
-                // stream exists, precisely so that this moment can be told
-                // apart. A stream nothing replaced still carries its cause:
-                // that one is the agent's to mourn and the throwable is the
-                // only clue anybody gets.
+                // Every renewal ends the displaced stream with Unavailable, by
+                // design, so that is a note rather than a failure with a stack
+                // trace. A stream nothing replaced keeps its cause.
                 if (session.hasReplacement()) {
                     note("the operator retired this stream for a renewal")
                 } else {
@@ -552,8 +340,6 @@ class SessionLoop<Req, Resp>(
         val toOperator = try {
             role.open(channel, credentials, fromOperator)
         } catch (e: Exception) {
-            // The channel was built here and was never handed to anything that
-            // would shut it down, so this is the only place that can.
             channel.shutdown()
             throw e
         }
@@ -561,120 +347,62 @@ class SessionLoop<Req, Resp>(
 
         send(session, role.hello(version))
 
-        // The replacement died before it could take over — synchronously from
-        // inside serverSession() on the in-process transport, and in production
-        // a rejected token or an operator that is briefly unreachable. Retiring
-        // the outgoing session for a stream that is already gone would be break
-        // before make with extra steps: the outgoing one still has the gap
-        // between renewAfterSeconds and hardDeadlineSeconds left to live, and
-        // the terminal callback has already booked a reconnect.
+        // The replacement died before it could take over: synchronously on the
+        // in-process transport, in production on a rejected token or an
+        // unreachable operator. The outgoing session still lives until its hard
+        // deadline, and the terminal callback has already booked a reconnect.
         if (session.ended.get()) {
             session.abandon()
             session.close()
             return
         }
 
-        // The new stream is where everything the agent does next belongs — the
-        // renewal it will schedule, a readiness push, a stop(). Retiring the
-        // outgoing one is deliberately *not* part of that: it happens in
-        // onNext, once the operator has answered. This is also why the renewal
-        // path below has no close() of its own.
+        // Retiring the outgoing stream is deliberately not done here but in
+        // onNext, once the operator has answered.
         current.set(session)
         // Before anything is sent on it: a report that raced this would be
         // sent on the new stream and then immediately undone by a reset.
         onStreamChanged()
 
-        // The obligation the outgoing stream just gave up needs a floor: this
-        // attempt now owes the agent its next stream, and an operator that
-        // never answers would otherwise never let it pay.
+        // This attempt now owes the agent its next stream, so an operator that
+        // never answers needs a bound.
         awaitAnswer(session)
 
-        // stop() may have run while this attempt was in flight, in which case it
-        // found nothing in `current` to retire and this session would outlive
-        // the plugin.
+        // stop() may have run meanwhile and found nothing in `current` to retire.
         if (stopped.get()) stop()
     }
 
     /**
-     * A stream ended without the agent having retired it, so it owes itself a
-     * reconnect — including when it ended so early that `current` never held it.
+     * A stream ended without the agent retiring it, so it owes a reconnect,
+     * even if it ended before `current` ever held it. That is why this guards
+     * on a per-attempt flag and not on `current`.
      *
-     * Guarding on `current` instead, which reads as the obvious thing to do,
-     * would skip the reconnect in exactly that case: connect() installs the
-     * session only after the Hello has gone out, so a failure arriving before
-     * that leaves `current` pointing elsewhere and the compare-and-set failing.
-     * The agent would then sit silent forever, which is worse than reconnecting
-     * too eagerly. A per-attempt flag says what `current` cannot: whether this
-     * particular stream was replaced on purpose.
-     *
-     * Unless a replacement is already under way, and then the replacement owes
-     * the reconnect rather than this stream. That is not an optimisation: it is
-     * what the operator's own order requires. `internal/agentserver` cancels
-     * the displaced stream's context inside `sessions.enter()`, at the handler
-     * entry of the replacement — before `Supersede`, and before either `Send`
-     * on the new stream. The cancelled handler answers `Unavailable`, so the
-     * agent sees the outgoing stream fail *first*, every time and by design,
-     * while the replacement is still waiting to be answered. A reconnect booked
-     * here would therefore be booked on every renewal, and since the
-     * replacement's first message resets the backoff to its 1 s minimum, the
-     * reconnect one second later would supersede the replacement and start the
-     * same sequence again — a self-sustaining stream churn at roughly 1 Hz, per
-     * server, for as long as the fleet runs.
-     *
-     * Nothing is dropped by skipping it. A replacement that dies books the
-     * reconnect from its own terminal callback (the stillborn path below), one
-     * that is retired in turn has a live successor, and one the agent closed on
-     * purpose was closed by a stop() that wants no reconnect at all.
+     * Unless a replacement is under way: the operator cancels the displaced
+     * stream at the replacement's handler entry, so on every renewal the
+     * outgoing stream fails first. Reconnecting here would supersede the
+     * replacement a second later, and again, at roughly 1 Hz. A replacement
+     * that dies books its own reconnect.
      */
     private fun streamEnded(session: Session<Req>) {
         if (!session.ended.compareAndSet(false, true)) return
         session.stopAwaitingAnswer()
-        // Before the skip, not after it: a superseded stream's channel is as
-        // dead as a broken one's, and the skip is about who owes the next
-        // stream, not about who owns this one's transport. See
-        // [Session.releaseChannel] for what one unreleased channel per failed
-        // attempt costs over an operator outage.
+        // Before the skip: a superseded stream's channel is as dead as a broken
+        // one's.
         session.releaseChannel()
         if (session.hasReplacement()) return
         reconnectLater()
     }
 
     /**
-     * Bounds how long an attempt may sit accepted and unanswered, because
-     * nothing else does.
+     * Bounds how long an attempt may sit accepted and unanswered. Once the
+     * replacement holds the reconnect obligation nothing else ends that wait:
+     * the call has no deadline, and the operator arms its own hard deadline
+     * only after its first `Send`.
      *
-     * The reconnect obligation is handed to the replacement the moment it is
-     * opened (see [streamEnded]), and that is right — but it makes the
-     * replacement the only thing left that can pay it. An operator that accepts
-     * the stream and then says nothing is therefore not slow, it is terminal:
-     * the outgoing stream has already been cancelled and skipped, no
-     * `ReportInterval` starts a report, no `SessionDeadline` schedules a
-     * renewal, and the channel underneath has no keepalive, no idle timeout and
-     * no call deadline to end the wait. The operator's own rescue does not
-     * arrive either: `internal/agentserver` arms its hard deadline at
-     * server.go:218, *after* both `Send`s, so precisely the operator that fails
-     * to send never arms it. A goroutine blocked in `Agents.Supersede`
-     * (server.go:193), which sits between the cancel and the first `Send`,
-     * produces exactly that — fleet-wide, for every pod whose renewal lands
-     * during the block.
-     *
-     * The bound is the operator's own `hardDeadlineSeconds`, not a constant
-     * invented here: it is the operator's statement about how long one session
-     * may live, so an attempt that has not been answered within it has outlived
-     * anything the operator promised. It also makes [answerOverdue] safe to
-     * retire the outgoing stream along with the attempt, which [Session.close]
-     * does through `takeOver`: by then the stream this one replaced is a whole
-     * hard deadline past the start of its own, so nothing with a future left is
-     * being cut short.
-     *
-     * Until the operator has stated that number the bound is
-     * [FALLBACK_ANSWER_BOUND_MILLIS], which *is* invented here — because the
-     * alternative on the first attempt of a fresh process is no bound at all,
-     * and the same stalled operator then hangs the pod before it has been seen
-     * by the control plane at all. Nothing on the operator's side rescues that
-     * one either: `sessions.cancel` cancels the derived context, not
-     * `stream.Context()`, so a handler stuck before its own `select` never
-     * observes it however early the operator arms its deadline.
+     * The bound is the operator's `hardDeadlineSeconds`, so by the time it
+     * fires the outgoing stream is past its own deadline and [answerOverdue]
+     * may retire it too. Until the operator has stated one, it is
+     * [FALLBACK_ANSWER_BOUND_MILLIS].
      */
     private fun awaitAnswer(session: Session<Req>) {
         val bound = hardDeadlineMillis.get().takeIf { it > 0 } ?: fallbackAnswerBoundMillis
@@ -686,30 +414,16 @@ class SessionLoop<Req, Resp>(
 
     /**
      * The operator accepted this attempt and never answered it. Claiming
-     * `ended` here is what keeps the obligation exactly-once: whichever of the
-     * timer and the stream's own terminal callback gets there first books the
-     * one reconnect, and the loser returns.
+     * `ended` makes the one reconnect exactly-once against the terminal
+     * callback.
      *
-     * The compare-and-set is only half of that argument, and the other half is
-     * written nowhere else, so it is written here. Unlike [streamEnded] this
-     * does not skip the reconnect when a replacement already exists — and it
-     * does not have to, because a session cannot be both unanswered and
-     * replaced. Becoming the outgoing stream requires connect() to run while
-     * this session is `current`, and the only two callers cannot: scheduleRenewal
-     * is armed by a `SessionDeadline`, which is an answer, and reconnectLater
-     * runs once per ended session and the one that opened this session has
-     * already spent itself. It becomes reachable the moment the operator sends
-     * two `SessionDeadline`s on one stream — which `internal/agentserver` does
-     * not, and which would be a double-renewal defect in its own right. Anyone
-     * changing either side into sending a second one has to add the
-     * `hasReplacement()` guard here, or this and the replacement will each book
-     * a reconnect for the same session.
+     * Unlike [streamEnded] there is no `hasReplacement()` skip, because an
+     * unanswered session cannot have been replaced: a renewal is armed only by
+     * a `SessionDeadline`, which is an answer. Should the operator ever send
+     * two `SessionDeadline`s on one stream, the guard is needed here, or both
+     * sessions book a reconnect.
      *
-     * The close is the forceful one. See [Session.close]: this is one of the
-     * two paths where the call being ended is one the operator will never
-     * finish — the other is a [stop] landing on an attempt still waiting for
-     * its first message — and asking a graceful shutdown to wait for such a
-     * call parks the transport.
+     * The close is the forceful one; see [Session.close].
      */
     private fun answerOverdue(session: Session<Req>) {
         if (!session.ended.compareAndSet(false, true)) return
@@ -719,10 +433,8 @@ class SessionLoop<Req, Resp>(
     }
 
     /**
-     * Make before break. connect() opens and greets the new stream and only
-     * then retires the old one, so there is deliberately no close() here — the
-     * old session is closed by connect(), strictly after the replacement has
-     * greeted.
+     * No close() here: the old session is retired once the operator answers
+     * the replacement.
      */
     private fun scheduleRenewal(session: Session<Req>, renewAfterSeconds: Int) {
         if (renewAfterSeconds <= 0) return
@@ -734,8 +446,8 @@ class SessionLoop<Req, Resp>(
             try {
                 connect()
             } catch (e: Exception) {
-                // The old stream is untouched and lives until the hard deadline,
-                // so there is still time — but only if something tries again.
+                // The old stream lives until the hard deadline, so there is
+                // still time, but only if something tries again.
                 log("the renewal failed; retrying before the hard deadline", e)
                 reconnectLater()
             }
@@ -749,25 +461,21 @@ class SessionLoop<Req, Resp>(
             try {
                 connect()
             } catch (e: Exception) {
-                // connect() can fail before anything is registered anywhere —
-                // an unreadable token, a channel that will not build. Nothing
-                // else would ever retry, so this has to.
+                // connect() can fail before anything is registered anywhere,
+                // so nothing else would ever retry.
                 log("could not reconnect to the operator", e)
                 reconnectLater()
             }
         }
     }
 
-    /**
-     * Returns the scheduled task, or null if the scheduler refused it, so a
-     * caller that has to be able to cancel what it armed can hold on to it.
-     */
+    /** Null if the scheduler refused the task. */
     private fun schedule(delayMillis: Long, whenRejected: String, task: () -> Unit): ScheduledFuture<*>? {
         return try {
             scheduler.schedule(Runnable { task() }, delayMillis, TimeUnit.MILLISECONDS)
         } catch (e: RejectedExecutionException) {
-            // The scheduler is gone, which happens on shutdown. Throwing here
-            // would surface on a gRPC callback thread instead.
+            // The scheduler is gone on shutdown. Throwing here would surface on
+            // a gRPC callback thread instead.
             log(whenRejected, e)
             null
         }
@@ -780,12 +488,9 @@ class SessionLoop<Req, Resp>(
                 scheduler.scheduleAtFixedRate(
                     {
                         send(session, role.playerCount())
-                        // After the count and on the same tick, so the two
-                        // describe the same instant as closely as this loop
-                        // can make them. Each is sent on its own: send drops a
-                        // message when there is no stream, and a report that
-                        // is a moment out of date is worth more than one that
-                        // was not sent because a different one could not be.
+                        // On the same tick as the count, so both describe the
+                        // same instant; each sent on its own, so one that cannot
+                        // go does not hold back the others.
                         for (extra in role.extraReports()) {
                             send(session, extra)
                         }
@@ -796,8 +501,8 @@ class SessionLoop<Req, Resp>(
                 )
             }
         } catch (e: RejectedExecutionException) {
-            // The same shutdown case [schedule] covers, and the same reason for
-            // covering it: this runs on a gRPC callback thread.
+            // The same shutdown case as [schedule]: this runs on a gRPC
+            // callback thread.
             log("the reporting timer could not be scheduled", e)
         }
     }

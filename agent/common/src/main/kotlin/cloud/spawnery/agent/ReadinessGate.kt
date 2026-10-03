@@ -2,13 +2,7 @@ package cloud.spawnery.agent
 
 import cloud.spawnery.agent.api.ReadinessHold
 
-/**
- * What a server's readiness waits for.
- *
- * [onOpen] runs once, when the server has finished enabling and no hold is
- * left -- whichever of the two comes second. It runs outside this object's
- * lock, because on Paper it sends on the agent's stream.
- */
+/** [onOpen] runs outside the lock, because on Paper it sends on the agent's stream. */
 class ReadinessGate(private val onOpen: () -> Unit) {
     private val lock = Any()
     private val open = LinkedHashMap<Long, String>()
@@ -18,9 +12,7 @@ class ReadinessGate(private val onOpen: () -> Unit) {
 
     fun hold(reason: String): ReadinessHold {
         synchronized(lock) {
-            // A late hold is not an error worth throwing for: the plugin
-            // cannot know it lost the race, and readiness cannot be lowered
-            // anyway. It gets a handle that releases nothing.
+            // Not thrown: the plugin cannot know it lost the race, and readiness cannot be lowered.
             if (opened) return ReadinessHold {}
             val key = next++
             open[key] = reason

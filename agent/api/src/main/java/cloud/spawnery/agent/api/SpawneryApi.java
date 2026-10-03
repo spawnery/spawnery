@@ -35,17 +35,13 @@ import java.util.concurrent.CompletionStage;
  * never wrong about a moment that happened. Each stage-returning method says
  * how it can fail; {@link #holdReadiness} is local and throws on a proxy.
  *
- * <p><b>Consume this interface; do not implement it.</b> Methods are added
- * here as later milestones land -- events, moving a player, starting a server
- * -- and adding one breaks an implementor while leaving every caller alone.
- * The agent supplies the implementation; a plugin obtains it from
- * {@link Spawnery#api()}.
+ * <p><b>Consume this interface; do not implement it.</b> New methods break
+ * implementors but no caller. The agent supplies the implementation; a plugin
+ * obtains it from {@link Spawnery#api()}.
  *
- * <p>Everything is scoped to this pod's own namespace, which is the whole of
- * what this agent can see. There is no method that reaches another network,
- * and that is structural rather than a check somebody could forget: the
- * agent's credentials are a pod-bound ServiceAccount token, so there is
- * nothing to widen.
+ * <p>Everything is scoped to this pod's own namespace. No method reaches
+ * another network: the agent's credentials are a pod-bound ServiceAccount
+ * token, so there is nothing to widen.
  */
 public interface SpawneryApi {
     /** What this process is. Use {@code instanceof} to learn which side. */
@@ -78,12 +74,8 @@ public interface SpawneryApi {
     /**
      * Asks the operator to move a player.
      *
-     * <p><b>Asynchronous on both platforms, including the one where it need
-     * not be.</b> On a proxy this could answer locally; on a backend it is a
-     * round trip through the operator. Following the platform would make the
-     * signature synchronous on one side and not the other, and a plugin author
-     * moving between them would have to rewrite rather than recompile. So it
-     * is the shape of the harder case on both.
+     * <p><b>Asynchronous on both platforms</b>, although a proxy could answer
+     * locally, so that the same code compiles on either side.
      *
      * <p>The stage fails rather than returning a result when the operator
      * refuses or cannot answer — including when the stream was renewed while
@@ -104,17 +96,10 @@ public interface SpawneryApi {
      * disconnected. Emptied, it is taken down by the same rules that take down
      * any server its group no longer needs.
      *
-     * <p>Asynchronous on both platforms for the reason {@link #connect} is,
-     * and on both it is a round trip: this one changes an object in the
-     * cluster, so neither a proxy nor a backend could answer it locally even
-     * in principle.
-     *
-     * <p>The stage completes with no value — the operator's answer names the
-     * server you already named. It fails when the operator refuses, and
-     * <b>asking for a server that is already retiring is a failure</b>: the
-     * operator distinguishes "you retired it" from "somebody had already
-     * asked", and a caller that wants to treat the second as success can do so
-     * far more safely than one that was never told.
+     * <p>The stage completes with no value. It fails when the operator
+     * refuses, and <b>asking for a server that is already retiring is a
+     * failure</b>, so a caller can tell "you retired it" from "somebody had
+     * already asked".
      */
     CompletionStage<Void> retire(String server);
 
@@ -144,20 +129,14 @@ public interface SpawneryApi {
      * Asks for extra capacity on a group, for a while.
      *
      * <p><b>It adds to what the group tries for and never to what it may
-     * reach.</b> The group's own {@code maxReplicas} still binds — a ceiling
-     * is an instruction, and a call from inside a game server must not be able
-     * to lift one. A request for more than the ceiling leaves is refused
-     * rather than trimmed, so what you asked for is what you got or you were
-     * told why not.
+     * reach.</b> The group's own {@code maxReplicas} still binds. A request
+     * for more than the ceiling leaves is refused rather than trimmed.
      *
      * <p><b>It expires.</b> Pass {@code null} for the operator's default,
      * which is an hour. The operator also bounds how long you may ask for; a
-     * need that outlives an evening belongs in the group's own definition,
-     * where a person reviews it, and this call deliberately cannot make one.
+     * lasting need belongs in the group's own definition.
      *
-     * <p>Boosts add rather than replace. Two calls make two boosts, and the
-     * second does not overwrite the first — which is what makes "somebody
-     * else already boosted this" a non-event rather than a race.
+     * <p>Boosts add rather than replace: two calls make two boosts.
      *
      * <p>The stage fails when the operator refuses: a group it does not have,
      * a group sized by a fixed replica count rather than by scaling, more than
@@ -171,10 +150,8 @@ public interface SpawneryApi {
     /**
      * Ends every boost on a group and reports how many there were.
      *
-     * <p>Every one, not the newest: a partial reduction across boosts with
-     * different expiries is arithmetic nobody asked for. Zero is an ordinary
-     * answer — the group had no boosts — and not a failure, which is what a
-     * caller who expected some needs to be able to tell.
+     * <p>Every one, not the newest. Zero is an ordinary answer -- the group
+     * had no boosts -- and not a failure.
      */
     CompletionStage<Integer> stopBoosts(String group);
 
@@ -275,13 +252,10 @@ public interface SpawneryApi {
     /**
      * Opens or closes this server's own door.
      *
-     * <p><b>Closing is not {@link #retire}, and the difference is the whole
-     * reason this exists.</b> Retiring says the server is finished: it stops
-     * taking joins, empties out, and is taken down once it is empty. This says
-     * only the first of those, it says it for as long as you like, and you can
-     * take it back. A round that has started is not a server that is going
-     * away, and asking for the one when you mean the other reads as a
-     * decommissioning to everybody who looks at it afterwards.
+     * <p><b>Closing is not {@link #retire}.</b> Retiring says the server is
+     * finished: it stops taking joins, empties out, and is taken down once it
+     * is empty. Closing only stops the joins, for as long as you like, and can
+     * be taken back.
      *
      * <p><b>Nobody is moved.</b> The players already here go on playing until
      * they leave on their own. What changes is only whether the proxies send
@@ -388,19 +362,15 @@ public interface SpawneryApi {
     /**
      * Publishes what this server is doing, for every other server to read.
      *
-     * <p><b>The cloud carries this and never reads it.</b> Nothing the
-     * operator decides looks at a word of it: not where a player is sent, not
-     * when a server is replaced, not how a group is sized. It reaches the
-     * other agents in this network as {@link ServerInfo#state()} and
-     * {@link ServerInfo#attributes()} and goes no further, which is what makes
-     * it safe to put anything in and useless to put an instruction in.
+     * <p><b>The cloud carries this and never reads it.</b> No operator
+     * decision looks at it. It reaches the other agents in this network as
+     * {@link ServerInfo#state()} and {@link ServerInfo#attributes()} and goes
+     * no further.
      *
      * <p><b>It is not {@link ServerInfo#phase()}.</b> The phase is the
      * operator's account of a server's lifecycle and no plugin can write it.
-     * This is the server's own account of itself, and the two are meant to
-     * disagree: a server is {@code READY} from the moment it can take players
-     * until it stops, and what is happening inside that window is a question
-     * only the thing running there can answer.
+     * This is the server's own account of what happens while it is
+     * {@code READY}.
      *
      * <p><b>Each call replaces the last one whole.</b> Attributes are not
      * merged: a call with one attribute leaves this server with one, whatever
@@ -414,8 +384,7 @@ public interface SpawneryApi {
      *
      * <p>It survives a reconnection without being called again: the agent
      * holds the last description it published and re-publishes it on every new
-     * session, so an operator that restarts does not leave a running game
-     * described as nothing.
+     * session.
      *
      * @param state what this server is doing, in a word or a short phrase.
      *     Empty clears it.

@@ -22,10 +22,9 @@ import java.util.function.Consumer;
  * Where a plugin hears about things happening in the cloud.
  *
  * <p><b>A feed and not a ledger.</b> An agent that was disconnected missed what
- * happened while it was gone, and nothing replays it — the network picture it
- * re-syncs on reconnect is the correction, and a better one than a replay
- * would be: it says what is true now rather than what was true in an order
- * nobody was watching. A plugin that needs a ledger should watch the objects.
+ * happened while it was gone, and nothing replays it; the network picture it
+ * re-syncs on reconnect says what is true now. A plugin that needs a ledger
+ * should watch the objects.
  *
  * <p>Events arrive uncollapsed, one per transition. What a player sees in chat
  * is a collapsed summary of them; you get the facts.
@@ -37,13 +36,10 @@ public interface EventBus {
      *
      * <p><b>The listener runs on a network callback thread.</b> Do not block
      * it and do not touch the world from it — hand the work to your platform's
-     * scheduler. A listener that throws is dropped from the next dispatch
-     * rather than taking the session down with it, but it is still your bug
-     * and nothing tells you twice.
+     * scheduler. A listener that throws is dropped from the next dispatch.
      *
-     * <p>Closing the handle is idempotent. A plugin that forgets to close one
-     * on disable leaks a listener into a classloader the platform is trying to
-     * unload, which is the ordinary way a reload turns into a memory leak.
+     * <p>Closing the handle is idempotent. Close it on disable, or the listener
+     * outlives the plugin's classloader.
      */
     AutoCloseable subscribe(Consumer<CloudEventInfo> listener);
 }

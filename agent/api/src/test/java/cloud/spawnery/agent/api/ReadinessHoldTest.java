@@ -25,8 +25,6 @@ import org.junit.jupiter.api.Test;
 class ReadinessHoldTest {
     @Test
     void closeDeclaresNoCheckedException() throws Exception {
-        // The whole point of narrowing AutoCloseable: a plugin writes
-        // try (var hold = api.holdReadiness("...")) with no catch.
         Method close = ReadinessHold.class.getMethod("close");
         assertEquals(0, close.getExceptionTypes().length,
                 "close must not declare a checked exception");

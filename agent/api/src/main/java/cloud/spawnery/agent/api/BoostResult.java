@@ -22,21 +22,12 @@ import java.util.Objects;
 /**
  * The extra capacity a {@link SpawneryApi#boost} call created.
  *
- * <p><b>{@code expiresAt} is the operator's clock, not yours.</b> The request
- * carries a duration and the answer carries an instant, and the asymmetry is
- * deliberate: the two sides do not share a clock, and an expiry computed on a
- * pod whose clock is minutes fast would end the boost early or late by exactly
- * that error — silently, since neither side can see the difference. The
- * operator's clock is the one the scaler reads, so it is the one that decides.
+ * <p><b>{@code expiresAt} is the operator's clock, not yours</b>, so comparing
+ * it against {@link Instant#now()} is off by any clock skew between the two.
+ * What it is good for is telling a person when the extra servers go away.
  *
- * <p>Compare it against {@link Instant#now()} at your own risk for the same
- * reason. What it is good for is telling a person when the extra servers go
- * away.
- *
- * @param replicas how many servers this boost adds. The operator's figure, not
- *     the one you asked for — it refuses rather than trimming, so these agree
- *     today, and a caller that reads this one cannot be wrong if that ever
- *     changes.
+ * @param replicas how many servers this boost adds, as the operator counted
+ *     them.
  */
 public record BoostResult(int replicas, Instant expiresAt) {
     public BoostResult {

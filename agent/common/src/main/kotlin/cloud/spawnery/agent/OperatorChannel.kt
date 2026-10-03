@@ -20,16 +20,12 @@ private val AUTHORIZATION: Metadata.Key<String> =
     Metadata.Key.of("authorization", Metadata.ASCII_STRING_MARSHALLER)
 
 /**
- * The channel to the operator. Trust comes from the mounted CA bundle and from
- * nowhere else — no system trust store — because that pinning is what makes the
- * pod's identity claim meaningful in both directions.
+ * Trust comes from the mounted CA bundle only, never the system trust store.
  */
 object OperatorChannel {
     /**
-     * The bundle may hold several concatenated PEMs. The agent channel design
-     * keeps that format open so a later CA rotation can run old and new with
-     * overlap; parsing only the first certificate would make the agent the one
-     * thing that cannot survive such a rotation.
+     * The bundle may hold several concatenated PEMs, so a CA rotation can run
+     * old and new with overlap.
      */
     fun trustManager(caBundlePem: ByteArray): X509TrustManager {
         val factory = CertificateFactory.getInstance("X.509")
@@ -53,21 +49,9 @@ object OperatorChannel {
     }
 
     /**
-     * TLS 1.3 and its three suites, spelled out rather than left to the
-     * default.
-     *
-     * grpc-okhttp picks its ConnectionSpec by platform: the TLS 1.3 + 1.2 one
-     * only on Android, and a TLS-1.2-only legacy spec everywhere else,
-     * including every JDK. internal/agentserver sets MinVersion:
-     * VersionTLS13, so the default leaves the agent offering a version the
-     * operator refuses, and the handshake dies with a protocol_version alert
-     * before a single byte of HTTP/2 — measured against a real operator-shaped
-     * server in hack/agent-test.sh, which is the only level that could see it:
-     * the in-process transport used by the unit tests does no TLS at all.
-     *
-     * Only 1.3, not "1.3 and 1.2": the operator accepts nothing else, so
-     * offering 1.2 as well could only ever produce the same failure one round
-     * trip later and with a vaguer message.
+     * grpc-okhttp offers only TLS 1.2 on a JDK (its TLS 1.3 spec is
+     * Android-only), and internal/agentserver requires TLS 1.3. The unit tests'
+     * in-process transport does no TLS, so only hack/agent-test.sh sees this.
      */
     private val TLS_VERSIONS = arrayOf("TLSv1.3")
     private val CIPHER_SUITES = arrayOf(
@@ -77,48 +61,14 @@ object OperatorChannel {
     )
 
     /**
-     * How long an idle connection waits before the agent pings the operator,
-     * and how long it then waits for the answer. Together they are the only
-     * clock the agent has on a connection that is up and going nowhere.
+     * The only clock the agent has on a connection that is up and going
+     * nowhere: a black-holed peer sends no RST and TCP's own retransmission
+     * takes minutes. The operator deliberately sets no keepalive, because
+     * `phase.Inputs.AgentSilent` already covers its side and a broken stream
+     * would weaken that state.
      *
-     * # Why the agent needs one and the operator does not
-     *
-     * A node that is hard-powered off, or a network that black-holes, sends no
-     * FIN and no RST. Both ends go on believing the connection is fine until
-     * TCP's own retransmission gives up, which on a default Linux is minutes:
-     * measured 2026-08-26 through a freezable relay at over 200 seconds, and
-     * twice not at all within 213.
-     *
-     * The operator has an application-level answer to that and does not need a
-     * transport one. The agent's reports stop the instant the peer does, and
-     * `phase.Inputs.AgentSilent` reads "the stream is up and has gone quiet" as
-     * exactly what it is, within twice the report interval — ten seconds at the
-     * operator's default. A server-side keepalive would be slower than that and
-     * would *replace* that state with a weaker one, because breaking the stream
-     * turns AgentSilent into an ordinary broken stream, which is tolerated for
-     * StreamDownGrace and does not start the drain that moves players off a
-     * backend that will never answer. So the operator deliberately sets no
-     * keepalive; `internal/agentserver`'s MaxConnectionIdle says so in its own
-     * comment.
-     *
-     * The agent has no such signal. Nothing arrives on a healthy stream between
-     * one operator instruction and the next — [SessionLoop] arms every other
-     * timer it has off something the operator said — so on a black hole the
-     * agent's own sends succeed into a kernel buffer and it learns nothing. The
-     * transport ping is the only clock there can be on this side, and unlike
-     * the operator's it displaces nothing.
-     *
-     * # The numbers
-     *
-     * 45 seconds and 20, so the agent gives up at about 65 rather than at over
-     * 200. What bounds them from below is the operator's own enforcement:
-     * `MinKeepaliveInterval` is 30 seconds and a client that pings more often
-     * than that collects strikes and is sent a GOAWAY. Forty-five leaves half
-     * that again as margin for jitter; anything nearer the floor buys seconds
-     * and risks the one failure mode this change can introduce, which is an
-     * agent the operator refuses for being too eager. hack/agent-test.sh's
-     * blackhole phase exercises both directions against a stub carrying the
-     * same enforcement policy.
+     * 45 s stays well above the operator's `MinKeepaliveInterval` of 30 s, below
+     * which a client collects strikes and is sent a GOAWAY.
      */
     private const val KEEPALIVE_SECONDS = 45L
     private const val KEEPALIVE_TIMEOUT_SECONDS = 20L
@@ -133,27 +83,17 @@ object OperatorChannel {
             .tlsConnectionSpec(TLS_VERSIONS, CIPHER_SUITES)
             .keepAliveTime(KEEPALIVE_SECONDS, TimeUnit.SECONDS)
             .keepAliveTimeout(KEEPALIVE_TIMEOUT_SECONDS, TimeUnit.SECONDS)
-            // Only while a call is outstanding, which matches the operator's
-            // own KeepaliveEnforcementPolicy: it sets PermitWithoutStream
-            // false, so a ping sent between sessions would be a violation
-            // rather than a courtesy. The agent holds a stream for all but the
-            // moment between one session and the next, so this costs it
-            // nothing.
+            // The operator sets PermitWithoutStream false; a ping between
+            // sessions would earn a GOAWAY.
             .keepAliveWithoutCalls(false)
             .build()
     }
 }
 
 /**
- * The bearer header, assembled by hand and therefore exactly:
- * `Authorization: Bearer <token>`, one space.
- *
- * internal/grpcauth/interceptor.go matches that prefix character for character
- * and fails closed on anything else — reporting "no token" rather than "wrong
- * spelling", which is why a mistake here would be expensive to find.
- *
- * Applied per call rather than per channel, which also makes a stale token
- * structurally impossible: every stream reads the file again.
+ * Assembled by hand as exactly `Bearer <token>`, one space: internal/grpcauth
+ * matches that prefix literally and reports a misspelling as "no token".
+ * Applied per call, so every stream reads the token file again.
  */
 object BearerCredentials {
     fun of(tokens: TokenSource): CallCredentials = object : CallCredentials() {

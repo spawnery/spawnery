@@ -2,10 +2,6 @@ package cloud.spawnery.agent.paper
 
 import net.kyori.adventure.text.Component
 
-/**
- * Whether a login fits the server's playable slots when its group enforces
- * them. Pure, so the rule is tested apart from the Bukkit event.
- */
 object LoginGate {
     const val KEY = "spawnery.join.full"
     private const val FALLBACK = "This round is full."

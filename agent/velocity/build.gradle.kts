@@ -1,6 +1,5 @@
 plugins {
-    // Both versions are pinned once in agent/build.gradle.kts, including the
-    // reason the Kotlin one may not go lower.
+    // Versions are pinned in agent/build.gradle.kts.
     kotlin("jvm")
     id("com.gradleup.shadow")
 }
@@ -8,10 +7,7 @@ plugins {
 group = "cloud.spawnery"
 version = providers.gradleProperty("agentVersion").getOrElse("0.0.0-dev")
 
-// Named explicitly rather than taken from the subproject directory, for the
-// same reason :paper does it: nix/agents.nix installs this jar by its file
-// name, and with two agents in one build "the directory it came from" is not
-// enough to tell two build/libs entries apart.
+// nix/agents.nix installs this jar by its file name.
 base {
     archivesName = "spawnery-velocity-agent"
 }
@@ -22,67 +18,26 @@ repositories {
 
 // The Velocity API comes from the pinned proxy jar, never from a Maven
 // repository, so the plugin cannot compile against a different API than the
-// proxy that loads it. Velocity ships as a fat jar that *contains* its own
-// plugin API -- 205 classes under com/velocitypowered/api/ -- so there is no
-// second artifact to resolve and nothing to unpack. nix/agents.nix symlinks
-// it in as velocity.jar before the build, into this subproject and not the
-// Gradle root, which is what keeps the relative path below correct; a
-// developer running Gradle by hand creates the same link:
+// proxy that loads it; the fat jar contains its own plugin API. nix/agents.nix
+// symlinks it in as velocity.jar before the build; by hand:
 //
 //   ln -sfn "$(nix build .#velocity-jar --no-link --print-out-paths)" agent/velocity/velocity.jar
 //
-// Two differences from agent/paper/build.gradle.kts, both measured rather than
-// assumed, both on 2026-08-11 against velocity 3.5.1 build 615:
-//
-//   JAR=$(nix build .#velocity-jar --no-link --print-out-paths)
-//   python3 -c "
-//   import zipfile, collections
-//   z = zipfile.ZipFile('$JAR')
-//   names = [n for n in z.namelist() if n.endswith('.class')]
-//   c = collections.Counter('/'.join(n.split('/')[:3]) for n in names)
-//   print(len(names)); [print(v, k) for k, v in sorted(c.items())]"
-//
-// 1. No `exclude` filter. Paper's bundle carries its own protobuf-java, which
-//    has to be kept off the compile classpath; this jar carries no protobuf,
-//    no gRPC, no okhttp/okio and no Kotlin at all. What it does carry, and
-//    what the relocation list below therefore has to cover, is Netty (2 372
-//    classes), Guava (1 960 under com.google.common plus 3 under
-//    com.google.thirdparty), Log4j (1 529), Adventure and the rest of
-//    net.kyori (738), Caffeine, Guice (505), Gson (203), Configurate,
-//    snakeyaml, Brigadier (52), slf4j (55), jsr305's javax.annotation (35),
-//    com.google.errorprone (29), com.google.j2objc (24), org.jspecify and
-//    org.codehaus.mojo.
-// 2. No separate source set for anything. Paper needed one because its
-//    libraries are class-file major 69 and javac 21 refuses to resolve out of
-//    them; these class files are major 65 (Java 21), so nothing has to be kept
-//    away from any compiler here.
-//
-// A version bump has to re-run the command above rather than trust this list:
-// it is a measurement with a date on it, not a property of Velocity.
+// Unlike agent/paper, no `exclude` filter (this jar carries no protobuf, gRPC,
+// okhttp or Kotlin) and no separate source set (its classes are Java 21).
 val velocityJar = files("velocity.jar")
 
-// The session machinery and the generated stubs live in :common, and reach
-// this project's compile classpath through :common's `api` configuration --
-// which is why the stub artifacts are not repeated here. grpc-okhttp sits on
-// :common's `implementation` and reaches only the runtime classpath, which is
-// all shadowJar needs in order to bundle it.
+// The generated stubs arrive through :common's `api` configuration.
 dependencies {
     implementation(project(":common"))
 
     compileOnly(velocityJar)
 
     testImplementation(kotlin("test"))
-    // The BOM, not just the aggregate artifact: junit-jupiter alone does not
-    // constrain junit-platform-launcher, and Gradle refuses a dependency with
-    // no version rather than guessing one.
+    // The BOM versions junit-platform-launcher, which junit-jupiter does not.
     testImplementation(platform("org.junit:junit-bom:5.11.4"))
     testImplementation("org.junit.jupiter:junit-jupiter:5.11.4")
-    // The tests here touch no Velocity type, and would compile without this.
-    // It is here anyway, and for the same reason :paper has its counterpart:
-    // the test compile classpath includes this project's own main output, so
-    // the day a test names AgentPlugin -- which task 7 will want -- the
-    // failure would otherwise be an unresolved com.velocitypowered symbol in a
-    // file that never mentions Velocity.
+    // Needed as soon as a test names a class whose signature uses Velocity.
     testImplementation(velocityJar)
     testRuntimeOnly("org.junit.platform:junit-platform-launcher")
 }
@@ -98,12 +53,9 @@ java {
     targetCompatibility = JavaVersion.VERSION_21
 }
 
-// Velocity reads the plugin's identity out of velocity-plugin.json, and the
-// version in it is what the agent reports to the operator as Hello.version --
-// exactly as paper-plugin.yml is for the server agent. The file is written by
-// hand rather than generated by Velocity's annotation processor: the processor
-// would mean adding kapt to a Kotlin build to produce eight fields, and
-// hack/agent-jar-check.sh reads the result either way.
+// The version in velocity-plugin.json is what the agent reports as
+// Hello.version. Written by hand: Velocity's annotation processor would need
+// kapt.
 tasks.processResources {
     filesMatching("velocity-plugin.json") {
         expand("version" to project.version)
@@ -112,20 +64,13 @@ tasks.processResources {
 
 tasks.test {
     useJUnitPlatform()
-    // The per-test events, not just the streams: a Nix build log is the only
-    // record anyone will see of this test run, and "BUILD SUCCESSFUL" alone
-    // does not distinguish tests that passed from tests that never ran.
     testLogging {
         showStandardStreams = true
         events("passed", "skipped", "failed")
     }
 
-    // The failures again, at the end. The per-test line above is written where
-    // the test ran, which in a Nix build is somewhere in the middle of a log
-    // Nix then reports as its last ten lines -- so on 2026-08-27 a Velocity
-    // test failed in CI, passed on a re-run of the identical derivation, and
-    // its name was not recoverable from anything the run kept. A flake nobody
-    // can name is a flake nobody can fix.
+    // Failed test names again at the end: Nix quotes only the last ten lines
+    // of a failed build.
     val failures = mutableListOf<String>()
     afterTest(
         KotlinClosure2({ descriptor: TestDescriptor, result: TestResult ->
@@ -136,14 +81,9 @@ tasks.test {
     )
     afterSuite(
         KotlinClosure2({ descriptor: TestDescriptor, _: TestResult ->
-            // The root suite has no parent, so this runs once per test task.
             if (descriptor.parent == null && failures.isNotEmpty()) {
-                // Thrown and not merely logged, and that is the whole point. A
-                // logged summary lands before Gradle's own failure block, which
-                // is outside the ten lines Nix quotes when it reports a failed
-                // derivation -- measured, on the first draft of this. Thrown,
-                // the names become the "What went wrong" text, which is inside
-                // it.
+                // Thrown, not logged: a log line lands before Gradle's failure
+                // block and outside those ten lines.
                 throw GradleException(
                     "FAILED TESTS (${failures.size}): " + failures.joinToString("; "),
                 )
@@ -152,22 +92,14 @@ tasks.test {
     )
 }
 
-// make image-repro compares two image builds byte for byte, and this jar is
-// inside the Velocity image. Without these two flags the archive carries build
-// timestamps and a filesystem-order entry list, and the comparison fails for
-// reasons that have nothing to do with the code.
+// make image-repro compares image builds byte for byte.
 tasks.withType<AbstractArchiveTask>().configureEach {
     isPreserveFileTimestamps = false
     isReproducibleFileOrder = true
 }
 
-// The plain jar keeps building: this project's own `test` task depends on it
-// through the test runtime classpath. Left with no classifier its output
-// filename would be identical to shadowJar's, and since checkPhase invokes
-// `gradle test` after buildPhase already ran shadowJar, it would silently
-// overwrite the shaded jar in build/libs with an unrelocated one under the
-// same name. Giving it a classifier makes that collision impossible rather
-// than order-dependent.
+// `test` still builds the plain jar; without a classifier it would overwrite
+// the shaded one under the same name.
 tasks.jar {
     archiveClassifier.set("plain")
 }
@@ -175,28 +107,13 @@ tasks.jar {
 tasks.shadowJar {
     archiveClassifier.set("")
 
-    // Copied verbatim from agent/paper/build.gradle.kts, and deliberately not
-    // trimmed to what Velocity alone would collide with. The list is not what
-    // enforces the rule -- hack/agent-jar-check.sh fails the build on *any*
-    // class outside cloud/spawnery/agent/, named here or not -- so a shorter
-    // list would buy nothing and would have to be re-derived every time either
-    // platform changed a bundled library. Two identical lists also mean a
-    // dependency added to :common cannot be relocated in one agent and not the
-    // other.
+    // Kept identical to agent/paper's list. hack/agent-jar-check.sh enforces
+    // the rule: it fails on any class outside cloud/spawnery/agent/.
     //
-    // Note what is *not* here and must not be: org.slf4j and
-    // com.velocitypowered. Velocity injects its own Logger into this plugin
-    // and instantiates the class through Guice against its own annotation
-    // types; relocating either would rewrite those references to classes no
-    // proxy has. Both are compileOnly, so neither is in the jar to relocate --
-    // but relocation rewrites *references* in the plugin's own bytecode too,
-    // which is what would make adding them silently fatal rather than merely
-    // useless. com.google.inject is absent for the same reason, one line below
-    // com.google.gson which is present.
-    //
-    // :common needs no entry of its own: its classes are already under
-    // cloud.spawnery.agent, which is the prefix everything else is relocated
-    // into.
+    // Not here and must not be: org.slf4j, com.velocitypowered and
+    // com.google.inject. Velocity injects its Logger and instantiates the
+    // plugin through Guice; relocation would rewrite the plugin's references to
+    // classes no proxy has.
     listOf(
         // gRPC and its transport.
         "io.grpc",
@@ -218,9 +135,7 @@ tasks.shadowJar {
         "com.google.rpc",
         "com.google.shopping",
         "com.google.type",
-        // Annotation-only artifacts. They carry no behaviour, which is why the
-        // ones Velocity also ships would be survivable rather than fatal; it
-        // is not a reason to keep them out of the prefix.
+        // Annotation-only artifacts.
         "com.google.errorprone",
         "com.google.j2objc",
         "javax.annotation",

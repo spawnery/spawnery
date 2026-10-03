@@ -25,11 +25,8 @@ import java.util.UUID;
  *
  * @param server empty when the proxy has them and no backend does: during the
  *     login handshake, and between one backend and the next. It is not an
- *     error and a plugin must handle it -- a player in flight is exactly the
- *     player a drain is about, and this project's own drain gap was a player
- *     nobody counted. On a backend it is also empty for a player on an
- *     on-demand server, which a backend is never told the name of; a proxy
- *     sees that name, which is where routing is.
+ *     error and a plugin must handle it. On a backend it is also empty for a
+ *     player on an on-demand server, whose name only the proxies are told.
  */
 public record CloudPlayer(UUID id, String name, Optional<String> server) {
     public CloudPlayer {

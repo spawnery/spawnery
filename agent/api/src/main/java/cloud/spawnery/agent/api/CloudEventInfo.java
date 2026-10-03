@@ -21,22 +21,18 @@ import java.util.Objects;
 /**
  * One thing that happened in the cloud.
  *
- * <p>These are the facts, one per transition, and not the collapsed summary a
- * player sees in chat — the agent collapses for readability, and you get what
- * it collapsed. The {@code message} is the operator's own sentence, the same
- * one {@code kubectl get events} shows for this event, because both are
- * derived from one call rather than computed twice.
+ * <p>One per transition, not the collapsed summary a player sees in chat. The
+ * {@code message} is the same sentence {@code kubectl get events} shows for
+ * this event.
  *
  * @param kind the operator's reason, in UpperCamelCase — {@code
- *     ReadyGatePassed}, {@code PodRejected}. A string and not an enum: the
- *     operator's vocabulary gains values, and an agent older than one must
- *     show it rather than fail to parse the message it arrived in. Match on
- *     the ones you know and pass the rest through.
+ *     ReadyGatePassed}, {@code PodRejected}. A string and not an enum, because
+ *     the operator's vocabulary gains values. Match on the ones you know and
+ *     pass the rest through.
  * @param subject what the event is about — a server name, or a group name for
  *     an event about a group.
  * @param group the group the subject belongs to, or the subject itself when
- *     the event is about a group. Never empty, so grouping needs no special
- *     case.
+ *     the event is about a group. Never empty.
  * @param warning whether this is the ordinary case or the one somebody should
  *     look at.
  */
