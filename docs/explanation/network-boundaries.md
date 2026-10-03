@@ -347,9 +347,9 @@ operator](../getting-started/index.md) tells an administrator to treat as one
 trust domain.
 
 The `/cloud` command is the different case and does gate. A command has a
-source, so a permission is expressible there. It carries three,
-`spawnery.cloud.read`, `.retire` and `.scale`, listed with what each costs in
-[The `/cloud` command](../guides/cloud-command.md).
+source, so a permission is expressible there. It carries five,
+`spawnery.cloud.read`, `.retire`, `.scale`, `.status` and `.events`, listed
+with what each costs in [The `/cloud` command](../guides/cloud-command.md).
 The split matters: reading the network is what a moderator gets, and adding
 servers spends money.
 

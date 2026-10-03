@@ -47,7 +47,7 @@ reason: somebody trusted to add servers is trusted to take back what they
 added, and a grant that let a person start boosts without ending them would
 leave them no way to undo their own mistake.
 
-Any one of the four makes the bare `/cloud` root visible. That is deliberate
+Any one of the five makes the bare `/cloud` root visible. That is deliberate
 too: a root demanding `spawnery.cloud.read` would hide the whole tree from
 somebody granted only `spawnery.cloud.retire`, and hide it in the worst
 possible way. The branches still gate themselves, so this widens what is
@@ -160,7 +160,7 @@ command can do.
 
 ## Granting nothing is a choice, not an oversight
 
-A network where nobody holds any of the four nodes has no in-game surface at
+A network where nobody holds any of the five nodes has no in-game surface at
 all, and that is a perfectly reasonable place to stay: everything `/cloud`
 does is also a `kubectl` away. The point of the command is the case where it is
 not: somebody who should be able to see which servers exist, or add capacity

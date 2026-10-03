@@ -103,7 +103,7 @@ The agents register a `/cloud` command on every Paper server and Velocity
 proxy, and nobody holds any of its permissions by default, so right after
 installing it answers "unknown command" to every player. That is the safe
 state, not a broken install; [The `/cloud`
-command](../guides/cloud-command.md) covers the four nodes and what each
+command](../guides/cloud-command.md) covers the five nodes and what each
 opens.
 
 ## Uninstalling
