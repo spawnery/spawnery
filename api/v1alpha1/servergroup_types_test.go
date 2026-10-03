@@ -59,3 +59,26 @@ func TestUpdateStrategyAndFloorAccessors(t *testing.T) {
 		})
 	}
 }
+
+func TestJoinPermissionResolvesItsNode(t *testing.T) {
+	var none *JoinPermission
+	if got := none.ResolvedNode("vip"); got != "" {
+		t.Errorf("no rule resolved to %q, want empty", got)
+	}
+	if none.DenyOnly() {
+		t.Error("no rule reads as deny-only")
+	}
+	if got := (&JoinPermission{}).ResolvedNode("vip"); got != "spawnery.join.vip" {
+		t.Errorf("default node = %q, want spawnery.join.vip", got)
+	}
+	named := &JoinPermission{Node: "network.vip", Mode: JoinPermissionDenyOnly}
+	if got := named.ResolvedNode("vip"); got != "network.vip" {
+		t.Errorf("named node = %q, want network.vip", got)
+	}
+	if !named.DenyOnly() {
+		t.Error("DenyOnly mode does not read as deny-only")
+	}
+	if (&JoinPermission{Mode: JoinPermissionRequired}).DenyOnly() {
+		t.Error("Required mode reads as deny-only")
+	}
+}

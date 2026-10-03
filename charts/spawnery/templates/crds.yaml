@@ -3722,6 +3722,28 @@ spec:
                   recommended.
                 minLength: 1
                 type: string
+              joinPermission:
+                description: |-
+                  JoinPermission limits who may join this group's servers. A proxy routes
+                  a player around a group they may not join; the server refuses the login.
+                  On an OnDemand group only the proxy checks it.
+                properties:
+                  mode:
+                    default: Required
+                    description: |-
+                      Mode Required admits only players who hold the node. DenyOnly admits
+                      everyone except players for whom the node is explicitly set to false.
+                    enum:
+                    - Required
+                    - DenyOnly
+                    type: string
+                  node:
+                    description: Node is the permission node. Empty means spawnery.join.<group
+                      name>.
+                    maxLength: 128
+                    pattern: ^[a-z0-9_.-]+$
+                    type: string
+                type: object
               maxInstances:
                 description: |-
                   MaxInstances is how many members this group may have at once.
