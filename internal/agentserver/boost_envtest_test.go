@@ -32,11 +32,9 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// One test per bound, and every one of them reads the cluster back afterwards.
-// An answer is not evidence that an object was or was not created, and "said
-// yes and wrote nothing" is exactly as broken as "said no and wrote anyway".
+// Every test reads the cluster back: an answer is not evidence that an object
+// was or was not created.
 
-// makeGroup creates an ephemeral group a boost can move.
 func makeGroup(t *testing.T, f *serverFixture, name string, minR, maxR int32) {
 	t.Helper()
 	g := &spawneryv1alpha1.ServerGroup{
@@ -58,7 +56,6 @@ func makeGroup(t *testing.T, f *serverFixture, name string, minR, maxR int32) {
 	}
 }
 
-// ask sends one CloudRequest on a stream and returns the answer to it.
 func ask(t *testing.T, f *serverFixture, pod *corev1.Pod, id uint64,
 	request *agentpb.CloudRequest,
 ) *agentpb.CloudResponse {
@@ -90,7 +87,6 @@ func ask(t *testing.T, f *serverFixture, pod *corev1.Pod, id uint64,
 	}
 }
 
-// boostRequest and stopRequest keep the envelope out of every test body.
 func boostRequest(group string, replicas int32, seconds int64) *agentpb.CloudRequest {
 	return &agentpb.CloudRequest{Request: &agentpb.CloudRequest_Boost{
 		Boost: &agentpb.BoostRequest{Group: group, Replicas: replicas, DurationSeconds: seconds},
@@ -106,9 +102,8 @@ func stopRequest(group string) *agentpb.CloudRequest {
 func boostsOn(t *testing.T, f *serverFixture, group string) []spawneryv1alpha1.ScaleBoost {
 	t.Helper()
 	var list spawneryv1alpha1.ScaleBoostList
-	// Namespace-scoped, always: envtest shares one control plane across the
-	// whole package and never cleans up, so a cluster-wide list would make one
-	// test's leftovers another's answer.
+	// Namespace-scoped: envtest never cleans up, so a cluster-wide list would
+	// see other tests' leftovers.
 	if err := f.c.List(f.ctx, &list, client.InNamespace(f.ns)); err != nil {
 		t.Fatalf("list boosts: %v", err)
 	}
@@ -132,8 +127,7 @@ func TestABoostIsCreatedOwnedByItsGroupAndExpires(t *testing.T) {
 	if resp.GetBoost().GetReplicas() != 2 {
 		t.Fatalf("answer = %+v, want a BoostResult for 2", resp.GetResult())
 	}
-	// The default, resolved by the operator rather than by the agent: the
-	// request asked for zero seconds.
+	// The request asked for zero seconds; the operator fills in the default.
 	expires := time.Unix(resp.GetBoost().GetExpiresAtUnix(), 0)
 	if got := expires.Sub(before); got < 55*time.Minute || got > 65*time.Minute {
 		t.Errorf("expiry is %s away, want about the one-hour default", got)
@@ -150,9 +144,6 @@ func TestABoostIsCreatedOwnedByItsGroupAndExpires(t *testing.T) {
 	if b.Spec.ExpiresAt == nil {
 		t.Fatal("the boost has no expiry, so nothing will ever end it")
 	}
-	// The owner reference is what makes a deleted group take its boosts with
-	// it. Without it a boost outlives the group it names and counts for
-	// nothing while sitting in the namespace.
 	if len(b.OwnerReferences) != 1 || b.OwnerReferences[0].Name != "lobby" {
 		t.Errorf("owner references = %+v, want one naming the group", b.OwnerReferences)
 	}
@@ -166,8 +157,7 @@ func TestTwoBoostsAddRatherThanReplace(t *testing.T) {
 	ask(t, f, pod, 1, boostRequest("lobby", 2, 0))
 	ask(t, f, pod, 2, boostRequest("lobby", 1, 0))
 
-	// Two objects and not one edited: "somebody else already boosted this" has
-	// to be a non-event rather than a race between two people typing.
+	// Two objects, not one edited: a second boost must not race the first.
 	if got := boostsOn(t, f, "lobby"); len(got) != 2 {
 		t.Fatalf("the namespace holds %d boosts, want two that add", len(got))
 	}
@@ -184,8 +174,6 @@ func TestABoostBeyondTheCeilingIsRefusedAndNamesTheRoom(t *testing.T) {
 	if got := resp.GetError().GetReason(); got != agentpb.RequestError_REFUSED {
 		t.Fatalf("reason = %v, want REFUSED past the ceiling", got)
 	}
-	// The number, so an admin can retype something that works rather than
-	// guess. A bare refusal makes them try five, then four, then three.
 	if msg := resp.GetError().GetMessage(); !strings.Contains(msg, "room for 2") {
 		t.Errorf("message = %q, did not say how much room there is", msg)
 	}
@@ -226,8 +214,6 @@ func TestABoostLongerThanTheBoundIsRefused(t *testing.T) {
 	if got := resp.GetError().GetReason(); got != agentpb.RequestError_REFUSED {
 		t.Fatalf("reason = %v, want REFUSED past the duration bound", got)
 	}
-	// The sentence that sends somebody to the file they should be editing.
-	// Without it the bound is an obstacle rather than an answer.
 	if msg := resp.GetError().GetMessage(); !strings.Contains(msg, "own file") {
 		t.Errorf("message = %q, did not point at the lasting way to do this", msg)
 	}
@@ -258,9 +244,7 @@ func TestABoostOnAPersistentGroupIsRefusedRatherThanIgnored(t *testing.T) {
 
 	resp := ask(t, f, pod, 1, boostRequest("survival", 1, 0))
 
-	// Refused and not created: nothing adds a boost to a persistent group's
-	// size, so the object would exist, be counted in status.boostedReplicas,
-	// and change nothing at all.
+	// Nothing adds a boost to a persistent group's size, so the object would change nothing.
 	if got := resp.GetError().GetReason(); got != agentpb.RequestError_REFUSED {
 		t.Fatalf("reason = %v, want REFUSED for a group no boost can move", got)
 	}
@@ -298,8 +282,6 @@ func TestABoostCannotReachAnotherNetworksGroupOfTheSameName(t *testing.T) {
 
 	ask(t, f, pod, 1, boostRequest("lobby", 1, 0))
 
-	// The agent's own namespace got it, and the other one has nothing --
-	// including no boost named for a group it does not have.
 	if got := boostsOn(t, f, "lobby"); len(got) != 1 {
 		t.Fatalf("the agent's own namespace holds %d boosts, want one", len(got))
 	}
@@ -330,9 +312,6 @@ func TestStopRemovesEveryBoostOnTheGroupAndSaysHowMany(t *testing.T) {
 	if got := boostsOn(t, f, "lobby"); len(got) != 0 {
 		t.Errorf("stop left %d boosts on the group", len(got))
 	}
-	// And it did not reach past the group it was given. Two verbs exist so
-	// that a typo cannot confuse a group with a server; a stop that swept the
-	// namespace would give that back.
 	if got := boostsOn(t, f, "arena"); len(got) != 1 {
 		t.Errorf("stop on lobby removed arena's boosts too: %d left", len(got))
 	}
@@ -345,8 +324,6 @@ func TestStoppingAGroupWithNoBoostsAnswersZero(t *testing.T) {
 
 	resp := ask(t, f, pod, 1, stopRequest("lobby"))
 
-	// An ordinary answer and not an error: it is what an admin who expected
-	// boosts needs to hear.
 	if resp.GetError() != nil {
 		t.Fatalf("a group with no boosts was an error: %+v", resp.GetError())
 	}

@@ -62,11 +62,8 @@ func newAuthFixture(t *testing.T) *authFixture {
 	return &authFixture{
 		t: t, ctx: ctx, c: c, cs: cs, ns: ns,
 		auth: &grpcauth.Authenticator{
-			// The operator's own view, not the harness's: this is the one call in the
-			// tree that needs `authentication.k8s.io/tokenreviews: create`, and under
-			// testenv.Client it would have been granted everything and proved nothing.
-			// f.cs stays admin because the harness mints ServiceAccount tokens, which
-			// the operator has no right to do and must not acquire.
+			// The operator's own RBAC, not the harness's admin client, so the
+			// tokenreviews grant is actually tested; f.cs stays admin to mint tokens.
 			Reviews:  restrictedCS(t).AuthenticationV1().TokenReviews(),
 			Pods:     &grpcauth.ClientPodChecker{Client: c},
 			Audience: podspec.AgentTokenAudience,
@@ -74,7 +71,6 @@ func newAuthFixture(t *testing.T) *authFixture {
 	}
 }
 
-// pod creates a managed server pod and returns it.
 func (f *authFixture) pod(name string) *corev1.Pod {
 	f.t.Helper()
 	pod := &corev1.Pod{
@@ -94,10 +90,8 @@ func (f *authFixture) pod(name string) *corev1.Pod {
 	return pod
 }
 
-// proxyPod creates a pod running under the proxy ServiceAccount. It exists
-// only so a proxy token can be minted at all: the real TokenRequest API
-// refuses to bind a token for one ServiceAccount to a pod that runs under a
-// different one, so a proxy token needs a genuine proxy pod behind it.
+// proxyPod exists because TokenRequest refuses to bind a proxy token to a
+// pod running under a different ServiceAccount.
 func (f *authFixture) proxyPod(name string) *corev1.Pod {
 	f.t.Helper()
 	pod := &corev1.Pod{
@@ -122,7 +116,6 @@ func (f *authFixture) proxyPod(name string) *corev1.Pod {
 	return pod
 }
 
-// token mints a token the way the kubelet would.
 func (f *authFixture) token(sa string, audiences []string, boundTo *corev1.Pod) string {
 	f.t.Helper()
 	spec := authnv1.TokenRequestSpec{
@@ -166,7 +159,6 @@ func TestAcceptsAPodBoundServerToken(t *testing.T) {
 	}
 }
 
-// Each of these must be refused. Without them the audit says nothing.
 func TestRejections(t *testing.T) {
 	cases := []struct {
 		name    string
@@ -235,9 +227,8 @@ func TestRejections(t *testing.T) {
 	}
 }
 
-// Defence in depth: a hand-built pod using the same ServiceAccount can never
-// speak for another server, but it must not be able to fill the registry with
-// entries that have no CR behind them either.
+// A hand-built pod using the same ServiceAccount must not fill the registry
+// with entries that have no CR behind them.
 func TestRejectsAPodThatIsNotOurs(t *testing.T) {
 	f := newAuthFixture(t)
 
@@ -262,9 +253,6 @@ func TestRejectsAPodThatIsNotOurs(t *testing.T) {
 	}
 }
 
-// The pod exists, is genuinely managed by Spawnery, and its ServiceAccount
-// matches — but its role label says proxy while a ServerSession is what was
-// requested. PodExists must refuse it on the role label alone.
 func TestRejectsAPodLabelledForTheOtherRole(t *testing.T) {
 	f := newAuthFixture(t)
 	pod := &corev1.Pod{
@@ -297,10 +285,8 @@ func TestRejectsAPodLabelledForTheOtherRole(t *testing.T) {
 	}
 }
 
-// The pod carries the right role label but not the managed-by label.
-// OrphanReconciler.Sweep treats both labels together as "one of ours"; if
-// PodExists accepted the role label alone, a pod that Sweep would reap as
-// foreign could still open a session in the meantime.
+// OrphanReconciler.Sweep needs both labels for "one of ours"; a pod it would
+// reap must not open a session in the meantime.
 func TestRejectsAPodWithoutTheManagedByLabel(t *testing.T) {
 	f := newAuthFixture(t)
 	pod := &corev1.Pod{
@@ -328,9 +314,6 @@ func TestRejectsAPodWithoutTheManagedByLabel(t *testing.T) {
 	}
 }
 
-// An unreachable API server must look different from a refused token: the
-// agent should back off and retry, not conclude its credentials are wrong.
-// This is the one case that needs no cluster, hence the narrow TokenReviewer.
 func TestTokenReviewUnavailableIsNotARejection(t *testing.T) {
 	a := &grpcauth.Authenticator{
 		Reviews:  failingReviewer{},
@@ -345,7 +328,6 @@ func TestTokenReviewUnavailableIsNotARejection(t *testing.T) {
 	if !strings.Contains(err.Error(), "unavailable") {
 		t.Errorf("error = %q, want it to name the outage rather than the token", err)
 	}
-	// The pod checker must never be reached — the review failed first.
 }
 
 type failingReviewer struct{}
@@ -361,10 +343,6 @@ func (refusingPodChecker) LookupPod(context.Context, string, string, string, age
 	return "", false, errors.New("the pod checker must not be reached")
 }
 
-// The group label of the pod has to survive the trip through the token, because
-// a proxy session's DrainPlayers messages carry the fallback groups of exactly
-// that ProxyGroup and nothing on the wire could tell the operator which one it
-// is.
 func TestIdentityCarriesTheGroupLabel(t *testing.T) {
 	f := newAuthFixture(t)
 
@@ -392,12 +370,8 @@ func TestIdentityCarriesTheGroupLabel(t *testing.T) {
 	}
 }
 
-// The ReviewCache caches the token review, never the pod lookup. This is the
-// property the whole split in Authenticate exists to preserve: if the pod
-// lookup were ever folded into what the cache remembers, deleting a pod would
-// stop being an immediate revocation for as long as the cached entry lived.
-// Only a real API server can show this, because a fake PodChecker cannot
-// distinguish "queried and found gone" from "never queried."
+// Only a real API server can show this: a fake PodChecker cannot tell
+// "queried and found gone" from "never queried".
 func TestDeletingAPodRevokesImmediatelyDespiteTheCache(t *testing.T) {
 	f := newAuthFixture(t)
 	f.auth.Cache = grpcauth.NewReviewCache(time.Now)
@@ -414,9 +388,8 @@ func TestDeletingAPodRevokesImmediatelyDespiteTheCache(t *testing.T) {
 		t.Fatalf("delete pod: %v", err)
 	}
 
-	// The token review itself is now served from the cache -- PositiveTTL is
-	// 60s, comfortably longer than this test takes to run -- so this proves
-	// the pod lookup ran live even on a cache hit.
+	// The review is now served from the cache (PositiveTTL 60s), so this
+	// proves the pod lookup ran live on a hit.
 	if _, err := f.auth.Authenticate(f.ctx, token, agent.RoleServer); err == nil {
 		t.Fatal("Authenticate accepted a token for a deleted pod; " +
 			"the cache must never cover the pod lookup")
@@ -441,9 +414,8 @@ func TestRoleForMethod(t *testing.T) {
 	}
 }
 
-// restrictedCS is a clientset acting as the operator does in a cluster, under
-// its own ServiceAccount and the ClusterRole config/rbac/role.yaml
-// generates. See testenv.RestrictedConfig.
+// restrictedCS acts under the operator's own ServiceAccount and generated
+// ClusterRole. See testenv.RestrictedConfig.
 func restrictedCS(t *testing.T) *kubernetes.Clientset {
 	t.Helper()
 	cs, err := kubernetes.NewForConfig(testenv.RestrictedConfig(t))

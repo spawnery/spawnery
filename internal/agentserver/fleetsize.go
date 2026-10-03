@@ -28,45 +28,24 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// FleetCountInterval is how often the pod count is refreshed. It is slow on
-// purpose. What the count feeds is a ceiling four times the fleet's legitimate
-// steady state (see FleetConnectionsPerAgent), so being a scale-up behind
-// moves nothing: the bound it turns on is still above any working agent's
-// peak, and a fleet that just doubled sits at half its new ceiling either way.
-// The cost of counting is a walk over every managed pod in the cache, and that
-// is not a thing to do every second for a number that tolerates a minute.
+// FleetCountInterval can be slow: the bound it feeds is four times the fleet's
+// steady state (FleetConnectionsPerAgent), so a scale-up behind moves nothing.
 const FleetCountInterval = 30 * time.Second
 
-// FleetCounter counts the pods this operator manages, which is how many agent
-// connections its endpoint ought to be holding. PeerLimiter turns that into a
-// bound; see its doc comment for what the bound is and why it is derived from
-// this number rather than fixed.
-//
-// It reads the manager's cache, so a count costs no API call. It is a
-// Runnable rather than a call in Accept's path for exactly that reason
-// inverted: the cache read is cheap but not free, and an attacker choosing the
-// accept rate would be choosing how often it happened.
+// FleetCounter is a Runnable rather than a call in Accept's path so that an
+// attacker choosing the accept rate does not choose how often the cache is walked.
 type FleetCounter struct {
-	// Pods lists pods. The manager's cached client in the operator, which
-	// already holds a pod informer for the controllers' sake.
 	Pods client.Reader
 	// Interval defaults to FleetCountInterval.
 	Interval time.Duration
 
-	// size is the last successful count plus one, so that the zero value of
-	// the struct reads as never counted. The offset is here rather than a
-	// separate flag because the two would be read separately and a count could
-	// then be seen without its flag; it is a plain field literal in
-	// cmd/spawnery-operator, so there is no constructor to seed a sentinel in.
-	// Read from the accept path on every connection, hence the atomic.
+	// size is the last successful count plus one, so the zero value reads as
+	// never counted; a separate flag could be read apart from the count.
 	size atomic.Int64
 }
 
-// Size is what PeerLimiter.Expect wants: the count, and whether there is one
-// yet. It reports unknown until the first count succeeds, which is the whole
-// reason this type exists rather than a closure over a List -- an empty cache
-// and a cluster with no pods are the same number and must not be the same
-// answer. See Expect for what each of them does to the bound.
+// Size reports unknown until the first count succeeds: an empty cache and a
+// cluster with no pods are the same number but not the same answer.
 func (c *FleetCounter) Size() (int, bool) {
 	size := c.size.Load()
 	if size == 0 {
@@ -75,8 +54,6 @@ func (c *FleetCounter) Size() (int, bool) {
 	return int(size - 1), true
 }
 
-// Start refreshes the count until ctx ends. It counts once immediately, so an
-// operator that has just become leader is not blind for an interval.
 func (c *FleetCounter) Start(ctx context.Context) error {
 	logger := log.FromContext(ctx).WithName("fleetcounter")
 	interval := c.Interval
@@ -88,10 +65,7 @@ func (c *FleetCounter) Start(ctx context.Context) error {
 	defer tick.Stop()
 	for {
 		if err := c.count(ctx); err != nil {
-			// Logged and carried, not returned: returning would take the
-			// manager down over a cache read, and the last count is still the
-			// best answer anyone has. A first count that fails leaves the
-			// bound off, which Expect calls the fail-open direction.
+			// Not returned: that would take the manager down over a cache read.
 			logger.Error(err, "counting managed pods for the fleet connection bound")
 		}
 		select {
@@ -102,11 +76,8 @@ func (c *FleetCounter) Start(ctx context.Context) error {
 	}
 }
 
-// NeedLeaderElection makes this leader-bound, like the endpoint whose bound it
-// feeds. A non-leader serves no agents and needs no count.
 func (c *FleetCounter) NeedLeaderElection() bool { return true }
 
-// count lists the managed pods and stores how many ought to hold a connection.
 func (c *FleetCounter) count(ctx context.Context) error {
 	pods := &corev1.PodList{}
 	if err := c.Pods.List(ctx, pods,
@@ -126,14 +97,9 @@ func (c *FleetCounter) count(ctx context.Context) error {
 	return nil
 }
 
-// finishedPod says the pod's containers have exited for good, so it holds no
-// connection and never will again.
-//
-// This is the only place the count is narrowed, and the direction matters. A
-// Pending pod is counted though it holds nothing, because counting high only
-// loosens a bound; a Failed one is not, because a cluster that keeps its
-// failures around would otherwise raise the ceiling by every pod that ever
-// died -- which is the same as having no ceiling, arrived at quietly.
+// finishedPod is the only narrowing of the count: Pending pods count because
+// counting high only loosens the bound, but kept Failed pods would raise the
+// ceiling without limit.
 func finishedPod(phase corev1.PodPhase) bool {
 	return phase == corev1.PodSucceeded || phase == corev1.PodFailed
 }

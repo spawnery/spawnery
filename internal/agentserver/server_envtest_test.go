@@ -52,8 +52,6 @@ import (
 	"github.com/spawnery/spawnery/internal/testenv"
 )
 
-// dialAgent opens a ServerSession the way a real agent would: TLS against the
-// pinned CA, token in the authorization header.
 func dialAgent(t *testing.T, ctx context.Context, addr string, ca []byte, token string) (
 	grpc.BidiStreamingClient[agentpb.ServerMessage, agentpb.OperatorToServer], func()) {
 	t.Helper()
@@ -62,8 +60,6 @@ func dialAgent(t *testing.T, ctx context.Context, addr string, ca []byte, token 
 	if !pool.AppendCertsFromPEM(ca) {
 		t.Fatal("CA bundle unusable")
 	}
-	// The agent pins this CA and nothing else — that is the whole point of the
-	// operator issuing its own certificate.
 	creds := credentials.NewTLS(&tls.Config{
 		RootCAs:    pool,
 		ServerName: "spawnery-operator.spawnery-system.svc",
@@ -102,9 +98,8 @@ func newServerFixtureWithDeadline(t *testing.T, renewAfter, hardDeadline time.Du
 	return newFixture(t, renewAfter, hardDeadline, 0)
 }
 
-// newServerFixtureWithProxyOutbox is for the closed-outbox test: it needs a
-// queue small enough to overflow after a handful of registrations rather than
-// however many it takes to exhaust a real stream's flow-control window.
+// newServerFixtureWithProxyOutbox gives a queue small enough to overflow after a
+// handful of registrations rather than a flow-control window's worth.
 func newServerFixtureWithProxyOutbox(t *testing.T, outboxSize int) *serverFixture {
 	return newFixture(t, 8*time.Minute, 10*time.Minute, outboxSize)
 }
@@ -113,12 +108,7 @@ func newFixture(t *testing.T, renewAfter, hardDeadline time.Duration, proxyOutbo
 	return newFixtureWithProxies(t, renewAfter, hardDeadline, proxyOutboxSize, nil)
 }
 
-// newFixtureWithProxies is newFixture with one more knob: what the server's
-// Options.Proxies actually is. Every other fixture wants the real *Fleet
-// wired straight through — wrap nil gives them exactly that — but a test that
-// needs to observe what ProxySession hands Join needs a fake sitting in that
-// one slot without losing the rest of the scaffolding (certs, auth, the real
-// fleet still available for f.proxies.Register and friends).
+// newFixtureWithProxies lets a test wrap Options.Proxies; wrap nil keeps the real *Fleet.
 func newFixtureWithProxies(t *testing.T, renewAfter, hardDeadline time.Duration, proxyOutboxSize int,
 	wrap func(*proxyreg.Fleet) agentserver.ProxyFleet) *serverFixture {
 	t.Helper()
@@ -152,12 +142,9 @@ func newFixtureWithProxies(t *testing.T, renewAfter, hardDeadline time.Duration,
 	}
 
 	registry := agent.New(now, 5*time.Second, now())
-	// The picture both fan-outs send, built once, exactly as the operator
-	// binary builds it.
 	state := netstate.Source{Reader: c, Agents: registry}
-	// The real writer against the envtest API server, not a stub: a retire
-	// that patches nothing would pass every assertion below about the answer
-	// while leaving spec.retire false, and the answer is not the point.
+	// The real writer, not a stub: a retire that patches nothing would pass every
+	// assertion about the answer.
 	writer := agentserver.KubeWriter{Client: c, Clock: now}
 	fleet := proxyreg.New(proxyreg.Options{Reader: c, OutboxSize: proxyOutboxSize, State: state})
 	servers := serverreg.New(serverreg.Options{State: state})
@@ -166,16 +153,12 @@ func newFixtureWithProxies(t *testing.T, renewAfter, hardDeadline time.Duration,
 		proxies = wrap(fleet)
 	}
 	srv := agentserver.New(agentserver.Options{
-		// Port 0: the kernel picks a free one, so parallel packages do not
-		// collide.
 		Addr:     "127.0.0.1:0",
 		Provider: provider,
 		Auth: &grpcauth.Authenticator{
-			// The operator's own view, not the harness's: this is the one call in the
-			// tree that needs `authentication.k8s.io/tokenreviews: create`, and under
-			// testenv.Client it would have been granted everything and proved nothing.
-			// f.cs stays admin because the harness mints ServiceAccount tokens, which
-			// the operator has no right to do and must not acquire.
+			// The operator's own RBAC, not testenv.Client: this is the one call needing
+			// tokenreviews create, and admin rights would prove nothing. f.cs stays admin
+			// because minting ServiceAccount tokens is a right the operator must not have.
 			Reviews:  restrictedCS(t).AuthenticationV1().TokenReviews(),
 			Pods:     &grpcauth.ClientPodChecker{Client: c},
 			Audience: podspec.AgentTokenAudience,
@@ -214,9 +197,8 @@ func newFixtureWithProxies(t *testing.T, renewAfter, hardDeadline time.Duration,
 	}
 }
 
-// pod creates a managed server pod and returns it. The full label set matters:
-// the authenticator insists on both the managed-by label and a role label that
-// matches the session being opened.
+// The authenticator insists on the managed-by label and a role label matching
+// the session being opened.
 func (f *serverFixture) pod(name string) *corev1.Pod {
 	f.t.Helper()
 	pod := &corev1.Pod{
@@ -236,11 +218,8 @@ func (f *serverFixture) pod(name string) *corev1.Pod {
 	return pod
 }
 
-// token mints a pod-bound token the way the kubelet would. sa and audiences
-// are explicit rather than assumed to be the server agent's, because a proxy
-// pod needs a token bound to its own ServiceAccount: the real TokenRequest
-// API refuses to bind a token for one ServiceAccount to a pod running under
-// another.
+// The TokenRequest API refuses to bind one ServiceAccount's token to a pod running
+// under another, so sa is explicit.
 func (f *serverFixture) token(sa string, audiences []string, boundTo *corev1.Pod) string {
 	f.t.Helper()
 	tr, err := f.cs.CoreV1().ServiceAccounts(f.ns).CreateToken(f.ctx, sa,
@@ -257,10 +236,7 @@ func (f *serverFixture) token(sa string, audiences []string, boundTo *corev1.Pod
 	return tr.Status.Token
 }
 
-// proxyPod creates a pod running under the proxy ServiceAccount. It exists
-// only so a proxy token can be minted at all: the real TokenRequest API
-// refuses to bind a token for one ServiceAccount to a pod that runs under a
-// different one, so a proxy token needs a genuine proxy pod behind it.
+// proxyPod exists only so a proxy token can be minted; see token.
 func (f *serverFixture) proxyPod(name string) *corev1.Pod {
 	f.t.Helper()
 	pod := &corev1.Pod{
@@ -308,14 +284,8 @@ func playerCount(players, slots int32) *agentpb.ServerMessage {
 	}
 }
 
-// awaitSession blocks until the operator's first message arrives on a stream.
-// The operator sends it only after registering the stream, so this is the
-// point from which the new stream is the live one.
-//
-// A real agent has to wait for it too: make-before-break means dropping the
-// old stream after the new one is established, never before. Dropped earlier,
-// the operator has not seen the new stream at all and the disconnect it
-// records is simply the truth.
+// awaitSession returns once the operator's first message arrives, which it sends only
+// after registering the stream.
 func awaitSession(t *testing.T, stream serverStream) {
 	t.Helper()
 	if _, err := stream.Recv(); err != nil {
@@ -323,8 +293,6 @@ func awaitSession(t *testing.T, stream serverStream) {
 	}
 }
 
-// waitFor polls until the condition holds. Message handling is concurrent with
-// the test, so a direct comparison would be flaky.
 func waitFor(t *testing.T, cond func() bool) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -358,8 +326,6 @@ func TestHelloWithReadyMarksTheAgentReady(t *testing.T) {
 	}
 }
 
-// The operator dictates the interval, so both sides derive the staleness
-// threshold from the same number.
 func TestOperatorSendsIntervalAndDeadlineOnConnect(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
@@ -407,8 +373,7 @@ func TestPlayerCountReachesTheRegistry(t *testing.T) {
 	}
 }
 
-// Spec 5.2: discard, do not disconnect. Dropping the stream would be a
-// reconnect loop the agent could trigger at will.
+// Dropping the stream would be a reconnect loop the agent could trigger at will.
 func TestPlayerCountAboveSlotsIsDiscardedButKeepsTheStream(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
@@ -443,8 +408,7 @@ func TestDisconnectIsVisibleInTheRegistry(t *testing.T) {
 	}
 }
 
-// Make-before-break: this is what keeps a renewal from dropping the server out
-// of Ready every ten minutes.
+// Make-before-break keeps a renewal from dropping the server out of Ready.
 func TestASecondStreamSupersedesTheFirstWithoutLosingState(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
@@ -456,13 +420,11 @@ func TestASecondStreamSupersedesTheFirstWithoutLosingState(t *testing.T) {
 
 	second, closeSecond := dialAgent(t, f.ctx, f.addr, f.ca, f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	defer closeSecond()
-	// Established first, dropped second: the order the agent owes the
-	// operator. Without the wait the new stream may not have reached the
-	// server yet, and the disconnect the old one then reports is correct.
+	// Without the wait the new stream may not have reached the server yet, and the
+	// old one's disconnect would be correctly reported.
 	awaitSession(t, second)
 	mustSend(t, second, hello(true))
 
-	// The superseded stream ends, and that must not tear down the new one.
 	closeFirst()
 
 	deadline := time.Now().Add(3 * time.Second)
@@ -477,13 +439,9 @@ func TestASecondStreamSupersedesTheFirstWithoutLosingState(t *testing.T) {
 	}
 }
 
-// The window this closes is narrow but it opens on every renewal of every
-// server: the new stream registers before its own Hello arrives, and a
-// reconcile that samples "connected but not ready" in between treats it as an
-// immediate readiness loss — deregistering the server from the proxies. So
-// readiness is sampled continuously across the handover, and the new stream
-// deliberately never says Hello: only the readiness carried over from the
-// stream it displaced can keep the flag up.
+// The new stream registers before its own Hello, and a reconcile sampling "connected
+// but not ready" in between would deregister the server. It never says Hello, so only
+// the readiness carried over from the displaced stream can keep the flag up.
 func TestASupersedingStreamNeverLetsReadinessDrop(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
@@ -515,7 +473,6 @@ func TestASupersedingStreamNeverLetsReadinessDrop(t *testing.T) {
 
 	second, closeSecond := dialAgent(t, f.ctx, f.addr, f.ca, f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	defer closeSecond()
-	// A report the registry accepts proves the new stream is the live one:
 	// ReportPlayers refuses anything without a live stream behind it.
 	mustSend(t, second, playerCount(11, 100))
 	waitFor(t, func() bool { return f.agents.Lookup(string(pod.UID)).Players == 11 })
@@ -535,10 +492,8 @@ func TestASupersedingStreamNeverLetsReadinessDrop(t *testing.T) {
 	}
 }
 
-// The complement of the test above, and the reason the carry-over is tied to
-// displacing a live stream rather than granted to every stream: after a real
-// break the agent process may have restarted, and only its own Hello may say
-// it is ready again. A reconnect that stays silent has to stay unready.
+// Carry-over is tied to displacing a live stream: after a real break the agent may
+// have restarted, and only its own Hello may say it is ready.
 func TestAReconnectAfterARealBreakStartsUnready(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
@@ -547,14 +502,11 @@ func TestAReconnectAfterARealBreakStartsUnready(t *testing.T) {
 	mustSend(t, first, hello(true))
 	waitFor(t, func() bool { return f.agents.Lookup(string(pod.UID)).Ready })
 
-	// The break has to be complete before the new stream arrives, or this
-	// would be the make-before-break case again.
 	closeFirst()
 	waitFor(t, func() bool { return !f.agents.Lookup(string(pod.UID)).Connected })
 
 	second, closeSecond := dialAgent(t, f.ctx, f.addr, f.ca, f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	defer closeSecond()
-	// No Hello on this stream: nothing may speak for the agent but the agent.
 	awaitSession(t, second)
 	waitFor(t, func() bool { return f.agents.Lookup(string(pod.UID)).Connected })
 
@@ -563,7 +515,6 @@ func TestAReconnectAfterARealBreakStartsUnready(t *testing.T) {
 	}
 }
 
-// The hard deadline is the net under an agent that ignores renewAfter.
 func TestTheHardDeadlineClosesTheStream(t *testing.T) {
 	f := newServerFixtureWithDeadline(t, 300*time.Millisecond, 600*time.Millisecond)
 	pod := f.pod("lobby-abcd")
@@ -571,14 +522,10 @@ func TestTheHardDeadlineClosesTheStream(t *testing.T) {
 	defer closeConn()
 
 	mustSend(t, stream, hello(true))
-	// The operator's own first message is what proves the session runs, and it
-	// arrives before the deadline can have started counting. Readiness would
-	// be the wrong signal here: the teardown at the deadline clears it, so a
-	// slow TokenReview could push the wait past the 600 ms and leave the test
-	// waiting for a flag that correct code has already taken back.
+	// Not readiness: the teardown at the deadline clears it, so a slow TokenReview could
+	// leave the test waiting for a flag correct code already took back.
 	awaitSession(t, stream)
 
-	// Recv returns the error once the operator hangs up.
 	done := make(chan error, 1)
 	go func() {
 		for {
@@ -595,8 +542,7 @@ func TestTheHardDeadlineClosesTheStream(t *testing.T) {
 	}
 }
 
-// An unknown branch must be ignored, not fatal: a newer agent against an older
-// operator has to keep working.
+// A newer agent against an older operator has to keep working.
 func TestAnEmptyMessageIsIgnored(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
@@ -606,8 +552,7 @@ func TestAnEmptyMessageIsIgnored(t *testing.T) {
 	mustSend(t, stream, hello(true))
 	waitFor(t, func() bool { return f.agents.Lookup(string(pod.UID)).Ready })
 
-	// A ServerMessage with no branch set is what an unknown future branch
-	// decodes to on this operator.
+	// An unknown future branch decodes to a ServerMessage with no branch set.
 	mustSend(t, stream, &agentpb.ServerMessage{})
 	mustSend(t, stream, playerCount(4, 100))
 
@@ -617,10 +562,8 @@ func TestAnEmptyMessageIsIgnored(t *testing.T) {
 	}
 }
 
-// A server pod's token does not carry a Group, and even if it did, the role
-// the authenticator saw at TokenReview time was server — a proxy session
-// insists on RoleProxy, so this is refused before a single message crosses
-// the wire.
+// The authenticator saw role server at TokenReview time; a proxy session insists on
+// RoleProxy.
 func TestAServerTokenOnAProxySessionIsUnauthenticated(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-abcd")
@@ -648,13 +591,7 @@ func TestAServerTokenOnAProxySessionIsUnauthenticated(t *testing.T) {
 	if err := stream.Send(&agentpb.ProxyMessage{
 		Message: &agentpb.ProxyMessage_Hello{Hello: &agentpb.Hello{Version: "0.1.0"}},
 	}); err != nil {
-		// A send may already fail once the server hung up — but SendMsg
-		// never carries the wire status; gRPC returns io.EOF once the server
-		// has ended the stream, or a client-side Unavailable, and requires
-		// the caller to fetch the real reason from RecvMsg. Asserting on
-		// err here would be exactly the operator-side/wire-side confusion
-		// this whole channel exists to eliminate: the status this test
-		// cares about is Recv's, not Send's, on either path.
+		// SendMsg never carries the wire status; the reason has to come from RecvMsg.
 		if _, recvErr := stream.Recv(); status.Code(recvErr) != codes.Unauthenticated {
 			t.Errorf("code = %s, want Unauthenticated", status.Code(recvErr))
 		}
@@ -669,16 +606,8 @@ func TestAServerTokenOnAProxySessionIsUnauthenticated(t *testing.T) {
 	}
 }
 
-// TestTheServerBoundsStreamsPerConnection is the one new bound that can be
-// observed from outside. An agent opens exactly one stream -- the proto has two
-// RPCs and a session uses one of them -- so the limit is generous by design;
-// what it stops is a single connection multiplexing an unbounded number.
-//
-// Be precise about what this does NOT bound, because the convenient reading is
-// that it closes the availability gap and it does not: MaxConcurrentStreams is
-// per connection, so a pod that opens many connections is untouched by it.
-// That is MaxConnectionsPerPeer's job, and
-// TestTheServerBoundsConnectionsPerPeer below is where it is proven.
+// An agent opens one stream per connection, so the limit is generous; it does not bound
+// a pod opening many connections, which is MaxConnectionsPerPeer's job.
 func TestTheServerBoundsStreamsPerConnection(t *testing.T) {
 	f := newServerFixture(t)
 
@@ -691,7 +620,6 @@ func TestTheServerBoundsStreamsPerConnection(t *testing.T) {
 		ServerName: "spawnery-operator.spawnery-system.svc",
 		MinVersion: tls.VersionTLS13,
 	})
-	// One connection, many streams: that is the shape the bound governs.
 	conn, err := grpc.NewClient(f.addr, grpc.WithTransportCredentials(creds))
 	if err != nil {
 		t.Fatalf("dial: %v", err)
@@ -714,7 +642,7 @@ func TestTheServerBoundsStreamsPerConnection(t *testing.T) {
 			t.Fatalf("stream %d of the permitted %d was refused: %v",
 				i, agentserver.MaxConcurrentStreams, err)
 		}
-		// Hold it open: a stream is only concurrent while it lives.
+		// A stream is only concurrent while it lives.
 		if err := stream.Send(&agentpb.ServerMessage{
 			Message: &agentpb.ServerMessage_Hello{
 				Hello: &agentpb.Hello{Version: "0.1.0", Ready: false},
@@ -724,49 +652,17 @@ func TestTheServerBoundsStreamsPerConnection(t *testing.T) {
 		}
 	}
 
-	// One past the limit. grpc-go's http2Client.NewStream -- which the
-	// generated ServerSession(ctx) stub calls synchronously, before this
-	// function returns -- mirrors the server's advertised
-	// SETTINGS_MAX_CONCURRENT_STREAMS as a stream quota, and once that quota
-	// is exhausted it blocks right there, in a select on the caller's context
-	// or a quota-available channel, before NewStream ever returns (grpc-go
-	// v1.83.0, internal/transport/http2_client.go:756-916, quota check around
-	// :1297-1337). So with the bound in force it is open() itself that blocks
-	// until over's five-second deadline -- not Recv(), which never even gets
-	// called -- and the error this test needs to check comes back from open,
-	// not from a later Recv on a stream that opened fine. Without the bound,
-	// open() returns immediately with room to spare and Recv() is what would
-	// have to be checked instead; both branches below exist because either
-	// shape is possible depending on which one actually happens.
+	// One past the limit. grpc-go's NewStream blocks on the stream quota mirrored from
+	// SETTINGS_MAX_CONCURRENT_STREAMS, so with the bound in force open() itself blocks
+	// until the deadline; without it Recv() would have to be checked instead.
 	over, cancel := context.WithTimeout(f.ctx, 5*time.Second)
 	defer cancel()
 	extra, err := open(over, int(agentserver.MaxConcurrentStreams))
 	if err != nil {
-		// DeadlineExceeded only, not a wider set: both of the obvious
-		// alternatives are codes this codebase genuinely produces for
-		// reasons that have nothing to do with the bound, and both can only
-		// reach open() after the ninth stream has already cleared the
-		// client-side quota gate -- i.e. only once MaxConcurrentStreams has
-		// already failed to hold. grpcauth's interceptor returns
-		// Unavailable specifically when a TokenReview call itself is
-		// unavailable (internal/grpcauth/interceptor.go), deliberately kept
-		// apart from Unauthenticated so an agent backs off instead of
-		// concluding its credentials are wrong -- an ordinary envtest-load
-		// flake here would look identical to a passing bound. And
-		// ResourceExhausted is grpc-go's own mapping for ENHANCE_YOUR_CALM
-		// and flow-control errors -- exactly the code this task's own new
-		// keepalive enforcement policy can produce. Accepting either would
-		// let the one failure this test exists to catch report PASS.
-		//
-		// The narrowing is safe in this fixture and only in this fixture.
-		// The two real paths to Unavailable during the quota wait are a
-		// GOAWAY and the transport context closing, and neither can fire
-		// here: the connection is never idle (eight live streams),
-		// MaxConnectionAge is unset, this client sets no keepalive so
-		// ENHANCE_YOUR_CALM cannot fire, and the transport context is
-		// cancelled only by t.Cleanup. Share a connection across subtests
-		// here, or give the client a keepalive, and that argument stops
-		// holding -- revisit the narrowing before doing either.
+		// DeadlineExceeded only: Unavailable (grpcauth's TokenReview outage) and
+		// ResourceExhausted (ENHANCE_YOUR_CALM, flow control) have unrelated causes here and
+		// would let a failed bound pass. The narrowing holds only because this connection is
+		// never idle, has no MaxConnectionAge and no client keepalive; revisit it if any changes.
 		if status.Code(err) != codes.DeadlineExceeded {
 			t.Fatalf("stream %d failed to open with %v, want the deadline "+
 				"-- a different code means it failed for some other reason "+
@@ -797,20 +693,10 @@ func restrictedCS(t *testing.T) *kubernetes.Clientset {
 	return cs
 }
 
-// TestTheServerBoundsConnectionsPerPeer is the other half: a single peer
-// cannot hold an unbounded number of connections open, no matter how
-// legitimate each one is.
-//
-// Every connection here carries a valid token and a live stream, which is what
-// makes it the real attack rather than a caricature of one. None of the bounds
-// that came before this touches that shape -- MaxConcurrentStreams is per
-// connection, MaxConnectionIdle never fires on a connection carrying a stream,
-// and grpcauth's rate limit throttles TokenReview misses, which a pod
-// replaying one valid token does not produce.
-//
-// One connection per grpc.NewClient, deliberately. A single ClientConn would
-// multiplex every stream onto one transport, which is the previous test's
-// subject and would prove nothing here.
+// Every connection carries a valid token and a live stream: none of MaxConcurrentStreams,
+// MaxConnectionIdle or grpcauth's TokenReview-miss rate limit touches that shape.
+// One connection per grpc.NewClient: a shared ClientConn would multiplex onto one
+// transport, which is the previous test's subject.
 func TestTheServerBoundsConnectionsPerPeer(t *testing.T) {
 	f := newServerFixture(t)
 
@@ -824,9 +710,7 @@ func TestTheServerBoundsConnectionsPerPeer(t *testing.T) {
 		MinVersion: tls.VersionTLS13,
 	})
 
-	// session opens a connection of its own and takes a stream on it as far as
-	// the operator's first message, which is the point the stream is really
-	// being served rather than merely requested.
+	// session holds its stream up to the operator's first message: served, not merely requested.
 	session := func(i int) error {
 		conn, err := grpc.NewClient(f.addr, grpc.WithTransportCredentials(creds))
 		if err != nil {
@@ -857,9 +741,7 @@ func TestTheServerBoundsConnectionsPerPeer(t *testing.T) {
 		}
 	}
 
-	// The one over the bound. Its TCP connection is accepted and closed before
-	// TLS, so what the client sees is a transport that will not come up --
-	// Unavailable, after grpc-go has retried it as far as the context allows.
+	// The one over the bound: closed before TLS, so the client sees Unavailable.
 	over, cancel := context.WithTimeout(f.ctx, 20*time.Second)
 	defer cancel()
 	done := make(chan error, 1)
@@ -889,18 +771,8 @@ func TestTheServerBoundsConnectionsPerPeer(t *testing.T) {
 			t.Fatalf("connection %d was served; MaxConnectionsPerPeer is not in force",
 				agentserver.MaxConnectionsPerPeer+1)
 		}
-		// Unavailable is what a transport that never came up produces, and the
-		// message it came back with says which half refused it:
-		//
-		//	transport: authentication handshake failed: EOF
-		//
-		// The connection was closed before TLS -- the listener's doing, not the
-		// authenticator's, which is the whole design argument for putting the
-		// bound on the listener rather than in a StatsHandler. The code is what
-		// is asserted, though, and not the message: Unauthenticated here would
-		// mean the connection *was* served and the token then rejected, a
-		// different outcome wearing the same failure. The code separates them
-		// where the wording would only track grpc-go's phrasing.
+		// Asserting the code, not the message ("authentication handshake failed: EOF"):
+		// Unauthenticated would mean the connection was served and the token rejected.
 		if code := status.Code(err); code != codes.Unavailable && code != codes.DeadlineExceeded {
 			t.Errorf("code = %s, want Unavailable or DeadlineExceeded (err: %v)", code, err)
 		}
@@ -910,8 +782,6 @@ func TestTheServerBoundsConnectionsPerPeer(t *testing.T) {
 	}
 }
 
-// A backend receives the mirror. Until 7b-3 this stream carried two messages
-// when it opened and nothing ever again.
 func TestAServerAgentReceivesItsNetworkState(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-aaaa")
@@ -919,10 +789,8 @@ func TestAServerAgentReceivesItsNetworkState(t *testing.T) {
 		f.token(podspec.ServerServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
 	defer done()
 
-	// The two opening messages come first; the state follows. Read until it
-	// arrives rather than assuming a position -- the opening sends and the
-	// fan-out's join are two different code paths and their order is not a
-	// contract this test should pin.
+	// Read until the state arrives: the opening sends and the fan-out's join are different
+	// code paths with no ordering contract.
 	var state *agentpb.NetworkState
 	for i := 0; i < 5 && state == nil; i++ {
 		msg, err := stream.Recv()

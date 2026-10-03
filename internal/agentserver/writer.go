@@ -34,65 +34,41 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// ErrNoSuchServer is what a ClusterWriter reports for a server that is not
-// there.
-//
-// A sentinel rather than the API machinery's own not-found, so that the
-// interface below stays free of Kubernetes: a reader of ClusterWriter should
-// be able to see the whole of what a request can do without knowing what
-// backs it.
+// ErrNoSuchServer is a sentinel rather than the API machinery's not-found so
+// that ClusterWriter stays free of Kubernetes.
 var ErrNoSuchServer = errors.New("no such server")
 
 // ErrServerStopping is an unretire for a server that is already draining,
 // terminating or finished.
 var ErrServerStopping = errors.New("server is already stopping")
 
-// ErrNotRetiring is an unretire for a server that is not retiring.
 var ErrNotRetiring = errors.New("server is not retiring")
 
-// ErrNoSuchGroup is the same for a group.
 var ErrNoSuchGroup = errors.New("no such group")
 
-// ErrGroupNotScalable is what a boost gets for a group no boost can move.
-//
-// Only an ephemeral group with a spec.scaling reaches the rule that adds
-// boosts to a floor; a persistent group is sized by spec.replicas and a boost
-// on one would be created, counted in status.boostedReplicas, and change
-// nothing. That is worse than a refusal: the object exists, the status agrees
-// it exists, and the group is the size it always was.
+// ErrGroupNotScalable: only an ephemeral group with spec.scaling adds boosts
+// to its floor; on any other group a boost would exist and change nothing.
 var ErrGroupNotScalable = errors.New("that group is not sized by scaling")
 
-// ErrGroupNotOnDemand is what a start gets for a group whose members are
-// counted rather than named. Creating a Server in one by hand would make the
-// group's own sizing pass condemn it on the next reconcile, which reads from
-// outside as a server that started and vanished.
+// ErrGroupNotOnDemand: a Server created by hand in a counted group would be
+// condemned by the group's next sizing pass.
 var ErrGroupNotOnDemand = errors.New("that group is not on-demand")
 
-// ErrTooManyInstances is the group's own ceiling, reached.
 var ErrTooManyInstances = errors.New("that group is at spec.maxInstances")
 
-// ErrNoCeiling is an on-demand group with no spec.maxInstances at all.
-//
-// Not reachable through the API server, which requires the field for this
-// type, and kept because the alternative reading of a nil -- unlimited -- is
-// the one the field's own documentation argues against. It is its own error
-// rather than ErrTooManyInstances because the two send an admin to opposite
-// places: one group is full, this one was never bounded.
+// ErrNoCeiling is an on-demand group with no spec.maxInstances. The CRD
+// requires the field, so this is a group that got around that rule; nil is
+// not read as unlimited.
 var ErrNoCeiling = errors.New("that group has no spec.maxInstances")
 
 // ErrNotAnInstance is a stop aimed at a server that no key names.
 var ErrNotAnInstance = errors.New("that server is not an on-demand member")
 
-// ErrInstanceStopping is a start on a key whose member is on its way out.
-//
-// Distinct from "already running" and from every refusal, because it is the
-// one state a caller should wait through rather than act on: the member is
-// draining its players and the same request starts a fresh one once it is
-// gone. Answering AlreadyRunning here would send the next player to a server
-// that is about to stop.
+// ErrInstanceStopping is a start on a key whose member is on its way out. The
+// caller should retry, not be told AlreadyRunning and send a player to a
+// server about to stop.
 var ErrInstanceStopping = errors.New("that member is still stopping")
 
-// ErrWorldDeleting is a start on a key whose world is still being deleted.
 var ErrWorldDeleting = errors.New("that member's world is still being deleted")
 
 // ErrForeignClaim is a delete whose claim this operator did not make for that
@@ -104,85 +80,40 @@ var ErrForeignClaim = errors.New("that claim was not made by this operator for t
 // to add it, so such a world can only be deleted by hand.
 var ErrUnkeyedWorld = errors.New("that world's claim does not carry its key")
 
-// ErrInstancesDraining is the ceiling, met, by members of which at least one
-// is already leaving.
-//
-// Separate from ErrTooManyInstances because the two mean opposite things to
-// the caller. A full group is a bound that stands until somebody stops a
-// server; this one clears by itself inside the group's drain timeout. Told
-// REFUSED, a plugin stops asking, and asking again shortly is exactly what
-// works here.
+// ErrInstancesDraining is the ceiling held by members of which at least one is
+// leaving. Unlike ErrTooManyInstances it clears by itself, so the caller
+// should ask again shortly.
 var ErrInstancesDraining = errors.New("that group is at spec.maxInstances and a member is stopping")
 
 // ErrNameTaken is a start whose composed name belongs to a server of another
-// group.
-//
-// Not a race and not rare: group "a" with key "b-xyz" composes the name that
-// group "a-b" gives its member "xyz". Answering AlreadyRunning for it would
-// hand a plugin the name of somebody else's server -- a lobby, in the case
-// that costs the most -- and the plugin would send its player there. The
-// caller can only fix it by choosing another key, or by the two groups being
-// named so that they cannot collide, which is why it is bad input rather than
-// a bound.
+// group: group "a" with key "b-xyz" composes the name group "a-b" gives its
+// member "xyz".
 var ErrNameTaken = errors.New("that name belongs to a server of another group")
 
-// ClusterWriter is every change a plugin's request is allowed to make.
-//
-// Deliberately one method wide, in the shape ProxyFleet uses and for the same
-// reason: this endpoint is the one place in the operator where an instruction
-// arrives from inside a game server, and the list of things such an
-// instruction can reach should be readable in one screen. A client.Client
-// here would instead put every object in the cluster one line away from a
-// request handler, and nobody auditing this later could bound it by reading.
+// ClusterWriter is every change a plugin's request is allowed to make. It is
+// deliberately narrow rather than a client.Client, so what a request from
+// inside a game server can reach is readable in one screen.
 type ClusterWriter interface {
-	// Retire asks one server to stop taking joins and empty out.
-	//
-	// It reports whether this call is the one that set the flag. False means
-	// somebody had already asked, which the caller answers as REFUSED rather
-	// than patching an identical value a second time.
-	//
-	// It returns ErrNoSuchServer when the server is gone, which is ordinary:
-	// the caller resolved the name against a snapshot that is allowed to be a
-	// moment stale.
+	// Retire reports whether this call is the one that set the flag.
 	Retire(ctx context.Context, namespace, name string) (bool, error)
 
-	// Headroom reports how much more capacity a group could be asked for.
-	//
-	// A read on an interface named for writing, and it earns its place here
-	// rather than on the network snapshot: it is the input to a bound, and a
-	// bound computed from a picture that is allowed to be a resync stale is a
-	// bound that can be wrong in the direction that matters. It returns
-	// ErrNoSuchGroup for a group this namespace does not have.
+	// Headroom is a read, here rather than on the network snapshot because it
+	// feeds a bound and the snapshot may be a resync stale.
 	Headroom(ctx context.Context, namespace, group string) (Headroom, error)
 
-	// Boost creates a ScaleBoost on a group, owned by it.
-	//
-	// The caller has already bounded the numbers; the only thing this can
-	// report is ErrNoSuchGroup, from the same race Retire has.
+	// Boost creates a ScaleBoost on a group, owned by it. The caller has
+	// already bounded the numbers.
 	Boost(ctx context.Context, namespace, group string, replicas int32, expiresAt time.Time) error
 
 	// StopBoosts deletes every boost on a group and says how many there were.
-	//
-	// Every one and not the newest: a partial reduction across boosts with
-	// different expiries is arithmetic nobody asked for. Zero is an ordinary
-	// answer.
 	StopBoosts(ctx context.Context, namespace, group string) (int, error)
 
-	// StartServer creates the member of an OnDemand group that carries key.
-	//
-	// Reports AlreadyRunning for a member that was already there, which is a
-	// success: what the caller asked for is the case. It returns
-	// ErrNoSuchGroup, ErrGroupNotOnDemand, ErrTooManyInstances, ErrNoCeiling,
-	// ErrNameTaken, instance.ErrBadKey for a key no name can be built from,
-	// and ErrInstanceStopping or ErrInstancesDraining for the two states that
-	// clear on their own.
+	// StartServer creates the member of an OnDemand group that carries key, or
+	// reports AlreadyRunning for one that is there.
 	StartServer(ctx context.Context, namespace, group, key string) (StartedServer, error)
 
-	// StopServer deletes one member of an OnDemand group.
-	//
-	// It returns ErrNoSuchServer for a name this namespace does not have and
-	// ErrNotAnInstance for a server that is not a member of such a group --
-	// the refusal that keeps a mistyped name from deleting a lobby.
+	// StopServer deletes one member of an OnDemand group and returns
+	// ErrNotAnInstance for any other server.
 	StopServer(ctx context.Context, namespace, name string) error
 	// DeleteServer deletes a member of an OnDemand group for good: its server
 	// if one exists, and its world claim. It returns ErrNoSuchGroup,
@@ -214,17 +145,9 @@ type Headroom struct {
 	Boosted int32
 }
 
-// Room is how many more servers a new boost may ask for.
-//
-// Measured against the *floor* and not against how many servers are running:
-// a boost raises what the group tries for, and a group sitting below its floor
-// because nodes are full has exactly as much room for a boost as one sitting
-// on it. Sizing this by the live count would refuse a boost precisely when
-// somebody is asking for capacity because capacity is short.
-//
-// Never negative. A group whose floor already exceeds its ceiling is
-// misconfigured, and answering "minus two" would put that arithmetic into a
-// chat line rather than a refusal.
+// Room is how many more servers a new boost may ask for, measured against the
+// floor and not the running count, which would refuse a boost exactly when
+// capacity is short.
 func (h Headroom) Room() int32 {
 	room := h.MaxReplicas - h.MinReplicas - h.Boosted
 	if room < 0 {
@@ -233,17 +156,13 @@ func (h Headroom) Room() int32 {
 	return room
 }
 
-// KubeWriter is the ClusterWriter the operator runs with.
 type KubeWriter struct {
-	// Client must be able to patch servers and create boosts. The manager's
-	// client is cached for reads, which is what makes the already-retiring
-	// check below cheap.
 	Client client.Client
 	// Reader reads claims past the manager's cache, which holds only claims
 	// carrying this operator's label: a claim somebody else made under a
 	// member's name has to be seen to be refused. Nil means Client.
 	Reader client.Reader
-	// Clock decides which boosts are still live. Nil means time.Now.
+	// Nil means time.Now.
 	Clock func() time.Time
 }
 
@@ -261,20 +180,9 @@ func (w KubeWriter) now() time.Time {
 	return w.Clock()
 }
 
-// Retire sets spec.retire on one server.
-//
-// The read before the patch is not an optimisation. spec.retire is a bool, so
-// a blind patch would succeed identically whether or not it changed anything,
-// and this verb has to be able to tell the two apart: the operator's answer is
-// the only way the person who typed the command learns whether they were the
-// one who retired the server or the second person to ask.
-//
-// The gap between the read and the patch is a race two admins could lose
-// together, and losing it costs nothing: the second patch writes the value the
-// first one already wrote, and the second admin is told they did something
-// they merely repeated. That is a strictly better failure than serialising
-// every retire through a conflict-retry loop for a flag that only ever goes
-// one way.
+// Retire sets spec.retire on one server, or retires a proxy of that name.
+// The race between read and patch is accepted: losing it only tells a second
+// admin they did what they merely repeated.
 func (w KubeWriter) Retire(ctx context.Context, namespace, name string) (bool, error) {
 	var srv spawneryv1alpha1.Server
 	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &srv); err != nil {
@@ -295,8 +203,7 @@ func (w KubeWriter) Retire(ctx context.Context, namespace, name string) (bool, e
 }
 
 // retireProxy asks the proxy group to drain one proxy: it is replaced, takes
-// no new connections and stops once empty. A pod that is not a proxy is
-// answered as a name this network does not have.
+// no new connections and stops once empty.
 func (w KubeWriter) retireProxy(ctx context.Context, namespace, name string) (bool, error) {
 	var pod corev1.Pod
 	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &pod); err != nil {
@@ -322,9 +229,6 @@ func (w KubeWriter) retireProxy(ctx context.Context, namespace, name string) (bo
 	return true, nil
 }
 
-// Unretire takes a server's retirement back and holds it: spec.retire false,
-// spec.hold true. Refused for a server that is already stopping, and for one
-// that is not retiring, which includes one an earlier unretire already held.
 func (w KubeWriter) Unretire(ctx context.Context, namespace, name string) error {
 	var srv spawneryv1alpha1.Server
 	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &srv); err != nil {
@@ -346,14 +250,8 @@ func (w KubeWriter) Unretire(ctx context.Context, namespace, name string) error 
 	return w.Client.Patch(ctx, &srv, patch)
 }
 
-// Headroom reads the group and its boosts.
-//
-// Two reads and not one: minReplicas and maxReplicas come from the group's own
-// spec, and what is already boosted comes from the boosts themselves. The
-// group's status carries a BoostedReplicas figure that would have saved a
-// List, and using it would have been wrong -- it is what the last reconcile
-// observed, so two people typing the command in the same second would each be
-// told there was room for both.
+// Headroom lists the boosts rather than reading status.boostedReplicas, which
+// is only as fresh as the last reconcile.
 func (w KubeWriter) Headroom(ctx context.Context, namespace, group string) (Headroom, error) {
 	var g spawneryv1alpha1.ServerGroup
 	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: group}, &g); err != nil {
@@ -376,16 +274,8 @@ func (w KubeWriter) Headroom(ctx context.Context, namespace, group string) (Head
 	}, nil
 }
 
-// Boost creates the object.
-//
-// generateName rather than a name built from the group and a timestamp: two
-// admins typing at once must both get a boost, and a name either could compute
-// would make the second one collide with the first. Boosts add, so two is the
-// correct outcome and a collision would silently make it one.
-//
-// The owner reference is what makes a deleted group take its boosts with it.
-// Without it a boost would outlive the group it names, count for nothing, and
-// sit in the namespace until somebody wondered what it was.
+// Boost uses generateName so two admins boosting at once get two boosts, not
+// a collision.
 func (w KubeWriter) Boost(
 	ctx context.Context, namespace, group string, replicas int32, expiresAt time.Time,
 ) error {
@@ -416,12 +306,8 @@ func (w KubeWriter) Boost(
 	})
 }
 
-// StopBoosts removes every boost on the group.
-//
-// Expired ones included, and deliberately: they count for nothing already, so
-// deleting them changes no group's size, and leaving them would mean the count
-// this reports disagrees with what an admin then sees in `kubectl get
-// scaleboosts`. The orphan sweep would have taken them anyway.
+// StopBoosts removes expired boosts too, so its count matches what an admin
+// sees in `kubectl get scaleboosts`.
 func (w KubeWriter) StopBoosts(ctx context.Context, namespace, group string) (int, error) {
 	var boosts spawneryv1alpha1.ScaleBoostList
 	if err := w.Client.List(ctx, &boosts, client.InNamespace(namespace)); err != nil {
@@ -435,9 +321,6 @@ func (w KubeWriter) StopBoosts(ctx context.Context, namespace, group string) (in
 		}
 		if err := w.Client.Delete(ctx, b); err != nil {
 			if apierrors.IsNotFound(err) {
-				// The sweep got there first. Not counted, because the admin
-				// did not remove it and the number is meant to tell them what
-				// their command did.
 				continue
 			}
 			return removed, err
@@ -448,30 +331,12 @@ func (w KubeWriter) StopBoosts(ctx context.Context, namespace, group string) (in
 }
 
 // StartServer creates the member, or reports the one that is already there.
+// Terminal members do not count against the ceiling.
 //
-// The count that bounds it is of members that are not terminal. A failed
-// world is kept for diagnosis and a finished one is swept within a pass, and
-// counting either against the ceiling would make a group drift closed as its
-// players' servers ended.
-//
-// The create is what decides the race between two callers asking for the same
-// key: AlreadyExists comes back to exactly one of them, which is why nothing
-// here takes a lock and why the list above is an optimisation and not the
-// bound. What AlreadyExists means, though, is not something the list can say
-// -- it is by then a picture of a moment that has passed, and the object in
-// the way may be a corpse the delete above has not finished removing, a
-// member another caller created in between, or a server of an entirely
-// different group whose name happens to compose the same. So the answer comes
-// from reading that object rather than from remembering what was listed; see
-// occupant.
-//
-// What remains best-effort is the list and nothing else. The ceiling is
-// counted from it, so a create that lands in the same instant as another can
-// put a group one over its ceiling until the next start is refused, and a
-// member that appears between the list and the create is classified by
-// occupant rather than by the terminal branch. Both self-correct: every
-// answer this can give wrongly is one the same request, asked again, gives
-// rightly.
+// The create decides the race between two callers for one key, so nothing
+// takes a lock; on AlreadyExists, occupant reads the object in the way. The
+// ceiling is counted from the list, so two simultaneous creates can put a
+// group one over it.
 func (w KubeWriter) StartServer(
 	ctx context.Context, namespace, group, key string,
 ) (StartedServer, error) {
@@ -510,21 +375,12 @@ func (w KubeWriter) StartServer(
 		if m.Spec.GroupRef.Name != group || !netstate.IsPrivateServer(m) {
 			continue
 		}
-		// Name and key together, which is the question occupant asks of the
-		// object a create finds in the way. Asking less here would let an
-		// object whose key does not compose its own name be the caller's
-		// member on this path and somebody else's on that one; nothing this
-		// operator writes is in that state, and one question with two
-		// answers is what this branch exists to remove. Such an object falls
-		// through to the create, where occupant refuses it by name.
+		// The same question occupant asks, so both paths agree.
 		if m.Name == name && m.Spec.Key == key {
 			if !m.DeletionTimestamp.IsZero() {
 				return StartedServer{}, ErrInstanceStopping
 			}
-			// A terminal run of this very key is replaced rather than
-			// reported: its world is on the claim, the object is a corpse,
-			// and refusing here would leave the owner waiting out a
-			// retention they cannot see.
+			// A terminal run of this key is replaced; its world is on the claim.
 			if phase.Terminal(phase.Phase(m.Status.Phase)) {
 				if err := w.Client.Delete(ctx, m); err != nil && !apierrors.IsNotFound(err) {
 					return StartedServer{}, err
@@ -536,21 +392,11 @@ func (w KubeWriter) StartServer(
 		if phase.Terminal(phase.Phase(m.Status.Phase)) {
 			continue
 		}
-		// A member that is draining still exists, and the ceiling is about
-		// how many may exist at once -- so it holds its slot. It is counted
-		// apart as well, because a ceiling held by servers that are leaving
-		// is a different answer from a ceiling held by servers that are
-		// staying.
 		live++
 		if !m.DeletionTimestamp.IsZero() {
 			going++
 		}
 	}
-	// The CRD makes spec.maxInstances required for this type, so a nil here is
-	// a group that reached etcd around that rule. Refusing rather than reading
-	// it as unlimited: the field is required because a ceiling nobody chose is
-	// one nobody thought about, and waving such a group through is the one
-	// outcome that rule exists to prevent.
 	if g.Spec.MaxInstances == nil {
 		return StartedServer{}, ErrNoCeiling
 	}
@@ -587,18 +433,6 @@ func (w KubeWriter) StartServer(
 }
 
 // occupant says what the object already holding name means for this caller.
-//
-// Read rather than assumed, because the three things AlreadyExists can mean
-// call for three different answers and only the object itself distinguishes
-// them. A member of this group carrying this key is the caller's own and is
-// reported as already running. A server of another group is a name collision
-// the caller has to resolve, and calling it theirs would hand them somebody
-// else's server. And an object on its way out -- the corpse the delete above
-// left behind, still held by its drain finalizer -- is neither: the same
-// request works once it is gone.
-//
-// Not found here means it went in the instant between the create and this
-// read, which is the retryable case for the same reason.
 func (w KubeWriter) occupant(
 	ctx context.Context, namespace, name, group, key string,
 ) (StartedServer, error) {
@@ -618,16 +452,6 @@ func (w KubeWriter) occupant(
 	return StartedServer{Name: name, AlreadyRunning: true}, nil
 }
 
-// StopServer deletes one member.
-//
-// The key check is the bound and not a courtesy: this is the only verb on
-// this channel that deletes a server outright, and a name that belongs to a
-// lobby has to fail rather than work.
-//
-// A non-empty spec.key is what marks an on-demand member throughout this
-// operator -- see ServerSpec.Key and the controller's fallbackGroup -- so the
-// object says which kind it is and its group's type does not have to be
-// fetched to find out.
 func (w KubeWriter) StopServer(ctx context.Context, namespace, name string) error {
 	var srv spawneryv1alpha1.Server
 	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &srv); err != nil {
@@ -645,13 +469,8 @@ func (w KubeWriter) StopServer(ctx context.Context, namespace, name string) erro
 	return nil
 }
 
-// DeleteServer deletes a member and its world.
-//
-// Two bounds keep it to that one world: the group must be OnDemand, whose
-// members are named from their key, and the claim must carry this operator's
-// labels for that group. The Server goes the way StopServer sends it, through
-// the drain finalizer; the claim is deleted at once, and pvc-protection holds
-// it until the pod no longer mounts it, so the order needs no record here.
+// DeleteServer deletes a member and its world. The claim is deleted at once;
+// pvc-protection holds it until the pod no longer mounts it.
 func (w KubeWriter) DeleteServer(ctx context.Context, namespace, group, key string) (DeletedServer, error) {
 	name, err := instance.Name(group, key)
 	if err != nil {
@@ -692,7 +511,6 @@ func (w KubeWriter) DeleteServer(ctx context.Context, namespace, group, key stri
 		}
 		haveServer = false
 	}
-	// A server of that name that is not this key's member is somebody else's.
 	if haveServer && (srv.Spec.GroupRef.Name != group || srv.Spec.Key != key) {
 		haveServer = false
 	}

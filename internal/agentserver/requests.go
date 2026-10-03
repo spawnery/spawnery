@@ -36,72 +36,38 @@ import (
 )
 
 const (
-	// RequestBurst is how many requests one pod may make back to back.
-	//
-	// Eight, which is generous for a plugin reacting to a player and cheap for
-	// the operator: each one is a cache read and a broadcast to a handful of
-	// proxies. The bound exists so that a compromised pod cannot make the
-	// operator do unbounded work, not so that a busy plugin has to pace
-	// itself.
+	// RequestBurst is how many requests one pod may make back to back. It
+	// bounds the work a compromised pod can cause, not a busy plugin.
 	RequestBurst = 8
 	// RequestRefill is how long one token takes to come back.
 	RequestRefill = time.Second
 
 	// BoostDefaultDuration is how long a boost runs when the request names no
-	// duration.
-	//
-	// An hour. What /cloud start usually means is an event, a rush, a Saturday
-	// night, and the failure mode of a permanent one is well known: the boost
-	// from last weekend is still there in March and nobody remembers why the
-	// lobby runs four servers.
+	// duration; a boost is meant for an event, not to linger for weeks.
 	BoostDefaultDuration = time.Hour
-	// BoostMaxDuration is the longest one a request may ask for.
-	//
-	// Twelve hours, which covers any single evening and no more. A need that
-	// outlives an evening belongs in the group's own file, where a person
-	// reviews it -- and this bound is the only thing that makes an admin
-	// discover that file rather than typing a week-long boost every week.
+	// BoostMaxDuration covers one evening. A longer need belongs in the
+	// group's own file.
 	BoostMaxDuration = 12 * time.Hour
 
-	// AnnounceMaxStateLength is the longest state a server may announce.
-	//
-	// Sixty-four characters, which is a word or a short phrase and not a
-	// sentence. The state is meant to be compared -- a plugin asks whether a
-	// server is in the state it cares about -- and a value long enough to
-	// carry a message is one somebody will put a message in.
+	// AnnounceMaxStateLength keeps the state a word to compare, not a message.
 	AnnounceMaxStateLength = 64
-	// AnnounceMaxAttributes is how many attributes one announcement may carry.
-	AnnounceMaxAttributes = 16
-	// AnnounceMaxKeyLength is the longest attribute key.
-	AnnounceMaxKeyLength = 64
-	// AnnounceMaxValueLength is the longest attribute value.
-	//
-	// The three numbers above bound one announcement at roughly five
-	// kilobytes, and that figure is the one that matters rather than any of
-	// them alone: an announcement is carried to every agent in the namespace
-	// on every resync, so a network of forty servers pays this forty times
-	// over, every resync, for as long as it runs. Generous enough for a
-	// description and far too small for a payload.
+	AnnounceMaxAttributes  = 16
+	AnnounceMaxKeyLength   = 64
+	// AnnounceMaxValueLength: with the bounds above, one announcement is at
+	// most about 5 KB, and it is resent to every agent in the namespace on
+	// every resync.
 	AnnounceMaxValueLength = 256
 )
 
 const requestMaxBuckets = 4096
 
-// requestLimiter is a token bucket per pod.
-//
-// grpcauth.PeerLimiter has the same shape and is not reused: it is keyed by
-// peer address for a different question -- how often a pod may miss the
-// TokenReview cache -- and its allow is unexported. Two buckets for two
-// questions is the honest split; sharing one would tie a connection's budget
-// to a plugin's.
+// requestLimiter is a token bucket per pod. grpcauth.PeerLimiter is not reused
+// because it is keyed by peer address and budgets TokenReview misses, a
+// different question.
 type requestLimiter struct {
 	now func() time.Time
-	// maxBuckets is when the map is swept of buckets that have refilled,
-	// which are indistinguishable from pods that never asked. Not a hard
-	// cap, for the reason grpcauth.PeerLimiter gives: refusing a legitimate
-	// pod to make room is the harm a limiter exists to prevent. Without the
-	// sweep a namespace of short rounds keeps one entry per pod that ever
-	// asked, until the operator restarts.
+	// maxBuckets is when fully refilled buckets are swept, not a hard cap:
+	// refusing a legitimate pod to make room is what a limiter must not do.
 	maxBuckets int
 
 	mu      sync.Mutex
@@ -155,30 +121,19 @@ func (l *requestLimiter) allow(pod string) bool {
 	return true
 }
 
-// answerCloudRequest routes one request to the verb that answers it.
+// answerCloudRequest routes one request to the verb that answers it, for both
+// server and proxy sessions.
 //
-// One dispatcher and not one per direction: a server session and a proxy
-// session ask the same questions and differ only in the envelope the answer
-// travels in, which each caller wraps. Unpacking the oneof per call site would
-// copy a chain whose last branch -- the answer for a request kind this
-// operator does not know -- is the one nobody would notice going missing.
-//
-// The unknown-request answer is a refusal and not a silence, and that matters
-// more than it looks: an agent waiting on an id it will never hear about holds
-// its caller's future until the deadline, so a silent operator turns "this
-// operator is older than your plugin" into "the cloud is slow".
+// An unknown request is refused rather than ignored: an agent waiting on an id
+// it will never hear about holds its caller until the deadline.
 func (s *Server) answerCloudRequest(
 	ctx context.Context,
 	logger logr.Logger,
 	id grpcauth.Identity,
 	req *agentpb.CloudRequest,
 ) *agentpb.CloudResponse {
-	// The bound is here and not in each verb, and that placement is the whole
-	// of its reliability: a per-verb check is a line the next verb's author
-	// can forget, and forgetting it is invisible -- the verb works, and only
-	// a pod asking in a loop ever finds out. An unknown request spends a
-	// token too, which is deliberate: it is still work a pod can make the
-	// operator do.
+	// Here rather than per verb, so a new verb cannot forget it. Unknown
+	// requests spend a token too.
 	if !s.requestRate.allow(id.PodUID) {
 		return refuse(req.GetId(), agentpb.RequestError_RATE_LIMITED,
 			"this pod has asked more often than the operator will answer")
@@ -213,26 +168,12 @@ func (s *Server) answerCloudRequest(
 	}
 }
 
-// answerRetire asks one server to stop taking joins.
+// answerRetire asks one server to stop taking joins. The namespace bound is
+// structural: the server is looked up under id.Namespace, from the pod's
+// token, and the request has no namespace field.
 //
-// # The first request that writes, and what bounds it
-//
-// **The namespace bound is structural, as it is for connect.** A RetireRequest
-// names a server and nothing else, and both the resolution and the patch
-// happen inside id.Namespace -- the namespace the pod's own ServiceAccount
-// token authenticated. There is no field an agent could put another network's
-// server in.
-//
-// Unlike connect, this resolves nothing against the network snapshot, and must
-// not: the writer's own namespaced Get already answers NOT_FOUND for a name
-// this network does not have, so a screening step there would read like a
-// bound while being unable to fail on its own. The bound is the Get's key.
-//
-// Refusing an already-retiring server is the one bound here that is not about
-// safety. The patch is idempotent and a second one would cost nothing; what it
-// would cost is the meaning of the answer. An operator that says "done" to the
-// second admin to type the command has told them the first attempt did
-// nothing, and the thing people do next is type it again harder.
+// An already-retiring server is refused although the patch is idempotent, so
+// a second admin is not told "done" as if the first attempt had done nothing.
 func (s *Server) answerRetire(
 	ctx context.Context,
 	logger logr.Logger,
@@ -240,14 +181,9 @@ func (s *Server) answerRetire(
 	reqID uint64,
 	req *agentpb.RetireRequest,
 ) *agentpb.CloudResponse {
-	// The namespace is the token's, never the message's, and it is the key
-	// this resolves under -- so a server this network does not have is
-	// answered by the writer rather than screened out beforehand.
 	applied, err := s.opts.Writer.Retire(ctx, id.Namespace, req.GetServer())
 	switch {
 	case errors.Is(err, ErrNoSuchServer):
-		// The snapshot said it was there and the cluster says otherwise --
-		// ordinary, since the snapshot is allowed to be a moment stale.
 		return refuse(reqID, agentpb.RequestError_NOT_FOUND,
 			"no server or proxy by that name is on this network")
 	case err != nil:
@@ -262,28 +198,10 @@ func (s *Server) answerRetire(
 	return retired(reqID, &agentpb.RetireResult{Server: req.GetServer()})
 }
 
-// answerBoost adds capacity to a group for a while.
-//
-// # What it refuses, and why each refusal is separate
-//
-// The namespace bound is structural, as it is for retire: the group is
-// resolved under id.Namespace and the request has no field that could name
-// another.
-//
-// Four things are refused and each says which one it was, because an admin who
-// is told only "refused" retypes the same command. **A group with no
-// spec.scaling**, because a boost on a persistent group would be created,
-// counted in the status, and change nothing -- see ErrGroupNotScalable. **Too
-// long**, at BoostMaxDuration, which is the bound that makes somebody discover
-// the file they should be editing instead. **Too many**, at what the group's
-// own ceiling leaves, because §4.4's rule is that a ceiling is an instruction
-// and a command typed in a chat window must not lift it. And **fewer than one
-// server**, which is not a boost.
-//
-// Refused rather than quietly capped. A boost that silently becomes something
-// other than what was typed is the class of surprise this repository avoids
-// everywhere else, and the admin who asked for six and got three would find
-// out only by counting servers.
+// answerBoost adds capacity to a group for a while, resolved under
+// id.Namespace. A boost beyond the group's ceiling is refused rather than
+// capped: a command typed in chat must not lift a ceiling, and an admin who
+// asked for six and silently got three would not notice.
 func (s *Server) answerBoost(
 	ctx context.Context,
 	logger logr.Logger,
@@ -296,9 +214,7 @@ func (s *Server) answerBoost(
 			"a boost has to add at least one server")
 	}
 
-	// A duration on the wire and an instant here: the two sides do not share a
-	// clock, so the operator's is the one that decides when this ends. See
-	// agentpb.BoostRequest.
+	// A duration on the wire, because agent and operator do not share a clock.
 	duration := time.Duration(req.GetDurationSeconds()) * time.Second
 	if duration <= 0 {
 		duration = BoostDefaultDuration
@@ -330,7 +246,6 @@ func (s *Server) answerBoost(
 	expiresAt := s.opts.Clock().Add(duration)
 	if err := s.opts.Writer.Boost(ctx, id.Namespace, req.GetGroup(), req.GetReplicas(), expiresAt); err != nil {
 		if errors.Is(err, ErrNoSuchGroup) {
-			// Deleted between the two calls. Ordinary.
 			return refuse(reqID, agentpb.RequestError_NOT_FOUND,
 				"no group by that name is on this network")
 		}
@@ -348,15 +263,8 @@ func (s *Server) answerBoost(
 	}
 }
 
-// answerStopBoost ends a group's boosts early.
-//
-// It refuses nothing but a read it could not do. A group with no boosts
-// answers zero, which is what an admin who expected some needs to hear -- and
-// a group that does not exist answers zero as well, because there is nothing
-// to distinguish and nothing that a person would do differently. That last
-// choice is the one worth stating: an admin who mistypes a group name is told
-// "no boosts", not "no such group", and the two readings agree on the only
-// thing that matters, which is that nothing was removed.
+// answerStopBoost ends a group's boosts early. A group that does not exist
+// answers zero removed, not NOT_FOUND: either way nothing was removed.
 func (s *Server) answerStopBoost(
 	ctx context.Context,
 	logger logr.Logger,
@@ -379,47 +287,19 @@ func (s *Server) answerStopBoost(
 }
 
 // answerConnect resolves a move request and says what the operator did with
-// it.
+// it. Everything resolves under id.Namespace, from the pod's token; the
+// request carries no namespace.
 //
-// # The bounds, and which of them is not a check
+// It resolves against the asking pod's own picture, so a backend cannot send
+// a player to a private server it is not shown. That is refused as REFUSED
+// rather than NOT_FOUND, which would claim a running server does not exist.
 //
-// **The namespace bound is structural.** A ConnectRequest names a player and a
-// target and carries no namespace at all, and both are resolved inside
-// id.Namespace -- the namespace the pod's own ServiceAccount token
-// authenticated. There is no field an agent could put another network's name
-// in, which is why this one has no `if` and cannot be forgotten in a later
-// edit: that a compromised pod cannot harm another network is carried by the
-// shape rather than by a guard.
+// A group target naming an on-demand group is refused for both session kinds,
+// before resolution: the operator would pick whichever stranger's world has
+// room, and a proxy is shown the members.
 //
-// The remaining checks each have their own test, because a single test
-// asserting "it was refused" passes when the wrong one fired. The rate bound
-// is not among them: it lives in answerCloudRequest, so that every verb has it
-// whether or not its author remembered.
-//
-// # What it resolves against
-//
-// The picture of the pod that asked, not the whole namespace. A backend's own
-// picture leaves out private servers, so a backend cannot send a player to one
-// either: naming a target would otherwise be a way to reach what its plugins
-// are not shown, and would commit that reach for good the way showing them
-// would. It is refused, and says so: NOT_FOUND would tell whoever meets it
-// that a server which is running fine does not exist. Any other name the
-// caller's network does not have is NOT_FOUND, as before. A proxy resolves
-// against everything.
-//
-// # A group is never a way into a private server
-//
-// Naming a group leaves the choice of member to the operator, which picks by
-// free slots. For an on-demand group that would put the player into whichever
-// stranger's world has room, so a group target naming one is refused for both
-// kinds of session. It comes before resolution and not after: a proxy is
-// shown the members, and would resolve to one.
-//
-// # What it promises
-//
-// Nothing about the player arriving. The proxy that carries the move does not
-// wait on Velocity's own future -- see agentpb.ConnectResult -- so ordered
-// means the instruction reached the proxies of this namespace and no more.
+// Ordered means the instruction reached this namespace's proxies, not that the
+// player arrived; see agentpb.ConnectResult.
 func (s *Server) answerConnect(
 	ctx context.Context,
 	logger logr.Logger,
@@ -427,8 +307,6 @@ func (s *Server) answerConnect(
 	reqID uint64,
 	req *agentpb.ConnectRequest,
 ) *agentpb.CloudResponse {
-	// The namespace is the token's, never the message's. Everything below
-	// resolves inside it, which is the whole of the cross-network bound.
 	state, err := s.opts.State.Build(ctx, id.Namespace, netstate.AudienceOf(id.Role))
 	if err != nil {
 		logger.V(1).Info("could not read the network for a connect request", "reason", err.Error())
@@ -444,10 +322,6 @@ func (s *Server) answerConnect(
 		}
 	}
 	if player == nil {
-		// Ordinary rather than exceptional: a player who logged out between a
-		// plugin's call and this request lands here, and so does one on
-		// another network -- which is the cross-network bound observed from
-		// the outside, since there is no namespace to have got wrong.
 		return refuse(reqID, agentpb.RequestError_NOT_FOUND,
 			"no player with that id is on this network")
 	}
@@ -468,7 +342,6 @@ func (s *Server) answerConnect(
 	}
 
 	if player.GetServer() == target {
-		// Nothing ordered and nothing wrong.
 		return connected(reqID, &agentpb.ConnectResult{AlreadyThere: true, Target: target})
 	}
 
@@ -476,13 +349,8 @@ func (s *Server) answerConnect(
 	return connected(reqID, &agentpb.ConnectResult{Ordered: true, Target: target})
 }
 
-// resolveTarget turns a request's target into one server name.
-//
-// A named server has to exist and be registered: an unregistered one is a
-// server the proxies cannot route to, so ordering a move there would put the
-// player nowhere. A named group is the operator's choice among that group's
-// registered servers, and it takes the one with the most room -- which is the
-// figure a plugin has no way to compare for itself without racing the mirror.
+// resolveTarget turns a request's target into one registered server name; for
+// a group, the registered member with the most free playable slots.
 func resolveTarget(state *agentpb.NetworkState, req *agentpb.ConnectRequest) (string, bool) {
 	switch {
 	case req.GetServer() != "":
@@ -518,19 +386,9 @@ func playableFree(srv *agentpb.ServerState) int {
 }
 
 // namesAPrivateServer reports whether the server a request names is a member
-// of an on-demand group.
-//
-// This is a deliberate hole in the boundary answerConnect draws around a
-// backend's picture, and it is only there to word a refusal. It looks at
-// exactly the one name the caller itself supplied, in the caller's own
-// namespace, and the single bit it returns is all that travels back: nothing
-// is resolved from it, no move follows from it, and no field of the server
-// is read but what netstate.IsPrivateServer asks. A group name, a typo and
-// another namespace's server all answer false, so they stay NOT_FOUND.
-//
-// A read of the one object and not a second Build, because this is the failure
-// path of a verb a pod may repeat, and a list of the namespace to learn one
-// bit is the expensive way to ask.
+// of an on-demand group. It is a deliberate hole in a backend's picture, only
+// to word a refusal: one name the caller supplied, one bit back, nothing
+// resolved from it.
 func (s *Server) namesAPrivateServer(ctx context.Context, namespace string, req *agentpb.ConnectRequest) bool {
 	name := req.GetServer()
 	if name == "" {
@@ -543,13 +401,8 @@ func (s *Server) namesAPrivateServer(ctx context.Context, namespace string, req 
 	return netstate.IsPrivateServer(&srv)
 }
 
-// namesAnOnDemandGroup reports whether the group a request names is an
-// on-demand one.
-//
-// It is the same kind of hole as namesAPrivateServer, for the same reason and
-// as narrow: one name the caller supplied, in its own namespace, one bit back.
-// A backend is not shown these groups either, and learns no more than that
-// the name it typed is one. Nothing is resolved from the group.
+// namesAnOnDemandGroup is the same narrow hole as namesAPrivateServer, for
+// groups.
 func (s *Server) namesAnOnDemandGroup(ctx context.Context, namespace string, req *agentpb.ConnectRequest) bool {
 	name := req.GetGroup()
 	if name == "" {
@@ -562,30 +415,9 @@ func (s *Server) namesAnOnDemandGroup(ctx context.Context, namespace string, req
 	return group.IsOnDemand()
 }
 
-// refuse builds an error answer and counts it.
-//
-// The message is free text for a person; the reason is what a caller branches
-// on. Neither carries a player's name into the counter -- see RequestsRefused.
-// answerAcceptJoins opens or closes one server's own door.
-//
-// # The second request that changes what the operator does, and the narrowest
-//
-// answerRetire writes to an object and names the server it writes to.
-// This one names nothing: it changes a flag on the session it arrived on, and
-// the only server it can reach is the one that asked. A pod cannot close
-// somebody else's door because there is no field in which to put somebody
-// else's name -- the same structural bound the announcement has, and a
-// stronger one than retire's, which is bounded by a namespace rather than by
-// a pod.
-//
-// **It is not retire and must not be reachable by mistake.** Retiring says the
-// server is finished and ends it; this says only that no new players should be
-// routed there, for as long as the server likes, and it can be taken back. The
-// phase does not move: a closed server is Ready and not registered, which is a
-// state this operator already had.
-//
-// A proxy is refused for a plainer reason than the announcement's: a proxy is
-// not in anybody's routing table, it is the routing table.
+// answerAcceptJoins opens or closes the asking server's own door; the request
+// has no field naming another server. Unlike retire it is reversible and the
+// phase does not move: a closed server is Ready and not registered.
 func (s *Server) answerAcceptJoins(
 	ctx context.Context,
 	logger logr.Logger,
@@ -614,33 +446,10 @@ func (s *Server) answerAcceptJoins(
 	}
 }
 
-// answerAnnounce records what a server says about itself.
-//
-// # The one request the operator stores and never reads
-//
-// Every other verb here changes something the operator then acts on. This one
-// changes only what the operator repeats: the announcement is carried into the
-// NetworkState every agent in the namespace receives, and no rule in this
-// repository branches on it. That is what makes free-form text acceptable
-// here and unacceptable anywhere else in this file.
-//
-// **The server names itself, and the message does not.** The name stored is
-// id.PodName, from the pod's own authenticated token; a pod is named after its
-// Server, so the identity already carries the name and there is no field an
-// agent could put another server's name in. An AnnounceRequest that carried a
-// name would be the first message on this channel that could describe
-// somebody else.
-//
-// **A proxy is refused rather than accepted and dropped.** A network's picture
-// has a record per server and none per proxy, so an announcement from a proxy
-// would be stored where nothing could read it. Storing it silently would leave
-// a plugin author watching for a description that was never going to appear,
-// with nothing anywhere saying why.
-//
-// **Too big is refused and never trimmed**, and each bound says which one it
-// was. A description silently cut in half is worse than a refusal twice over:
-// the plugin believes it published what it wrote, and the truncation lands
-// wherever the cut happened to fall rather than where a reader could see it.
+// answerAnnounce records what a server says about itself. The operator only
+// repeats it in the NetworkState and never branches on it, which is why
+// free-form text is acceptable here. The name stored is id.PodName, from the
+// token; the request carries none. Too big is refused, never trimmed.
 func (s *Server) answerAnnounce(
 	logger logr.Logger,
 	id grpcauth.Identity,
@@ -655,12 +464,9 @@ func (s *Server) answerAnnounce(
 		return refuse(reqID, agentpb.RequestError_REFUSED, message)
 	}
 
-	// The namespace and the name are the token's; only the words are the
-	// message's.
 	if err := s.opts.Agents.ReportAnnouncement(id.PodUID, id.Namespace, id.PodName,
 		agent.Announcement{State: req.GetState(), Attributes: req.GetAttributes()}); err != nil {
-		// The stream this arrived on was superseded between the read and here,
-		// which is ordinary during a renewal and is the caller's to retry.
+		// The stream was superseded, ordinary during a renewal.
 		logger.V(1).Info("could not record an announcement", "reason", err.Error())
 		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
 			"the operator could not record that just now")
@@ -672,12 +478,6 @@ func (s *Server) answerAnnounce(
 	}
 }
 
-// announcementRefusal reports whether an announcement is within its bounds,
-// and says which one it broke when it is not.
-//
-// The message names the bound and the offending key, because the caller is a
-// plugin author reading a log line and "too many attributes" without the
-// number is a bound they then have to find in this file.
 func announcementRefusal(req *agentpb.AnnounceRequest) (string, bool) {
 	if len(req.GetState()) > AnnounceMaxStateLength {
 		return fmt.Sprintf("that state is %d characters and the operator carries at most %d",
@@ -713,8 +513,6 @@ func refuse(reqID uint64, reason agentpb.RequestError_Reason, message string) *a
 	}
 }
 
-// answerUnretire takes one server's retirement back, bound to the token's
-// namespace exactly as answerRetire is.
 func (s *Server) answerUnretire(
 	ctx context.Context,
 	logger logr.Logger,
@@ -744,8 +542,6 @@ func (s *Server) answerUnretire(
 	}
 }
 
-// answerStatus reports the network's usage and tick rates, bound to the
-// token's namespace and to the picture the agent's role is allowed to see.
 func (s *Server) answerStatus(
 	ctx context.Context,
 	logger logr.Logger,
@@ -769,7 +565,6 @@ func (s *Server) answerStatus(
 	return &agentpb.CloudResponse{Id: reqID, Result: &agentpb.CloudResponse_Status{Status: res}}
 }
 
-// retired wraps a successful retire answer.
 func retired(reqID uint64, result *agentpb.RetireResult) *agentpb.CloudResponse {
 	return &agentpb.CloudResponse{
 		Id:     reqID,
@@ -777,8 +572,6 @@ func retired(reqID uint64, result *agentpb.RetireResult) *agentpb.CloudResponse 
 	}
 }
 
-// connected wraps a successful answer, so the two success paths above cannot
-// disagree about the id they echo.
 func connected(reqID uint64, result *agentpb.ConnectResult) *agentpb.CloudResponse {
 	return &agentpb.CloudResponse{
 		Id:     reqID,
@@ -786,7 +579,6 @@ func connected(reqID uint64, result *agentpb.ConnectResult) *agentpb.CloudRespon
 	}
 }
 
-// startedServer wraps a successful start answer.
 func startedServer(reqID uint64, result *agentpb.StartServerResult) *agentpb.CloudResponse {
 	return &agentpb.CloudResponse{
 		Id:     reqID,
@@ -794,7 +586,6 @@ func startedServer(reqID uint64, result *agentpb.StartServerResult) *agentpb.Clo
 	}
 }
 
-// stoppedServer wraps a successful stop answer.
 func stoppedServer(reqID uint64, result *agentpb.StopServerResult) *agentpb.CloudResponse {
 	return &agentpb.CloudResponse{
 		Id:     reqID,
@@ -803,23 +594,12 @@ func stoppedServer(reqID uint64, result *agentpb.StopServerResult) *agentpb.Clou
 }
 
 // answerStartServer creates the member of an on-demand group that carries a
-// key.
+// key, resolved under id.Namespace.
 //
-// The namespace bound is structural, as it is for retire and boost: the group
-// is resolved under id.Namespace and the request has no field that could name
-// another network's.
-//
-// Asking for a key that is already running is answered and not refused, which
-// is the one place this verb differs from every other writing verb here. The
-// difference is in who asks: retire and boost are typed by an admin, for whom
-// "somebody already did this" is news, while this is called by a plugin
-// reacting to a player pressing a button twice.
-//
-// Two answers here are neither a success nor a bound: a member that is
-// stopping, and a ceiling held by members of which one is already leaving.
-// Both are UNAVAILABLE, because the same request succeeds once the cluster
-// has caught up with a deletion that is already under way, and a caller can
-// tell them from a refusal by the reason alone and simply ask again.
+// Unlike the admin verbs, a key that is already running is answered, not
+// refused: the caller is a plugin, and a player may press the button twice.
+// Waiting on a deletion already under way is UNAVAILABLE, so the caller can
+// simply ask again.
 func (s *Server) answerStartServer(
 	ctx context.Context,
 	logger logr.Logger,
@@ -870,12 +650,8 @@ func (s *Server) answerStartServer(
 	})
 }
 
-// answerStopServer deletes one member.
-//
-// The refusal for a server that no key names is the bound that matters here.
-// This is the only request on this channel that deletes a server outright,
-// and a mistyped name that happened to be a lobby's would otherwise take the
-// lobby down with every player on it.
+// answerStopServer deletes one on-demand member, and refuses any other server
+// so a mistyped name cannot take a lobby down.
 func (s *Server) answerStopServer(
 	ctx context.Context,
 	logger logr.Logger,

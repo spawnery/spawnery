@@ -21,8 +21,7 @@ import (
 	"github.com/spawnery/spawnery/internal/agentpb"
 )
 
-// One test per bound, each naming the bound it broke, as for announcements:
-// a single "it was refused" passes when the wrong bound fired.
+// One test per bound: a single "it was refused" passes when the wrong bound fired.
 
 func rosterOf(n int) *agentpb.PlayerRoster {
 	r := &agentpb.PlayerRoster{}
@@ -38,7 +37,6 @@ func TestARosterWithinItsBoundsIsAccepted(t *testing.T) {
 	if message, ok := rosterRefusal(rosterOf(RosterMaxEntries)); !ok {
 		t.Errorf("a roster at the bound was refused: %s", message)
 	}
-	// And the empty one, which is how a proxy says nobody is on.
 	if _, ok := rosterRefusal(&agentpb.PlayerRoster{}); !ok {
 		t.Error("an empty roster was refused")
 	}

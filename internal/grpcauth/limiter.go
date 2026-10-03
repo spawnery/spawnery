@@ -22,18 +22,14 @@ import (
 )
 
 const (
-	// PeerBurst is how many token checks one peer may cause back to back.
-	// A legitimate agent misses the cache at most once per token rotation --
-	// projected tokens live 600 seconds -- and once per reconnect, so this is
-	// generous by an order of magnitude.
+	// PeerBurst is generous by an order of magnitude: a legitimate agent misses
+	// the cache once per token rotation (600 s) and once per reconnect.
 	PeerBurst = 5
 
-	// PeerRefill is how long one token takes to come back.
 	PeerRefill = 10 * time.Second
 
-	// maxBuckets bounds the map. Pod IPs are recycled and a peer that has
-	// refilled to full is indistinguishable from one that never appeared, so
-	// full buckets are dropped rather than kept.
+	// maxBuckets: a full bucket is indistinguishable from an absent one, so full
+	// buckets are dropped.
 	maxBuckets = 4096
 )
 
@@ -42,14 +38,9 @@ type bucket struct {
 	last   time.Time
 }
 
-// PeerLimiter is a token bucket per peer address.
-//
-// It is consulted only when the review cache misses, and that is what makes it
-// harmless to legitimate traffic and effective against the documented attack.
-// A pod in a connection loop replays one token, hits the cache, and never
-// reaches this. Feeling it at all requires presenting tokens the cache has not
-// seen -- and those cannot be manufactured, because TokenReview is
-// audience-bound and the token is signed by the cluster.
+// PeerLimiter is a token bucket per peer address, consulted only when the
+// review cache misses. A reconnect loop replays one token and hits the cache;
+// fresh tokens cannot be manufactured, as TokenReview is audience-bound.
 type PeerLimiter struct {
 	now func() time.Time
 
@@ -57,12 +48,10 @@ type PeerLimiter struct {
 	buckets map[string]bucket
 }
 
-// NewPeerLimiter returns a limiter reading time from now.
 func NewPeerLimiter(now func() time.Time) *PeerLimiter {
 	return &PeerLimiter{now: now, buckets: map[string]bucket{}}
 }
 
-// allow spends one token for peer, reporting whether there was one.
 func (l *PeerLimiter) allow(peer string) bool {
 	if l == nil {
 		return true
@@ -96,15 +85,9 @@ func (l *PeerLimiter) allow(peer string) bool {
 	return true
 }
 
-// evictFullLocked makes room by dropping buckets that have refilled, and is
-// deliberately not a hard cap.
-//
-// With maxBuckets peers all simultaneously active nothing is evictable and the
-// map grows past it. That is the many-compromised-pods case milestone 6b's
-// design ruled out of scope, and it is recorded here so the absence reads as a
-// decision rather than an oversight: a hard cap would mean refusing a
-// legitimate agent to make room for whoever is attacking, which is the harm
-// the limiter exists to prevent, moved rather than removed.
+// evictFullLocked is deliberately no hard cap: with maxBuckets peers active the
+// map grows past it, because capping would refuse a legitimate agent to make
+// room for an attacker.
 func (l *PeerLimiter) evictFullLocked() {
 	for key, b := range l.buckets {
 		if b.tokens >= PeerBurst {

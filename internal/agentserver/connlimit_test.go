@@ -23,11 +23,8 @@ import (
 	"time"
 )
 
-// serveLimited runs a limiter over a real loopback listener and hands every
-// accepted connection to the caller's channel. A real socket rather than a
-// pipe, because the thing under test reads RemoteAddr and splits a port off
-// it: net.Pipe has no addresses at all and would let peerKey's fallback pass
-// for the behaviour that matters.
+// serveLimited uses a real loopback socket rather than net.Pipe, which has no
+// addresses and would only exercise peerKey's fallback.
 func serveLimited(t *testing.T, limit int) (*PeerLimiter, <-chan net.Conn, func() []ConnEvent) {
 	t.Helper()
 
@@ -36,10 +33,6 @@ func serveLimited(t *testing.T, limit int) (*PeerLimiter, <-chan net.Conn, func(
 		t.Fatalf("listen: %v", err)
 	}
 
-	// A copy under the lock rather than the slice itself: the observer keeps
-	// appending while a test reads, and handing out the header would be a race
-	// on the header -- which is what the first draft of this helper did, and
-	// -race caught.
 	var mu sync.Mutex
 	events := make([]ConnEvent, 0, 16)
 	recorded := func() []ConnEvent {
@@ -78,9 +71,6 @@ func dial(t *testing.T, limiter *PeerLimiter) net.Conn {
 	return conn
 }
 
-// TestALimitedPeerIsRefusedAtItsBound is the whole point of the type: the
-// connection over the limit is closed rather than served, and the ones under
-// it are untouched.
 func TestALimitedPeerIsRefusedAtItsBound(t *testing.T) {
 	const limit = 3
 	limiter, accepted, _ := serveLimited(t, limit)
@@ -94,9 +84,7 @@ func TestALimitedPeerIsRefusedAtItsBound(t *testing.T) {
 		}
 	}
 
-	// The one over the bound. It is refused at the listener, so nothing is
-	// handed to the server -- and the client learns only from the close, since
-	// the kernel completed the handshake before Accept ever saw it.
+	// The kernel completed the handshake, so the client learns only from the close.
 	over := dial(t, limiter)
 	select {
 	case conn := <-accepted:
@@ -111,9 +99,6 @@ func TestALimitedPeerIsRefusedAtItsBound(t *testing.T) {
 	}
 }
 
-// TestAClosedConnectionGivesItsSlotBack is the other half. Without it the
-// bound would be a lifetime quota rather than a concurrency limit, and a pod
-// that renewed MaxConnectionsPerPeer times would lock itself out permanently.
 func TestAClosedConnectionGivesItsSlotBack(t *testing.T) {
 	const limit = 2
 	limiter, accepted, _ := serveLimited(t, limit)
@@ -123,8 +108,7 @@ func TestAClosedConnectionGivesItsSlotBack(t *testing.T) {
 	dial(t, limiter)
 	<-accepted
 
-	// At the bound now. Give one back from the server side, which is the side
-	// that counts.
+	// The server side is the side that counts.
 	_ = served.Close()
 	_ = first.Close()
 
@@ -136,10 +120,6 @@ func TestAClosedConnectionGivesItsSlotBack(t *testing.T) {
 	}
 }
 
-// TestClosingTwiceReleasesOneSlot guards the sync.Once. net.Conn permits a
-// second Close and grpc-go's transport makes one, so a naive decrement would
-// hand the peer a slot it never gave back -- and the bound would then leak
-// upward, silently, one double-close at a time.
 func TestClosingTwiceReleasesOneSlot(t *testing.T) {
 	limiter, accepted, _ := serveLimited(t, 2)
 
@@ -156,9 +136,8 @@ func TestClosingTwiceReleasesOneSlot(t *testing.T) {
 	}
 }
 
-// TestAZeroLimitCountsWithoutRefusing is the mode cmd/spawnery-stubop measures
-// in. The peak it reports is the number MaxConnectionsPerPeer is derived from,
-// so a zero limit quietly refusing anything would corrupt that measurement.
+// TestAZeroLimitCountsWithoutRefusing: cmd/spawnery-stubop measures the peak
+// MaxConnectionsPerPeer is derived from in this mode.
 func TestAZeroLimitCountsWithoutRefusing(t *testing.T) {
 	limiter, accepted, recorded := serveLimited(t, 0)
 
@@ -186,10 +165,6 @@ func TestAZeroLimitCountsWithoutRefusing(t *testing.T) {
 	}
 }
 
-// TestARefusedPeerIsLoggedOnPowersOfTen pins the throttle rather than the
-// wording. A line per refusal would make the operator's log the amplifier the
-// connections themselves no longer are, so what the rule admits is the part
-// worth a test.
 func TestARefusedPeerIsLoggedOnPowersOfTen(t *testing.T) {
 	for n, want := range map[int]bool{
 		0: false, 1: true, 2: false, 9: false, 10: true,
@@ -201,9 +176,6 @@ func TestARefusedPeerIsLoggedOnPowersOfTen(t *testing.T) {
 	}
 }
 
-// TestTheRefusalCountResetsWithThePeer keeps the refusal map bounded by the
-// live fleet. It is the one map an attacker drives the size of, so a key that
-// outlived its peer would be a leak they choose the rate of.
 func TestTheRefusalCountResetsWithThePeer(t *testing.T) {
 	limiter, accepted, _ := serveLimited(t, 1)
 
@@ -214,7 +186,6 @@ func TestTheRefusalCountResetsWithThePeer(t *testing.T) {
 	for i := 0; i < 3; i++ {
 		dial(t, limiter)
 	}
-	// The refusals are asynchronous; wait for the count rather than assume it.
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		limiter.mu.Lock()
@@ -246,9 +217,6 @@ func TestTheRefusalCountResetsWithThePeer(t *testing.T) {
 	}
 }
 
-// TestPeerKeyDropsThePort is what makes the bound per pod rather than per
-// connection: every connection from one pod has a different source port, so
-// keeping it would give each its own bucket and bound nothing at all.
 func TestPeerKeyDropsThePort(t *testing.T) {
 	for _, tc := range []struct {
 		name string
@@ -268,12 +236,8 @@ func TestPeerKeyDropsThePort(t *testing.T) {
 	}
 }
 
-// dialFrom dials the limiter from a chosen local address, which is how a test
-// gets more than one peer out of a loopback listener: every address in
-// 127.0.0.0/8 is local on Linux, so 127.0.0.2 reaches a listener on 127.0.0.1
-// and arrives with a different RemoteAddr. Skips rather than fails where that
-// is not true -- the fleet bound is about the sum across peers, and a platform
-// with one usable loopback address cannot show that either way.
+// dialFrom relies on every address in 127.0.0.0/8 being local on Linux, which
+// gives a loopback listener more than one peer. It skips where that fails.
 func dialFrom(t *testing.T, limiter *PeerLimiter, local string) net.Conn {
 	t.Helper()
 	dialer := net.Dialer{LocalAddr: &net.TCPAddr{IP: net.ParseIP(local)}}
@@ -285,9 +249,6 @@ func dialFrom(t *testing.T, limiter *PeerLimiter, local string) net.Conn {
 	return conn
 }
 
-// served waits for one connection to reach the server side, and says whether
-// it did. The negative case is a wait for nothing to happen, so it is
-// deliberately not a Fatal: both readings are results here.
 func served(t *testing.T, accepted <-chan net.Conn) bool {
 	t.Helper()
 	select {
@@ -298,8 +259,6 @@ func served(t *testing.T, accepted <-chan net.Conn) bool {
 	}
 }
 
-// lastRefusal is the most recent refusal event, which is the one carrying
-// which bound did the refusing.
 func lastRefusal(t *testing.T, recorded func() []ConnEvent) ConnEvent {
 	t.Helper()
 	events := recorded()
@@ -312,17 +271,10 @@ func lastRefusal(t *testing.T, recorded func() []ConnEvent) ConnEvent {
 	return ConnEvent{}
 }
 
-// TestTheFleetBoundTightensEveryPeerAtItsCeiling is the fleet half of the
-// type. The per-peer bound here is 8 and nothing about this peer changes; what
-// changes is that the operator is holding more connections than one pod can
-// account for, and every peer's slack goes away at once.
 func TestTheFleetBoundTightensEveryPeerAtItsCeiling(t *testing.T) {
 	limiter, accepted, recorded := serveLimited(t, 8)
 	limiter.Expect(func() (int, bool) { return 1, true })
 
-	// One pod expected, so the ceiling is FleetConnectionsPerAgent. Everything
-	// up to it is served: the tightened bound is still above any legitimate
-	// agent's peak, which is the property it is chosen for.
 	for i := 0; i < FleetConnectionsPerAgent; i++ {
 		dial(t, limiter)
 		if !served(t, accepted) {
@@ -343,11 +295,6 @@ func TestTheFleetBoundTightensEveryPeerAtItsCeiling(t *testing.T) {
 	}
 }
 
-// TestAnUncountedFleetBoundsNobody is the fail-open direction, and it is the
-// one that matters most in a cluster: the count comes from a cache, and a
-// cache is empty for a moment after every operator restart. Reading that as
-// "this fleet should hold nothing" would refuse every agent in the cluster at
-// the worst possible moment.
 func TestAnUncountedFleetBoundsNobody(t *testing.T) {
 	limiter, accepted, _ := serveLimited(t, 8)
 	limiter.Expect(func() (int, bool) { return 0, false })
@@ -360,10 +307,6 @@ func TestAnUncountedFleetBoundsNobody(t *testing.T) {
 	}
 }
 
-// TestACountedEmptyFleetStillServesTheLegitimateShape is the other half of the
-// same distinction. Zero pods is a real answer and does tighten the bound --
-// but tightening is not refusing, and a peer within the shape a working agent
-// has is served even by a fleet that ought to have no agents at all.
 func TestACountedEmptyFleetStillServesTheLegitimateShape(t *testing.T) {
 	limiter, accepted, recorded := serveLimited(t, 8)
 	limiter.Expect(func() (int, bool) { return 0, true })
@@ -383,18 +326,12 @@ func TestACountedEmptyFleetStillServesTheLegitimateShape(t *testing.T) {
 	}
 }
 
-// TestTheFleetCeilingRefusesAPeerHoldingNothing is the one thing a per-peer
-// bound could never say. Every peer here is within the bound the fleet
-// tightened them to; what is over its limit is the fleet, and the peer refused
-// is holding no connections at all. Nothing compared those two numbers before,
-// and that comparison is the whole of what this closes.
 func TestTheFleetCeilingRefusesAPeerHoldingNothing(t *testing.T) {
 	limiter, accepted, recorded := serveLimited(t, MaxConnectionsPerPeer)
 	limiter.Expect(func() (int, bool) { return 1, true })
 
-	// One pod expected, so the ceiling on the sum is MaxConnectionsPerPeer and
-	// no single peer can reach it -- the tightening below cuts each of them to
-	// FleetConnectionsPerAgent first. Two peers together do.
+	// No single peer reaches the MaxConnectionsPerPeer ceiling once tightened
+	// to FleetConnectionsPerAgent; two together do.
 	for _, local := range []string{"127.0.0.2", "127.0.0.3"} {
 		for i := 0; i < FleetConnectionsPerAgent; i++ {
 			dialFrom(t, limiter, local)
@@ -404,7 +341,6 @@ func TestTheFleetCeilingRefusesAPeerHoldingNothing(t *testing.T) {
 		}
 	}
 
-	// A third address, holding nothing, asking for its first.
 	dialFrom(t, limiter, "127.0.0.4")
 	if served(t, accepted) {
 		t.Fatal("a connection was served past the fleet ceiling")
@@ -421,11 +357,6 @@ func TestTheFleetCeilingRefusesAPeerHoldingNothing(t *testing.T) {
 	}
 }
 
-// TestFleetSlackComesBackWhenConnectionsDo guards the release path's half of
-// the total. Without it the tightening would be permanent after one episode,
-// which is a lifetime quota on the fleet rather than a bound on what it holds
-// at once -- the same mistake TestAClosedConnectionGivesItsSlotBack guards for
-// one peer.
 func TestFleetSlackComesBackWhenConnectionsDo(t *testing.T) {
 	limiter, accepted, _ := serveLimited(t, 8)
 	limiter.Expect(func() (int, bool) { return 1, true })
@@ -445,7 +376,6 @@ func TestFleetSlackComesBackWhenConnectionsDo(t *testing.T) {
 		t.Fatal("the connection over the fleet ceiling was served")
 	}
 
-	// Give one back from the server side, which is the side that counts.
 	_ = open[0].Close()
 	deadline := time.Now().Add(5 * time.Second)
 	for {

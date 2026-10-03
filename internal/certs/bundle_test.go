@@ -160,7 +160,6 @@ func TestValidateRejectsWhatMustLeadToReissue(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Reissue: %v", err)
 	}
-	// An entirely different bundle, with its own CA.
 	other, err := Issue(testNow, testDNSNames())
 	if err != nil {
 		t.Fatalf("Issue (other): %v", err)
@@ -177,9 +176,6 @@ func TestValidateRejectsWhatMustLeadToReissue(t *testing.T) {
 		{"CA key missing", func(b *Bundle) { b.CAKeyPEM = nil }, testNow, "no CA"},
 		{"expired", func(b *Bundle) {}, testNow.Add(ServingLifetime + time.Hour), "not valid at"},
 		{
-			// The gap this fix closes: a serving certificate that is
-			// well-formed, unexpired and correctly SAN'd, but signed by a
-			// different CA than the one stored alongside it.
 			name: "CA does not match the serving certificate",
 			mutate: func(b *Bundle) {
 				b.CACertPEM = other.CACertPEM
@@ -189,9 +185,8 @@ func TestValidateRejectsWhatMustLeadToReissue(t *testing.T) {
 			wantError: "not signed by the stored CA",
 		},
 		{
-			// ca.crt and ca.key are each individually well-formed but did
-			// not come from the same Issue. parseCA must catch this itself,
-			// since both Validate and the store's repair path go through it.
+			// parseCA must catch this itself: Validate and the store's repair both go
+			// through it.
 			name: "CA cert and CA key are not a pair",
 			mutate: func(b *Bundle) {
 				b.CAKeyPEM = other.CAKeyPEM
@@ -200,8 +195,7 @@ func TestValidateRejectsWhatMustLeadToReissue(t *testing.T) {
 			wantError: "CA key does not match",
 		},
 		{
-			// Same CA on both sides (so the signature check passes), but the
-			// serving key does not belong to the serving certificate.
+			// Same CA, so only the serving key mismatch can fail.
 			name: "serving certificate does not match the serving key",
 			mutate: func(b *Bundle) {
 				b.ServingCertPEM = resigned.ServingCertPEM

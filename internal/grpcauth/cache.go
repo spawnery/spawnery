@@ -25,31 +25,21 @@ import (
 )
 
 const (
-	// PositiveTTL is how long an accepted token's review is reused. Projected
-	// agent tokens live 600 seconds (podspec.TokenExpirationSeconds) and the
-	// kubelet rotates them, so this sits well inside one token's life.
-	//
-	// What it can delay is narrow, and the narrowing is the design: only the
-	// TokenReview is cached, never the pod lookup, so deleting a pod -- the
-	// revocation an operator actually performs -- takes effect on the very
-	// next connection attempt whatever this cache holds.
+	// PositiveTTL sits well inside a projected token's 600 s life
+	// (podspec.TokenExpirationSeconds). Only the TokenReview is cached, never
+	// the pod lookup, so deleting a pod still revokes at once.
 	PositiveTTL = 60 * time.Second
 
-	// NegativeTTL is how long a refusal is reused, deliberately shorter. A
-	// cached "no" that was wrong should heal quickly; a cached "yes" is what
-	// removes the load.
+	// NegativeTTL is shorter so a wrong cached refusal heals quickly.
 	NegativeTTL = 10 * time.Second
 
-	// maxCacheEntries is a hard bound on the map, not a target. store never
-	// lets the map exceed it: expired entries go first, and if that frees
-	// nothing the entry closest to expiry is dropped to make room.
+	// maxCacheEntries is a hard bound: store evicts expired entries first, then
+	// the one closest to expiry.
 	maxCacheEntries = 1024
 )
 
-// reviewResult is what a TokenReview establishes about a token on its own,
-// independent of which role the caller asked for. The role check is
-// deliberately not in here: it varies per call, so caching it would let one
-// agent's rejection answer another agent's question.
+// reviewResult leaves out the role check: it varies per call, so caching it
+// would let one agent's rejection answer another agent's question.
 type reviewResult struct {
 	Namespace      string
 	ServiceAccount string
@@ -63,7 +53,6 @@ type cacheEntry struct {
 	expires time.Time
 }
 
-// ReviewCache remembers what the API server said about a token.
 type ReviewCache struct {
 	now func() time.Time
 
@@ -71,7 +60,6 @@ type ReviewCache struct {
 	entries map[string]cacheEntry
 }
 
-// NewReviewCache returns a cache reading time from now.
 func NewReviewCache(now func() time.Time) *ReviewCache {
 	return &ReviewCache{now: now, entries: map[string]cacheEntry{}}
 }
@@ -81,7 +69,6 @@ func cacheKey(token string) string {
 	return hex.EncodeToString(sum[:])
 }
 
-// lookup returns a remembered answer, if one has not expired.
 func (c *ReviewCache) lookup(token string) (reviewResult, error, bool) {
 	if c == nil {
 		return reviewResult{}, nil, false
@@ -99,12 +86,9 @@ func (c *ReviewCache) lookup(token string) (reviewResult, error, bool) {
 	return entry.result, nil, true
 }
 
-// store remembers an answer. An API server outage is never remembered: it says
-// nothing about the token, and caching it would extend the outage past its end.
-//
-// A refusal is stored as its message rather than as the error value, which
-// loses the error's type. That is safe precisely because the one type that
-// matters -- unavailableErr -- is the one case this never stores.
+// store never remembers an API server outage: it says nothing about the token.
+// A refusal is stored as its message, losing its type, which is safe because
+// unavailableErr is never stored.
 func (c *ReviewCache) store(token string, result reviewResult, err error) {
 	if c == nil || isUnavailable(err) {
 		return
@@ -112,11 +96,8 @@ func (c *ReviewCache) store(token string, result reviewResult, err error) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 
-	// Two steps, and the second is what makes the bound a bound. Sweeping
-	// expired entries is free and usually enough, but with maxCacheEntries
-	// live entries it deletes nothing, and a map that only ever sweeps the
-	// dead grows without limit under a flood of distinct tokens -- exactly the
-	// case a bound is for.
+	// Sweeping expired entries frees nothing when all are live; evicting the
+	// soonest is what bounds the map under a flood of distinct tokens.
 	if len(c.entries) >= maxCacheEntries {
 		c.evictExpiredLocked()
 	}
@@ -140,21 +121,9 @@ func (c *ReviewCache) evictExpiredLocked() {
 	}
 }
 
-// evictSoonestLocked drops the one entry closest to expiring, which is what
-// makes room for the caller's. One is enough: store adds at most one entry per
-// call, so evicting one before each store holds the map at maxCacheEntries for
-// good.
-//
-// Closest to expiry rather than least recently used, because it needs no
-// extra bookkeeping. Every entry has one of two lifetimes: the short
-// NegativeTTL for a refusal, the longer PositiveTTL for an accepted review.
-// Under a flood of distinct tokens, a freshly stored refusal expires before a
-// freshly stored positive, so it is usually the refusal that goes first --
-// but only for roughly the first fifty seconds of a positive entry's life.
-// Past that point a positive has less time left than a freshly stored
-// refusal and gets evicted first instead. Either order is fine: evicting a
-// live positive costs one extra TokenReview and admits nobody who would not
-// otherwise be admitted.
+// evictSoonestLocked evicts closest-to-expiry rather than least recently used,
+// which needs no bookkeeping. Evicting a live positive costs one extra
+// TokenReview and admits nobody.
 func (c *ReviewCache) evictSoonestLocked() {
 	var soonestKey string
 	var soonest time.Time

@@ -23,12 +23,8 @@ import (
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
-// TestPublishingABundleReportsBothExpiries goes through Provider.Set rather
-// than calling observeExpiry directly, and that is the whole point of it. A
-// gauge that is correct but never set is the failure this file exists to
-// prevent: the two rotation gauges beside it were reachable by nothing for
-// months because the chart's Service exposed no metrics port, and a gauge the
-// operator declares but never writes is the same defect one layer in.
+// TestPublishingABundleReportsBothExpiries goes through Provider.Set, not
+// observeExpiry, so a gauge declared but never written fails it.
 func TestPublishingABundleReportsBothExpiries(t *testing.T) {
 	now := time.Now().Truncate(time.Second)
 	bundle, err := Issue(now, []string{"spawnery-operator.spawnery-system.svc"})
@@ -58,20 +54,15 @@ func TestPublishingABundleReportsBothExpiries(t *testing.T) {
 		t.Errorf("spawnery_serving_cert_expiry_timestamp_seconds = %v, want %v", got, want)
 	}
 
-	// The two certificates must not report the same instant, or a mutation
-	// swapping one for the other would leave both assertions above green.
-	// CALifetime is ten years and ServingLifetime is far shorter, so this
-	// holds by construction rather than by luck.
+	// Distinct instants, or swapping the two gauges would pass both assertions.
 	if caCert.NotAfter.Equal(servingCert.NotAfter) {
 		t.Fatal("the CA and the serving certificate expire at the same instant, so the two " +
 			"assertions above cannot tell the gauges apart")
 	}
 }
 
-// TestABundleThatWillNotParseLeavesTheGaugesAlone pins the deliberate choice
-// not to zero a gauge on a parse failure. Zero is a timestamp in 1970, and an
-// alert written the obvious way -- expiry minus now -- would read it as fifty
-// years expired and wake somebody for a bundle that is fine.
+// TestABundleThatWillNotParseLeavesTheGaugesAlone: zero would be a 1970
+// timestamp, which an expiry alert reads as long expired.
 func TestABundleThatWillNotParseLeavesTheGaugesAlone(t *testing.T) {
 	good, err := Issue(time.Now(), []string{"spawnery-operator.spawnery-system.svc"})
 	if err != nil {

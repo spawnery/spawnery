@@ -75,8 +75,7 @@ func TestEnsureCreatesTheSecret(t *testing.T) {
 	}
 }
 
-// This is the restart: a second Ensure must not mint a new CA, or every agent
-// pinned to the old one would stop trusting the operator.
+// A new CA on restart would break every agent pinned to the old one.
 func TestEnsureIsIdempotent(t *testing.T) {
 	s, _, ctx, _ := newStore(t)
 
@@ -143,17 +142,13 @@ func TestEnsureRepairsACorruptSecret(t *testing.T) {
 	if err := b.Validate(s.Clock(), s.DNSNames); err != nil {
 		t.Errorf("the repaired bundle is still broken: %v", err)
 	}
-	// Only the serving certificate was damaged; the CA was still readable, so
-	// the repair must have kept it rather than throwing it away.
 	if string(b.CACertPEM) != string(before.CACertPEM) {
 		t.Error("repairing a damaged serving certificate replaced a still-intact CA")
 	}
 }
 
-// A CA cert and CA key that are each individually well-formed but do not
-// belong together must be repaired once — and the repair must converge, not
-// loop, since a Reissue against a mismatched pair would fail Validate again
-// and Ensure would "fix" it forever under Task 9's hourly ticker.
+// A CA cert and key that do not belong together are repaired once, and the
+// repair converges instead of failing Validate again on every tick.
 func TestEnsureConvergesOnAMismatchedCAPair(t *testing.T) {
 	s, _, ctx, _ := newStore(t)
 
@@ -199,8 +194,7 @@ func TestEnsureConvergesOnAMismatchedCAPair(t *testing.T) {
 	}
 }
 
-// The gRPC server asks the provider on every handshake, so a renewal takes
-// effect without a restart and without dropping a connection.
+// The provider is asked on every handshake, so a renewal needs no restart.
 func TestProviderServesTheCurrentCertificate(t *testing.T) {
 	s, _, ctx, _ := newStore(t)
 	p := certs.NewProvider(s)
@@ -247,13 +241,8 @@ func TestGetCertificateBeforeSetFails(t *testing.T) {
 	}
 }
 
-// A rotation in progress survives the operator restarting.
-//
-// Everything about the sequence lives in the secret so that a new leader can
-// pick it up, and this is the assertion that the storage layer actually keeps
-// it. Ensure reads the secret back on every call; a rotation slot it did not
-// know about would be dropped on the first renewal, silently, and the operator
-// would go back to publishing one CA while agents were mid-window.
+// A rotation in progress survives the operator restarting: a slot Ensure did
+// not read back would be dropped silently on the next renewal.
 func TestEnsureCarriesARotationSlotThroughAReadBack(t *testing.T) {
 	s, clock, ctx, ns := newStore(t)
 
@@ -265,10 +254,7 @@ func TestEnsureCarriesARotationSlotThroughAReadBack(t *testing.T) {
 	if err != nil {
 		t.Fatalf("IssueCA: %v", err)
 	}
-	// A previous slot alongside the next one: drop-old is the only other
-	// consumer of ca-previous.*, so this is the one test standing between a
-	// deleted write block and a rollback losing the CA it needs to sign with
-	// again.
+	// Outside drop-old nothing else reads ca-previous.*, so this guards its write.
 	prevCert, prevKey, err := certs.IssueCA(clock.Now())
 	if err != nil {
 		t.Fatalf("IssueCA: %v", err)
@@ -286,8 +272,7 @@ func TestEnsureCarriesARotationSlotThroughAReadBack(t *testing.T) {
 		t.Fatalf("plant the incoming and outgoing CAs: %v", err)
 	}
 
-	// Far enough for the serving certificate to need renewing, so this goes
-	// down Ensure's rewrite path rather than its no-op one.
+	// Far enough to renew the serving certificate, so Ensure rewrites the secret.
 	clock.Advance(80 * 24 * time.Hour)
 
 	b, err := s.Ensure(ctx)
@@ -320,14 +305,9 @@ func TestEnsureCarriesARotationSlotThroughAReadBack(t *testing.T) {
 	}
 }
 
-// When the stored CA is damaged beyond repair, Ensure has to mint a whole
-// new one -- but a next CA already being distributed has nothing to do with
-// why ca.key stopped parsing, and carrying it forward is a deliberate choice
-// (see carryRotation): dropping it would leave the secret claiming a
-// rotation is still distributing with no slot left to prove it, and Task 4's
-// SwitchToNext would find nothing to switch to. This is the one test that
-// exercises that fallback at all -- every other test's stored CA parses
-// fine, so this is the only place a change to that branch would be caught.
+// When the stored CA is damaged beyond repair, Ensure mints a new one but
+// carries the next CA forward (see carryRotation). No other test reaches that
+// fallback.
 func TestEnsureCarriesTheNextCAAcrossAFullCAReissue(t *testing.T) {
 	s, clock, ctx, ns := newStore(t)
 
@@ -347,9 +327,7 @@ func TestEnsureCarriesTheNextCAAcrossAFullCAReissue(t *testing.T) {
 	}
 	secret.Data["ca-next.crt"] = nextCert
 	secret.Data["ca-next.key"] = nextKey
-	// Not PEM at all, let alone an EC key -- parseCA has to fail outright,
-	// not just fail to match a certificate, so Ensure takes the Issue
-	// fallback rather than the Reissue-keeps-the-CA one.
+	// Not PEM at all, so Ensure takes the Issue fallback rather than Reissue.
 	secret.Data["ca.key"] = []byte("not a key")
 	if err := s.Client.Update(ctx, secret); err != nil {
 		t.Fatalf("plant the incoming CA and corrupt ca.key: %v", err)

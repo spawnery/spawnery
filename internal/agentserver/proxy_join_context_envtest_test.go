@@ -28,24 +28,9 @@ import (
 	"github.com/spawnery/spawnery/internal/proxyreg"
 )
 
-// joinContextRecordingFleet delegates to a real *proxyreg.Fleet — so the
-// session behaves exactly like it does in production, FullSync and all — but
-// on a second Join call, it also records whether the *first* call's context
-// was already cancelled by that point.
-//
-// That check has to happen here, inside Join itself, rather than later from
-// the test goroutine. sessions.enter cancels the displaced handler's
-// enter-derived context before that handler's successor ever reaches Join —
-// happens-before within one goroutine, no scheduling luck required — so if
-// ProxySession hands Join the enter-derived context, this is true on every
-// run. But the cascade that eventually cancels stream.Context() too (the
-// first handler noticing its own ctx.Done(), returning, and gRPC tearing its
-// stream down as a result) is a real concurrent race with no ordering
-// guarantee against this call. Give it any wall-clock time at all — a poll
-// loop, a few more Recv round trips — and that race resolves the same way
-// regardless of which context Join actually received, and the test stops
-// discriminating. Checking synchronously, in the same call, is what keeps it
-// honest.
+// joinContextRecordingFleet records, on the second Join, whether the first Join's context
+// was already cancelled. The check must run inside Join: stream.Context() is cancelled
+// later by a concurrent race, and any delay lets that race hide which context Join got.
 type joinContextRecordingFleet struct {
 	*proxyreg.Fleet
 
@@ -73,8 +58,6 @@ func (f *joinContextRecordingFleet) Join(ctx context.Context, namespace, group, 
 	return f.Fleet.Join(ctx, namespace, group, podUID)
 }
 
-// firstWasCancelledBySecond blocks until a second Join call has happened, then
-// reports what it observed about the first call's context at that instant.
 func (f *joinContextRecordingFleet) firstWasCancelledBySecond(t *testing.T) bool {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -93,20 +76,8 @@ func (f *joinContextRecordingFleet) firstWasCancelledBySecond(t *testing.T) bool
 	}
 }
 
-// The guard in Fleet.Join (internal/proxyreg/fleet.go) only closes the
-// zombie-handler window because ProxySession passes it the enter-derived
-// context, the one sessions.enter returns and a successor's enter cancels —
-// not stream.Context(), which a supersede never touches. Swap the two in
-// server.go and this guard goes quietly inert: Join would never see a
-// cancelled context from a displaced handler, because stream.Context() of the
-// first stream is still live at the point its successor calls Join (a
-// supersede does not close the client's own stream), and no other test would
-// notice.
-//
-// This pins the invariant directly. TestASecondProxyStreamSupersedesTheFirstWithoutMisreportingWhy
-// is the model for driving the supersede itself; this test adds the one
-// assertion that test cannot make, because it has no way to see the context
-// object Join was actually given.
+// Fleet.Join's zombie-handler guard only works if ProxySession passes it the
+// enter-derived context: a supersede never cancels the first stream's stream.Context().
 func TestProxySessionJoinsWithTheEnterDerivedContext(t *testing.T) {
 	recording := &joinContextRecordingFleet{}
 	f := newFixtureWithProxies(t, 8*time.Minute, 10*time.Minute, 0, func(real *proxyreg.Fleet) agentserver.ProxyFleet {

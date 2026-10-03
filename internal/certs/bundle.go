@@ -14,10 +14,9 @@ See the License for the specific language governing permissions and
 limitations under the License.
 */
 
-// Package certs issues and renews the operator's own serving certificate. The
-// operator is its own CA on purpose: it creates the agent pods anyway, so it
-// can pin its CA into them, and "one helm install is enough" survives without
-// cert-manager.
+// Package certs issues and renews the operator's own serving certificate.
+// The operator is its own CA so that one helm install works without
+// cert-manager; it pins the CA into the agent pods it creates.
 package certs
 
 import (
@@ -37,10 +36,9 @@ import (
 )
 
 const (
-	// CALifetime is long because rotating the CA needs an overlap phase that
-	// milestone 2a does not build.
+	// CALifetime is long because only a human starts a CA rotation.
 	CALifetime = 10 * 365 * 24 * time.Hour
-	// ServingLifetime is short because renewing it is automatic and costs no
+	// ServingLifetime is short because renewal is automatic and drops no
 	// connection.
 	ServingLifetime = 90 * 24 * time.Hour
 
@@ -56,18 +54,12 @@ type Bundle struct {
 	ServingKeyPEM  []byte
 
 	// NextCACertPEM and NextCAKeyPEM hold the incoming CA while a rotation is
-	// distributing, and are empty at every other time. The CA that signs the
-	// serving certificate stays CACertPEM/CAKeyPEM throughout that phase --
-	// still the outgoing one -- and that is what makes the phase safe: the new
-	// CA is published for agents to trust well before anything is signed with
-	// it.
+	// distributing. It is published for trust but signs nothing yet.
 	NextCACertPEM []byte
 	NextCAKeyPEM  []byte
 
 	// PreviousCACertPEM and PreviousCAKeyPEM hold the outgoing CA between the
-	// switch and drop-old. The key is kept and not only the certificate,
-	// because signing with it again is the whole content of a rollback; a
-	// certificate on its own would be trust nobody can act on.
+	// switch and drop-old. The key is kept because a rollback signs with it.
 	PreviousCACertPEM []byte
 	PreviousCAKeyPEM  []byte
 }
@@ -82,10 +74,8 @@ func ServingDNSNames(service, namespace string) []string {
 	}
 }
 
-// IssueCA mints a self-signed CA. Issue calls it for the first one; a rotation
-// calls it for the incoming one, which is why it exists separately: at that
-// point there is no serving certificate to sign, and signing one would be
-// exactly the thing the overlap window has to postpone.
+// IssueCA mints a self-signed CA without a serving certificate, which a
+// rotation must not sign with the incoming CA yet.
 func IssueCA(now time.Time) (certPEM, keyPEM []byte, err error) {
 	caKey, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
@@ -168,16 +158,9 @@ func Reissue(now time.Time, b *Bundle, dnsNames []string) (*Bundle, error) {
 	}, nil
 }
 
-// PublishedCA is what the agents pin: the CA that signs the serving
-// certificate, followed by whichever second CA the rotation is currently
-// holding. Order does not matter to the agent -- OperatorChannel.trustManager
-// loads every certificate in the stream -- but it is deterministic so that a
-// phase which has not changed produces a ConfigMap write that is a no-op.
-//
-// A slot that fails parsableCert is treated as absent rather than surfaced as
-// an error: this function is pure and keeps no logger, because a mistyped
-// annotation reaching here must not take the operator down, and the report is
-// a later concern's, not this one's.
+// PublishedCA is what the agents pin: the signing CA, then whichever
+// rotation slot is held. The order is fixed so an unchanged phase writes an
+// identical ConfigMap. A slot failing parsableCert is treated as absent.
 func (b *Bundle) PublishedCA() []byte {
 	switch {
 	case parsableCert(b.NextCACertPEM) == nil:
@@ -188,55 +171,21 @@ func (b *Bundle) PublishedCA() []byte {
 	return b.CACertPEM
 }
 
-// errNotOnlyTheFirstBlock is the one parsableCert verdict a caller can repair
-// instead of throwing the slot away, and it is a sentinel rather than a
-// message so that the caller keys on the verdict rather than on this file's
-// wording.
-//
-// It says: the first PEM block is a certificate, and the slot is more than
-// that block alone. Which is exactly the case where parsableCert and parseCA
-// disagree -- parseCA decodes the first block and ignores everything else, so
-// the slot still signs perfectly well -- and therefore exactly the case where
-// truncating to the first block costs nothing and settles the disagreement.
-//
-// What the agent does with the surplus depends on what the surplus is, and
-// neither answer is one to publish on. A trailing five-hyphen run that opens
-// no valid block throws for the whole stream, taking the signing CA with it.
-// A trailing *valid* block does not throw at all: it is loaded as another CA,
-// silently widening the fleet's trust store. Leading junk is the same two
-// cases with the certificate after it rather than before.
+// errNotOnlyTheFirstBlock: the first PEM block is a certificate, but the slot
+// holds more. parseCA reads only that block, so truncating to it loses
+// nothing. The surplus must not be published: an invalid block makes the
+// agent throw for the whole stream, a valid one silently widens its trust.
 var errNotOnlyTheFirstBlock = errors.New("more than its first PEM block")
 
-// parsableCert reports whether pemBytes is something an agent's trust store
-// will accept: exactly the PEM encoding of one certificate.
+// parsableCert accepts exactly the PEM encoding of one certificate.
 //
-// **What the agent actually rejects.**
-// OperatorChannel.trustManager parses with CertificateFactory.generateCertificates.
-// OpenJDK's X509Factory.readOneBlock skips everything before the first line
-// beginning with a five-hyphen run and returns null at end of stream instead
-// of throwing, so stray bytes carrying no such line are stepped over: a good
-// ca.crt followed by "this is not a certificate" still yields the good CA.
-// What kills the stream is a line that begins with a five-hyphen run and does
-// not open a complete, decodable certificate block -- a PEM envelope around
-// something that is not a certificate, a block whose base64 is malformed, a
-// header with no matching footer, or a bare "-----x-----" line. Then nothing
-// already parsed survives; the whole bundle throws.
+// OpenJDK's X509Factory steps over stray bytes without a five-hyphen line but
+// throws for the whole stream on any such line that opens no decodable
+// certificate. This check is stricter, because depending on that JDK detail
+// breaks on a single pasted "-----".
 //
-// **This check is deliberately stricter than that.** "Stray bytes that happen
-// to contain no five-hyphen run" is not a property worth depending on: it
-// belongs to one JDK's block scanner rather than to the format, it is
-// invisible in the bytes a human pastes, and a single "-----" anywhere in
-// them flips it. So the rule is the narrow one -- exactly the PEM encoding of
-// one certificate -- and everything else is repaired or cleared by
-// AdvanceRotation rather than published on the strength of that property.
-//
-// **One rule, not a list of failure modes.** The slot must be byte-identical
-// to firstPEMBlock of itself, and that block must be a certificate. Phrased
-// as "decode, then look at what is left over" it would have three modes and a
-// hole: pem.Decode skips whatever precedes the first block, so `rest` comes
-// back empty for a slot with junk pasted in front of the certificate and the
-// junk is invisible to the check -- while the bytes that reach the agent
-// still carry it.
+// It compares against firstPEMBlock rather than inspecting pem.Decode's rest:
+// Decode silently skips junk before the first block.
 func parsableCert(pemBytes []byte) error {
 	block, _ := pem.Decode(pemBytes)
 	if block == nil {
@@ -245,11 +194,7 @@ func parsableCert(pemBytes []byte) error {
 	if _, err := x509.ParseCertificate(block.Bytes); err != nil {
 		return fmt.Errorf("parse certificate: %w", err)
 	}
-	// firstPEMBlock is DER-faithful and idempotent, so a slot the operator
-	// wrote itself compares equal here and nothing happens to it. Anything
-	// else -- leading junk, trailing junk, a second block, or merely a
-	// different encoding of the same certificate -- is what a hand-edit
-	// produces, and the caller can repair every one of them the same way.
+	// A slot the operator wrote itself re-encodes to the same bytes.
 	if !bytes.Equal(pemBytes, firstPEMBlock(pemBytes)) {
 		return errNotOnlyTheFirstBlock
 	}
@@ -257,16 +202,8 @@ func parsableCert(pemBytes []byte) error {
 }
 
 // firstPEMBlock re-encodes the first PEM block of pemBytes and drops whatever
-// surrounded it.
-//
-// Re-encoded rather than sliced out, because pem.Decode reports neither where
-// the block began nor where it ended, and slicing from what it does report
-// would carry any preceding junk along. The DER inside is untouched, so this
-// is the same certificate parseCA reads out of these bytes.
-//
-// nil for input with no PEM block at all, which is how parsableCert's
-// comparison stays correct without a second decode of its own: pemBytes is
-// never nil there, having already decoded.
+// surrounded it. Re-encoded because pem.Decode does not report the block's
+// offsets.
 func firstPEMBlock(pemBytes []byte) []byte {
 	block, _ := pem.Decode(pemBytes)
 	if block == nil {
@@ -337,8 +274,7 @@ func (b *Bundle) WithNextCA(certPEM, keyPEM []byte) *Bundle {
 
 // SwitchToNext promotes the incoming CA to the signing one, demotes the
 // outgoing one to the previous slot, and signs a fresh serving certificate
-// with the new CA. This is the step the overlap window exists to protect, and
-// the only one that can strand an agent.
+// with the new CA. The only step that can strand an agent.
 func (b *Bundle) SwitchToNext(now time.Time, dnsNames []string) (*Bundle, error) {
 	if len(b.NextCACertPEM) == 0 || len(b.NextCAKeyPEM) == 0 {
 		return nil, fmt.Errorf("bundle has no next CA to switch to")

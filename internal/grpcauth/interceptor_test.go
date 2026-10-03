@@ -34,11 +34,8 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// fakeServerStream is just enough of grpc.ServerStream for the interceptor:
-// it only ever calls Context() before a token is accepted. Embedding the
-// nil interface would panic if the interceptor called anything else, which
-// is the point — it catches the interceptor reaching into the stream before
-// authentication succeeds.
+// fakeServerStream embeds the nil interface, so the interceptor panics if it
+// touches anything but Context() before authentication succeeds.
 type fakeServerStream struct {
 	grpc.ServerStream
 	ctx context.Context
@@ -51,9 +48,7 @@ func streamCtxWithToken(token string) context.Context {
 		metadata.Pairs("authorization", "Bearer "+token))
 }
 
-// rejectingReviewer simulates the real API server refusing a token, as
-// opposed to failingReviewer, which simulates the API server being
-// unreachable. The two must map to different gRPC codes.
+// rejectingReviewer refuses a token; failingReviewer is unreachable.
 type rejectingReviewer struct{}
 
 func (rejectingReviewer) Create(context.Context, *authnv1.TokenReview, metav1.CreateOptions) (
@@ -63,9 +58,6 @@ func (rejectingReviewer) Create(context.Context, *authnv1.TokenReview, metav1.Cr
 	}, nil
 }
 
-// The message-only assertion in TestTokenReviewUnavailableIsNotARejection
-// does not prove anything reaches the wire differently: this checks the
-// actual gRPC status code the interceptor returns.
 func TestInterceptorMapsUnavailableToUnavailableCode(t *testing.T) {
 	a := &grpcauth.Authenticator{
 		Reviews:  failingReviewer{},
@@ -88,8 +80,6 @@ func TestInterceptorMapsUnavailableToUnavailableCode(t *testing.T) {
 	}
 }
 
-// A genuinely refused token must still come back as Unauthenticated, not
-// Unavailable — otherwise the two codes would carry no information at all.
 func TestInterceptorMapsRejectionToUnauthenticatedCode(t *testing.T) {
 	a := &grpcauth.Authenticator{
 		Reviews:  rejectingReviewer{},
@@ -110,18 +100,9 @@ func TestInterceptorMapsRejectionToUnauthenticatedCode(t *testing.T) {
 	if code := status.Code(err); code != codes.Unauthenticated {
 		t.Errorf("code = %v, want %v", code, codes.Unauthenticated)
 	}
-	// The pod checker must never be reached — the review already refused it.
 }
 
-// The rate limit's one externally observable effect is the gRPC code the
-// interceptor returns for it, and nothing exercised that mapping until this.
-// The limiter's own tests all call Authenticate directly and read isExhausted,
-// an unexported predicate, so replacing codes.ResourceExhausted in the
-// interceptor with codes.Unauthenticated broke nothing — and an agent that
-// cannot tell "your credentials are wrong" from "you are asking too fast"
-// gives up where it should have backed off.
 func TestInterceptorMapsARateLimitToResourceExhausted(t *testing.T) {
-	// Frozen, so the peer's bucket never refills mid-loop.
 	now := time.Date(2026, 8, 24, 12, 0, 0, 0, time.UTC)
 	clock := func() time.Time { return now }
 	a := &grpcauth.Authenticator{
@@ -132,11 +113,8 @@ func TestInterceptorMapsARateLimitToResourceExhausted(t *testing.T) {
 		Limiter:  grpcauth.NewPeerLimiter(clock),
 	}
 
-	// Every token is distinct, so every call is a genuine cache miss and
-	// reaches the limiter. The limiter is consulted before the TokenReview, so
-	// the first PeerBurst calls spend the bucket and come back Unauthenticated
-	// from the reviewer; the one after that is the limiter's own refusal, and
-	// its code is what this is about.
+	// Distinct tokens all miss the cache; the first PeerBurst come back
+	// Unauthenticated from the reviewer, the next is the limiter's refusal.
 	for i := 0; i < grpcauth.PeerBurst+2; i++ {
 		err := a.StreamInterceptor()(nil,
 			&fakeServerStream{ctx: streamCtxWithToken(fmt.Sprintf("distinct-token-%d", i))},

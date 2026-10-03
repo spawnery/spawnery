@@ -30,17 +30,8 @@ import (
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
-// One test per bound, each asserting which one fired.
-//
-// Retire is the first request on this channel that writes, so every test here
-// also reads spec.retire back afterwards: an answer is not evidence that
-// anything was patched, and the two failure modes -- answering yes without
-// writing, and writing without saying so -- are both invisible to a test that
-// only inspects the response.
+// Every test reads spec.retire back: an answer is not evidence that anything was patched.
 
-// makeServer creates a Server in the fixture's namespace so netstate can see
-// it. The address matters only in that netstate reports registered servers;
-// hasServer does not consult it, which is the difference from a move target.
 func makeServer(t *testing.T, f *serverFixture, name string) {
 	t.Helper()
 	srv := &spawneryv1alpha1.Server{
@@ -54,13 +45,6 @@ func makeServer(t *testing.T, f *serverFixture, name string) {
 	}
 }
 
-// retireOverTheWire asks, on a real server stream, and returns the answer.
-//
-// The pod is the caller's, not this helper's: the already-retiring test asks
-// twice, and a helper that minted its own pod each time would try to create
-// the same one twice. Two streams from one pod is also the truthful shape --
-// it is one server agent asking again, which is exactly the case that test is
-// about.
 func retireOverTheWire(
 	t *testing.T, f *serverFixture, pod *corev1.Pod, server string,
 ) *agentpb.CloudResponse {
@@ -137,14 +121,8 @@ func TestRetireSetsTheFlagAndSaysSo(t *testing.T) {
 	}
 }
 
-// The namespace bound, shown rather than asserted about.
-//
-// Two namespaces hold a server of the same name, and an agent authenticated
-// into one asks to retire it. A handler that trusted the message's name over
-// the token's namespace would patch whichever it found first, and this is the
-// only shape of test that can tell the difference: with distinct names, a
-// cross-namespace write would simply fail to resolve and the test would pass
-// for the wrong reason.
+// Same name in two namespaces: with distinct names a cross-namespace write
+// would fail to resolve and the test would pass for the wrong reason.
 func TestRetireCannotReachAnotherNetworksServerOfTheSameName(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-aaaa")
@@ -187,10 +165,8 @@ func TestRetiringAServerThisNetworkDoesNotHaveIsNotFound(t *testing.T) {
 	}
 }
 
-// Asking twice is refused, and refused with REFUSED rather than answered
-// again. The second admin has to be able to tell "I did this" from "somebody
-// beat me to it": an operator that says done twice teaches both of them the
-// command does nothing.
+// REFUSED, not answered again: a second admin must be able to tell "I did
+// this" from "somebody beat me to it".
 func TestRetiringAnAlreadyRetiringServerIsRefused(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-aaaa")
@@ -203,24 +179,13 @@ func TestRetiringAnAlreadyRetiringServerIsRefused(t *testing.T) {
 	if got := second.GetError().GetReason(); got != agentpb.RequestError_REFUSED {
 		t.Fatalf("reason = %v, want REFUSED for a server that is already retiring", got)
 	}
-	// And the flag is still set: a refusal must not be a rollback.
 	if !retiring(t, f, f.ns, "lobby-aaaa") {
 		t.Error("the second, refused ask cleared spec.retire")
 	}
 }
 
-// The rate bound belongs to the channel, not to a verb.
-//
-// It is asserted through retire on purpose. The limiter's own arithmetic is
-// covered by unit tests in requests_test.go; what those cannot see is whether
-// a *newly added verb* is behind the bound at all, and that is precisely what
-// a per-verb check loses the day somebody adds the third one. This test fails
-// if the bound ever moves back down into the verbs and retire is left out.
-//
-// One stream and not one per ask: the bucket refills a token a second, and
-// nine separate dials and handshakes would take long enough to earn one back.
-// On a single stream the nine sends are sub-millisecond and the refill cannot
-// rescue them, which is what makes this assert a bound rather than a race.
+// Asserted through retire so a verb added outside the channel-wide bound fails here.
+// One stream: the bucket refills a token a second, which separate dials would earn back.
 func TestTheRateBoundCoversEveryVerbAndNotJustConnect(t *testing.T) {
 	f := newServerFixture(t)
 	pod := f.pod("lobby-aaaa")
@@ -240,9 +205,7 @@ func TestTheRateBoundCoversEveryVerbAndNotJustConnect(t *testing.T) {
 				CloudRequest: &agentpb.CloudRequest{
 					Id: uint64(i + 1),
 					Request: &agentpb.CloudRequest_Retire{
-						// A name nothing has, so every ask costs a token and
-						// none of them writes anything: the bound is the
-						// subject here, not the verb's effect.
+						// Unknown name: every ask costs a token and writes nothing.
 						Retire: &agentpb.RetireRequest{Server: "a-server-nobody-has"},
 					},
 				},
@@ -252,8 +215,7 @@ func TestTheRateBoundCoversEveryVerbAndNotJustConnect(t *testing.T) {
 		}
 	}
 
-	// Collect until the last id comes back rather than counting messages: the
-	// stream also carries reports the operator sends on its own schedule.
+	// The stream also carries reports the operator sends on its own schedule.
 	deadline := time.Now().Add(10 * time.Second)
 	var last *agentpb.CloudResponse
 	for last == nil {
