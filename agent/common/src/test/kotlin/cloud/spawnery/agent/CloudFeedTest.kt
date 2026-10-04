@@ -45,7 +45,7 @@ class CloudFeedTest {
         val lines = coalesce(
             listOf(
                 event("ReadyGatePassed", "lobby-a3f9", "lobby"),
-                event("Terminating", "lobby-b71c", "lobby"),
+                event("Retiring", "lobby-b71c", "lobby"),
             ),
         )
 
@@ -167,8 +167,8 @@ class CloudFeedSignTest {
     fun `a collapsed line takes the sign of its kind`() {
         val lines = coalesce(
             listOf(
-                event("Terminating", "lobby-a3f9", "lobby"),
-                event("Terminating", "lobby-b71c", "lobby"),
+                event("Retiring", "lobby-a3f9", "lobby"),
+                event("Retiring", "lobby-b71c", "lobby"),
             ),
         )
 
@@ -179,12 +179,12 @@ class CloudFeedSignTest {
     fun `the kind is no longer green in a collapsed line`() {
         val lines = coalesce(
             listOf(
-                event("Terminating", "lobby-a3f9", "lobby"),
-                event("Terminating", "lobby-b71c", "lobby"),
+                event("Retiring", "lobby-a3f9", "lobby"),
+                event("Retiring", "lobby-b71c", "lobby"),
             ),
         )
 
-        assertTrue(!lines.single().contains("<green>Terminating"), lines.single())
+        assertTrue(!lines.single().contains("<green>Retiring"), lines.single())
     }
 
     @Test

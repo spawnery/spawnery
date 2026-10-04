@@ -42,10 +42,10 @@ fun coalesce(events: List<CloudEvent>): List<String> {
 }
 
 /** A neutral event gets a dim sign too, so the signs line up. */
-private fun sign(kind: String): String = when (direction(kind)) {
-    Direction.ADDED -> Style.marker("+", "green")
-    Direction.REMOVED -> Style.marker("-", "gold")
-    Direction.NEUTRAL -> Style.marker("\u00b7", "dark_gray")
+private fun sign(kind: String): String = when (row(kind)) {
+    Row.CREATED, Row.ARRIVED, Row.READY -> Style.marker("+", "green")
+    Row.LEAVING, Row.GONE -> Style.marker("-", "gold")
+    Row.OTHER -> Style.marker("\u00b7", "dark_gray")
 }
 
 private val WARNING = Style.marker("!", "red")
