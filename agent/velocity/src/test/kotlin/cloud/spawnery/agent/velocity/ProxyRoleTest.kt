@@ -5,7 +5,7 @@ import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.CloudEvents
 import cloud.spawnery.agent.Feed
 import cloud.spawnery.agent.FeedAudience
-import cloud.spawnery.agent.FeedState
+import cloud.spawnery.agent.FeedLevels
 import cloud.spawnery.agent.dormantConnector
 import cloud.spawnery.agent.pb.DrainPlayers
 import cloud.spawnery.agent.pb.FullSync
@@ -33,7 +33,7 @@ private fun inertFeed(): Feed = Feed(
         override fun holders(permission: String): List<UUID> = emptyList()
         override fun send(player: UUID, message: String) = Unit
     },
-    FeedState(),
+    FeedLevels(null),
     System::currentTimeMillis,
 )
 

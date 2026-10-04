@@ -195,7 +195,7 @@ func (r *Registry) Interested(podUID string) bool {
 }
 
 // Publish sends one event to every session in the namespace that asked for
-// events. It implements cloudevent.Sink. It reports nothing: a feed nobody
+// events. It implements cloudevent.Publisher. It reports nothing: a feed nobody
 // watches must not fail a reconcile, and a missed event is ordinary.
 func (r *Registry) Publish(namespace string, ev *agentpb.CloudEvent) {
 	r.broadcast(namespace, func(s *session) *agentpb.OperatorToServer {

@@ -217,14 +217,10 @@ does not learn is *where*: `CloudPlayer.server()` is empty for them, as it is
 for a player between two backends, so the network picture a backend receives
 never names a server its own `servers()` does not list.
 
-**The event feed is not split this way, and today that is a limitation.**
-Everything above is about the network picture. Events are a separate channel
-and have no audience: a private member's lifecycle (its creation, its pod, the
-gate it passes, the run that ends, anything that fails) reaches every backend
-whose plugin asked for events, naming the member and its group, and the
-`Network`'s `spec.defaults.feedFormat` can turn those into chat lines. So a
-backend plugin can learn a private server's name from an event even though
-`servers()` will not list it and `connect` will not route to it.
+**The event feed is split the same way.** An event about a member or its group
+reaches proxies only, so a backend plugin subscribed to events never hears of a
+private server. In a proxy's chat feed a member shows as its group and the
+first six characters of its key.
 
 The same line bounds `connect`:
 

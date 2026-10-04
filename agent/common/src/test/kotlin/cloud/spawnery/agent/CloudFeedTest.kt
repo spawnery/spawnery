@@ -1,195 +1,215 @@
 package cloud.spawnery.agent
 
+import cloud.spawnery.agent.api.Group
 import cloud.spawnery.agent.pb.CloudEvent
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
-private fun event(kind: String, subject: String, group: String, warning: Boolean = false): CloudEvent =
+private fun event(
+    kind: String,
+    subject: String,
+    group: String = "lobby",
+    warning: Boolean = false,
+    message: String = "$subject: $kind",
+): CloudEvent =
     CloudEvent.newBuilder()
         .setKind(kind).setSubject(subject).setGroup(group)
-        .setMessage("$subject: $kind").setWarning(warning)
+        .setMessage(message).setWarning(warning)
         .build()
+
+private fun lines(
+    level: FeedLevel,
+    vararg events: CloudEvent,
+    kinds: (String) -> Group.Kind = { Group.Kind.EPHEMERAL },
+): List<String> = coalesce(events.toList(), level, kinds).map(::plain)
 
 class CloudFeedTest {
     @Test
-    fun `one event is one line and says what happened`() {
-        val lines = coalesce(listOf(event("ReadyGatePassed", "lobby-a3f9", "lobby")))
-
-        assertEquals(1, lines.size)
-        assertTrue(lines.single().contains("lobby-a3f9"), lines.single())
-    }
-
-    @Test
-    fun `many of one kind in one group collapse to one line that names them`() {
-        val lines = coalesce(
-            listOf(
-                event("ReadyGatePassed", "lobby-a3f9", "lobby"),
-                event("ReadyGatePassed", "lobby-b71c", "lobby"),
-                event("ReadyGatePassed", "lobby-c02e", "lobby"),
+    fun `minimal shows a server arriving and going and nothing between`() {
+        assertEquals(listOf("[+] lobby-x7k2"), lines(FeedLevel.MINIMAL, event("PodCreated", "lobby-x7k2")))
+        assertEquals(listOf("[-] lobby-x7k2"), lines(FeedLevel.MINIMAL, event("ServerStopped", "lobby-x7k2")))
+        assertEquals(
+            emptyList(),
+            lines(
+                FeedLevel.MINIMAL,
+                event("ReadyGatePassed", "lobby-a"),
+                event("Retiring", "lobby-b"),
+                event("PodPending", "lobby-c"),
             ),
         )
-
-        assertEquals(1, lines.size)
-        val line = lines.single()
-        assertTrue(line.contains("3"), "the count is missing: $line")
-        assertTrue(line.contains("lobby"), "the group is missing: $line")
-        assertTrue(
-            line.contains("lobby-a3f9") && line.contains("lobby-b71c") && line.contains("lobby-c02e"),
-            "the names are missing: $line",
-        )
     }
 
     @Test
-    fun `two kinds in one group stay two lines`() {
-        val lines = coalesce(
-            listOf(
-                event("ReadyGatePassed", "lobby-a3f9", "lobby"),
-                event("Terminating", "lobby-b71c", "lobby"),
+    fun `normal names each step in a word`() {
+        assertEquals(
+            listOf("[+] lobby-a starting", "[✓] lobby-b ready", "[-] lobby-c leaving", "[-] lobby-d stopped"),
+            lines(
+                FeedLevel.NORMAL,
+                event("PodCreated", "lobby-a"),
+                event("ReadyGatePassed", "lobby-b"),
+                event("DeletionRequested", "lobby-c"),
+                event("ServerStopped", "lobby-d"),
             ),
         )
-
-        assertEquals(2, lines.size)
     }
 
     @Test
-    fun `the same kind in two groups stays two lines`() {
-        val lines = coalesce(
-            listOf(
-                event("ReadyGatePassed", "lobby-a3f9", "lobby"),
-                event("ReadyGatePassed", "arena-1", "arena"),
+    fun `a proxy arrives at its ready gate`() {
+        val started = event("ProxyStarted", "gateway-4d1", group = "gateway")
+        assertEquals(listOf("[+] gateway-4d1"), lines(FeedLevel.MINIMAL, started))
+        assertEquals(listOf("[✓] gateway-4d1 ready"), lines(FeedLevel.NORMAL, started))
+        assertEquals(
+            listOf("[-] gateway-4d1 leaving", "[-] gateway-4d1 stopped"),
+            lines(
+                FeedLevel.NORMAL,
+                event("ProxyRetiring", "gateway-4d1", group = "gateway"),
+                event("ProxyStopped", "gateway-4d1", group = "gateway"),
             ),
         )
-
-        assertEquals(2, lines.size)
-        assertTrue(lines.any { it.contains("lobby") }, lines.toString())
-        assertTrue(lines.any { it.contains("arena") }, lines.toString())
     }
 
     @Test
-    fun `a warning is never collapsed into a normal line`() {
-        val lines = coalesce(
-            listOf(
-                event("ReadyGatePassed", "lobby-a3f9", "lobby"),
-                event("PodRejected", "lobby-b71c", "lobby", warning = true),
+    fun `verbose shows the operator's note`() {
+        assertEquals(
+            listOf("[+] lobby-x7k2: created pod lobby-x7k2"),
+            lines(FeedLevel.VERBOSE, event("PodCreated", "lobby-x7k2", message = "created pod lobby-x7k2")),
+        )
+        assertEquals(
+            listOf("[·] lobby-x7k2: phase Pending -> Starting: pod is running"),
+            lines(
+                FeedLevel.VERBOSE,
+                event("PodRunning", "lobby-x7k2", message = "phase Pending -> Starting: pod is running"),
             ),
         )
-
-        assertEquals(2, lines.size)
-        assertTrue(lines.any { it.contains("lobby-b71c") }, "the warning vanished: $lines")
     }
 
     @Test
-    fun `two warnings of one kind stay two lines`() {
-        val lines = coalesce(
-            listOf(
-                event("PodRejected", "lobby-a", "lobby", warning = true),
-                event("PodRejected", "lobby-b", "lobby", warning = true),
+    fun `a kind this agent does not know shows only in verbose`() {
+        val later = event("SomethingAddedInALaterRelease", "lobby-a")
+        assertEquals(emptyList(), lines(FeedLevel.MINIMAL, later))
+        assertEquals(emptyList(), lines(FeedLevel.NORMAL, later))
+        assertEquals(1, lines(FeedLevel.VERBOSE, later).size)
+    }
+
+    @Test
+    fun `a warning is a short reason below verbose and the note in it`() {
+        val timeout = event(
+            "StartupTimeout", "lobby-x7k2",
+            message = "phase Starting -> Failed: server did not become ready in time",
+        )
+        assertEquals(listOf("[!] lobby-x7k2 did not start in time"), lines(FeedLevel.MINIMAL, timeout))
+        assertEquals(listOf("[!] lobby-x7k2 did not start in time"), lines(FeedLevel.NORMAL, timeout))
+        assertEquals(
+            listOf("[!] lobby-x7k2: phase Starting -> Failed: server did not become ready in time"),
+            lines(FeedLevel.VERBOSE, timeout),
+        )
+    }
+
+    @Test
+    fun `a warning nobody put in the table is read from its kind`() {
+        assertEquals(
+            listOf("[!] lobby-x7k2 pod name conflict"),
+            lines(FeedLevel.MINIMAL, event("PodNameConflict", "lobby-x7k2", warning = true)),
+        )
+    }
+
+    @Test
+    fun `a warning with no note or no kind still says something`() {
+        assertEquals(
+            listOf("[!] lobby-x7k2: did not start in time"),
+            lines(FeedLevel.VERBOSE, event("StartupTimeout", "lobby-x7k2", message = "")),
+        )
+        assertEquals(
+            listOf("[!] lobby-x7k2 warning"),
+            lines(FeedLevel.MINIMAL, event("", "lobby-x7k2", warning = true, message = "")),
+        )
+    }
+
+    @Test
+    fun `many of one row in one group collapse to a count`() {
+        val three = arrayOf(event("PodCreated", "lobby-a"), event("PodCreated", "lobby-b"), event("PodCreated", "lobby-c"))
+        assertEquals(listOf("[+] 3 lobby"), lines(FeedLevel.MINIMAL, *three))
+        assertEquals(listOf("[+] 3 lobby starting"), lines(FeedLevel.NORMAL, *three))
+    }
+
+    @Test
+    fun `one server with two events of one row counts once`() {
+        val window = arrayOf(event("Retiring", "lobby-a"), event("DeletionRequested", "lobby-a"))
+        assertEquals(listOf("[-] lobby-a leaving"), lines(FeedLevel.NORMAL, *window))
+
+        val more = arrayOf(*window, event("Retiring", "lobby-b"), event("DeletionRequested", "lobby-b"))
+        assertEquals(listOf("[-] 2 lobby leaving"), lines(FeedLevel.NORMAL, *more))
+    }
+
+    @Test
+    fun `verbose lists a server once per kind`() {
+        assertEquals(
+            listOf("[+] 2 PodCreated in lobby (lobby-a, lobby-b)"),
+            lines(FeedLevel.VERBOSE, event("PodCreated", "lobby-a"), event("PodCreated", "lobby-a"), event("PodCreated", "lobby-b")),
+        )
+    }
+
+    @Test
+    fun `a row the level hides neither shows nor counts`() {
+        val window = arrayOf(event("PodCreated", "lobby-a"), event("PodCreated", "lobby-b"), event("ReadyGatePassed", "lobby-c"))
+        assertEquals(listOf("[+] 2 lobby"), lines(FeedLevel.MINIMAL, *window))
+        assertEquals(listOf("[+] 2 lobby starting", "[✓] lobby-c ready"), lines(FeedLevel.NORMAL, *window))
+    }
+
+    @Test
+    fun `one row in two groups stays two lines`() {
+        assertEquals(
+            listOf("[+] lobby-a", "[+] arena-a"),
+            lines(FeedLevel.MINIMAL, event("PodCreated", "lobby-a"), event("PodCreated", "arena-a", group = "arena")),
+        )
+    }
+
+    @Test
+    fun `warnings come first and never collapse`() {
+        assertEquals(
+            listOf("[!] lobby-b did not start in time", "[!] lobby-c did not start in time", "[+] lobby-a"),
+            lines(
+                FeedLevel.MINIMAL,
+                event("PodCreated", "lobby-a"),
+                event("StartupTimeout", "lobby-b"),
+                event("StartupTimeout", "lobby-c"),
             ),
         )
-
-        assertEquals(2, lines.size)
     }
 
     @Test
-    fun `a warning keeps the operator's own sentence`() {
-        val lines = coalesce(
-            listOf(
-                CloudEvent.newBuilder()
-                    .setKind("PodRejected").setSubject("lobby-b71c").setGroup("lobby")
-                    .setMessage("the node had no room").setWarning(true).build(),
-            ),
+    fun `verbose collapses by kind and names the servers`() {
+        assertEquals(
+            listOf("[+] 3 PodCreated in lobby (lobby-a, lobby-b, lobby-c)"),
+            lines(FeedLevel.VERBOSE, event("PodCreated", "lobby-a"), event("PodCreated", "lobby-b"), event("PodCreated", "lobby-c")),
         )
-
-        assertTrue(lines.single().contains("the node had no room"), lines.single())
+        val eight = (1..8).map { event("PodCreated", "lobby-$it") }.toTypedArray()
+        assertTrue(lines(FeedLevel.VERBOSE, *eight).single().endsWith("lobby-6 and 2 more)"), lines(FeedLevel.VERBOSE, *eight).single())
     }
 
     @Test
-    fun `an empty window produces no lines rather than an empty one`() {
-        assertTrue(coalesce(emptyList()).isEmpty())
+    fun `off shows nothing at all`() {
+        assertEquals(emptyList(), coalesce(listOf(event("StartupTimeout", "lobby-a")), FeedLevel.OFF))
     }
 
     @Test
-    fun `a very wide collapse names some and counts the rest`() {
-        val many = (1..40).map { event("ReadyGatePassed", "lobby-%02d".format(it), "lobby") }
+    fun `an on-demand member is shown short, linked by its full name`() {
+        val kinds = { g: String -> if (g == "challenge") Group.Kind.ON_DEMAND else Group.Kind.EPHEMERAL }
+        val created = event("PodCreated", "challenge-3f2b1c9a0d4e", group = "challenge")
 
-        val line = plain(coalesce(many).single())
-
-        assertTrue(line.contains("40"), "the total is missing: $line")
-        assertTrue(line.length < 200, "the line is ${line.length} characters: $line")
-        assertTrue(line.contains("lobby-01"), "it named none of them: $line")
+        assertEquals(listOf("[+] challenge-3f2b1c"), lines(FeedLevel.MINIMAL, created, kinds = kinds))
+        val raw = coalesce(listOf(created), FeedLevel.MINIMAL, kinds).single()
+        assertTrue(raw.contains("show_text:'challenge-3f2b1c9a0d4e'"), raw)
+        assertTrue(raw.contains("suggest_command:'/cloud info challenge-3f2b1c9a0d4e'"), raw)
     }
 
     @Test
-    fun `the lines come out in the order the events arrived`() {
-        // Six groups, so a hash order cannot match insertion order by luck.
-        val groups = listOf("zulu", "alpha", "mike", "bravo", "yankee", "delta")
-        val events = groups.map { event("ReadyGatePassed", "$it-1", it) }
-
-        val lines = coalesce(events)
-
-        assertEquals(groups.size, lines.size)
-        for ((i, g) in groups.withIndex()) {
-            assertTrue(lines[i].contains("$g-1"), "line $i is ${lines[i]}, want $g-1")
-        }
-    }
-}
-
-class CloudFeedSignTest {
-    private fun line(kind: String, warning: Boolean = false): String =
-        coalesce(listOf(event(kind, "lobby-a3f9", "lobby", warning))).single()
-
-    @Test
-    fun `an arrival opens with a green plus`() {
-        assertTrue(line("ReadyGatePassed").startsWith("<dark_gray>[</dark_gray><green>+</green>"), line("ReadyGatePassed"))
-    }
-
-    @Test
-    fun `a departure opens with a gold minus`() {
-        assertTrue(line("Retiring").startsWith("<dark_gray>[</dark_gray><gold>-</gold>"), line("Retiring"))
-    }
-
-    @Test
-    fun `a warning opens with a red bang and keeps its red sentence`() {
-        val warned = line("StartupTimeout", warning = true)
-        assertTrue(warned.startsWith("<dark_gray>[</dark_gray><red>!</red>"), warned)
-        // The sign is added to the red sentence, not a replacement for it.
-        assertTrue(warned.contains("<red>lobby-a3f9: StartupTimeout</red>"), warned)
-    }
-
-    @Test
-    fun `a neutral event still occupies the column`() {
-        val neutral = line("PodPending")
-        assertTrue(neutral.startsWith("<dark_gray>[</dark_gray><dark_gray>·</dark_gray>"), neutral)
-    }
-
-    @Test
-    fun `a collapsed line takes the sign of its kind`() {
-        val lines = coalesce(
-            listOf(
-                event("Terminating", "lobby-a3f9", "lobby"),
-                event("Terminating", "lobby-b71c", "lobby"),
-            ),
-        )
-
-        assertTrue(lines.single().startsWith("<dark_gray>[</dark_gray><gold>-</gold>"), lines.single())
-    }
-
-    @Test
-    fun `the kind is no longer green in a collapsed line`() {
-        val lines = coalesce(
-            listOf(
-                event("Terminating", "lobby-a3f9", "lobby"),
-                event("Terminating", "lobby-b71c", "lobby"),
-            ),
-        )
-
-        assertTrue(!lines.single().contains("<green>Terminating"), lines.single())
-    }
-
-    @Test
-    fun `the sentence a person reads is unchanged by the sign`() {
-        val text = plain(line("ReadyGatePassed"))
-        assertEquals("[+] lobby-a3f9: lobby-a3f9: ReadyGatePassed", text)
+    fun `only the sign carries the row's colour`() {
+        val raw = coalesce(listOf(event("PodCreated", "lobby-a")), FeedLevel.MINIMAL).single()
+        assertTrue(raw.startsWith("<dark_gray>[</dark_gray><green>+</green><dark_gray>]</dark_gray> "), raw)
+        val warning = coalesce(listOf(event("StartupTimeout", "lobby-a")), FeedLevel.MINIMAL).single()
+        assertTrue(warning.startsWith("<dark_gray>[</dark_gray><red>!</red>"), warning)
+        assertTrue(warning.endsWith("<red>did not start in time</red>"), warning)
     }
 }

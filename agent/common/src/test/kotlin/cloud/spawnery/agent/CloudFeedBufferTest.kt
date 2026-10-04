@@ -6,7 +6,7 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class CloudFeedBufferTest {
-    private val delivered = mutableListOf<List<String>>()
+    private val delivered = mutableListOf<List<CloudEvent>>()
     private var now = 0L
     private fun buffer() = CloudFeedBuffer({ now }, 1_000L) { delivered += it }
 
@@ -26,7 +26,7 @@ class CloudFeedBufferTest {
     }
 
     @Test
-    fun `the window closing delivers one collapsed batch`() {
+    fun `the window closing delivers its events as one batch`() {
         val b = buffer()
         b.add(anEvent("lobby-a"))
         b.add(anEvent("lobby-b"))
@@ -34,7 +34,7 @@ class CloudFeedBufferTest {
         b.tick()
 
         assertEquals(1, delivered.size)
-        assertEquals(1, delivered.single().size, "two events made ${delivered.single().size} lines")
+        assertEquals(2, delivered.single().size, "two events made ${delivered.single().size}")
     }
 
     @Test
@@ -86,6 +86,6 @@ class CloudFeedBufferTest {
         now = 2_000
         b.tick()
         assertEquals(2, delivered.size, "the second window never closed")
-        assertTrue(delivered[1].single().contains("lobby-b"), delivered[1].toString())
+        assertEquals("lobby-b", delivered[1].single().subject, delivered[1].toString())
     }
 }

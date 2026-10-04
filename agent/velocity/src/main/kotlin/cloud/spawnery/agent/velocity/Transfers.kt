@@ -3,6 +3,7 @@ package cloud.spawnery.agent.velocity
 import com.velocitypowered.api.proxy.Player
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer
 import net.kyori.adventure.key.Key
+import net.kyori.adventure.text.Component
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.UUID
@@ -14,6 +15,8 @@ interface Traveller {
     val currentServer: String?
     val virtualHost: InetSocketAddress?
     val address: InetAddress?
+
+    fun tell(message: Component)
 
     /** Stores [cookie] on the client and sends it to [to]; throws when the client cannot be transferred. */
     fun transfer(cookie: ByteArray, to: InetSocketAddress)
@@ -55,10 +58,18 @@ class Transfers(
         val now = clock()
         lastSentFrom.values.removeIf { now - it >= spacingMillis }
         val picture = picture()
-        if (!myTurn(picture, now)) return
-        val chosen = mutableSetOf<InetAddress>()
         val movable = players.filter { it.virtualHost != null }.associateBy { it.uuid }
         val occupants = movable.values.map { TransferPolicy.Occupant(it.uuid, it.currentServer) }
+        for (warning in policy.warnings(picture, occupants, TransferWarning.LEAD_MILLIS)) {
+            val player = movable[warning.id] ?: continue
+            try {
+                player.tell(TransferWarning.message(warning.seconds))
+            } catch (e: Exception) {
+                warn("spawnery: could not warn '${player.username}' of the coming transfer", e)
+            }
+        }
+        if (!myTurn(picture, now)) return
+        val chosen = mutableSetOf<InetAddress>()
         val admit = { id: UUID ->
             val address = movable.getValue(id).address
             address == null || (!cooling(address, now) && chosen.add(address))
@@ -160,6 +171,8 @@ internal class VelocityTraveller(
     override val currentServer: String? get() = player.currentServer.map { it.serverInfo.name }.orElse(null)
     override val virtualHost: InetSocketAddress? get() = player.virtualHost.orElse(null)
     override val address: InetAddress? get() = player.remoteAddress?.address
+
+    override fun tell(message: Component) = player.sendMessage(message)
 
     override fun transfer(cookie: ByteArray, to: InetSocketAddress) {
         player.storeCookie(TRANSFER_COOKIE_KEY, cookie)

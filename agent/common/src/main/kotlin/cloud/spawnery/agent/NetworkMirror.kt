@@ -105,6 +105,9 @@ class NetworkMirror {
     fun acceptingTransfers(): Set<String> = snapshot.acceptingTransfers
 
     fun joinRule(group: String): JoinRule? = snapshot.joinRules[group]
+
+    fun groupKind(name: String): Group.Kind =
+        snapshot.groups.firstOrNull { it.name() == name }?.kind() ?: Group.Kind.UNKNOWN
 }
 
 internal fun kindOf(kind: GroupState.Kind): Group.Kind =

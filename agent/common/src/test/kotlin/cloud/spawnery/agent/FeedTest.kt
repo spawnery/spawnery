@@ -23,21 +23,21 @@ class FeedTest {
     private val alice = UUID.nameUUIDFromBytes("alice".toByteArray())
     private val bob = UUID.nameUUIDFromBytes("bob".toByteArray())
     private val audience = FakeAudience()
-    private val state = FeedState()
+    private val levels = FeedLevels(null)
     private var now = 0L
     private var format = ""
-    private val feed = Feed(audience, state, { now }, format = { format })
+    private val feed = Feed(audience, levels, { now }, format = { format })
 
     private fun anEvent(name: String): CloudEvent =
         CloudEvent.newBuilder()
-            .setKind("ReadyGatePassed").setSubject(name).setGroup("lobby")
+            .setKind("PodCreated").setSubject(name).setGroup("lobby")
             .setMessage("$name is ready").build()
 
     @Test
-    fun `a closed window reaches everybody permitted who has not opted out`() {
+    fun `a closed window reaches everybody permitted whose level is not off`() {
         audience.online += listOf(alice, bob)
         audience.permitted += listOf(alice, bob)
-        state.optOut(bob)
+        levels.set(bob, FeedLevel.OFF)
 
         feed.onEvent(anEvent("lobby-a"))
         now = 1_000
@@ -45,6 +45,24 @@ class FeedTest {
 
         assertEquals(1, audience.sent.size, "sent to ${audience.sent.map { it.first }}")
         assertEquals(alice, audience.sent.single().first)
+    }
+
+    @Test
+    fun `each player sees the window at their own level`() {
+        audience.online += listOf(alice, bob)
+        audience.permitted += listOf(alice, bob)
+        levels.set(bob, FeedLevel.NORMAL)
+
+        feed.onEvent(anEvent("lobby-a"))
+        feed.onEvent(
+            CloudEvent.newBuilder().setKind("ReadyGatePassed").setSubject("lobby-a").setGroup("lobby")
+                .setMessage("phase Starting -> Ready").build(),
+        )
+        now = 1_000
+        feed.tick()
+
+        assertEquals(1, audience.sent.count { it.first == alice }, audience.sent.toString())
+        assertEquals(2, audience.sent.count { it.first == bob }, audience.sent.toString())
     }
 
     @Test
@@ -67,7 +85,7 @@ class FeedTest {
         audience.permitted += alice
         assertTrue(feed.wanted(0), "a permitted player online did not register")
 
-        state.optOut(alice)
+        levels.set(alice, FeedLevel.OFF)
         assertTrue(!feed.wanted(0), "the last watcher opting out left the agent still asking")
     }
 

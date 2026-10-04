@@ -65,7 +65,7 @@ public interface NetworkStateOrBuilder extends
    *
    * A backend's picture leaves out on-demand groups and their members but
    * keeps every player; for a player on such a server, server is blank. A
-   * CloudEvent can still name a private member to a backend.
+   * CloudEvent about either reaches proxies only.
    * </pre>
    *
    * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -79,7 +79,7 @@ public interface NetworkStateOrBuilder extends
    *
    * A backend's picture leaves out on-demand groups and their members but
    * keeps every player; for a player on such a server, server is blank. A
-   * CloudEvent can still name a private member to a backend.
+   * CloudEvent about either reaches proxies only.
    * </pre>
    *
    * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -92,7 +92,7 @@ public interface NetworkStateOrBuilder extends
    *
    * A backend's picture leaves out on-demand groups and their members but
    * keeps every player; for a player on such a server, server is blank. A
-   * CloudEvent can still name a private member to a backend.
+   * CloudEvent about either reaches proxies only.
    * </pre>
    *
    * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -105,7 +105,7 @@ public interface NetworkStateOrBuilder extends
    *
    * A backend's picture leaves out on-demand groups and their members but
    * keeps every player; for a player on such a server, server is blank. A
-   * CloudEvent can still name a private member to a backend.
+   * CloudEvent about either reaches proxies only.
    * </pre>
    *
    * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>
@@ -119,7 +119,7 @@ public interface NetworkStateOrBuilder extends
    *
    * A backend's picture leaves out on-demand groups and their members but
    * keeps every player; for a player on such a server, server is blank. A
-   * CloudEvent can still name a private member to a backend.
+   * CloudEvent about either reaches proxies only.
    * </pre>
    *
    * <code>repeated .spawnery.agent.v1alpha1.RosterEntry players = 3;</code>

@@ -7,6 +7,16 @@ package cloud.spawnery.agent
 internal object Style {
     fun name(value: String): String = "<aqua>${escape(value)}</aqua>"
 
+    /** Only a Kubernetes-style name is linked: anything else could close the tag's quoted argument. */
+    fun subject(full: String, shown: String = full): String =
+        if (!LINKABLE.matches(full)) {
+            name(shown)
+        } else {
+            "<hover:show_text:'$full'><click:suggest_command:'/cloud info $full'>${name(shown)}</click></hover>"
+        }
+
+    private val LINKABLE = Regex("[a-z0-9][a-z0-9.-]*")
+
     fun good(value: String): String = "<green>${escape(value)}</green>"
 
     fun bad(value: String): String = "<red>${escape(value)}</red>"

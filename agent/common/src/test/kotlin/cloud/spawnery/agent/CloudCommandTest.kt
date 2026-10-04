@@ -94,7 +94,7 @@ class CloudCommandTest {
     /** Null is the console. */
     private var sourcePlayer: UUID? = UUID.nameUUIDFromBytes("admin".toByteArray())
 
-    private val feed = FeedState()
+    private var levels = FeedLevels(null)
 
     /** Bare, so assertions about wording are not about the wrapper. */
     private var format = Feed.MESSAGE_TOKEN
@@ -116,7 +116,7 @@ class CloudCommandTest {
 
     private fun run(command: String, api: SpawneryApi = api()): Int {
         val dispatcher = CommandDispatcher<Int>()
-        dispatcher.register(cloudCommand(api, adapter, feed, { format }))
+        dispatcher.register(cloudCommand(api, adapter, levels, { format }))
         return dispatcher.execute(command, 0)
     }
 
@@ -361,7 +361,7 @@ class CloudCommandTest {
         run("cloud scale lobby 2 for 2hh")
 
         assertTrue(requested.isEmpty(), "an unreadable duration still reached the operator: $requested")
-        assertTrue(sent.single().contains("2hh"), "the answer did not name what it could not read: $sent")
+        assertTrue(plain(sent.single()).contains("2hh is not a duration"), "the answer did not name what it could not read: $sent")
     }
 
     @Test
@@ -372,7 +372,16 @@ class CloudCommandTest {
 
         answer { setStopBoost(StopBoostResult.newBuilder().setRemoved(2)) }
 
-        assertTrue(plain(sent.single()).contains("removed 2"), sent.toString())
+        assertTrue(plain(sent.single()).contains("removed 2 pins and boosts from lobby"), sent.toString())
+    }
+
+    @Test
+    fun `reset of exactly one says pin or boost, not both`() {
+        run("cloud scale lobby reset")
+
+        answer { setStopBoost(StopBoostResult.newBuilder().setRemoved(1)) }
+
+        assertTrue(plain(sent.single()).contains("removed 1 pin or boost from lobby"), sent.toString())
     }
 
     @Test
@@ -381,7 +390,7 @@ class CloudCommandTest {
 
         answer { setStopBoost(StopBoostResult.newBuilder().setRemoved(0)) }
 
-        assertTrue(plain(sent.single()).contains("had no pin or boost"), sent.toString())
+        assertTrue(plain(sent.single()).contains("has no pin or boost"), sent.toString())
     }
 
     @Test
@@ -442,7 +451,7 @@ class CloudCommandTest {
 
     private fun runOnProxy(command: String): Int {
         val dispatcher = CommandDispatcher<Int>()
-        dispatcher.register(cloudCommand(api(), adapter, feed, { format }, proxyCommands))
+        dispatcher.register(cloudCommand(api(), adapter, levels, { format }, proxyCommands))
         return dispatcher.execute(command, 0)
     }
 
@@ -519,43 +528,81 @@ class CloudCommandTest {
     }
 
     @Test
-    fun `events off tells the player it lasts for this session only`() {
-        run("cloud events off")
+    fun `events alone shows the player's level, minimal by default`() {
+        run("cloud events")
 
-        val line = sent.single()
-        assertTrue(line.contains("off"), line)
-        assertTrue(
-            line.contains("rejoin") || line.contains("session"),
-            "it did not say the setting is for this session: $line",
-        )
+        assertTrue(plain(sent.single()).contains("minimal"), sent.single())
     }
 
     @Test
-    fun `events off then on leaves the player wanting them again`() {
-        run("cloud events off")
-        assertFalse(feed.wants(sourcePlayer!!), "off did not take effect")
-
-        run("cloud events on")
-        assertTrue(feed.wants(sourcePlayer!!), "on did not undo off")
+    fun `each level word sets that level, and on means minimal`() {
+        val player = sourcePlayer!!
+        for ((word, want) in listOf(
+            "normal" to FeedLevel.NORMAL,
+            "verbose" to FeedLevel.VERBOSE,
+            "off" to FeedLevel.OFF,
+            "minimal" to FeedLevel.MINIMAL,
+            "off" to FeedLevel.OFF,
+            "on" to FeedLevel.MINIMAL,
+        )) {
+            run("cloud events $word")
+            assertEquals(want, levels.level(player), "after /cloud events $word")
+        }
     }
 
     @Test
-    fun `one player's opt-out is not another's`() {
-        // A single boolean would have passed every other test here.
+    fun `a level kept only in memory says a restart loses it`() {
+        run("cloud events normal")
+
+        val line = plain(sent.single())
+        assertTrue(line.contains("normal") && line.contains("restart"), line)
+    }
+
+    @Test
+    fun `a level LuckPerms keeps is saved there and not called temporary`() {
+        val store = StandInStore()
+        levels = FeedLevels(store)
+
+        run("cloud events verbose")
+
+        assertEquals("verbose", store.user[sourcePlayer!!])
+        assertFalse(plain(sent.single()).contains("restart"), sent.single())
+    }
+
+    @Test
+    fun `a save that fails is reported, not claimed`() {
+        val store = StandInStore().apply { failWrites = true }
+        levels = FeedLevels(store)
+
+        run("cloud events normal")
+
+        assertTrue(sent.single().startsWith("<red>✘</red> "), sent.single())
+        assertTrue(sent.single().contains("read-only"), sent.single())
+    }
+
+    @Test
+    fun `one player's level is not another's`() {
         val other = UUID.nameUUIDFromBytes("someone-else".toByteArray())
         run("cloud events off")
 
-        assertFalse(feed.wants(sourcePlayer!!))
-        assertTrue(feed.wants(other), "one player's opt-out silenced another")
+        assertEquals(FeedLevel.OFF, levels.level(sourcePlayer!!))
+        assertEquals(FeedLevel.MINIMAL, levels.level(other))
     }
 
     @Test
-    fun `the console is told it cannot opt out rather than silently failing`() {
+    fun `the console is told it has no level rather than silently failing`() {
         sourcePlayer = null
 
         run("cloud events off")
+        run("cloud events")
 
-        assertTrue(sent.single().contains("console"), sent.toString())
+        assertEquals(2, sent.size, sent.toString())
+        assertTrue(sent.all { it.contains("console") }, sent.toString())
+    }
+
+    @Test
+    fun `an unknown level is an unknown command`() {
+        assertFailsWith<CommandSyntaxException> { run("cloud events loud") }
     }
 
     @Test
@@ -571,7 +618,7 @@ class CloudCommandTest {
 
         run("cloud events off")
 
-        assertFalse(feed.wants(sourcePlayer!!))
+        assertEquals(FeedLevel.OFF, levels.level(sourcePlayer!!))
     }
 
     @Test
@@ -1030,7 +1077,7 @@ class CloudCompletionTest {
 
     private fun completions(command: String): List<String> {
         val dispatcher = CommandDispatcher<Int>()
-        dispatcher.register(cloudCommand(api(), adapter, FeedState(), { Feed.MESSAGE_TOKEN }))
+        dispatcher.register(cloudCommand(api(), adapter, FeedLevels(null), { Feed.MESSAGE_TOKEN }))
         return dispatcher.getCompletionSuggestions(dispatcher.parse(command, 0)).join().list.map { it.text }
     }
 
@@ -1058,7 +1105,7 @@ class CloudCompletionTest {
     private fun proxyCompletions(command: String): List<String> {
         val dispatcher = CommandDispatcher<Int>()
         val connector = CloudConnector(Requests(timeoutMillis = 1_000, clock = System::currentTimeMillis)) { }
-        dispatcher.register(cloudCommand(api(), adapter, FeedState(), { Feed.MESSAGE_TOKEN }, ProxyCommands(connector) { "x" }))
+        dispatcher.register(cloudCommand(api(), adapter, FeedLevels(null), { Feed.MESSAGE_TOKEN }, ProxyCommands(connector) { "x" }))
         return dispatcher.getCompletionSuggestions(dispatcher.parse(command, 0)).join().list.map { it.text }
     }
 

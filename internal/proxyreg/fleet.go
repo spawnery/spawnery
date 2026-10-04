@@ -300,7 +300,7 @@ func (f *Fleet) Interested(podUID string) bool {
 }
 
 // Publish sends one event to every session in the namespace that asked for
-// events. It implements cloudevent.Sink and reports nothing: a feed nobody is
+// events. It implements cloudevent.Publisher and reports nothing: a feed nobody is
 // watching must not be able to fail a reconcile.
 func (f *Fleet) Publish(namespace string, ev *agentpb.CloudEvent) {
 	f.broadcast(namespace, func(s *session) *agentpb.OperatorToProxy {

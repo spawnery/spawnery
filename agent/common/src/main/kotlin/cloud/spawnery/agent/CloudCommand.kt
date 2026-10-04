@@ -44,7 +44,7 @@ const val PERMISSION_STATUS: String = "spawnery.cloud.status"
 fun <S> cloudCommand(
     api: SpawneryApi,
     adapter: SourceAdapter<S>,
-    feed: FeedState,
+    levels: FeedLevels,
     /** A lambda so a Network edit lands at the next resync, not the next pod. */
     format: () -> String = { Feed.DEFAULT_FORMAT },
     proxy: ProxyCommands<S>? = null,
@@ -93,7 +93,7 @@ fun <S> cloudCommand(
                             reply(adapter, format, 
                                 ctx.source,
                                 Layout.fail(
-                                    Style.bad("no server, proxy or group called") + " " + Style.name(name) +
+                                    Style.bad("nothing called") + " " + Style.name(name) +
                                         Style.quiet(" on this network"),
                                 ),
                             )
@@ -129,14 +129,10 @@ fun <S> cloudCommand(
                             val source = ctx.source
                             api.retire(name).whenComplete { _, failure ->
                                 if (failure == null) {
-                                    // "Retire" reads as "stop" to anybody who has not read the design.
                                     replyOk(adapter, format, 
                                         source,
-                                        Style.name(name) + Style.good(" is retiring.") +
-                                            Style.quiet(
-                                                " It takes no new joins; the players on it finish in " +
-                                                    "their own time and nobody is kicked.",
-                                            ),
+                                        Style.name(name) + Style.good(" is retiring") +
+                                            Style.quiet(": no new joins, and nobody is kicked."),
                                     )
                                 } else {
                                     // The operator's refusals are written for a person.
@@ -166,8 +162,8 @@ fun <S> cloudCommand(
                                 if (failure == null) {
                                     replyOk(adapter, format, 
                                         source,
-                                        Style.name(name) + Style.good(" takes joins again.") +
-                                            Style.quiet(" Nothing automatic removes it now; it stays until it ends by itself."),
+                                        Style.name(name) + Style.good(" takes joins again") +
+                                            Style.quiet(" and stays until it ends by itself."),
                                     )
                                 } else {
                                     replyFail(adapter, format, 
@@ -206,9 +202,9 @@ fun <S> cloudCommand(
                                                 if (span == null) {
                                                     replyFail(adapter, format,
                                                         ctx.source,
-                                                        Style.bad("could not read") + " " +
-                                                            Style.name(text) +
-                                                            Style.quiet(" as a length of time. Try ") +
+                                                        Style.name(text) +
+                                                            Style.bad(" is not a duration") +
+                                                            Style.quiet(". Try ") +
                                                             Style.number("30m") + Style.quiet(", ") +
                                                             Style.number("2h") + Style.quiet(" or ") +
                                                             Style.number("3d") + Style.quiet("."),
@@ -223,20 +219,7 @@ fun <S> cloudCommand(
                 ),
         )
 
-        .then(
-            LiteralArgumentBuilder.literal<S>("events")
-                .requires { adapter.hasPermission(it, PERMISSION_EVENTS) }
-                // Two literals rather than one argument, so a typo is an
-                // unknown command instead of a silent no-op.
-                .then(
-                    LiteralArgumentBuilder.literal<S>("on")
-                        .executes { ctx -> setFeed(adapter, format, feed, ctx.source, on = true) },
-                )
-                .then(
-                    LiteralArgumentBuilder.literal<S>("off")
-                        .executes { ctx -> setFeed(adapter, format, feed, ctx.source, on = false) },
-                ),
-        )
+        .then(eventsBranch(adapter, format, levels))
 
     if (proxy != null) {
         root.then(forceStopBranch(api, adapter, format, proxy)).then(executeBranch(api, adapter, format, proxy))
@@ -249,38 +232,71 @@ private fun rootNodes(onProxy: Boolean): List<String> =
     listOf(PERMISSION_READ, PERMISSION_RETIRE, PERMISSION_SCALE, PERMISSION_STATUS, PERMISSION_EVENTS) +
         if (onProxy) listOf(PERMISSION_FORCESTOP, PERMISSION_EXECUTE) else emptyList()
 
-private fun <S> setFeed(
+private val LEVEL_WORDS = listOf("minimal", "normal", "verbose", "off", "on")
+
+private fun <S> eventsBranch(
     adapter: SourceAdapter<S>,
     format: () -> String,
-    feed: FeedState,
-    source: S,
-    on: Boolean,
-): Int {
-    val player = adapter.playerId(source)
-    if (player == null) {
-        replyFail(adapter, format, 
-            source,
-            Style.bad("the console cannot turn the cloud feed off") +
-                Style.quiet(": it is not a player, and these lines are already in its log"),
+    levels: FeedLevels,
+): LiteralArgumentBuilder<S> {
+    val branch = LiteralArgumentBuilder.literal<S>("events")
+        .requires { adapter.hasPermission(it, PERMISSION_EVENTS) }
+        .executes { ctx -> showLevel(adapter, format, levels, ctx.source) }
+    // Literals rather than one argument, so a typo is an unknown command
+    // instead of a silent no-op.
+    for (word in LEVEL_WORDS) {
+        val level = FeedLevel.parse(word)!!
+        branch.then(
+            LiteralArgumentBuilder.literal<S>(word)
+                .executes { ctx -> setLevel(adapter, format, levels, ctx.source, level) },
         )
-        return 0
     }
-    if (on) {
-        feed.optIn(player)
-        replyOk(adapter, format, source, Style.good("The cloud feed is on for you."))
-    } else {
-        feed.optOut(player)
-        replyOk(adapter, format, 
-            source,
-            Style.good("The cloud feed is off for you.") +
-                Style.quiet(
-                    " It comes back when you rejoin -- this setting lives for the session, on " +
-                        "purpose: the proxy has nowhere to keep it, and one platform remembering " +
-                        "while the other forgets would be worse than neither.",
-                ),
-        )
+    return branch
+}
+
+private fun <S> showLevel(adapter: SourceAdapter<S>, format: () -> String, levels: FeedLevels, source: S): Int {
+    val player = adapter.playerId(source) ?: return consoleHasNoLevel(adapter, format, source)
+    replyOk(
+        adapter, format, source,
+        Style.quiet("Your feed level is ") + Style.number(levels.level(player).word) +
+            Style.quiet(". Change it with ") + Style.number("/cloud events minimal|normal|verbose|off") +
+            Style.quiet("."),
+    )
+    return 1
+}
+
+private fun <S> setLevel(
+    adapter: SourceAdapter<S>,
+    format: () -> String,
+    levels: FeedLevels,
+    source: S,
+    level: FeedLevel,
+): Int {
+    val player = adapter.playerId(source) ?: return consoleHasNoLevel(adapter, format, source)
+    val kept = levels.kept()
+    levels.set(player, level).whenComplete { _, failure ->
+        if (failure != null) {
+            replyFail(
+                adapter, format, source,
+                Style.bad("could not save your feed level") + Style.quiet(": ") + Style.bad(reason(failure)),
+            )
+        } else {
+            replyOk(
+                adapter, format, source,
+                Style.good("Feed level: ${level.word}.") +
+                    if (kept) "" else Style.quiet(" Kept until the next restart."),
+            )
+        }
     }
     return 1
+}
+
+private fun <S> consoleHasNoLevel(adapter: SourceAdapter<S>, format: () -> String, source: S): Int {
+    replyFail(
+        adapter, format, source,
+        Style.bad("the console has no feed level") + Style.quiet(": the feed goes to players only"),
+    )
+    return 0
 }
 
 /** A blank format is what an operator older than the field sends. */
@@ -305,7 +321,7 @@ private fun <S> askStatus(
         if (failure == null) {
             for (line in statusLines(status, target)) reply(adapter, format, source, line)
         } else {
-            replyFail(adapter, format, source, Style.bad("no status") + Style.quiet(": ") + Style.bad(reason(failure)))
+            replyFail(adapter, format, source, Style.bad("could not get the status") + Style.quiet(": ") + Style.bad(reason(failure)))
         }
     }
     return 1
@@ -337,7 +353,7 @@ private fun <S> pin(
                 Style.quiet(if (result.replicas() == 1) " server" else " servers") +
                 Style.quiet(" until ") + Style.number(AT_MINUTE_UTC.format(result.expiresAt())) + Style.quiet(" UTC"))
         reply(adapter, format, source,
-            Style.quiet("It ends on its own; ") + Style.number("/cloud scale $group reset") + Style.quiet(" ends it early."))
+            Style.number("/cloud scale $group reset") + Style.quiet(" ends it early."))
     }
     return 1
 }
@@ -353,11 +369,12 @@ private fun <S> resetScale(
         when {
             failure != null -> replyFail(adapter, format, source,
                 Style.bad("could not reset") + " " + Style.name(group) + Style.quiet(": ") + Style.bad(reason(failure)))
-            removed == 0 -> replyOk(adapter, format, source, Style.name(group) + Style.quiet(" had no pin or boost"))
+            removed == 0 -> replyOk(adapter, format, source, Style.name(group) + Style.quiet(" has no pin or boost"))
             else -> replyOk(adapter, format, source,
-                Style.name(group) + Style.quiet(": removed ") + Style.number(removed) +
-                    Style.good(" pin${if (removed == 1) "" else "s"} and boosts.") +
-                    Style.quiet(" The group returns to its own floor and ceiling."))
+                Style.quiet("removed ") + Style.number(removed) +
+                    Style.good(if (removed == 1) " pin or boost" else " pins and boosts") +
+                    Style.quiet(" from ") + Style.name(group) +
+                    Style.quiet("; it is back to its own floor and ceiling"))
         }
     }
     return 1
@@ -381,7 +398,7 @@ private fun <S> forceStopBranch(
                         if (failure == null) {
                             replyOk(adapter, format, source,
                                 Style.name(name) + Style.bad(" is being killed.") +
-                                    Style.quiet(" /cloud info shows when its pod is gone."))
+                                    Style.quiet(" /cloud info shows when it is gone."))
                         } else {
                             replyFail(adapter, format, source,
                                 Style.bad("could not force-stop") + " " + Style.name(name) +
@@ -415,7 +432,7 @@ private fun <S> executeBranch(
                             if (command.length > EXECUTE_MAX_COMMAND) {
                                 replyFail(adapter, format, source,
                                     Style.bad("that command is ") + Style.number(command.length) +
-                                        Style.bad(" characters; the operator carries at most ") +
+                                        Style.bad(" characters long; the limit is ") +
                                         Style.number(EXECUTE_MAX_COMMAND))
                                 return@executes 0
                             }
