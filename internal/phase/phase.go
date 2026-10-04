@@ -106,6 +106,7 @@ const (
 	ReasonRetentionElapsed      = "RetentionElapsed"
 	ReasonStoppingFailedPod     = "StoppingFailedPod"
 	ReasonTerminating           = "Terminating"
+	ReasonForceStopped          = "ForceStopped"
 	ReasonUnknownPhase          = "UnknownPhase"
 	// ReasonRoundFinished marks the round's end, not the pod's: a Ready server
 	// carries it on deregistering while still running, and again into Finished
@@ -184,6 +185,10 @@ type Inputs struct {
 	// since only it knows the generation, the budget and the replacement.
 	RetirementRequested bool
 
+	// ForceStopRequested is Server.spec.forceStop: kill the pod now, whatever
+	// is on it.
+	ForceStopRequested bool
+
 	// RoundEnded is read from status.roundEndedAt, not the in-memory registry, so
 	// an operator restart cannot turn a finished round into a failure.
 	RoundEnded bool
@@ -214,13 +219,20 @@ type Decision struct {
 	StartDrain           bool
 	CountReadinessLoss   bool
 	ResetReadinessLosses bool
-	// DeletePod means no players are at risk.
+	// DeletePod means no players are at risk, or an administrator accepted the
+	// risk with spec.forceStop.
 	DeletePod bool
 	Reason    string
 	Message   string
 }
 
 func Decide(current Phase, in Inputs) Decision {
+	if in.ForceStopRequested {
+		return Decision{
+			Next: Terminating, DeletePod: true, Deregister: in.Registered,
+			Reason: ReasonForceStopped, Message: "force-stopped: the pod is killed without a drain",
+		}
+	}
 	switch current {
 	case Terminating:
 		return Decision{

@@ -562,6 +562,30 @@ func TestOccupiedFailedServerIsNeverDeletedBeforeItsDrainDeadline(t *testing.T) 
 	}
 }
 
+func TestAForceStopEndsEveryPhaseAtOnce(t *testing.T) {
+	for _, current := range declaredPhases(t) {
+		in := healthyReady()
+		in.PlayersOnline = 12
+		in.ForceStopRequested = true
+
+		got := Decide(current, in)
+
+		if got.Next != Terminating || !got.DeletePod || got.StartDrain || got.Reason != ReasonForceStopped {
+			t.Errorf("%s: decision = %+v, want Terminating, DeletePod, no drain, ForceStopped", current, got)
+		}
+		if !got.Deregister {
+			t.Errorf("%s: a registered server was not deregistered", current)
+		}
+	}
+
+	in := healthyReady()
+	in.Registered = false
+	in.ForceStopRequested = true
+	if Decide(Starting, in).Deregister {
+		t.Error("an unregistered server was deregistered")
+	}
+}
+
 func TestNoPathBackFromDraining(t *testing.T) {
 	got := Decide(Draining, healthyReady())
 	if got.Next == Ready || got.Register {
@@ -614,6 +638,22 @@ func TestOccupiedServerIsNeverDeletedWithoutDeadline(t *testing.T) {
 						tc.phase, stale, deleting, tc.wasRegistered, got)
 				}
 			}
+		}
+	}
+}
+
+func TestForceStopIsTheOnlyWayToDeleteAnOccupiedServerWithoutDeadline(t *testing.T) {
+	for _, current := range []Phase{Ready, Draining, Starting} {
+		in := healthyReady()
+		in.PlayersOnline = 7
+		in.WasRegistered = true
+
+		if got := Decide(current, in); got.DeletePod {
+			t.Errorf("Decide(%q, players=7) deleted the pod without a force-stop: %+v", current, got)
+		}
+		in.ForceStopRequested = true
+		if got := Decide(current, in); !got.DeletePod {
+			t.Errorf("Decide(%q, players=7, force-stop) kept the pod: %+v", current, got)
 		}
 	}
 }
