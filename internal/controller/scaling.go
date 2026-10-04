@@ -390,6 +390,40 @@ func staleRemains(in ScalingInputs) bool {
 	return false
 }
 
+// shedSurplus removes empty servers above the ceiling. Under a pin, once no
+// empty one is left, it retires the occupied ones with the fewest players: the
+// players stay until they leave. Retire never shares a pass with Delete.
+func shedSurplus(in ScalingInputs, surplus int32) (del, retire []string) {
+	pool := deletable(in)
+	if del = SelectDeletionCandidates(pool, int(surplus)); len(del) > 0 || !in.Pinned {
+		return del, nil
+	}
+	for _, v := range in.Views {
+		if v.countsTowardSize() && (v.Retire || in.PendingRetires[v.Name]) {
+			surplus--
+		}
+	}
+	occupied := make([]ServerView, 0, len(pool))
+	for _, v := range pool {
+		if v.countsTowardSize() {
+			occupied = append(occupied, v)
+		}
+	}
+	sort.SliceStable(occupied, func(i, j int) bool {
+		if occupied[i].Players != occupied[j].Players {
+			return occupied[i].Players < occupied[j].Players
+		}
+		if !occupied[i].CreatedAt.Equal(occupied[j].CreatedAt) {
+			return occupied[i].CreatedAt.After(occupied[j].CreatedAt)
+		}
+		return occupied[i].Name < occupied[j].Name
+	})
+	for i := 0; i < len(occupied) && i < int(surplus); i++ {
+		retire = append(retire, occupied[i].Name)
+	}
+	return nil, retire
+}
+
 // DecideSize is the group's sizing rule plus condemnation, which rides
 // alongside: a node drain answers to none of decideSize's branches, so none
 // may decline or bound it.
@@ -470,12 +504,14 @@ func decideSize(in ScalingInputs) SizeDecision {
 		// No room to grow, but a lowered maxReplicas must still be carried out. The
 		// demand removal below stays forbidden: the group just said it is short.
 		if surplus := alive - in.ceiling(); surplus > 0 {
+			del, retire := shedSurplus(in, surplus)
 			return SizeDecision{
 				Wanted:            wanted,
 				Limited:           limited,
 				ColdStartBlocked:  coldBlocked,
 				Surplus:           surplus,
-				Delete:            SelectDeletionCandidates(deletable(in), int(surplus)),
+				Delete:            del,
+				Retire:            retire,
 				ChangeoverWaiting: waiting,
 			}
 		}
@@ -488,9 +524,11 @@ func decideSize(in ScalingInputs) SizeDecision {
 	}
 
 	if surplus := alive - in.ceiling(); surplus > 0 {
+		del, retire := shedSurplus(in, surplus)
 		return SizeDecision{
 			Surplus:           surplus,
-			Delete:            SelectDeletionCandidates(deletable(in), int(surplus)),
+			Delete:            del,
+			Retire:            retire,
 			ChangeoverWaiting: waiting,
 		}
 	}

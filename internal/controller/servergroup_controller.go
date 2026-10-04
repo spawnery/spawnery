@@ -1254,7 +1254,7 @@ func (r *ServerGroupReconciler) retireServer(
 		return err
 	}
 	r.Recorder.Eventf(group, nil, corev1.EventTypeNormal, "ServerRetiring", actionRetireServer,
-		"retiring server %s for a rolling update", name)
+		"retiring server %s", name)
 	return nil
 }
 
