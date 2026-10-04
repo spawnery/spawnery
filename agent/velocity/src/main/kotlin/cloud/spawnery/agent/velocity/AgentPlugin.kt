@@ -5,9 +5,10 @@ import cloud.spawnery.agent.CloudEvents
 import cloud.spawnery.agent.ProxyCommands
 import cloud.spawnery.agent.cloudCommand
 import cloud.spawnery.agent.Feed
-import cloud.spawnery.agent.FeedState
+import cloud.spawnery.agent.FeedLevels
 import cloud.spawnery.agent.JoinRules
 import cloud.spawnery.agent.LuckPermsContexts
+import cloud.spawnery.agent.LuckPermsFeedLevels
 import cloud.spawnery.agent.LuckPermsPermissions
 import cloud.spawnery.agent.MirrorApi
 import cloud.spawnery.agent.TransferView
@@ -103,7 +104,7 @@ class AgentPlugin @Inject constructor(
     private var transferPass: ScheduledTask? = null
 
     /** Built here rather than in start(), because it outlives a reconnect. */
-    private val feedState = FeedState()
+    private val feedLevels = FeedLevels(LuckPermsFeedLevels.storeIfPresent())
     private var feed: Feed? = null
 
     /**
@@ -191,7 +192,7 @@ class AgentPlugin @Inject constructor(
         )
         this.joinAccess = access
         this.rescue = Rescue(router, ::warn, access)
-        val feed = Feed(VelocityAudience(proxy), feedState, System::currentTimeMillis, format = mirror::feedFormat)
+        val feed = Feed(VelocityAudience(proxy), feedLevels, System::currentTimeMillis, format = mirror::feedFormat)
         this.feed = feed
         // No ReadinessGate: a proxy has no readiness flag to hold. See ProxyState.
         val api = MirrorApi(
@@ -207,7 +208,7 @@ class AgentPlugin @Inject constructor(
         // under no plugin.
         val proxyCommands = ProxyCommands<CommandSource>(connector) { source -> (source as? Player)?.username ?: "console" }
         val command = BrigadierCommand(
-            cloudCommand(api, VelocitySource, feedState, mirror::feedFormat, proxyCommands).build(),
+            cloudCommand(api, VelocitySource, feedLevels, mirror::feedFormat, proxyCommands).build(),
         )
         proxy.commandManager.register(
             proxy.commandManager.metaBuilder(command).plugin(this).build(),

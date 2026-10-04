@@ -23,10 +23,10 @@ class FeedTest {
     private val alice = UUID.nameUUIDFromBytes("alice".toByteArray())
     private val bob = UUID.nameUUIDFromBytes("bob".toByteArray())
     private val audience = FakeAudience()
-    private val state = FeedState()
+    private val levels = FeedLevels(null)
     private var now = 0L
     private var format = ""
-    private val feed = Feed(audience, state, { now }, format = { format })
+    private val feed = Feed(audience, levels, { now }, format = { format })
 
     private fun anEvent(name: String): CloudEvent =
         CloudEvent.newBuilder()
@@ -34,10 +34,10 @@ class FeedTest {
             .setMessage("$name is ready").build()
 
     @Test
-    fun `a closed window reaches everybody permitted who has not opted out`() {
+    fun `a closed window reaches everybody permitted whose level is not off`() {
         audience.online += listOf(alice, bob)
         audience.permitted += listOf(alice, bob)
-        state.optOut(bob)
+        levels.set(bob, FeedLevel.OFF)
 
         feed.onEvent(anEvent("lobby-a"))
         now = 1_000
@@ -67,7 +67,7 @@ class FeedTest {
         audience.permitted += alice
         assertTrue(feed.wanted(0), "a permitted player online did not register")
 
-        state.optOut(alice)
+        levels.set(alice, FeedLevel.OFF)
         assertTrue(!feed.wanted(0), "the last watcher opting out left the agent still asking")
     }
 

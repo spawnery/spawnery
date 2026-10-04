@@ -12,8 +12,9 @@ import cloud.spawnery.agent.api.Spawnery
 import cloud.spawnery.agent.BearerCredentials
 import cloud.spawnery.agent.Environment
 import cloud.spawnery.agent.Feed
-import cloud.spawnery.agent.FeedState
+import cloud.spawnery.agent.FeedLevels
 import cloud.spawnery.agent.LuckPermsContexts
+import cloud.spawnery.agent.LuckPermsFeedLevels
 import cloud.spawnery.agent.OperatorChannel
 import cloud.spawnery.agent.SessionLoop
 import cloud.spawnery.agent.TokenSource
@@ -59,8 +60,8 @@ class AgentPlugin : JavaPlugin(), Listener {
             ?: throw IllegalStateException("this agent has no session to the operator")
         loop.send(ServerMessage.newBuilder().setCloudRequest(request).build())
     }
-    private val feedState = FeedState()
-    private val feed = Feed(PaperAudience, feedState, System::currentTimeMillis, format = mirror::feedFormat)
+    private val feedLevels = FeedLevels(LuckPermsFeedLevels.storeIfPresent())
+    private val feed = Feed(PaperAudience, feedLevels, System::currentTimeMillis, format = mirror::feedFormat)
     private val events = CloudEvents()
     private val role = ServerRole(state, mirror, connector, feed, events, ::execute)
 
@@ -103,7 +104,7 @@ class AgentPlugin : JavaPlugin(), Listener {
                 // lifecycle event; a direct call from onEnable throws.
                 lifecycleManager.registerEventHandler(LifecycleEvents.COMMANDS) { event ->
                     event.registrar().register(
-                        cloudCommand(api, PaperSource, feedState, mirror::feedFormat).build(),
+                        cloudCommand(api, PaperSource, feedLevels, mirror::feedFormat).build(),
                         "Spawnery cloud commands",
                     )
                 }

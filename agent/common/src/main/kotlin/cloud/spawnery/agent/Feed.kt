@@ -6,7 +6,7 @@ const val PERMISSION_EVENTS: String = "spawnery.cloud.events"
 
 class Feed(
     private val audience: FeedAudience,
-    private val state: FeedState,
+    private val levels: FeedLevels,
     clock: () -> Long,
     windowMillis: Long = WINDOW_MILLIS,
     /** A lambda, because the format arrives with every resync and an edit must not wait for the next pod. */
@@ -26,11 +26,11 @@ class Feed(
      * operator would stop sending events its plugins subscribed to.
      */
     fun wanted(subscribers: Int): Boolean =
-        subscribers > 0 || audience.holders(PERMISSION_EVENTS).any(state::wants)
+        subscribers > 0 || audience.holders(PERMISSION_EVENTS).any { levels.level(it) != FeedLevel.OFF }
 
     private fun deliver(lines: List<String>) {
         // Read once, not per line, so nobody gets a partial batch.
-        val recipients = audience.holders(PERMISSION_EVENTS).filter(state::wants)
+        val recipients = audience.holders(PERMISSION_EVENTS).filter { levels.level(it) != FeedLevel.OFF }
         if (recipients.isEmpty()) return
         // Read once, so a resync mid-loop cannot give two players different shapes.
         val shape = format().ifBlank { DEFAULT_FORMAT }
