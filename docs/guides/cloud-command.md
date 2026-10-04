@@ -147,8 +147,9 @@ by requests. It creates an `Exact` `ScaleBoost`, described in [Holding a group
 at a size](scaling-and-boosts.md#holding-a-group-at-a-size). The operator
 creates it, so it has an owner reference to the group and goes with it.
 
-Servers above the number are drained to the fallback groups, emptiest first.
-A server you took hold of with `/cloud unretire` stays. While a pin holds, a
+Empty servers above the number are deleted. Occupied ones are retired,
+emptiest first: the proxies send nobody new, and a server goes once its players
+have left, or at `spec.update.maxStaleSeconds` if the group sets one. A server you took hold of with `/cloud unretire` stays. While a pin holds, a
 rolling update cannot surge above it, the same as for a group at
 `maxReplicas`. `/cloud info <group>` shows `Pinned 0 servers until 18:00 UTC`.
 `/cloud scale <group> reset` removes every pin and every boost on the group.
@@ -180,7 +181,7 @@ with the issuer and the command, never the output, and the operator logs
 network, proxy, issuer, target and command.
 
 Switching it on means that anybody holding the node can run any console command
-on any server, and on most servers that includes `op`. There is no allowlist.
+on any server, with no allowlist, and on most servers that includes `op`.
 
 **`/cloud events on|off`** turns this player's cloud event feed on or off.
 

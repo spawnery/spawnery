@@ -72,7 +72,7 @@ availability question; see [network-boundaries.md](network-boundaries.md#how-man
 
 A proxy's token can force-stop any server in its namespace and, where
 `spec.commands.execute` is on, run any console command on any of them. On a
-server with `op` that is the server. A backend can do neither: the operator
+server with `op` that means full control of the server. A backend can do neither: the operator
 refuses both requests from a server's token, the Paper `/cloud` has neither
 verb, and the plugin API offers no method for either. On a network whose
 proxies run third-party plugins, `spec.commands.execute` is the setting to

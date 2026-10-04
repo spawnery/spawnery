@@ -243,8 +243,7 @@ spec:
 ```
 
 While it lives, the group's floor and its ceiling are both `replicas`, and
-`Add` boosts pause. Of several live `Exact` boosts the newest wins. They do not
-add up. Empty servers above the number are deleted. Occupied ones are retired:
+`Add` boosts pause. Of several live `Exact` boosts only the newest counts. Empty servers above the number are deleted. Occupied ones are retired:
 the proxies stop sending anyone there, the players stay until they leave, and
 the server goes once it is empty. A pin to 0 therefore admits nobody new
 without ending a running round. A group with `spec.update.maxStaleSeconds`
