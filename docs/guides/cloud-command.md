@@ -202,7 +202,10 @@ which is the default, and `off` shows nothing.
 | anything else | | | the operator's note |
 
 Several lines of one kind in one group within a second become one
-(`[+] 5 lobby`). Warnings are never merged. An on-demand member shows as its
+(`[+] 5 lobby`). At `verbose` the merged line names the kind and lists up to six
+names (`8 PodCreated in lobby (lobby-a, lobby-b, lobby-c, lobby-d, lobby-e,
+lobby-f and 2 more)`), and a single event shows as `name: note`. Warnings are
+never merged. An on-demand member shows as its
 group and the first six characters of its key (`challenge-3f2b1c`). Hovering
 over a name shows it in full, and clicking it puts `/cloud info <name>` in the
 chat box.
@@ -210,8 +213,9 @@ chat box.
 With LuckPerms the level is the player's meta value `spawnery-feed`, read with
 inheritance, so `/lp group admin meta set spawnery-feed normal` covers every
 admin who has not chosen their own. It survives a roll and a change of proxy
-when the proxies share LuckPerms storage, since they then read the same user
-data. Another proxy picks up a change on LuckPerms' next sync. Without
+when the proxies share LuckPerms storage, because LuckPerms loads a player's
+data from storage at login, so the level follows the player from their next
+login on any proxy. Without
 LuckPerms the proxy keeps the level in memory until it restarts.
 
 ## Both sides, one command

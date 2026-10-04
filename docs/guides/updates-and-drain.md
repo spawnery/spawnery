@@ -362,7 +362,8 @@ the translatable key `spawnery.transfer.warning` with the seconds as its one
 argument, and the English text above is its fallback, so a network with its own
 translations can word it differently. A player is warned once per leaving
 proxy, and only when a forced transfer is coming for them. Players behind a
-closed door are not warned, nor is anyone while no other proxy can take them,
+closed door are not warned while it stays closed (a door that opens after the
+deadline gets the warning and the move in the same pass), nor is anyone while no other proxy can take them,
 nor a player on a server switch, who is transferred at once.
 
 A transfer only happens while another proxy of the same group is Ready, not
