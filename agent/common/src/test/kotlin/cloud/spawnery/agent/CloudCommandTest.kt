@@ -361,7 +361,7 @@ class CloudCommandTest {
         run("cloud scale lobby 2 for 2hh")
 
         assertTrue(requested.isEmpty(), "an unreadable duration still reached the operator: $requested")
-        assertTrue(sent.single().contains("2hh"), "the answer did not name what it could not read: $sent")
+        assertTrue(plain(sent.single()).contains("2hh is not a duration"), "the answer did not name what it could not read: $sent")
     }
 
     @Test
@@ -372,7 +372,7 @@ class CloudCommandTest {
 
         answer { setStopBoost(StopBoostResult.newBuilder().setRemoved(2)) }
 
-        assertTrue(plain(sent.single()).contains("removed 2"), sent.toString())
+        assertTrue(plain(sent.single()).contains("removed 2 pins and boosts from lobby"), sent.toString())
     }
 
     @Test
@@ -381,7 +381,7 @@ class CloudCommandTest {
 
         answer { setStopBoost(StopBoostResult.newBuilder().setRemoved(0)) }
 
-        assertTrue(plain(sent.single()).contains("had no pin or boost"), sent.toString())
+        assertTrue(plain(sent.single()).contains("has no pin or boost"), sent.toString())
     }
 
     @Test
