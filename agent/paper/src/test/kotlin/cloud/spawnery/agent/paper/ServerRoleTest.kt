@@ -145,4 +145,19 @@ class ServerRoleTest {
         state.setPlayable(0)
         assertEquals(0, role.playerCount().playerCount.playableSlots)
     }
+
+    @Test
+    fun `an execute command goes to the executor and changes nothing else`() {
+        val handed = mutableListOf<Long>()
+        val role = ServerRole(ServerState(), NetworkMirror(), dormantConnector(), aFeed(), CloudEvents()) { handed += it.id }
+
+        val directive = role.onMessage(
+            OperatorToServer.newBuilder()
+                .setExecuteCommand(cloud.spawnery.agent.pb.ExecuteCommand.newBuilder().setId(9).setCommand("list"))
+                .build(),
+        )
+
+        assertEquals(Directive.None, directive)
+        assertEquals(listOf(9L), handed)
+    }
 }

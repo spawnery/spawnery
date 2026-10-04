@@ -8,6 +8,7 @@ import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.Directive
 import cloud.spawnery.agent.Feed
 import cloud.spawnery.agent.pb.AgentServiceGrpc
+import cloud.spawnery.agent.pb.ExecuteCommand
 import cloud.spawnery.agent.pb.Hello
 import cloud.spawnery.agent.pb.OperatorToServer
 import cloud.spawnery.agent.pb.PlayerCount
@@ -23,6 +24,7 @@ class ServerRole(
     private val connector: CloudConnector,
     private val feed: Feed,
     private val events: CloudEvents,
+    private val execute: (ExecuteCommand) -> Unit = {},
 ) : AgentRole<ServerMessage, OperatorToServer> {
     override fun open(
         channel: ManagedChannel,
@@ -73,6 +75,10 @@ class ServerRole(
             OperatorToServer.MessageCase.CLOUD_EVENT -> {
                 feed.onEvent(message.cloudEvent)
                 events.publish(message.cloudEvent)
+                Directive.None
+            }
+            OperatorToServer.MessageCase.EXECUTE_COMMAND -> {
+                execute(message.executeCommand)
                 Directive.None
             }
             else -> Directive.None
