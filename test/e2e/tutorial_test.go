@@ -5,6 +5,7 @@ package e2e
 import (
 	"bufio"
 	"bytes"
+	"context"
 	"fmt"
 	"os"
 	"os/exec"
@@ -919,6 +920,17 @@ func TestTutorialCloudCommands(t *testing.T) {
 	setExecute(true)
 	t.Cleanup(func() { setExecute(false) })
 
+	var floor spawneryv1alpha1.ServerGroup
+	if err := k8s.Get(ctx, groupKey, &floor); err != nil {
+		t.Fatalf("get ServerGroup: %v", err)
+	}
+	eventuallyIn(t, tutorialOperatorNamespace, 5*time.Minute, "the lobby back at its floor, every server Ready", func() (bool, string) {
+		ready, total := readyLobbyServers(), lobbyServerCount()
+		return int32(len(ready)) >= floor.Spec.Scaling.MinReplicas && len(ready) == total,
+			fmt.Sprintf("ready=%v servers=%d floor=%d", ready, total, floor.Spec.Scaling.MinReplicas)
+	})
+	targets := readyLobbyServers()
+
 	marker := fmt.Sprintf("spawnery-e2e-%d", time.Now().UnixNano())
 	velocityConsole(t, gateway, "cloud execute lobby say "+marker)
 	eventuallyIn(t, tutorialOperatorNamespace, time.Minute, "say to reach every lobby server", func() (bool, string) {
@@ -928,10 +940,10 @@ func TestTutorialCloudCommands(t *testing.T) {
 			return false, err.Error()
 		}
 		m := total.FindAllStringSubmatch(log, -1)
-		if len(m) == 0 || m[len(m)-1][1] != m[len(m)-1][2] {
-			return false, fmt.Sprintf("totals so far: %v", m)
+		if len(m) == 0 || m[len(m)-1][1] != strconv.Itoa(len(targets)) || m[len(m)-1][2] != strconv.Itoa(len(targets)) {
+			return false, fmt.Sprintf("want %d of %d; totals so far: %v", len(targets), len(targets), m)
 		}
-		for _, name := range readyLobbyServers() {
+		for _, name := range targets {
 			var s spawneryv1alpha1.Server
 			if err := k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: name}, &s); err != nil {
 				return false, err.Error()
@@ -1124,7 +1136,9 @@ func envValue(p *corev1.Pod, container, name string) string {
 // typed commands. The console holds every permission.
 func velocityConsole(t *testing.T, pod, line string) {
 	t.Helper()
-	cmd := exec.Command("kubectl", "-n", tutorialNamespace, "exec", pod, "-c", podspec.ProxyContainerName,
+	execCtx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	cmd := exec.CommandContext(execCtx, "kubectl", "-n", tutorialNamespace, "exec", pod, "-c", podspec.ProxyContainerName,
 		"--", "bash", "-c", `printf '%s\n' "$1" > /proc/1/fd/0`, "console", line)
 	if out, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("type %q into %s's console: %v\n%s", line, pod, err, out)
