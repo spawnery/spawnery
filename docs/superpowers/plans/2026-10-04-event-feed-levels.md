@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - Work in the worktree `/home/paul/git/spawnery-feed`, branch `feat/event-feed`. It is based on `feat/cloud-commands` (PR #98), not on master. Read code from the worktree, not from `/home/paul/git/spawnery`.
-- The branch does not contain master's #97 (transfer pacing: `Transfers.myTurn`, `Traveller.address`, `forced(..., admit)`). Do not merge master in. When the branch is rebased after #98 merges, resolve `Transfers.pass` by keeping master's pacing and running Task 7's warning loop before `if (!myTurn(picture, now)) return`, and keep both new `Traveller` members.
+- The branch sits on master with #97 and #98 merged (0.19.0). `Transfers.pass` carries #97's pacing (`myTurn`, `cooling`, `Traveller.address`, `forced(..., admit)`); Task 7's warning loop runs before `if (!myTurn(picture, now)) return`, so the warning is not held back by the pacing window.
 - Every build and test command runs in the dev shell, with the flake as an argument and never after a `cd`: `nix --extra-experimental-features 'nix-command flakes' develop /home/paul/git/spawnery-feed -c <cmd>`, started from the worktree root. Below, `NIX` stands for `nix --extra-experimental-features 'nix-command flakes'`.
 - Check `hostname` once. On `paul-desktop` run tests without throttling. On the development VM pass `-p 1` to any `go test` that covers more than one envtest package.
 - To read master quickly, `codegraph explore "<symbols or question>"` from `/home/paul/git/spawnery` returns verbatim source. For anything #98 changed (`agent/common` `CloudCommand.kt`, `Execute.kt`, `ListLines.kt`, `StatusLines.kt`, `internal/agentserver`) read the worktree directly.
