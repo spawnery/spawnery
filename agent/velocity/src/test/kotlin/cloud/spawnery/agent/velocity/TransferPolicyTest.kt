@@ -153,4 +153,84 @@ class TransferPolicyTest {
         now += 1_000
         assertEquals(listOf(alice to "lobby-1"), p.forced(leaving, listOf(TransferPolicy.Occupant(alice, "lobby-1"))))
     }
+
+    private fun occupants(vararg ids: UUID) = ids.map { TransferPolicy.Occupant(it, "lobby-1") }
+
+    @Test
+    fun `nobody is warned while more than the lead is left`() {
+        val p = policy(forceAfterMillis = 120_000L)
+        val pic = picture(leavingAlone)
+
+        assertEquals(emptyList(), p.warnings(pic, occupants(alice), 10_000L))
+        now += 110_000L - 1
+        assertEquals(emptyList(), p.warnings(pic, occupants(alice), 10_000L))
+        now += 1
+        assertEquals(listOf(TransferPolicy.Warning(alice, 10)), p.warnings(pic, occupants(alice), 10_000L))
+    }
+
+    @Test
+    fun `the seconds are rounded up`() {
+        val p = policy(forceAfterMillis = 15_000L)
+        val pic = picture(leavingAlone)
+        p.warnings(pic, occupants(alice), 10_000L)
+        now += 5_500L
+
+        assertEquals(listOf(TransferPolicy.Warning(alice, 10)), p.warnings(pic, occupants(alice), 10_000L))
+    }
+
+    @Test
+    fun `a forceAfter shorter than the lead warns at once`() {
+        assertEquals(
+            listOf(TransferPolicy.Warning(alice, 3)),
+            policy(forceAfterMillis = 3_000L).warnings(picture(leavingAlone), occupants(alice), 10_000L),
+        )
+    }
+
+    @Test
+    fun `a forceAfter of zero warns once with one second, before the same pass moves the player`() {
+        val p = policy(forceAfterMillis = 0L)
+        val pic = picture(leavingAlone)
+
+        assertEquals(listOf(TransferPolicy.Warning(alice, 1)), p.warnings(pic, occupants(alice), 10_000L))
+        assertEquals(listOf(alice to "lobby-1"), p.forced(pic, occupants(alice)))
+    }
+
+    @Test
+    fun `each player is warned once per leaving proxy`() {
+        val p = policy(forceAfterMillis = 0L)
+        val pic = picture(leavingAlone)
+        assertEquals(1, p.warnings(pic, occupants(alice), 10_000L).size)
+        assertEquals(emptyList(), p.warnings(pic, occupants(alice), 10_000L))
+
+        val back = picture(listOf(ProxyInfo("edge-1", "edge", true, false, 0, ""), ProxyInfo("edge-2", "edge", true, false, 0, "")))
+        p.warnings(back, occupants(alice), 10_000L)
+        assertEquals(1, p.warnings(pic, occupants(alice), 10_000L).size, "a second leave did not warn again")
+    }
+
+    @Test
+    fun `only those the forced pass would move are warned`() {
+        val p = policy(forceAfterMillis = 0L)
+
+        assertEquals(
+            emptyList(),
+            p.warnings(picture(leavingAlone, closedDoors = setOf("lobby-1")), occupants(alice), 10_000L),
+            "a player behind a closed door was warned",
+        )
+        val nowhere = picture(listOf(ProxyInfo("edge-1", "edge", false, true, 0, ""), ProxyInfo("hub-1", "hub", true, false, 0, "")))
+        assertEquals(emptyList(), p.warnings(nowhere, occupants(alice), 10_000L), "warned with nowhere to go")
+        assertEquals(
+            emptyList(),
+            p.warnings(picture(leavingAlone), listOf(TransferPolicy.Occupant(bob, null)), 10_000L),
+            "a player between servers was warned",
+        )
+    }
+
+    @Test
+    fun `a player already moved on a switch is not warned`() {
+        val p = policy(forceAfterMillis = 0L)
+        val pic = picture(leavingAlone)
+        assertTrue(p.onSwitch(pic, alice))
+
+        assertEquals(emptyList(), p.warnings(pic, occupants(alice), 10_000L))
+    }
 }

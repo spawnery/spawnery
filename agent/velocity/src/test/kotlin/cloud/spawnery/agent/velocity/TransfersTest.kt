@@ -2,6 +2,8 @@ package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.api.ProxyInfo
 import org.junit.jupiter.api.Test
+import net.kyori.adventure.text.Component
+import net.kyori.adventure.text.TranslatableComponent
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.UUID
@@ -51,6 +53,11 @@ class TransfersTest {
     ) : Traveller {
         override val uuid: UUID = UUID.nameUUIDFromBytes(username.toByteArray())
         val sent = mutableListOf<Pair<ByteArray, InetSocketAddress>>()
+        val told = mutableListOf<Component>()
+
+        override fun tell(message: Component) {
+            told += message
+        }
 
         override fun transfer(cookie: ByteArray, to: InetSocketAddress) {
             failWith?.let { throw it }
@@ -357,5 +364,57 @@ class TransfersTest {
         transfers.pass(players)
 
         assertTrue(players.all { it.sent.size == 1 })
+    }
+
+    @Test
+    fun `a pass warns a player before it transfers them`() {
+        val alice = FakeTraveller("alice", "lobby-1", host)
+
+        transfers.pass(listOf(alice))
+
+        val warning = alice.told.single() as TranslatableComponent
+        assertEquals("spawnery.transfer.warning", warning.key())
+        assertEquals(1, alice.sent.size)
+    }
+
+    @Test
+    fun `a switch transfers without a warning`() {
+        val alice = FakeTraveller("alice", "lobby-1", host)
+
+        assertTrue(transfers.onSwitch(alice, "arena-1"))
+        assertTrue(alice.told.isEmpty(), alice.told.toString())
+    }
+
+    @Test
+    fun `a player without a virtual host is not warned either`() {
+        val alice = FakeTraveller("alice", "lobby-1", null)
+
+        transfers.pass(listOf(alice))
+
+        assertTrue(alice.told.isEmpty(), alice.told.toString())
+    }
+
+    @Test
+    fun `a proxy waiting for its turn still warns`() {
+        val bothLeaving = listOf(
+            ProxyInfo("edge-1", "edge", false, true, 0, ""),
+            ProxyInfo("edge-2", "edge", false, true, 0, ""),
+            ProxyInfo("edge-3", "edge", true, false, 0, ""),
+        )
+        val second = transfersAs("edge-2", bothLeaving)
+        val alice = FakeTraveller("alice", "lobby-1", host)
+
+        second.pass(listOf(alice))
+
+        assertEquals(1, alice.told.size)
+        assertTrue(alice.sent.isEmpty())
+    }
+
+    @Test
+    fun `the warning is translatable, with the seconds as its argument and a fallback`() {
+        val c = TransferWarning.message(7) as TranslatableComponent
+        assertEquals("spawnery.transfer.warning", c.key())
+        assertEquals("You will be reconnected in %s seconds.", c.fallback())
+        assertEquals(Component.text(7L), c.arguments().single().asComponent())
     }
 }
