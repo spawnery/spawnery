@@ -303,3 +303,36 @@ func TestInterestForAPodWithNoSessionIsIgnored(t *testing.T) {
 		t.Error("interest was recorded for a pod with no session")
 	}
 }
+
+func TestSendReachesOnlyTheNamedSession(t *testing.T) {
+	r := newRegistry(t, serverreg.Options{}, group("ns", "lobby"))
+	a, leaveA, err := r.Join(context.Background(), "ns", "pod-a")
+	if err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	defer leaveA()
+	b, leaveB, err := r.Join(context.Background(), "ns", "pod-b")
+	if err != nil {
+		t.Fatalf("join: %v", err)
+	}
+	defer leaveB()
+	<-a
+	<-b
+
+	msg := &agentpb.OperatorToServer{Message: &agentpb.OperatorToServer_ExecuteCommand{
+		ExecuteCommand: &agentpb.ExecuteCommand{Id: 1, Command: "list"}}}
+	if !r.Send("pod-a", msg) {
+		t.Fatal("Send to a live session reported failure")
+	}
+	if got := <-a; got.GetExecuteCommand().GetId() != 1 {
+		t.Errorf("pod-a got %v", got)
+	}
+	select {
+	case got := <-b:
+		t.Errorf("pod-b got %v, want nothing", got)
+	default:
+	}
+	if r.Send("pod-gone", msg) {
+		t.Error("Send to no session reported success")
+	}
+}

@@ -46,6 +46,9 @@ var ErrNotRetiring = errors.New("server is not retiring")
 
 var ErrNoSuchGroup = errors.New("no such group")
 
+// ErrNotAServer is a server verb aimed at a proxy.
+var ErrNotAServer = errors.New("that is a proxy, not a server")
+
 // ErrGroupNotScalable: only an ephemeral group with spec.scaling adds boosts
 // to its floor; on any other group a boost would exist and change nothing.
 var ErrGroupNotScalable = errors.New("that group is not sized by scaling")
@@ -104,6 +107,14 @@ type ClusterWriter interface {
 	// Boost creates a ScaleBoost on a group, owned by it. The caller has
 	// already bounded the numbers.
 	Boost(ctx context.Context, namespace, group string, replicas int32, expiresAt time.Time) error
+
+	// Pin creates an Exact ScaleBoost on a group, owned by it. The caller has
+	// already bounded the numbers.
+	Pin(ctx context.Context, namespace, group string, replicas int32, expiresAt time.Time) error
+
+	// ForceStop sets spec.forceStop on a server; ErrNotAServer for a proxy's
+	// name, ErrNoSuchServer for anything else unknown.
+	ForceStop(ctx context.Context, namespace, name string) error
 
 	// StopBoosts deletes every boost on a group and says how many there were.
 	StopBoosts(ctx context.Context, namespace, group string) (int, error)
@@ -274,10 +285,19 @@ func (w KubeWriter) Headroom(ctx context.Context, namespace, group string) (Head
 	}, nil
 }
 
-// Boost uses generateName so two admins boosting at once get two boosts, not
-// a collision.
-func (w KubeWriter) Boost(
-	ctx context.Context, namespace, group string, replicas int32, expiresAt time.Time,
+func (w KubeWriter) Boost(ctx context.Context, namespace, group string, replicas int32, expiresAt time.Time) error {
+	return w.createBoost(ctx, namespace, group, spawneryv1alpha1.ScaleBoostAdd, replicas, expiresAt)
+}
+
+func (w KubeWriter) Pin(ctx context.Context, namespace, group string, replicas int32, expiresAt time.Time) error {
+	return w.createBoost(ctx, namespace, group, spawneryv1alpha1.ScaleBoostExact, replicas, expiresAt)
+}
+
+// createBoost uses generateName so two admins boosting at once get two
+// boosts, not a collision.
+func (w KubeWriter) createBoost(
+	ctx context.Context, namespace, group string, mode spawneryv1alpha1.ScaleBoostMode, replicas int32,
+	expiresAt time.Time,
 ) error {
 	var g spawneryv1alpha1.ServerGroup
 	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: group}, &g); err != nil {
@@ -300,10 +320,34 @@ func (w KubeWriter) Boost(
 		},
 		Spec: spawneryv1alpha1.ScaleBoostSpec{
 			GroupRef:  spawneryv1alpha1.ObjectRef{Name: group},
+			Mode:      mode,
 			Replicas:  replicas,
 			ExpiresAt: &at,
 		},
 	})
+}
+
+// ForceStop does not refuse a server already set: a second force-stop is what
+// shortens a grace period that began before the first.
+func (w KubeWriter) ForceStop(ctx context.Context, namespace, name string) error {
+	var srv spawneryv1alpha1.Server
+	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &srv); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return err
+		}
+		var pod corev1.Pod
+		if perr := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &pod); perr == nil &&
+			pod.Labels[podspec.LabelRole] == podspec.RoleProxy {
+			return ErrNotAServer
+		}
+		return ErrNoSuchServer
+	}
+	if srv.Spec.ForceStop {
+		return nil
+	}
+	patch := client.MergeFrom(srv.DeepCopy())
+	srv.Spec.ForceStop = true
+	return w.Client.Patch(ctx, &srv, patch)
 }
 
 // StopBoosts removes expired boosts too, so its count matches what an admin

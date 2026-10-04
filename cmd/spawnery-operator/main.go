@@ -395,6 +395,7 @@ func main() {
 			Clock:   time.Now,
 			Log:     ctrl.Log.WithName("netstatus"),
 		},
+		Recorder:       mgr.GetEventRecorder("agentserver"),
 		Fleet:          fleet.Size,
 		ReportInterval: reportInterval,
 		RenewAfter:     renewAfter,

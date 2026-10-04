@@ -173,6 +173,19 @@ func (r *Registry) SetInterest(podUID string, wanted bool) {
 	}
 }
 
+// Send queues one message for one session. False when the pod has no live
+// session, or when the message cut a session that had fallen behind.
+func (r *Registry) Send(podUID string, msg *agentpb.OperatorToServer) bool {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	s, ok := r.sessions[podUID]
+	if !ok || s.closed {
+		return false
+	}
+	r.send(s, msg)
+	return !s.closed
+}
+
 // Interested reports what SetInterest last recorded. Exported for tests.
 func (r *Registry) Interested(podUID string) bool {
 	r.mu.Lock()
