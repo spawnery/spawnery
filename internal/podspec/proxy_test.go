@@ -632,6 +632,34 @@ func TestAProxyGroupWithTransferCarriesItsDeadlineAndSecretPath(t *testing.T) {
 	}
 }
 
+func TestAProxyGroupWithForceGroupsNamesThemToTheAgent(t *testing.T) {
+	group := testProxyGroup()
+	group.Spec.Update = &spawneryv1alpha1.ProxyUpdateSpec{
+		Transfer: &spawneryv1alpha1.ProxyTransferSpec{ForceGroups: []string{"hub", "lobby"}},
+	}
+	pod, err := BuildProxyPod(testNetwork(), group, "gateway-abcd", testEndpoint, nil)
+	if err != nil {
+		t.Fatalf("BuildProxyPod: %v", err)
+	}
+	if got := proxyEnv(pod, EnvTransferForceGroups); got != "hub,lobby" {
+		t.Errorf("%s = %q, want hub,lobby", EnvTransferForceGroups, got)
+	}
+}
+
+func TestAProxyGroupWithoutForceGroupsSetsNoVariable(t *testing.T) {
+	group := testProxyGroup()
+	group.Spec.Update = &spawneryv1alpha1.ProxyUpdateSpec{Transfer: &spawneryv1alpha1.ProxyTransferSpec{}}
+	pod, err := BuildProxyPod(testNetwork(), group, "gateway-abcd", testEndpoint, nil)
+	if err != nil {
+		t.Fatalf("BuildProxyPod: %v", err)
+	}
+	for _, name := range envNames(pod) {
+		if name == EnvTransferForceGroups {
+			t.Fatalf("%s is set for a group that names no force groups", EnvTransferForceGroups)
+		}
+	}
+}
+
 func TestAProxyGroupWithTransferDefaultsItsDeadline(t *testing.T) {
 	group := testProxyGroup()
 	group.Spec.Update = &spawneryv1alpha1.ProxyUpdateSpec{Transfer: &spawneryv1alpha1.ProxyTransferSpec{}}

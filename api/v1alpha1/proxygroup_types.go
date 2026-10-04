@@ -179,6 +179,15 @@ type ProxyTransferSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	ForceAfterSeconds *int32 `json:"forceAfterSeconds,omitempty"`
+
+	// ForceGroups limits the forced transfer to players on servers of these
+	// server groups; everyone else moves only when they change server. Empty
+	// forces in every group.
+	// +listType=set
+	// +kubebuilder:validation:MaxItems=32
+	// +kubebuilder:validation:items:MinLength=1
+	// +optional
+	ForceGroups []string `json:"forceGroups,omitempty"`
 }
 
 // ProxyGroupSpec describes the Velocity layer of a network.
@@ -389,6 +398,15 @@ func (g *ProxyGroup) MaxStale() time.Duration {
 // defaultTransferForceAfter stays well below the 300 s drain default because
 // the agent learns it is leaving up to one resync after the drain clock starts.
 const defaultTransferForceAfter = 120 * time.Second
+
+// TransferForceGroups is spec.update.transfer.forceGroups; nil when transfer
+// is unset or names none.
+func (g *ProxyGroup) TransferForceGroups() []string {
+	if g.Spec.Update == nil || g.Spec.Update.Transfer == nil {
+		return nil
+	}
+	return g.Spec.Update.Transfer.ForceGroups
+}
 
 // TransferForceAfter is spec.update.transfer.forceAfterSeconds and whether
 // transfer is on at all. (0, false) when spec.update.transfer is unset.

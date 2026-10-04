@@ -184,3 +184,16 @@ while `(now / spacing) mod 2n == 2i`. Two windows of different proxies are
 then at least one spacing apart. A switch outside the proxy's window is not
 transferred.
 
+## 9. Addendum, 2026-10-04: forcing only in some groups
+
+A network wanted forced transfers in its hub only: its game servers close
+their door during a round, but their waiting lobbies, build worlds and
+private servers keep it open, and a player there should move when they next
+change server and not before. `spec.update.transfer.forceGroups` lists the
+server groups whose players may be forced; empty or unset is every group, as
+before. The operator passes it as `SPAWNERY_TRANSFER_FORCE_GROUPS`, comma
+separated and absent when empty, so groups without it keep their pod hash.
+The agent maps each server to its group from the network picture; a server
+it cannot place is not forced. The warning before a forced transfer follows
+the same rule. Transfers on a server switch are unaffected.
+

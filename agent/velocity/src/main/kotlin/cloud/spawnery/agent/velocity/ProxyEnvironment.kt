@@ -23,7 +23,7 @@ sealed interface ProxyEnvironment {
         val transferOff: String? = null,
     ) : ProxyEnvironment
 
-    class Transfer(val forceAfterSeconds: Long, val secret: ByteArray)
+    class Transfer(val forceAfterSeconds: Long, val secret: ByteArray, val forceGroups: Set<String> = emptySet())
 
     data class Dormant(val reason: String) : ProxyEnvironment
 
@@ -36,6 +36,7 @@ sealed interface ProxyEnvironment {
 
         const val TRANSFER_FORCE_AFTER_SECONDS = "SPAWNERY_TRANSFER_FORCE_AFTER_SECONDS"
         const val FORWARDING_SECRET_FILE = "SPAWNERY_FORWARDING_SECRET_FILE"
+        const val TRANSFER_FORCE_GROUPS = "SPAWNERY_TRANSFER_FORCE_GROUPS"
 
         /**
          * The check order is asserted by the tests. [Environment] runs first,
@@ -97,7 +98,7 @@ sealed interface ProxyEnvironment {
                 return off("cannot read $file: $e")
             }
             if (secret.isEmpty()) return off("$file is empty")
-            return Transfer(after, secret) to null
+            return Transfer(after, secret, split(getenv(TRANSFER_FORCE_GROUPS)).toSet()) to null
         }
 
         /**
