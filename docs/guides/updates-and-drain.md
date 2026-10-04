@@ -325,6 +325,11 @@ of the rendered config the group's pod hash covers. The proxies doing that
 first roll do not have the setting yet, so they still drain the old way;
 every roll after that transfers.
 
+A group whose `configOverlay` sets a `config-version` older than 2.7 in
+`velocity.toml` is refused while `transfer` is set: Velocity would migrate such
+a file on start and switch `accepts-transfers` off again. Drop the key from the
+overlay, or bring the overlay up to the current version.
+
 **Disabling it is safe.** It rolls the group the same way, and the old
 proxies, which still transfer, only send players to proxies that accept
 them: the new ones do not, so the old ones drain the old way.
