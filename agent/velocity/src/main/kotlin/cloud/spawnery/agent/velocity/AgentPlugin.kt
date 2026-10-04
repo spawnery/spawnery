@@ -192,7 +192,13 @@ class AgentPlugin @Inject constructor(
         )
         this.joinAccess = access
         this.rescue = Rescue(router, ::warn, access)
-        val feed = Feed(VelocityAudience(proxy), feedLevels, System::currentTimeMillis, format = mirror::feedFormat)
+        val feed = Feed(
+            VelocityAudience(proxy),
+            feedLevels,
+            System::currentTimeMillis,
+            format = mirror::feedFormat,
+            groupKind = mirror::groupKind,
+        )
         this.feed = feed
         // No ReadinessGate: a proxy has no readiness flag to hold. See ProxyState.
         val api = MirrorApi(

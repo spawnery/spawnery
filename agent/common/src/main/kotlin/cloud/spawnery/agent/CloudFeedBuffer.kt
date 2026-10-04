@@ -11,7 +11,7 @@ import cloud.spawnery.agent.pb.CloudEvent
 class CloudFeedBuffer(
     private val clock: () -> Long,
     private val windowMillis: Long,
-    private val deliver: (List<String>) -> Unit,
+    private val deliver: (List<CloudEvent>) -> Unit,
 ) {
     private val pending = mutableListOf<CloudEvent>()
     private var openedAt = 0L
@@ -26,11 +26,9 @@ class CloudFeedBuffer(
     fun tick() {
         if (pending.isEmpty()) return
         if (clock() - openedAt < windowMillis) return
-        val lines = coalesce(pending.toList())
+        val batch = pending.toList()
         // Cleared first, so a throwing deliver does not resend this window on every tick.
         pending.clear()
-        if (lines.isNotEmpty()) {
-            deliver(lines)
-        }
+        deliver(batch)
     }
 }

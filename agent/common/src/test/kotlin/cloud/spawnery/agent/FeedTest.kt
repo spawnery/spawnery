@@ -30,7 +30,7 @@ class FeedTest {
 
     private fun anEvent(name: String): CloudEvent =
         CloudEvent.newBuilder()
-            .setKind("ReadyGatePassed").setSubject(name).setGroup("lobby")
+            .setKind("PodCreated").setSubject(name).setGroup("lobby")
             .setMessage("$name is ready").build()
 
     @Test
@@ -45,6 +45,24 @@ class FeedTest {
 
         assertEquals(1, audience.sent.size, "sent to ${audience.sent.map { it.first }}")
         assertEquals(alice, audience.sent.single().first)
+    }
+
+    @Test
+    fun `each player sees the window at their own level`() {
+        audience.online += listOf(alice, bob)
+        audience.permitted += listOf(alice, bob)
+        levels.set(bob, FeedLevel.NORMAL)
+
+        feed.onEvent(anEvent("lobby-a"))
+        feed.onEvent(
+            CloudEvent.newBuilder().setKind("ReadyGatePassed").setSubject("lobby-a").setGroup("lobby")
+                .setMessage("phase Starting -> Ready").build(),
+        )
+        now = 1_000
+        feed.tick()
+
+        assertEquals(1, audience.sent.count { it.first == alice }, audience.sent.toString())
+        assertEquals(2, audience.sent.count { it.first == bob }, audience.sent.toString())
     }
 
     @Test
