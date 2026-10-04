@@ -347,11 +347,12 @@ operator](../getting-started/index.md) tells an administrator to treat as one
 trust domain.
 
 The `/cloud` command is the different case and does gate. A command has a
-source, so a permission is expressible there. It carries five,
-`spawnery.cloud.read`, `.retire`, `.scale`, `.status` and `.events`, listed
+source, so a permission is expressible there. It carries seven,
+`spawnery.cloud.read`, `.retire`, `.scale`, `.status`, `.events` and, on a proxy,
+`.forcestop` and `.execute`, listed
 with what each costs in [The `/cloud` command](../guides/cloud-command.md).
-The split matters: reading the network is what a moderator gets, and adding
-servers spends money.
+The split matters: reading the network is what a moderator gets, adding
+servers spends money, and killing or commanding a server is a proxy's alone.
 
 **That gate binds a person, not a pod.** A permission decides who may ask; the
 operator's own bounds (a ceiling a boost cannot lift, a duration it cannot

@@ -16,7 +16,7 @@ set -euo pipefail
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 
 PAGES=(
-  "docs/guides/upgrading.md:950"
+  "docs/guides/upgrading.md:1050"
   "docs/getting-started/index.md:1000"
   "docs/guides/rotating-the-forwarding-secret.md:1800"
   "docs/guides/rotating-the-ca.md:1400"

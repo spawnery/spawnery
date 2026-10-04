@@ -23,15 +23,17 @@ and from then on they have:
 
 Everything else is a separate grant, deliberately.
 
-## The five nodes
+## The seven nodes
 
 | Node | Opens |
 |---|---|
 | `spawnery.cloud.read` | `/cloud list`, `/cloud info <name>` |
 | `spawnery.cloud.retire` | `/cloud retire <name>`, `/cloud unretire <name>` |
-| `spawnery.cloud.scale` | `/cloud start <group> <count> [for <duration>]`, `/cloud stop <group>` |
+| `spawnery.cloud.scale` | `/cloud scale <group> <count> [for <duration>]`, `/cloud scale <group> reset` |
 | `spawnery.cloud.events` | `/cloud events on`, `/cloud events off` |
 | `spawnery.cloud.status` | `/cloud status [group\|server\|proxy]` |
+| `spawnery.cloud.forcestop` | `/cloud forcestop <server>` (proxy only) |
+| `spawnery.cloud.execute` | `/cloud execute <server\|group> <command>` (proxy only, and only with `spec.commands.execute`) |
 
 **None of them implies another.** Retiring is its own node rather than a level
 above reading, because the two are not the same kind of thing: reading is what
@@ -42,16 +44,15 @@ moderator the second the day somebody granted the first.
 `retire` and `unretire` share one node for the same reason: somebody trusted
 to retire a server is trusted to take that back.
 
-`start` and `stop` share one node in the other direction, and for the matching
-reason: somebody trusted to add servers is trusted to take back what they
-added, and a grant that let a person start boosts without ending them would
-leave them no way to undo their own mistake.
+Pinning a group and resetting it share the `scale` node, for the same reason:
+whoever holds a group at a size must be able to let it go again, or a mistake
+would stay until somebody with more rights undid it.
 
-Any one of the five makes the bare `/cloud` root visible. That is deliberate
+Any one of the seven makes the bare `/cloud` root visible. That is deliberate
 too: a root demanding `spawnery.cloud.read` would hide the whole tree from
 somebody granted only `spawnery.cloud.retire`, and hide it in the worst
 possible way. The branches still gate themselves, so this widens what is
-visible and nothing else.
+visible and nothing else. On a backend the two proxy-only nodes open nothing.
 
 ## Where a permission applies
 
@@ -137,12 +138,49 @@ its slots reads `9 / 12 · max 100`), TPS against 20, and CPU and memory against
 their limit (or their request where a container has no limit). One-line
 answers begin with ✔ or ✘.
 
-**`/cloud start <group> <count> for <duration>`** creates a `ScaleBoost`, which
-is the same object [Scaling and boosts](scaling-and-boosts.md) describes. A
-boost raised this way is created by the operator rather than by you, so it
-gets an owner reference to the group: deleting the group takes it
-along, which a boost you apply by hand does not. Leave `for` off and the boost
-does not expire; `/cloud stop <group>` removes the group's boosts.
+**`/cloud scale <group> <count> [for <duration>]`** holds an ephemeral group at
+exactly that many servers, 0 included, for the given time. A duration is a
+number and a unit, `30m`, `2h` or `3d`; without one the pin lasts an hour, and
+the longest is 7 days. A count above the group's `maxReplicas` is refused, and
+so is a persistent or on-demand group, which are sized by `spec.replicas` and
+by requests. It creates an `Exact` `ScaleBoost`, described in [Holding a group
+at a size](scaling-and-boosts.md#holding-a-group-at-a-size). The operator
+creates it, so it has an owner reference to the group and goes with it.
+
+Servers above the number are drained to the fallback groups, emptiest first.
+A server you took hold of with `/cloud unretire` stays. While a pin holds, a
+rolling update cannot surge above it, the same as for a group at
+`maxReplicas`. `/cloud info <group>` shows `Pinned 0 servers until 18:00 UTC`.
+`/cloud scale <group> reset` removes every pin and every boost on the group.
+
+**`/cloud forcestop <server>`** kills the server's pod at once. There is no
+drain and no confirmation. Players lose their connection and the proxy moves
+them to the next fallback group. Unsaved world data is lost. What follows is
+the group's own rule: an ephemeral group builds a new server if it needs one, a
+persistent group restarts the same ordinal on its claim, and an on-demand
+member stays stopped with its world. `/cloud info` shows when the pod is gone.
+The server gets a `ForceStopped` event naming the issuer and the proxy.
+
+**`/cloud execute <server|group> <command>`** is off until the Network says so:
+
+```yaml
+kind: Network
+spec:
+  commands:
+    execute: true
+```
+
+It then runs the command with console permissions on one server, or on every
+Ready server of a group whose agent is connected. One server answers with up to
+20 lines of output. A group answers with a line per server and a total such as
+`4 of 5 servers ran it`. A server that stays silent for 8 seconds is listed as
+such, and feedback a command sends later, from another tick or thread, is not
+shown. A proxy is never a target. Each server gets a `CommandExecuted` event
+with the issuer and the command, never the output, and the operator logs
+network, proxy, issuer, target and command.
+
+Switching it on means that anybody holding the node can run any console command
+on any server, and on most servers that includes `op`. There is no allowlist.
 
 **`/cloud events on|off`** turns this player's cloud event feed on or off.
 
@@ -160,7 +198,7 @@ command can do.
 
 ## Granting nothing is a choice, not an oversight
 
-A network where nobody holds any of the five nodes has no in-game surface at
+A network where nobody holds any of the seven nodes has no in-game surface at
 all, and that is a perfectly reasonable place to stay: everything `/cloud`
 does is also a `kubectl` away. The point of the command is the case where it is
 not: somebody who should be able to see which servers exist, or add capacity
