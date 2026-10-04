@@ -283,9 +283,10 @@ that leave together (both halves of a blue/green roll) take turns: each sends
 only in its own window of that length, with an empty window between any two,
 so players behind one address who sit on different old proxies do not collide
 either. A server switch from an address that was just used, or outside the
-proxy's window, goes ahead on the old proxy without a transfer. Behind a front end that does not pass the client's address on (no
-PROXY protocol), every player shares the front end's address, and a forced pass
-moves one player every few seconds.
+proxy's window, goes ahead on the old proxy without a transfer. Behind a front
+end that does not pass the client's address on (no PROXY protocol), every
+player shares the front end's address, and a forced pass moves one player every
+few seconds.
 
 A plugin that announces quits and joins can ask whether one is a transfer; see
 [A player who changed proxies](../plugin-api/index.md#a-player-who-changed-proxies).
@@ -362,9 +363,10 @@ the translatable key `spawnery.transfer.warning` with the seconds as its one
 argument, and the English text above is its fallback, so a network with its own
 translations can word it differently. A player is warned once per leaving
 proxy, and only when a forced transfer is coming for them. Players behind a
-closed door are not warned while it stays closed (a door that opens after the
-deadline gets the warning and the move in the same pass), nor is anyone while no other proxy can take them,
-nor a player on a server switch, who is transferred at once.
+closed door are not warned while it stays closed, nor is anyone while no other
+proxy can take them, nor a player on a server switch, who is transferred at
+once. A door that opens after the deadline gets the warning (1 second) and the
+move in the same pass.
 
 A transfer only happens while another proxy of the same group is Ready, not
 itself leaving, and accepts transfers. Otherwise there is nowhere to send
