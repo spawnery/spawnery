@@ -3,7 +3,7 @@ image:
   # A tag, not a digest: hack/publish.sh only learns the digest after the tag
   # is pushed, so a digest written here would always describe the previous
   # release. Pin by digest in the deployment instead.
-  tag: "0.19.0"
+  tag: "0.20.0"
   # Set, this wins over tag. Left empty deliberately; see above.
   digest: ""
   pullPolicy: IfNotPresent
