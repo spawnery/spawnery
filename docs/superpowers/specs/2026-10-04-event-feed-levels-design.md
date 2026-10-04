@@ -44,9 +44,18 @@ Each player sees the feed at one of four levels:
 
 - The agent maps each event kind to a row of this table. The operator keeps
   sending the same events as today, the same facts as `kubectl get events`.
-- "Gone" is the one event every server and every proxy emits exactly once at
-  its end; the implementation picks it from the code (for proxies
-  `ProxyStopped`).
+- No server recorded one "gone" event: the change to `Terminating` carries a
+  dozen reasons, and `PodDeleted` is missing when a pod vanished. The
+  operator records a new Normal event `ServerStopped` when a server's
+  finalizer comes off, and that is the server's `[-]`. For a proxy it is
+  `ProxyStopped`; a proxy removed at its drain deadline shows as the warning
+  `ProxyDrainTimeout`, and a proxy lost outside a drain shows nothing.
+- Proxies record no creation event, so a proxy's `[+]` is `ProxyStarted`
+  (its first readiness), and at `normal` it reads `[✓] … ready`.
+- Some failures are recorded as Normal events (`StartupTimeout`,
+  `Flapping`, `PodLost`, `PodNeverCreated`, `PodTerminal`, `DrainTimeout`);
+  the agent treats this fixed list as warnings. A force-stop shows once, as
+  `PodKilled` (`killed`); the phase change `ForceStopped` reads as leaving.
 - A short reason comes from a small table (`StartupTimeout` → `did not start
   in time`, `PodRejected` → `pod refused`, `ForceStopped` → `killed`, and so
   on). A warning kind not in the table is read from its name
@@ -88,7 +97,8 @@ puts `/cloud info <full name>` into the chat box.
 ## 5. Who receives what
 
 `cloudevent.Derive` marks an event about a Server with a non-empty
-`spec.key` (an on-demand member) as private. A private event reaches proxy
+`spec.key` (an on-demand member), and an event about an on-demand
+ServerGroup (whose notes name its members), as private. A private event reaches proxy
 sessions only, never backend sessions, in line with the network picture.
 Plugins on backends that subscribe through the plugin API's `EventBus`
 therefore no longer see private servers; `docs/guides/upgrading.md` says so.
@@ -105,7 +115,8 @@ English. The end-to-end tests that read reply text change with them.
 
 A player whom `TransferPolicy.forced` is about to move gets a warning 10
 seconds before the transfer is forced, or at once when `forceAfterSeconds`
-is shorter than that.
+is shorter than that. With `forceAfterSeconds: 0` the warning goes out in
+the same pass as the transfer and says 1 second.
 
 - Exactly the players the forced pass would move: not behind a closed door,
   and only while another proxy of the group accepts transfers.
