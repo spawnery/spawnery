@@ -270,7 +270,7 @@ func (w KubeWriter) Headroom(ctx context.Context, namespace, group string) (Head
 	return Headroom{
 		MinReplicas: g.Spec.Scaling.MinReplicas,
 		MaxReplicas: g.Spec.Scaling.MaxReplicas,
-		Boosted:     boost.Live(boosts.Items, group, w.now()),
+		Boosted:     boost.Live(boost.Of(boosts.Items, &g), group, w.now()),
 	}, nil
 }
 
