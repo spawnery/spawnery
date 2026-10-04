@@ -18,6 +18,7 @@ package agentserver
 
 import (
 	"context"
+	"math"
 	"strings"
 	"testing"
 	"time"
@@ -117,8 +118,6 @@ func TestAScaleIsRefusedWhereItCannotHold(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "survival", Namespace: "ns"},
 		Spec:       spawneryv1alpha1.ServerGroupSpec{Type: spawneryv1alpha1.ServerGroupPersistent},
 	}
-	s, _, _ := commandFixture(t, scalableGroup("lobby", 1, 5), persistent)
-
 	for name, c := range map[string]struct {
 		group    string
 		replicas int32
@@ -130,9 +129,14 @@ func TestAScaleIsRefusedWhereItCannotHold(t *testing.T) {
 		"above maxReplicas":        {"lobby", 6, 0, agentpb.RequestError_REFUSED, "maxReplicas is 5"},
 		"eight days":               {"lobby", 1, 8 * 24 * 3600, agentpb.RequestError_REFUSED, "7 days"},
 		"seconds that overflow":    {"lobby", 1, 1 << 62, agentpb.RequestError_REFUSED, "7 days"},
+		"negative seconds":         {"lobby", 1, -1, agentpb.RequestError_REFUSED, "negative"},
+		"negative that wraps":      {"lobby", 1, -9223372037, agentpb.RequestError_REFUSED, "negative"},
+		"the smallest int64":       {"lobby", 1, math.MinInt64, agentpb.RequestError_REFUSED, "negative"},
+		"the largest int64":        {"lobby", 1, math.MaxInt64, agentpb.RequestError_REFUSED, "7 days"},
 		"a persistent group":       {"survival", 1, 0, agentpb.RequestError_REFUSED, "ephemeral"},
 		"a group that is not here": {"nowhere", 1, 0, agentpb.RequestError_NOT_FOUND, "no group"},
 	} {
+		s, _, _ := commandFixture(t, scalableGroup("lobby", 1, 5), persistent)
 		got := askScale(s, serverCaller, c.group, c.replicas, c.seconds).GetError()
 		if got.GetReason() != c.reason || !strings.Contains(got.GetMessage(), c.says) {
 			t.Errorf("%s: error = %v, want %s mentioning %q", name, got, c.reason, c.says)

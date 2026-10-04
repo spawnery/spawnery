@@ -53,13 +53,15 @@ func (s *Server) answerScale(
 	if req.GetReplicas() < 0 {
 		return refuse(reqID, agentpb.RequestError_REFUSED, "a group cannot be pinned below zero servers")
 	}
-	// Bounded before the multiplication, which would wrap a large count of
-	// seconds into a negative duration and then into the default.
-	if req.GetDurationSeconds() > int64(ScaleMaxDuration/time.Second) {
+	seconds := req.GetDurationSeconds()
+	if seconds < 0 {
+		return refuse(reqID, agentpb.RequestError_REFUSED, "a pin cannot last a negative number of seconds")
+	}
+	if seconds > int64(ScaleMaxDuration/time.Second) {
 		return refuse(reqID, agentpb.RequestError_REFUSED, "the longest a pin may hold is 7 days")
 	}
-	duration := time.Duration(req.GetDurationSeconds()) * time.Second
-	if duration <= 0 {
+	duration := time.Duration(seconds) * time.Second
+	if duration == 0 {
 		duration = ScaleDefaultDuration
 	}
 
