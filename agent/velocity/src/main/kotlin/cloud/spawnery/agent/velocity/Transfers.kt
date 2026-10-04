@@ -3,6 +3,7 @@ package cloud.spawnery.agent.velocity
 import com.velocitypowered.api.proxy.Player
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer
 import net.kyori.adventure.key.Key
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -12,6 +13,7 @@ interface Traveller {
     val username: String
     val currentServer: String?
     val virtualHost: InetSocketAddress?
+    val address: InetAddress?
 
     /** Stores [cookie] on the client and sends it to [to]; throws when the client cannot be transferred. */
     fun transfer(cookie: ByteArray, to: InetSocketAddress)
@@ -24,22 +26,44 @@ class Transfers(
     private val registered: (String) -> Boolean,
     private val info: (String) -> Unit,
     private val warn: (String, Throwable?) -> Unit,
+    /** The receiving proxy refuses a second login from one address within its login rate limit. */
+    private val spacingMillis: Long = 0,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) {
     private val waiting = ConcurrentHashMap<UUID, () -> Unit>()
     private val asked = ConcurrentHashMap.newKeySet<UUID>()
     private val arrivals = ConcurrentHashMap<UUID, String>()
+    private val arrived = ConcurrentHashMap.newKeySet<UUID>()
+    private val leaving = ConcurrentHashMap.newKeySet<UUID>()
+    private val lastSentFrom = ConcurrentHashMap<InetAddress, Long>()
+
+    fun arrivedByTransfer(player: UUID): Boolean = player in arrived
+
+    fun leavingByTransfer(player: UUID): Boolean = player in leaving
 
     /** True when the switch was replaced by a transfer and must be denied. */
     fun onSwitch(player: Traveller, target: String): Boolean {
         val host = player.virtualHost ?: return false
-        if (!policy.onSwitch(picture(), player.uuid)) return false
+        val now = clock()
+        val picture = picture()
+        if (cooling(player.address, now) || !myTurn(picture, now)) return false
+        if (!policy.onSwitch(picture, player.uuid)) return false
         return send(player, host, target, "switch")
     }
 
     fun pass(players: List<Traveller>) {
+        val now = clock()
+        lastSentFrom.values.removeIf { now - it >= spacingMillis }
+        val picture = picture()
+        if (!myTurn(picture, now)) return
+        val chosen = mutableSetOf<InetAddress>()
         val movable = players.filter { it.virtualHost != null }.associateBy { it.uuid }
         val occupants = movable.values.map { TransferPolicy.Occupant(it.uuid, it.currentServer) }
-        for ((id, target) in policy.forced(picture(), occupants)) {
+        val admit = { id: UUID ->
+            val address = movable.getValue(id).address
+            address == null || (!cooling(address, now) && chosen.add(address))
+        }
+        for ((id, target) in policy.forced(picture, occupants, admit)) {
             val player = movable[id] ?: continue
             send(player, player.virtualHost ?: continue, target, "forced")
         }
@@ -52,6 +76,8 @@ class Transfers(
             warn("spawnery: could not transfer '${player.username}' ($reason) toward '$target'; leaving them here", e)
             return false
         }
+        leaving += player.uuid
+        player.address?.let { lastSentFrom[it] = clock() }
         info("spawnery: transferred '${player.username}' ($reason) toward '$target'")
         return true
     }
@@ -66,7 +92,10 @@ class Transfers(
         if (!asked.remove(player)) return false
         val resume = waiting.remove(player) ?: return true
         when (val result = if (payload == null) TransferCookie.Result.Refused("no cookie") else cookie.read(player, payload)) {
-            is TransferCookie.Result.Valid -> arrivals[player] = result.target
+            is TransferCookie.Result.Valid -> {
+                arrivals[player] = result.target
+                arrived += player
+            }
             is TransferCookie.Result.Refused -> refused(username, result.reason)
         }
         resume()
@@ -92,7 +121,27 @@ class Transfers(
         waiting.remove(player)?.invoke()
         asked.remove(player)
         arrivals.remove(player)
+        arrived.remove(player)
+        leaving.remove(player)
         policy.forget(picture(), player)
+    }
+
+    /**
+     * Proxies of one group that leave together share the receiving proxies'
+     * rate limit, and none of them knows the others' addresses. Each sends
+     * only in its own window, with an empty window between any two.
+     */
+    private fun myTurn(picture: TransferPolicy.Picture, now: Long): Boolean {
+        if (spacingMillis <= 0) return true
+        val leaving = picture.proxies.filter { it.group() == picture.group && it.draining() }.map { it.name() }.sorted()
+        val index = leaving.indexOf(picture.self)
+        if (leaving.size <= 1 || index < 0) return true
+        return (now / spacingMillis) % (2L * leaving.size) == 2L * index
+    }
+
+    private fun cooling(address: InetAddress?, now: Long): Boolean {
+        val last = lastSentFrom[address ?: return false] ?: return false
+        return now - last < spacingMillis
     }
 
     private fun refused(username: String, reason: String) {
@@ -110,6 +159,7 @@ internal class VelocityTraveller(
     override val username: String get() = player.username
     override val currentServer: String? get() = player.currentServer.map { it.serverInfo.name }.orElse(null)
     override val virtualHost: InetSocketAddress? get() = player.virtualHost.orElse(null)
+    override val address: InetAddress? get() = player.remoteAddress?.address
 
     override fun transfer(cookie: ByteArray, to: InetSocketAddress) {
         player.storeCookie(TRANSFER_COOKIE_KEY, cookie)

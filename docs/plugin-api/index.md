@@ -119,6 +119,30 @@ mirror current inside the agent, so `servers()` is a lookup in a local map.
 (during login, and between one backend and the next). That is ordinary, and it
 is exactly the player a drain is about.
 
+## A player who changed proxies
+
+On a proxy group with `spec.update.transfer`, a leaving proxy sends its players
+to another proxy of the group. Every plugin on both proxies sees an ordinary
+quit and an ordinary login, so a plugin that tells friends someone went offline,
+or greets a player who joins the network, does both for a player who never
+left. Two reads tell those apart, answered locally like every other read:
+
+- `leavingByTransfer(uuid)` is true on the old proxy once it has sent the
+  player away, up to and including every listener of their `DisconnectEvent`.
+- `arrivedByTransfer(uuid)` is true on the new proxy for a player whose
+  transfer cookie the agent verified. It is known from `LoginEvent` on, for a
+  listener that runs after the agent's, and stays true until they disconnect.
+
+Both are false on a server. `arrivedByTransfer` does not trust the handshake:
+any client can say it was transferred, and only the signed cookie counts, so a
+capacity or maintenance check may rely on it. `leavingByTransfer` says the
+player was sent, not that they arrived. A plugin that keeps a party or a
+session alive for them should still let it lapse when they do not turn up on
+another proxy within a few seconds.
+
+Agents older than 0.19.0 do not have either method, and calling one there
+throws a `LinkageError`.
+
 ## Version skew
 
 `ServerPhase` and `Group.Kind` both carry `UNKNOWN`, and the operator is free

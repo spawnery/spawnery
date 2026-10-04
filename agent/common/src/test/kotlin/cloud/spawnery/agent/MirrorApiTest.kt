@@ -13,6 +13,7 @@ import cloud.spawnery.agent.pb.ServerState
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertFailsWith
 import kotlin.test.assertSame
 import kotlin.test.assertTrue
@@ -257,5 +258,24 @@ class MirrorApiTest {
         api.playableSlots(12)
         api.playableSlots(0)
         assertEquals(listOf(12, 0), set)
+    }
+
+    @Test
+    fun `a server never saw a transfer, and a proxy answers from its view`() {
+        val mirror = NetworkMirror()
+        val view = object : TransferView {
+            override fun arrived(player: UUID) = player == richPlayer
+            override fun leaving(player: UUID) = player != richPlayer
+        }
+        val onServer = MirrorApi(mirror, serverSelf(), connector(), CloudEvents())
+        val onProxy = MirrorApi(mirror, proxySelf(), connector(), CloudEvents(), transfers = view)
+        val other = UUID.randomUUID()
+
+        assertFalse(onServer.arrivedByTransfer(richPlayer))
+        assertFalse(onServer.leavingByTransfer(other))
+        assertTrue(onProxy.arrivedByTransfer(richPlayer))
+        assertFalse(onProxy.arrivedByTransfer(other))
+        assertTrue(onProxy.leavingByTransfer(other))
+        assertFalse(onProxy.leavingByTransfer(richPlayer))
     }
 }

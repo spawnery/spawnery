@@ -9,6 +9,7 @@ import cloud.spawnery.agent.JoinRules
 import cloud.spawnery.agent.LuckPermsContexts
 import cloud.spawnery.agent.LuckPermsPermissions
 import cloud.spawnery.agent.MirrorApi
+import cloud.spawnery.agent.TransferView
 import cloud.spawnery.agent.Requests
 import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.api.ProxySelf
@@ -38,6 +39,7 @@ import com.velocitypowered.api.event.proxy.ProxyShutdownEvent
 import com.velocitypowered.api.network.HandshakeIntent
 import com.velocitypowered.api.plugin.Plugin
 import com.velocitypowered.api.proxy.ProxyServer
+import com.velocitypowered.proxy.VelocityServer
 import com.velocitypowered.api.scheduler.ScheduledTask
 import net.kyori.adventure.text.Component
 import org.slf4j.Logger
@@ -45,6 +47,7 @@ import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 
 /**
@@ -188,7 +191,13 @@ class AgentPlugin @Inject constructor(
         val feed = Feed(VelocityAudience(proxy), feedState, System::currentTimeMillis, format = mirror::feedFormat)
         this.feed = feed
         // No ReadinessGate: a proxy has no readiness flag to hold. See ProxyState.
-        val api = MirrorApi(mirror, self, connector, events)
+        val api = MirrorApi(
+            mirror, self, connector, events,
+            transfers = object : TransferView {
+                override fun arrived(player: UUID) = transfers?.arrivedByTransfer(player) ?: false
+                override fun leaving(player: UUID) = transfers?.leavingByTransfer(player) ?: false
+            },
+        )
         Spawnery.install(api)
         LuckPermsContexts.registerIfPresent(self, logger::info)
         // Not the deprecated one-argument register(), which files the command
@@ -285,6 +294,7 @@ class AgentPlugin @Inject constructor(
             },
             info = logger::info,
             warn = ::warn,
+            spacingMillis = loginRatelimitMillis().let { if (it > 0) it + TRANSFER_SPACING_MARGIN_MILLIS else 0 },
         )
         this.transfers = transfers
         transferPass = proxy.scheduler
@@ -352,8 +362,20 @@ class AgentPlugin @Inject constructor(
     @Subscribe
     fun onDisconnect(event: DisconnectEvent) {
         rescue?.forget(event.player.uniqueId)
+    }
+
+    /** Last, so every other plugin's listener can still ask leavingByTransfer. */
+    @Subscribe(priority = Short.MIN_VALUE)
+    fun onDisconnectSettled(event: DisconnectEvent) {
         transfers?.forget(event.player.uniqueId)
     }
+
+    private fun loginRatelimitMillis(): Long =
+        try {
+            (proxy as? VelocityServer)?.configuration?.loginRatelimit?.toLong() ?: DEFAULT_LOGIN_RATELIMIT_MILLIS
+        } catch (e: LinkageError) {
+            DEFAULT_LOGIN_RATELIMIT_MILLIS
+        }
 
     /**
      * LoginEvent, the earliest event with a player to ask: Velocity takes a
@@ -496,5 +518,9 @@ class AgentPlugin @Inject constructor(
 
         const val TRANSFER_PASS_SECONDS = 1L
         const val COOKIE_WAIT_MILLIS = 2_000L
+
+        /** Velocity's own default for login-ratelimit. */
+        const val DEFAULT_LOGIN_RATELIMIT_MILLIS = 3_000L
+        const val TRANSFER_SPACING_MARGIN_MILLIS = 500L
     }
 }

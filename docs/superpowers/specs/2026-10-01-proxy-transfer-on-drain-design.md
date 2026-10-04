@@ -153,3 +153,34 @@ In every other case the player is routed as a fresh join.
 - A per-server-group override of `forceAfterSeconds`.
 - Moving players off a draining *backend* without a reconnect: that already
   happens inside one proxy, and is unchanged.
+
+## 8. Addendum, 2026-10-04: what plugins and the rate limit need
+
+Running a network's own proxy plugins against this showed two gaps.
+
+**Plugins cannot tell a transfer from a quit and a join.** Friend
+notifications, parties and first-join greetings react to the disconnect on the
+old proxy and the login on the new one. `SpawneryApi` gains two local reads:
+`leavingByTransfer(uuid)`, true on the old proxy from the transfer until the
+last `DisconnectEvent` listener (the agent forgets the player at
+`Short.MIN_VALUE`), and `arrivedByTransfer(uuid)`, true on the new proxy for a
+player whose cookie verified, until they disconnect. The handshake intent alone
+is not offered as the answer because any client can send it. Both are false on
+a server.
+
+**A forced pass trips the receiving proxy's login rate limit.** Velocity
+refuses a second login from one address within `login-ratelimit` (3000 ms as
+spawnery renders it), and with the PROXY protocol that address is the
+client's. A pass now admits one player per address, and an address that was
+used waits `login-ratelimit` plus 500 ms; a switch from such an address is not
+transferred and goes ahead on the old proxy. The limit is read from the proxy's
+own configuration, so an overlay that changes it is followed.
+
+Spacing inside one proxy is not enough: a blue/green roll drains every old
+proxy at once, and two of them can send players behind one address in the same
+second (seen on a local cluster: the second login was refused). The proxies of
+a group that are leaving sort their names, and the one at index i sends only
+while `(now / spacing) mod 2n == 2i`. Two windows of different proxies are
+then at least one spacing apart. A switch outside the proxy's window is not
+transferred.
+
