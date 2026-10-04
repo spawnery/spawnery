@@ -8,6 +8,8 @@ set -euo pipefail
 CLUSTER="${CLUSTER:-spawnery-e2e-tutorial}"
 E2E_KEEP="${E2E_KEEP:-0}"
 DEADLINE="${DEADLINE:-300}"
+# E2E_RUN narrows -run, for proving one test bites.
+E2E_RUN="${E2E_RUN:-TestTutorialPath|TestTutorialPlayableSlots|TestTutorialChangeoverStages|TestTutorialTransferOnDrain|TestTutorialJoinPermission|TestTutorialCloudCommands}"
 
 # The chart's default, so this run installs exactly what README.md documents.
 OPERATOR_NAMESPACE=spawnery-system
@@ -87,4 +89,4 @@ kubectl -n "$OPERATOR_NAMESPACE" rollout status deployment/spawnery-operator --t
 # The reader's single-stream apply, which the Go test's per-document create does not exercise.
 kubectl apply -f docs/tutorial/network.yaml
 
-SPAWNERY_E2E_TUTORIAL=1 go test -tags e2e -count=1 -v -timeout 21m -run 'TestTutorialPath|TestTutorialPlayableSlots|TestTutorialChangeoverStages|TestTutorialTransferOnDrain|TestTutorialJoinPermission' ./test/e2e/...
+SPAWNERY_E2E_TUTORIAL=1 go test -tags e2e -count=1 -v -timeout 28m -run "$E2E_RUN" ./test/e2e/...

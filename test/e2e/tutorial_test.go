@@ -812,6 +812,147 @@ func TestTutorialJoinPermission(t *testing.T) {
 	}
 }
 
+// TestTutorialCloudCommands pins the lobby to zero and resets it, force-stops
+// a lobby server, and runs console commands on the lobby, all typed into the
+// gateway's console. Each reply is read back from the gateway's log.
+func TestTutorialCloudCommands(t *testing.T) {
+	if os.Getenv("SPAWNERY_E2E_TUTORIAL") != "1" {
+		t.Skip("set SPAWNERY_E2E_TUTORIAL=1; hack/e2e-tutorial.sh does this nightly")
+	}
+	applyManifest(t, tutorialManifest)
+	groupKey := client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialServerGroup}
+	t.Cleanup(func() {
+		_ = k8s.DeleteAllOf(ctx, &spawneryv1alpha1.ScaleBoost{}, client.InNamespace(tutorialNamespace))
+	})
+
+	// The test before this one rolls the gateway on its way out; a rolling proxy's console goes away mid-test.
+	eventuallyIn(t, tutorialOperatorNamespace, 5*time.Minute, "a Ready lobby server and a gateway done rolling", func() (bool, string) {
+		return len(readyLobbyServers()) >= 1 && settledGateway() != "",
+			fmt.Sprintf("lobby=%v gateway=%q", readyLobbyServers(), settledGateway())
+	})
+	gateway := settledGateway()
+
+	// A pin of 0 empties the lobby.
+	velocityConsole(t, gateway, "cloud scale lobby 0 for 10m")
+	eventuallyIn(t, tutorialOperatorNamespace, 4*time.Minute, "a pin of 0 to empty the lobby", func() (bool, string) {
+		var g spawneryv1alpha1.ServerGroup
+		if err := k8s.Get(ctx, groupKey, &g); err != nil {
+			return false, err.Error()
+		}
+		pinned := g.Status.PinnedReplicas != nil && *g.Status.PinnedReplicas == 0
+		n := lobbyServerCount()
+		return pinned && n == 0, fmt.Sprintf("pinnedReplicas=%s servers=%d", pinnedString(g.Status.PinnedReplicas), n)
+	})
+	if !proxyLogMatches(gateway, regexp.MustCompile(`lobby is pinned to 0 servers until \d\d:\d\d UTC`)) {
+		t.Error("the gateway's console never said the lobby is pinned")
+	}
+
+	// reset brings it back.
+	velocityConsole(t, gateway, "cloud scale lobby reset")
+	eventuallyIn(t, tutorialOperatorNamespace, 5*time.Minute, "reset to bring a lobby server back", func() (bool, string) {
+		var g spawneryv1alpha1.ServerGroup
+		if err := k8s.Get(ctx, groupKey, &g); err != nil {
+			return false, err.Error()
+		}
+		return g.Status.PinnedReplicas == nil && len(readyLobbyServers()) >= 1,
+			fmt.Sprintf("pinnedReplicas=%s ready=%v", pinnedString(g.Status.PinnedReplicas), readyLobbyServers())
+	})
+
+	// forcestop kills the pod without a drain, and a new server follows.
+	victim := readyLobbyServers()[0]
+	velocityConsole(t, gateway, "cloud forcestop "+victim)
+	// Both ends record ForceStopped: the agent endpoint (Warning) on the request,
+	// the Server controller (Normal) on the phase change that kills the pod.
+	forceStopEvents := func() (requested, killed bool, err error) {
+		events, err := clientset.CoreV1().Events(tutorialNamespace).List(ctx, metav1.ListOptions{
+			FieldSelector: "involvedObject.name=" + victim,
+		})
+		if err != nil {
+			return false, false, err
+		}
+		for _, e := range events.Items {
+			if e.Reason != "ForceStopped" {
+				continue
+			}
+			requested = requested || e.Type == corev1.EventTypeWarning
+			killed = killed || strings.Contains(e.Message, "force-stopped: the pod is killed without a drain")
+		}
+		return requested, killed, nil
+	}
+	eventuallyIn(t, tutorialOperatorNamespace, 2*time.Minute, "the force-stop to kill the victim without a drain", func() (bool, string) {
+		_, killed, err := forceStopEvents()
+		if err != nil {
+			return false, err.Error()
+		}
+		gone := apierrors.IsNotFound(k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: victim}, &spawneryv1alpha1.Server{}))
+		return killed && gone, fmt.Sprintf("killed=%v gone=%v", killed, gone)
+	})
+	eventuallyIn(t, tutorialOperatorNamespace, 5*time.Minute, "a new lobby server after the force-stop", func() (bool, string) {
+		ready := readyLobbyServers()
+		return len(ready) >= 1, fmt.Sprintf("ready=%v", ready)
+	})
+	if !proxyLogMatches(gateway, regexp.MustCompile(regexp.QuoteMeta(victim)+` is being killed\.`)) {
+		t.Error("the gateway's console never confirmed the force-stop")
+	}
+	if requested, _, err := forceStopEvents(); err != nil || !requested {
+		t.Errorf("no ForceStopped event from the agent endpoint on %s (err %v)", victim, err)
+	}
+
+	// execute is refused without the switch.
+	velocityConsole(t, gateway, "cloud execute lobby list")
+	eventuallyIn(t, tutorialOperatorNamespace, time.Minute, "the refusal without spec.commands.execute", func() (bool, string) {
+		return proxyLogMatches(gateway, regexp.MustCompile(`execute is not enabled on this network`)), "not in the log yet"
+	})
+
+	// With it, say runs on every lobby server, and list's output comes back.
+	setExecute := func(on bool) {
+		var n spawneryv1alpha1.Network
+		if err := k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: "tutorial"}, &n); err != nil {
+			t.Fatalf("get Network: %v", err)
+		}
+		patch := client.MergeFrom(n.DeepCopy())
+		n.Spec.Commands = &spawneryv1alpha1.NetworkCommands{Execute: on}
+		if err := k8s.Patch(ctx, &n, patch); err != nil {
+			t.Fatalf("patch Network: %v", err)
+		}
+	}
+	setExecute(true)
+	t.Cleanup(func() { setExecute(false) })
+
+	marker := fmt.Sprintf("spawnery-e2e-%d", time.Now().UnixNano())
+	velocityConsole(t, gateway, "cloud execute lobby say "+marker)
+	eventuallyIn(t, tutorialOperatorNamespace, time.Minute, "say to reach every lobby server", func() (bool, string) {
+		total := regexp.MustCompile(`(\d+) of (\d+) servers ran it`)
+		log, err := readPodLog(tutorialNamespace, gateway, &corev1.PodLogOptions{Container: podspec.ProxyContainerName})
+		if err != nil {
+			return false, err.Error()
+		}
+		m := total.FindAllStringSubmatch(log, -1)
+		if len(m) == 0 || m[len(m)-1][1] != m[len(m)-1][2] {
+			return false, fmt.Sprintf("totals so far: %v", m)
+		}
+		for _, name := range readyLobbyServers() {
+			var s spawneryv1alpha1.Server
+			if err := k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: name}, &s); err != nil {
+				return false, err.Error()
+			}
+			serverLog, err := readPodLog(tutorialNamespace, s.Status.PodName, &corev1.PodLogOptions{Container: podspec.ContainerName})
+			if err != nil || !strings.Contains(serverLog, marker) {
+				return false, name + " has not logged the marker"
+			}
+		}
+		return true, ""
+	})
+
+	target := readyLobbyServers()[0]
+	velocityConsole(t, gateway, "cloud execute "+target+" list")
+	eventuallyIn(t, tutorialOperatorNamespace, time.Minute, "list's output back in the gateway's log", func() (bool, string) {
+		ran := proxyLogMatches(gateway, regexp.MustCompile(regexp.QuoteMeta(target)+` ran it`))
+		output := proxyLogMatches(gateway, regexp.MustCompile(`players online`))
+		return ran && output, fmt.Sprintf("ran=%v output=%v", ran, output)
+	})
+}
+
 type heldJoin struct {
 	username string
 	cmd      *exec.Cmd
@@ -976,4 +1117,68 @@ func envValue(p *corev1.Pod, container, name string) string {
 		}
 	}
 	return ""
+}
+
+// velocityConsole types one line into a proxy's console: java is PID 1 and
+// the container keeps stdin open, so PID 1's stdin is where Velocity reads
+// typed commands. The console holds every permission.
+func velocityConsole(t *testing.T, pod, line string) {
+	t.Helper()
+	cmd := exec.Command("kubectl", "-n", tutorialNamespace, "exec", pod, "-c", podspec.ProxyContainerName,
+		"--", "bash", "-c", `printf '%s\n' "$1" > /proc/1/fd/0`, "console", line)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("type %q into %s's console: %v\n%s", line, pod, err, out)
+	}
+}
+
+// settledGateway is a gateway pod once the group has no roll in flight: its
+// status is current, and every pod is Ready and not on its way out.
+func settledGateway() string {
+	var g spawneryv1alpha1.ProxyGroup
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialProxyGroup}, &g); err != nil {
+		return ""
+	}
+	if g.Status.ObservedGeneration != g.Generation || g.Status.Changeover != spawneryv1alpha1.ChangeoverNone {
+		return ""
+	}
+	var pods corev1.PodList
+	if err := k8s.List(ctx, &pods, client.InNamespace(tutorialNamespace),
+		client.MatchingLabels{podspec.LabelRole: podspec.RoleProxy, podspec.LabelGroup: tutorialProxyGroup}); err != nil {
+		return ""
+	}
+	if int32(len(pods.Items)) != g.Spec.Replicas {
+		return ""
+	}
+	for i := range pods.Items {
+		if !pods.Items[i].DeletionTimestamp.IsZero() || !podReady(&pods.Items[i]) {
+			return ""
+		}
+	}
+	return pods.Items[0].Name
+}
+
+func proxyLogMatches(pod string, pattern *regexp.Regexp) bool {
+	log, err := readPodLog(tutorialNamespace, pod, &corev1.PodLogOptions{Container: podspec.ProxyContainerName})
+	return err == nil && pattern.MatchString(log)
+}
+
+func lobbyServerCount() int {
+	var list spawneryv1alpha1.ServerList
+	if err := k8s.List(ctx, &list, client.InNamespace(tutorialNamespace)); err != nil {
+		return -1
+	}
+	n := 0
+	for _, s := range list.Items {
+		if s.Spec.GroupRef.Name == tutorialServerGroup {
+			n++
+		}
+	}
+	return n
+}
+
+func pinnedString(p *int32) string {
+	if p == nil {
+		return "unset"
+	}
+	return strconv.Itoa(int(*p))
 }
