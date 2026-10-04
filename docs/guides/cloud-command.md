@@ -145,15 +145,17 @@ the longest is 7 days. A count above the group's `maxReplicas` is refused, and
 so is a persistent or on-demand group, which are sized by `spec.replicas` and
 by requests. A pin below the group's `minReplicas` is accepted only from a
 proxy, so a plugin on a backend can pin within the floor and ceiling but
-cannot take a group under its floor. It creates an `Exact` `ScaleBoost`, described in [Holding a group
-at a size](scaling-and-boosts.md#holding-a-group-at-a-size). The operator
+cannot take a group under its floor. It creates an `Exact` `ScaleBoost`,
+described in [Holding a group at a
+size](scaling-and-boosts.md#holding-a-group-at-a-size). The operator
 creates it, so it has an owner reference to the group and goes with it.
 
 Empty servers above the number are deleted. Occupied ones are retired,
 emptiest first: the proxies send nobody new, and a server goes once its players
 have left, or at `spec.update.maxStaleSeconds` if the group sets one. A server
 you took hold of with `/cloud unretire` stays. While a pin holds, a rolling
-update cannot surge above it, the same as for a group at `maxReplicas`. `/cloud info <group>` shows `Pinned 0 servers until 18:00 UTC`.
+update cannot surge above it, the same as for a group at `maxReplicas`.
+`/cloud info <group>` shows `Pinned 0 servers until 18:00 UTC`.
 `/cloud scale <group> reset` removes every pin and every boost on the group.
 
 **`/cloud forcestop <server>`** kills the server's pod at once. There is no
