@@ -27,4 +27,21 @@ class StyleTest {
     fun `an ordinary value is wrapped and otherwise untouched`() {
         assertEquals("<aqua>lobby-a3f9</aqua>", Style.name("lobby-a3f9"))
     }
+
+    @Test
+    fun `a subject carries its full name on hover and a click that suggests cloud info`() {
+        assertEquals(
+            "<hover:show_text:'challenge-3f2b1c9a'><click:suggest_command:'/cloud info challenge-3f2b1c9a'>" +
+                "<aqua>challenge-3f2b1c</aqua></click></hover>",
+            Style.subject("challenge-3f2b1c9a", "challenge-3f2b1c"),
+        )
+        assertEquals("challenge-3f2b1c", plain(Style.subject("challenge-3f2b1c9a", "challenge-3f2b1c")))
+    }
+
+    @Test
+    fun `a name a quoted argument cannot carry gets no hover and no click`() {
+        assertEquals("<aqua>it's</aqua>", Style.subject("it's"))
+        assertEquals("<aqua>Lobby</aqua>", Style.subject("Lobby"))
+        assertEquals("<aqua>a\\<b</aqua>", Style.subject("a<b"))
+    }
 }

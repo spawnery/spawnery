@@ -42,6 +42,19 @@ private fun state(
 
 class NetworkMirrorTest {
     @Test
+    fun `a group's kind is found by name, and a group not in the picture is unknown`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder()
+                .addGroups(GroupState.newBuilder().setName("challenge").setKind(GroupState.Kind.ON_DEMAND))
+                .build(),
+        )
+
+        assertEquals(Group.Kind.ON_DEMAND, mirror.groupKind("challenge"))
+        assertEquals(Group.Kind.UNKNOWN, mirror.groupKind("lobby"))
+    }
+
+    @Test
     fun `a group's join rule is mirrored, and a group without one has none`() {
         val mirror = NetworkMirror()
         mirror.apply(
