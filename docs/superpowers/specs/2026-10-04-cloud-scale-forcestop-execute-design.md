@@ -60,7 +60,8 @@ spec:
 
 ### 2.3 Sizing
 
-`internal/boost` gains `Exact(boosts, group, now) (int32, bool)`: the newest
+`internal/boost` gains `Exact(boosts, group, now) (Pin, bool)`, where `Pin`
+carries the replicas and the expiry: the newest
 unexpired `Exact` boost of the group (creation timestamp, then name). While one
 exists, the group's floor and its ceiling are both that number, and `Add`
 boosts do not count. `ScalingInputs` carries it; `floor()` and the ceiling
@@ -78,7 +79,8 @@ is the behaviour of a group at its `maxReplicas`, and the guide says so.
 `ServerGroup.status` gains `pinnedReplicas` and `pinnedUntil`, both empty
 without a pin. `GroupState` gains `pinned` (bool), `pinned_replicas` and
 `pinned_until_unix`, so `/cloud info lobby` shows `pinned to 0 until 18:00
-UTC`.
+UTC`. The public `Group` record carries the same three values, with a
+constructor kept for the 0.18 shape.
 
 ### 2.5 Wire
 
@@ -188,7 +190,9 @@ no method for it.
 1. The proxy sends `ExecuteRequest{target, command, issuer}`.
 2. The operator checks the network switch and the caller's role, then
    resolves `target`: a server of that name, otherwise every `Ready` server of
-   the group that has an agent session. No server is refused as NOT_FOUND.
+   the group that has an agent session. A named server without a session is
+   refused as UNAVAILABLE; group members without one are skipped, and a group
+   left with none is refused as NOT_FOUND.
 3. For each target it sends `ExecuteCommand{id, command}` down that server's
    stream. This is the first command on the server channel that expects an
    answer; the agent replies with `ExecuteOutcome{id, ok, output, error}`.
@@ -197,7 +201,8 @@ no method for it.
    feedback collected as plain text, at most 20 lines of at most 256
    characters. `dispatchCommand` returning false is `ok = false` with
    `unknown command`.
-5. The operator waits at most 8 seconds, inside the 10 seconds after which an
+5. The operator answers off the proxy session's request loop, so the wait
+   cannot hold back the proxy's other traffic. It waits at most 8 seconds, inside the 10 seconds after which an
    agent gives up on a request, and answers `ExecuteResult{outcomes}`. A
    server that has not answered by then is listed with `no answer within 8 s`.
 
