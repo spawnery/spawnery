@@ -73,7 +73,10 @@ server that may carry players). Occupied ones are retired: the proxies stop
 sending anyone there, the players on them stay until they leave, and each
 server goes once it is empty. A pin to 0 therefore admits nobody new without
 ending a running round; `/cloud forcestop` is the way to end one at once.
-Lowering `maxReplicas` itself keeps today's behaviour.
+Lowering `maxReplicas` itself keeps today's behaviour. A group that sets
+`spec.update.maxStaleSeconds` bounds a retirement by a pin as it bounds every
+retirement today, `/cloud retire` included: after that window the server is
+drained.
 
 While a pin holds, a rolling update cannot surge above the pinned number. That
 is the behaviour of a group at its `maxReplicas`, and the guide says so.
