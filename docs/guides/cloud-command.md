@@ -143,15 +143,17 @@ exactly that many servers, 0 included, for the given time. A duration is a
 number and a unit, `30m`, `2h` or `3d`; without one the pin lasts an hour, and
 the longest is 7 days. A count above the group's `maxReplicas` is refused, and
 so is a persistent or on-demand group, which are sized by `spec.replicas` and
-by requests. It creates an `Exact` `ScaleBoost`, described in [Holding a group
+by requests. A pin below the group's `minReplicas` is accepted only from a
+proxy, so a plugin on a backend can pin within the floor and ceiling but
+cannot take a group under its floor. It creates an `Exact` `ScaleBoost`, described in [Holding a group
 at a size](scaling-and-boosts.md#holding-a-group-at-a-size). The operator
 creates it, so it has an owner reference to the group and goes with it.
 
 Empty servers above the number are deleted. Occupied ones are retired,
 emptiest first: the proxies send nobody new, and a server goes once its players
-have left, or at `spec.update.maxStaleSeconds` if the group sets one. A server you took hold of with `/cloud unretire` stays. While a pin holds, a
-rolling update cannot surge above it, the same as for a group at
-`maxReplicas`. `/cloud info <group>` shows `Pinned 0 servers until 18:00 UTC`.
+have left, or at `spec.update.maxStaleSeconds` if the group sets one. A server
+you took hold of with `/cloud unretire` stays. While a pin holds, a rolling
+update cannot surge above it, the same as for a group at `maxReplicas`. `/cloud info <group>` shows `Pinned 0 servers until 18:00 UTC`.
 `/cloud scale <group> reset` removes every pin and every boost on the group.
 
 **`/cloud forcestop <server>`** kills the server's pod at once. There is no
@@ -172,10 +174,11 @@ spec:
 ```
 
 It then runs the command with console permissions on one server, or on every
-Ready server of a group whose agent is connected. One server answers with up to
+Ready server of a group. One server answers with up to
 20 lines of output. A group answers with a line per server and a total such as
 `4 of 5 servers ran it`. A server that stays silent for 8 seconds is listed as
-such, and feedback a command sends later, from another tick or thread, is not
+such, and so is one whose agent is not connected, which counts as not having
+run it. Feedback a command sends later, from another tick or thread, is not
 shown. A proxy is never a target. Each server gets a `CommandExecuted` event
 with the issuer and the command, never the output, and the operator logs
 network, proxy, issuer, target and command.

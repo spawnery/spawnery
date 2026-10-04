@@ -38,9 +38,10 @@ kubectl apply -f hub.yaml
 kubectl get servergroup hub -n minecraft
 ```
 
-The `PLAYERS`, `FREE SLOTS` and `BOOSTED` columns show the control loop: `FREE SLOTS` is the number the scaler compares against
-`spareSlots`, and `BOOSTED` is how much of the group's floor comes from boosts
-rather than from `minReplicas`.
+The `PLAYERS`, `FREE SLOTS` and `BOOSTED` columns show the control loop:
+`FREE SLOTS` is the number the scaler compares against `spareSlots`, and
+`BOOSTED` is how much of the group's floor comes from boosts rather than from
+`minReplicas`.
 
 ## Two more servers, until Friday night is over
 
@@ -243,7 +244,8 @@ spec:
 ```
 
 While it lives, the group's floor and its ceiling are both `replicas`, and
-`Add` boosts pause. Of several live `Exact` boosts only the newest counts. Empty servers above the number are deleted. Occupied ones are retired:
+`Add` boosts pause. Of several live `Exact` boosts only the newest counts. Empty servers above the
+number are deleted. Occupied ones are retired:
 the proxies stop sending anyone there, the players stay until they leave, and
 the server goes once it is empty. A pin to 0 therefore admits nobody new
 without ending a running round. A group with `spec.update.maxStaleSeconds`
