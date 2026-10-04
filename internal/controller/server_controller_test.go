@@ -1018,6 +1018,52 @@ func TestDeletionDrainsBeforeThePodIsDeleted(t *testing.T) {
 	}
 }
 
+func TestAServerRecordsServerStoppedOnceAtItsEnd(t *testing.T) {
+	f := newFixture(t)
+	rec := newRecorder()
+	f.reconc.Recorder = rec
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if err := f.agents.ReportPlayers(uid, 3, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if err := f.c.Delete(f.ctx, f.server("lobby-x7k2")); err != nil {
+		t.Fatalf("delete Server: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	f.clock.Advance(3 * time.Second)
+	if err := f.agents.ReportPlayers(uid, 0, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if _, ok := f.pod("lobby-x7k2"); ok {
+		t.Fatal("pod still there after the drain finished")
+	}
+	seen := drainEvents(rec)
+	if containsEvent(seen, ReasonServerStopped) {
+		t.Fatal("ServerStopped recorded while the Server still held its finalizer")
+	}
+
+	f.reconcile("lobby-x7k2")
+	err := f.c.Get(f.ctx, types.NamespacedName{Name: "lobby-x7k2", Namespace: f.ns}, &spawneryv1alpha1.Server{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("Server still present: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	seen = append(seen, drainEvents(rec)...)
+
+	stopped := 0
+	for _, e := range seen {
+		if eventHasReason(e, ReasonServerStopped) {
+			stopped++
+		}
+	}
+	if stopped != 1 {
+		t.Errorf("ServerStopped recorded %d times, want exactly once: %v", stopped, seen)
+	}
+}
+
 // Deregistering only stops new joins, so a once-registered Starting server still has players.
 func TestDeletionAfterAReadinessLossStillDrains(t *testing.T) {
 	f := newFixture(t)

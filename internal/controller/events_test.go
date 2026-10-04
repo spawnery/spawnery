@@ -179,7 +179,7 @@ var knownActions = map[string]string{
 }
 
 // Asserted rather than logged, so a shrinking corpus fails.
-const wantEventfSites = 38
+const wantEventfSites = 39
 
 // FakeRecorder drops the action and go vet cannot see through EventRecorder, while
 // events.k8s.io/v1 refuses an empty action with nothing on the object to show it; only

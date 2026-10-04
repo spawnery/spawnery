@@ -51,6 +51,9 @@ const MaxContainerRestarts int32 = 3
 // not control.
 const ReasonPodNameConflict = "PodNameConflict"
 
+// ReasonServerStopped is the one event every Server records at its end, whatever ended it.
+const ReasonServerStopped = "ServerStopped"
+
 // ReasonNamespaceNotBootstrapped says a namespace does not yet hold the CA
 // bundle and the agent ServiceAccounts its pods mount. The Server controller
 // sets it as a condition, the Network controller as an event.
@@ -342,9 +345,11 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if decision.Next == phase.Terminating && !podFound {
 		if !srv.DeletionTimestamp.IsZero() {
 			srv.Finalizers = slices.DeleteFunc(srv.Finalizers, func(f string) bool { return f == ServerFinalizer })
-			if err := persistedServer(r.Update(ctx, srv)); err != nil {
-				return ctrl.Result{}, err
+			if err := r.Update(ctx, srv); err != nil {
+				return ctrl.Result{}, client.IgnoreNotFound(err)
 			}
+			r.Recorder.Eventf(srv, nil, corev1.EventTypeNormal, ReasonServerStopped, actionDeletePod,
+				"server %s stopped", srv.Name)
 			return ctrl.Result{}, nil
 		}
 		// Terminating without a deletion request: the state machine decided the
