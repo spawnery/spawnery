@@ -344,7 +344,7 @@ ServerSpec describes one running Minecraft server instance. It is created and ow
 <div style="overflow-x: auto;"><table>
 <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Default</th><th>Description</th></tr></thead>
 <tbody>
-<tr><td><code>forceStop</code></td><td>boolean</td><td align="center"></td><td></td><td>ForceStop kills this server&#x27;s pod at once, with no drain and a grace period of zero: its players lose their connection and the world loses whatever it had not saved. Set by the agent endpoint&#x27;s force-stop request, which only a proxy may send.</td></tr>
+<tr><td><code>forceStop</code></td><td>boolean</td><td align="center"></td><td></td><td>ForceStop kills this server&#x27;s pod at once, with no drain and a grace period of one second: its players lose their connection and the world loses whatever it had not saved. Set by the agent endpoint&#x27;s force-stop request, which only a proxy may send.</td></tr>
 <tr><td><code>groupGeneration</code></td><td>integer (int64)</td><td align="center"></td><td></td><td>GroupGeneration is the metadata.generation of the group at creation time. A server whose value is behind the group&#x27;s is stale.</td></tr>
 <tr><td><code>groupRef</code></td><td>object</td><td align="center">&#10003;</td><td></td><td>GroupRef names the owning ServerGroup.</td></tr>
 <tr><td><code>groupRef.name</code></td><td>string (length &gt;= 1)</td><td align="center">&#10003;</td><td></td><td>Name of the referenced object.</td></tr>

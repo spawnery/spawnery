@@ -80,8 +80,8 @@ type ServerSpec struct {
 	Hold bool `json:"hold,omitempty"`
 
 	// ForceStop kills this server's pod at once, with no drain and a grace
-	// period of zero: its players lose their connection and the world loses
-	// whatever it had not saved. Set by the agent endpoint's force-stop
+	// period of one second: its players lose their connection and the world
+	// loses whatever it had not saved. Set by the agent endpoint's force-stop
 	// request, which only a proxy may send.
 	// +optional
 	ForceStop bool `json:"forceStop,omitempty"`

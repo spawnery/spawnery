@@ -168,10 +168,12 @@ public interface SpawneryApi {
      * Holds an ephemeral group at exactly this many servers for a while.
      *
      * <p>Unlike {@link #boost}, which adds to the floor, a pin is both the
-     * floor and the ceiling: servers above the number are drained and
-     * removed, 0 included. The group's own {@code maxReplicas} still binds; a
-     * pin above it is refused. Of several pins on one group the newest wins,
-     * and boosts do not count while one holds.
+     * floor and the ceiling. Empty servers above the number are deleted and
+     * occupied ones are retired: no new joins, and the players stay until
+     * they leave. 0 is allowed, but a pin below the group's
+     * {@code minReplicas} is refused unless the caller is a proxy, and a pin
+     * above its {@code maxReplicas} is always refused. Of several pins on one
+     * group the newest wins, and boosts do not count while one holds.
      *
      * <p>The stage fails when the operator refuses: a group it does not have,
      * a group that is not ephemeral, more than {@code maxReplicas}, or longer
