@@ -307,4 +307,55 @@ class TransfersTest {
         assertTrue(alice.sent.isEmpty())
         assertEquals(1, bob.sent.size)
     }
+
+    private fun transfersAs(self: String, proxies: List<ProxyInfo>) = Transfers(
+        cookie = cookie,
+        policy = TransferPolicy(0L) { seconds * 1000 },
+        picture = { TransferPolicy.Picture(self, "edge", proxies, emptySet(), proxies.map { it.name() }.toSet()) },
+        registered = { it in registered },
+        info = {},
+        warn = { _, _ -> },
+        spacingMillis = 3_500,
+        clock = { seconds * 1000 },
+    )
+
+    @Test
+    fun `two leaving proxies never send from one address within the spacing of each other`() {
+        val bothLeaving = listOf(
+            ProxyInfo("edge-1", "edge", false, true, 0, ""),
+            ProxyInfo("edge-2", "edge", false, true, 0, ""),
+            ProxyInfo("edge-3", "edge", true, false, 0, ""),
+        )
+        val shared = InetAddress.getByName("198.51.100.7")
+        val first = transfersAs("edge-1", bothLeaving)
+        val second = transfersAs("edge-2", bothLeaving)
+        val onFirst = listOf(FakeTraveller("alice", "lobby-1", host, address = shared), FakeTraveller("bob", "lobby-1", host, address = shared))
+        val onSecond = listOf(FakeTraveller("carol", "lobby-1", host, address = shared), FakeTraveller("dave", "lobby-1", host, address = shared))
+        val sentAt = mutableListOf<Long>()
+
+        repeat(60) {
+            val before = (onFirst + onSecond).sumOf { it.sent.size }
+            first.pass(onFirst)
+            second.pass(onSecond)
+            repeat((onFirst + onSecond).sumOf { it.sent.size } - before) { sentAt += seconds * 1000 }
+            seconds += 1
+        }
+
+        assertEquals(4, sentAt.size, "every player is sent within a minute")
+        sentAt.zipWithNext().forEach { (a, b) -> assertTrue(b - a >= 3_500, "sends at $a and $b are closer than the spacing") }
+    }
+
+    @Test
+    fun `a proxy leaving alone is not held to a turn`() {
+        val alone = listOf(
+            ProxyInfo("edge-1", "edge", false, true, 0, ""),
+            ProxyInfo("edge-2", "edge", true, false, 0, ""),
+        )
+        val transfers = transfersAs("edge-1", alone)
+        val players = (1..5).map { FakeTraveller("p$it", "lobby-1", host) }
+
+        transfers.pass(players)
+
+        assertTrue(players.all { it.sent.size == 1 })
+    }
 }

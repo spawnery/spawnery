@@ -176,3 +176,11 @@ used waits `login-ratelimit` plus 500 ms; a switch from such an address is not
 transferred and goes ahead on the old proxy. The limit is read from the proxy's
 own configuration, so an overlay that changes it is followed.
 
+Spacing inside one proxy is not enough: a blue/green roll drains every old
+proxy at once, and two of them can send players behind one address in the same
+second (seen on a local cluster: the second login was refused). The proxies of
+a group that are leaving sort their names, and the one at index i sends only
+while `(now / spacing) mod 2n == 2i`. Two windows of different proxies are
+then at least one spacing apart. A switch outside the proxy's window is not
+transferred.
+

@@ -278,9 +278,12 @@ A forced pass sends at most one player per client address at a time. The next
 player from that address goes once the proxy's `login-ratelimit` (3 s unless an
 overlay changes it) and another half second have passed, because the receiving
 proxy refuses a second login from one address inside that window as too fast.
-That matters for a household or a school behind one address. A server switch
-from an address that was just used goes ahead on the old proxy without a
-transfer. Behind a front end that does not pass the client's address on (no
+That matters for a household or a school behind one address. Proxies of a group
+that leave together (both halves of a blue/green roll) take turns: each sends
+only in its own window of that length, with an empty window between any two,
+so players behind one address who sit on different old proxies do not collide
+either. A server switch from an address that was just used, or outside the
+proxy's window, goes ahead on the old proxy without a transfer. Behind a front end that does not pass the client's address on (no
 PROXY protocol), every player shares the front end's address, and a forced pass
 moves one player every few seconds.
 

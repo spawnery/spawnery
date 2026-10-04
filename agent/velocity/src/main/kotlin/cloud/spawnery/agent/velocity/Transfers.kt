@@ -44,14 +44,18 @@ class Transfers(
     /** True when the switch was replaced by a transfer and must be denied. */
     fun onSwitch(player: Traveller, target: String): Boolean {
         val host = player.virtualHost ?: return false
-        if (cooling(player.address, clock())) return false
-        if (!policy.onSwitch(picture(), player.uuid)) return false
+        val now = clock()
+        val picture = picture()
+        if (cooling(player.address, now) || !myTurn(picture, now)) return false
+        if (!policy.onSwitch(picture, player.uuid)) return false
         return send(player, host, target, "switch")
     }
 
     fun pass(players: List<Traveller>) {
         val now = clock()
         lastSentFrom.values.removeIf { now - it >= spacingMillis }
+        val picture = picture()
+        if (!myTurn(picture, now)) return
         val chosen = mutableSetOf<InetAddress>()
         val movable = players.filter { it.virtualHost != null }.associateBy { it.uuid }
         val occupants = movable.values.map { TransferPolicy.Occupant(it.uuid, it.currentServer) }
@@ -59,7 +63,7 @@ class Transfers(
             val address = movable.getValue(id).address
             address == null || (!cooling(address, now) && chosen.add(address))
         }
-        for ((id, target) in policy.forced(picture(), occupants, admit)) {
+        for ((id, target) in policy.forced(picture, occupants, admit)) {
             val player = movable[id] ?: continue
             send(player, player.virtualHost ?: continue, target, "forced")
         }
@@ -120,6 +124,19 @@ class Transfers(
         arrived.remove(player)
         leaving.remove(player)
         policy.forget(picture(), player)
+    }
+
+    /**
+     * Proxies of one group that leave together share the receiving proxies'
+     * rate limit, and none of them knows the others' addresses. Each sends
+     * only in its own window, with an empty window between any two.
+     */
+    private fun myTurn(picture: TransferPolicy.Picture, now: Long): Boolean {
+        if (spacingMillis <= 0) return true
+        val leaving = picture.proxies.filter { it.group() == picture.group && it.draining() }.map { it.name() }.sorted()
+        val index = leaving.indexOf(picture.self)
+        if (leaving.size <= 1 || index < 0) return true
+        return (now / spacingMillis) % (2L * leaving.size) == 2L * index
     }
 
     private fun cooling(address: InetAddress?, now: Long): Boolean {
