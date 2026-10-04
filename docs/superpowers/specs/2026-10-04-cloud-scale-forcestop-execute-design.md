@@ -67,9 +67,13 @@ exists, the group's floor and its ceiling are both that number, and `Add`
 boosts do not count. `ScalingInputs` carries it; `floor()` and the ceiling
 read it.
 
-Servers above the pinned number leave the way they leave when `maxReplicas`
-is lowered today: `SelectDeletionCandidates` picks the ones with the fewest
-players, and each is drained to the fallback groups before its pod stops.
+Servers above the pinned number go in two ways. Empty ones are deleted, as
+when `maxReplicas` is lowered (`SelectDeletionCandidates`, which never takes a
+server that may carry players). Occupied ones are retired: the proxies stop
+sending anyone there, the players on them stay until they leave, and each
+server goes once it is empty. A pin to 0 therefore admits nobody new without
+ending a running round; `/cloud forcestop` is the way to end one at once.
+Lowering `maxReplicas` itself keeps today's behaviour.
 
 While a pin holds, a rolling update cannot surge above the pinned number. That
 is the behaviour of a group at its `maxReplicas`, and the guide says so.
