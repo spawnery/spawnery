@@ -4,6 +4,7 @@ import cloud.spawnery.agent.api.CloudPlayer
 import cloud.spawnery.agent.api.Group
 import cloud.spawnery.agent.api.BoostResult
 import cloud.spawnery.agent.api.ConnectResult
+import cloud.spawnery.agent.api.ScaleResult
 import cloud.spawnery.agent.api.ReadinessHold
 import cloud.spawnery.agent.api.EventBus
 import cloud.spawnery.agent.api.Self
@@ -64,8 +65,15 @@ class MirrorApi(
 
     override fun status(target: String): CompletionStage<NetworkStatus> = connector.status(target)
 
+    @Deprecated("use scale")
     override fun boost(group: String, replicas: Int, forHowLong: Duration?): CompletionStage<BoostResult> =
         connector.boost(group, replicas, forHowLong)
+
+    override fun scale(group: String, replicas: Int, forHowLong: Duration?): CompletionStage<ScaleResult> =
+        connector.scale(group, replicas, forHowLong)
+
+    override fun resetScale(group: String): CompletionStage<Int> =
+        connector.resetScale(group)
 
     override fun startServer(group: String, key: String): CompletionStage<StartedServer> =
         connector.startServer(group, key)
@@ -100,6 +108,7 @@ class MirrorApi(
         sink(slots)
     }
 
+    @Deprecated("use resetScale")
     override fun stopBoosts(group: String): CompletionStage<Int> =
         connector.stopBoosts(group)
 

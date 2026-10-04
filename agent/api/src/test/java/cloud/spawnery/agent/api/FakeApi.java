@@ -96,6 +96,16 @@ final class FakeApi implements SpawneryApi {
     }
 
     @Override
+    public CompletionStage<ScaleResult> scale(String group, int replicas, Duration forHowLong) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
+    }
+
+    @Override
+    public CompletionStage<Integer> resetScale(String group) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
+    }
+
+    @Override
     public CompletionStage<Void> acceptJoins(boolean accept) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
     }

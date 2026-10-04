@@ -148,7 +148,9 @@ public interface SpawneryApi {
      *
      * @param forHowLong how long the boost should run, or {@code null} for the
      *     operator's default.
+     * @deprecated use {@link #scale}, which sets the size rather than adding to it; this keeps working.
      */
+    @Deprecated
     CompletionStage<BoostResult> boost(String group, int replicas, Duration forHowLong);
 
     /**
@@ -156,8 +158,35 @@ public interface SpawneryApi {
      *
      * <p>Every one, not the newest. Zero is an ordinary answer -- the group
      * had no boosts -- and not a failure.
+     *
+     * @deprecated use {@link #resetScale}; this keeps working.
      */
+    @Deprecated
     CompletionStage<Integer> stopBoosts(String group);
+
+    /**
+     * Holds an ephemeral group at exactly this many servers for a while.
+     *
+     * <p>Unlike {@link #boost}, which adds to the floor, a pin is both the
+     * floor and the ceiling: servers above the number are drained and
+     * removed, 0 included. The group's own {@code maxReplicas} still binds; a
+     * pin above it is refused. Of several pins on one group the newest wins,
+     * and boosts do not count while one holds.
+     *
+     * <p>The stage fails when the operator refuses: a group it does not have,
+     * a group that is not ephemeral, more than {@code maxReplicas}, or longer
+     * than seven days. Each says which.
+     *
+     * @param forHowLong how long the pin holds, or {@code null} for the
+     *     operator's default of an hour.
+     */
+    CompletionStage<ScaleResult> scale(String group, int replicas, Duration forHowLong);
+
+    /**
+     * Ends every pin and every boost on a group and reports how many there
+     * were. Zero is an ordinary answer.
+     */
+    CompletionStage<Integer> resetScale(String group);
 
     /**
      * Asks for the private server that carries this key.

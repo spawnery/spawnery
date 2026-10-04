@@ -16,6 +16,7 @@ limitations under the License.
 
 package cloud.spawnery.agent.api;
 
+import java.time.Instant;
 import java.util.Map;
 import java.util.Objects;
 
@@ -32,6 +33,10 @@ import java.util.Objects;
  * @param displayName what this group is called where a person reads it, for
  *     example on a scoreboard; {@link #name()} is a DNS label. Never empty: a
  *     group nobody has named is displayed by its own name.
+ * @param pinned whether an {@code Exact} ScaleBoost holds the group at a size.
+ * @param pinnedReplicas the size the pin holds the group at, 0 without a pin.
+ * @param pinnedUntil when the pin ends on the operator's clock; null for a
+ *     pin without an end and for no pin.
  */
 public record Group(
         String name,
@@ -41,7 +46,10 @@ public record Group(
         int onlinePlayers,
         int freeSlots,
         Map<String, String> attributes,
-        String displayName) {
+        String displayName,
+        boolean pinned,
+        int pinnedReplicas,
+        Instant pinnedUntil) {
     public Group {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(kind, "kind");
@@ -49,6 +57,23 @@ public record Group(
         // Here and not in the operator, so an operator that predates the field
         // reads like one that left it out.
         displayName = displayName == null || displayName.isEmpty() ? name : displayName;
+        if (!pinned) {
+            pinnedReplicas = 0;
+            pinnedUntil = null;
+        }
+    }
+
+    /** The 0.18 shape: no pin. */
+    public Group(
+            String name,
+            Kind kind,
+            int replicas,
+            int readyReplicas,
+            int onlinePlayers,
+            int freeSlots,
+            Map<String, String> attributes,
+            String displayName) {
+        this(name, kind, replicas, readyReplicas, onlinePlayers, freeSlots, attributes, displayName, false, 0, null);
     }
 
     /** Which sizing rule this group answers to. */

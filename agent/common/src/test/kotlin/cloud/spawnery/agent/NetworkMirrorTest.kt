@@ -10,6 +10,7 @@ import cloud.spawnery.agent.pb.ServerState
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
+import kotlin.test.assertFalse
 import kotlin.test.assertNull
 import kotlin.test.assertTrue
 
@@ -334,5 +335,22 @@ class NetworkMirrorTest {
                 .build(),
         )
         assertEquals(emptySet(), mirror.acceptingTransfers())
+    }
+
+    @Test
+    fun `a pinned group says to what and until when`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder()
+                .addGroups(GroupState.newBuilder().setName("lobby").setKind(GroupState.Kind.EPHEMERAL)
+                    .setPinned(true).setPinnedReplicas(0).setPinnedUntilUnix(1_800_000_000))
+                .addGroups(GroupState.newBuilder().setName("arena").setKind(GroupState.Kind.EPHEMERAL))
+                .build(),
+        )
+        val lobby = mirror.groups().single { it.name() == "lobby" }
+        assertTrue(lobby.pinned())
+        assertEquals(0, lobby.pinnedReplicas())
+        assertEquals(java.time.Instant.ofEpochSecond(1_800_000_000), lobby.pinnedUntil())
+        assertFalse(mirror.groups().single { it.name() == "arena" }.pinned())
     }
 }

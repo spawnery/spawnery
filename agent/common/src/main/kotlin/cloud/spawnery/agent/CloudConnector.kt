@@ -5,6 +5,7 @@ import cloud.spawnery.agent.api.ConnectResult
 import cloud.spawnery.agent.api.StartedServer
 import cloud.spawnery.agent.api.Target
 import cloud.spawnery.agent.api.NetworkStatus
+import cloud.spawnery.agent.api.ScaleResult
 import cloud.spawnery.agent.pb.AcceptJoinsRequest
 import cloud.spawnery.agent.pb.AnnounceRequest
 import cloud.spawnery.agent.pb.BoostRequest
@@ -12,8 +13,11 @@ import cloud.spawnery.agent.pb.CloudRequest
 import cloud.spawnery.agent.pb.CloudResponse
 import cloud.spawnery.agent.pb.ConnectRequest
 import cloud.spawnery.agent.pb.DeleteServerRequest
+import cloud.spawnery.agent.pb.ExecuteRequest
+import cloud.spawnery.agent.pb.ForceStopRequest
 import cloud.spawnery.agent.pb.RequestError
 import cloud.spawnery.agent.pb.RetireRequest
+import cloud.spawnery.agent.pb.ScaleRequest
 import cloud.spawnery.agent.pb.StartServerRequest
 import cloud.spawnery.agent.pb.StatusRequest
 import cloud.spawnery.agent.pb.StopBoostRequest
@@ -91,6 +95,45 @@ class CloudConnector(
                             .setReplicas(replicas)
                             .setDurationSeconds(forHowLong?.seconds ?: 0L),
                     )
+                    .build(),
+            )
+        }
+
+    /** The same duration rule as [boost]. */
+    fun scale(group: String, replicas: Int, forHowLong: Duration?): CompletionStage<ScaleResult> =
+        requests.start<ScaleResult> { id ->
+            sendRequest(
+                CloudRequest.newBuilder()
+                    .setId(id)
+                    .setScale(
+                        ScaleRequest.newBuilder()
+                            .setGroup(group)
+                            .setReplicas(replicas)
+                            .setDurationSeconds(forHowLong?.seconds ?: 0L),
+                    )
+                    .build(),
+            )
+        }
+
+    /** The operator's StopBoostRequest removes pins and boosts alike. */
+    fun resetScale(group: String): CompletionStage<Int> = stopBoosts(group)
+
+    fun forceStop(server: String, issuer: String): CompletionStage<String> =
+        requests.start<String> { id ->
+            sendRequest(
+                CloudRequest.newBuilder()
+                    .setId(id)
+                    .setForceStop(ForceStopRequest.newBuilder().setServer(server).setIssuer(issuer))
+                    .build(),
+            )
+        }
+
+    fun execute(target: String, command: String, issuer: String): CompletionStage<List<ExecuteLine>> =
+        requests.start<List<ExecuteLine>> { id ->
+            sendRequest(
+                CloudRequest.newBuilder()
+                    .setId(id)
+                    .setExecute(ExecuteRequest.newBuilder().setTarget(target).setCommand(command).setIssuer(issuer))
                     .build(),
             )
         }
@@ -227,6 +270,15 @@ class CloudConnector(
             response.hasStopBoost() -> requests.complete(response.id, response.stopBoost.removed)
             response.hasAnnounce() -> requests.complete(response.id, null)
             response.hasAcceptJoins() -> requests.complete(response.id, null)
+            response.hasScale() -> requests.complete(
+                response.id,
+                ScaleResult(response.scale.replicas, Instant.ofEpochSecond(response.scale.expiresAtUnix)),
+            )
+            response.hasForceStop() -> requests.complete(response.id, response.forceStop.server)
+            response.hasExecute() -> requests.complete(
+                response.id,
+                response.execute.outcomesList.map { ExecuteLine(it.server, it.ok, it.outputList, it.error) },
+            )
             // Failed rather than ignored, so the version skew has a name.
             else -> requests.fail(
                 response.id,

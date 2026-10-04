@@ -56,4 +56,12 @@ class RecordCompatibilityTest {
         assertEquals(20, new ServerInfo("a", "g", ServerPhase.READY, 1, 20, true, "", Map.of(), "", 0, false, "", 50).playableSlots());
         assertEquals(12, new ServerInfo("a", "g", ServerPhase.READY, 1, 20, true, "", Map.of(), "", 0, false, "", 12).playableSlots());
     }
+
+    @Test
+    void theZeroEighteenGroupConstructorStillBuildsAndReadsAsUnpinned() {
+        Group group = new Group("lobby", Group.Kind.EPHEMERAL, 1, 1, 0, 100, Map.of(), "Lobby");
+        assertEquals(false, group.pinned());
+        assertEquals(0, group.pinnedReplicas());
+        assertEquals(null, group.pinnedUntil());
+    }
 }

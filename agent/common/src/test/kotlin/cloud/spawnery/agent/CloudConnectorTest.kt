@@ -4,8 +4,12 @@ import cloud.spawnery.agent.api.Group
 import cloud.spawnery.agent.pb.CloudRequest
 import cloud.spawnery.agent.pb.CloudResponse
 import cloud.spawnery.agent.pb.DeleteServerResult
+import cloud.spawnery.agent.pb.ExecuteOutcome
+import cloud.spawnery.agent.pb.ExecuteResult
+import cloud.spawnery.agent.pb.ForceStopResult
 import cloud.spawnery.agent.pb.GroupState
 import cloud.spawnery.agent.pb.RequestError
+import cloud.spawnery.agent.pb.ScaleResult as PbScaleResult
 import cloud.spawnery.agent.pb.StartServerResult
 import cloud.spawnery.agent.pb.StatusResult
 import cloud.spawnery.agent.pb.StopServerResult
@@ -30,6 +34,57 @@ class CloudConnectorTest {
     private fun connector() = CloudConnector(
         Requests(timeoutMillis = 1_000, clock = System::currentTimeMillis),
     ) { request -> requested += request }
+
+    private fun answer(connector: CloudConnector, build: CloudResponse.Builder.() -> Unit) =
+        connector.answer(CloudResponse.newBuilder().setId(requested.last().id).apply(build).build())
+
+    @Test
+    fun `scale sends a scale request and reads the pin back`() {
+        val connector = connector()
+        val stage = connector.scale("lobby", 0, Duration.ofDays(2))
+
+        assertEquals("lobby", requested.single().scale.group)
+        assertEquals(0, requested.single().scale.replicas)
+        assertEquals(172_800L, requested.single().scale.durationSeconds)
+        answer(connector) { setScale(PbScaleResult.newBuilder().setReplicas(0).setExpiresAtUnix(1_800_000_000)) }
+
+        val result = stage.toCompletableFuture().get(1, TimeUnit.SECONDS)
+        assertEquals(0, result.replicas())
+        assertEquals(java.time.Instant.ofEpochSecond(1_800_000_000), result.expiresAt())
+    }
+
+    @Test
+    fun `reset is the stop-boost request`() {
+        val connector = connector()
+        val stage = connector.resetScale("lobby")
+        assertEquals("lobby", requested.single().stopBoost.group)
+        answer(connector) { setStopBoost(cloud.spawnery.agent.pb.StopBoostResult.newBuilder().setRemoved(2)) }
+        assertEquals(2, stage.toCompletableFuture().get(1, TimeUnit.SECONDS))
+    }
+
+    @Test
+    fun `force-stop and execute carry who typed them`() {
+        val connector = connector()
+        val stopped = connector.forceStop("lobby-a", "alice")
+        assertEquals("alice", requested.last().forceStop.issuer)
+        answer(connector) { setForceStop(ForceStopResult.newBuilder().setServer("lobby-a")) }
+        assertEquals("lobby-a", stopped.toCompletableFuture().get(1, TimeUnit.SECONDS))
+
+        val ran = connector.execute("lobby", "list", "console")
+        assertEquals("console", requested.last().execute.issuer)
+        assertEquals("list", requested.last().execute.command)
+        answer(connector) {
+            setExecute(
+                ExecuteResult.newBuilder()
+                    .addOutcomes(ExecuteOutcome.newBuilder().setServer("lobby-a").setOk(true).addOutput("hi"))
+                    .addOutcomes(ExecuteOutcome.newBuilder().setServer("lobby-b").setError("no answer within 8s")),
+            )
+        }
+        assertEquals(
+            listOf(ExecuteLine("lobby-a", true, listOf("hi"), ""), ExecuteLine("lobby-b", false, emptyList(), "no answer within 8s")),
+            ran.toCompletableFuture().get(1, TimeUnit.SECONDS),
+        )
+    }
 
     @Test
     fun `a new stream is told again what this server said it was`() {
