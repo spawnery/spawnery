@@ -37,6 +37,10 @@ type ScalingInputs struct {
 	// else. maxReplicas still applies after it.
 	Boost       int32
 	MaxReplicas int32
+	// Pinned is an Exact ScaleBoost on the group. Pin is then both the floor
+	// and the ceiling, bounded by MaxReplicas, and Boost does not count.
+	Pinned bool
+	Pin    int32
 	// SpareSlots is the free player capacity the group keeps available.
 	SpareSlots int32
 	// MaxPlayers is the capacity of a single server of this group.
@@ -74,9 +78,22 @@ type ScalingInputs struct {
 	WhenEmpty bool
 }
 
-// floor is MinReplicas plus live boosts. Both the create rule and the guard
-// against shedding below the floor must read the same number.
-func (in ScalingInputs) floor() int32 { return in.MinReplicas + in.Boost }
+// floor is MinReplicas plus live boosts, or the pin. Both the create rule and
+// the guard against shedding below the floor must read the same number.
+func (in ScalingInputs) floor() int32 {
+	if in.Pinned {
+		return in.ceiling()
+	}
+	return in.MinReplicas + in.Boost
+}
+
+// ceiling is maxReplicas, lowered to the pin while one holds.
+func (in ScalingInputs) ceiling() int32 {
+	if in.Pinned && in.Pin < in.MaxReplicas {
+		return in.Pin
+	}
+	return in.MaxReplicas
+}
 
 // capacity is what one server brings before it has reported anything.
 func (in ScalingInputs) capacity() int32 {
@@ -432,7 +449,7 @@ func decideSize(in ScalingInputs) SizeDecision {
 	if cold && create < 1 {
 		create = 1
 	}
-	room := in.MaxReplicas - alive
+	room := in.ceiling() - alive
 	if room < 0 {
 		room = 0
 	}
@@ -452,7 +469,7 @@ func decideSize(in ScalingInputs) SizeDecision {
 		}
 		// No room to grow, but a lowered maxReplicas must still be carried out. The
 		// demand removal below stays forbidden: the group just said it is short.
-		if surplus := alive - in.MaxReplicas; surplus > 0 {
+		if surplus := alive - in.ceiling(); surplus > 0 {
 			return SizeDecision{
 				Wanted:            wanted,
 				Limited:           limited,
@@ -470,7 +487,7 @@ func decideSize(in ScalingInputs) SizeDecision {
 		// server; the changeover filter holds the current spec out.
 	}
 
-	if surplus := alive - in.MaxReplicas; surplus > 0 {
+	if surplus := alive - in.ceiling(); surplus > 0 {
 		return SizeDecision{
 			Surplus:           surplus,
 			Delete:            SelectDeletionCandidates(deletable(in), int(surplus)),
@@ -489,7 +506,7 @@ func decideSize(in ScalingInputs) SizeDecision {
 	if floorHeld {
 		floorOpen = joinableCount(in)
 		if in.PendingCreates == 0 && !currentStarting(in) {
-			if alive < in.MaxReplicas {
+			if alive < in.ceiling() {
 				return SizeDecision{Create: 1, FloorHeld: true, Joinable: floorOpen, ChangeoverWaiting: waiting}
 			}
 			floorBlocked = true
