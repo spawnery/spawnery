@@ -273,6 +273,9 @@ ten. The `message` is the operator's own sentence, the same one `kubectl get
 events` shows, so logging it puts you in agreement with whoever is reading the
 cluster.
 
+On a backend you get no events about on-demand groups or their members. Those
+reach proxies only, as the network picture does.
+
 **`kind` is a string and not an enum.** The operator's vocabulary gains values,
 and an agent older than one has to show it rather than fail to parse the
 message it arrived in. Match on the ones you know; pass the rest through.

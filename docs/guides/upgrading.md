@@ -119,6 +119,13 @@ alike. The node is still `spawnery.cloud.scale`. A plugin calling `boost` or
 `stopBoosts` keeps working; both are deprecated in favour of `scale` and
 `resetScale`.
 
+## Events about private servers stay on the proxies
+
+Since 0.20.0 an event about a member of an on-demand group, or about the
+group itself, reaches proxies only. A backend plugin subscribed to `EventBus`
+no longer hears of private servers, which matches `servers()`, where they
+never appeared.
+
 ## Older installations
 
 [Release notes](../archive/release-notes.md) carries the notes release by

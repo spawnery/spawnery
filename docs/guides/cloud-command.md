@@ -30,7 +30,7 @@ Everything else is a separate grant, deliberately.
 | `spawnery.cloud.read` | `/cloud list`, `/cloud info <name>` |
 | `spawnery.cloud.retire` | `/cloud retire <name>`, `/cloud unretire <name>` |
 | `spawnery.cloud.scale` | `/cloud scale <group> <count> [for <duration>]`, `/cloud scale <group> reset` |
-| `spawnery.cloud.events` | `/cloud events on`, `/cloud events off` |
+| `spawnery.cloud.events` | `/cloud events [minimal\|normal\|verbose\|off]` |
 | `spawnery.cloud.status` | `/cloud status [group\|server\|proxy]` |
 | `spawnery.cloud.forcestop` | `/cloud forcestop <server>` (proxy only) |
 | `spawnery.cloud.execute` | `/cloud execute <server\|group> <command>` (proxy only, and only with `spec.commands.execute`) |
@@ -188,7 +188,31 @@ network, proxy, issuer, target and command.
 Switching it on means that anybody holding the node can run any console command
 on any server, with no allowlist, and on most servers that includes `op`.
 
-**`/cloud events on|off`** turns this player's cloud event feed on or off.
+**`/cloud events`** sets how much of the cloud event feed this player sees in
+chat. Without a word it shows the player's current level. `on` means `minimal`,
+which is the default, and `off` shows nothing.
+
+| Event | `minimal` | `normal` | `verbose` |
+|---|---|---|---|
+| a server or proxy appears | `[+] lobby-x7k2` | `[+] lobby-x7k2 starting`; a proxy `[✓] gateway-4d1 ready` | the operator's note |
+| a server passes its ready gate | | `[✓] lobby-x7k2 ready` | the operator's note |
+| a server or proxy starts to leave | | `[-] lobby-x7k2 leaving` | the operator's note |
+| a server or proxy is gone | `[-] lobby-x7k2` | `[-] lobby-x7k2 stopped` | the operator's note |
+| a warning or a failure | `[!] lobby-x7k2 did not start in time` | the same | the operator's note |
+| anything else | | | the operator's note |
+
+Several lines of one kind in one group within a second become one
+(`[+] 5 lobby`). Warnings are never merged. An on-demand member shows as its
+group and the first six characters of its key (`challenge-3f2b1c`). Hovering
+over a name shows it in full, and clicking it puts `/cloud info <name>` in the
+chat box.
+
+With LuckPerms the level is the player's meta value `spawnery-feed`, read with
+inheritance, so `/lp group admin meta set spawnery-feed normal` covers every
+admin who has not chosen their own. It survives a roll and a change of proxy
+when the proxies share LuckPerms storage, since they then read the same user
+data. Another proxy picks up a change on LuckPerms' next sync. Without
+LuckPerms the proxy keeps the level in memory until it restarts.
 
 ## Both sides, one command
 

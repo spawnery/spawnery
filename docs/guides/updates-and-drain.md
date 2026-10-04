@@ -353,6 +353,18 @@ Once enabled, a leaving proxy moves players in two moments:
   door opens and the deadline has passed, they go on the next pass, which
   runs once a second.
 
+Ten seconds before the forced transfer, or at once when `forceAfterSeconds` is
+shorter, the proxy sends each player it will move a chat line: `You will be
+reconnected in 10 seconds.` The count runs down to the `forceAfterSeconds`
+deadline. A player behind a shared address may be moved a little later than
+that, because transfers are spaced per address, but never earlier. The line is
+the translatable key `spawnery.transfer.warning` with the seconds as its one
+argument, and the English text above is its fallback, so a network with its own
+translations can word it differently. A player is warned once per leaving
+proxy, and only when a forced transfer is coming for them. Players behind a
+closed door are not warned, nor is anyone while no other proxy can take them,
+nor a player on a server switch, who is transferred at once.
+
 A transfer only happens while another proxy of the same group is Ready, not
 itself leaving, and accepts transfers. Otherwise there is nowhere to send
 the player, and the proxy leaves them where they are. Each player is tried
