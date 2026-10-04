@@ -147,7 +147,9 @@ proxy's own namespace. An unknown name and a proxy's name are refused.
 `Server.spec.forceStop: true` is set by a patch, like `spec.retire`. In
 `phase.Decide` a new input `ForceStopRequested` leads from every phase to
 `Terminating`, with no drain and no deadline. The controller deletes the pod
-with a grace period of 0, and the Server object goes the way every
+with a grace period of 1 second (0 would be a force delete: the API server
+drops the pod object before the kubelet has stopped the container, and a
+persistent ordinal's replacement could start on the same volume), and the Server object goes the way every
 `Terminating` server goes. What follows is the group's ordinary behaviour:
 
 - ephemeral: the floor and demand build a new server if one is needed;
