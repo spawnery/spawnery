@@ -38,7 +38,8 @@ internal fun coalesce(
         byKey.getOrPut(key) { mutableListOf() } += e
     }
 
-    for ((key, collapsed) in byKey) {
+    for ((key, events) in byKey) {
+        val collapsed = events.distinctBy { it.subject }
         val group = key.second
         val r = row(collapsed.first().kind)
         val sign = sign(r, level)

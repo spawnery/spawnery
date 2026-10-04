@@ -134,6 +134,23 @@ class CloudFeedTest {
     }
 
     @Test
+    fun `one server with two events of one row counts once`() {
+        val window = arrayOf(event("Retiring", "lobby-a"), event("DeletionRequested", "lobby-a"))
+        assertEquals(listOf("[-] lobby-a leaving"), lines(FeedLevel.NORMAL, *window))
+
+        val more = arrayOf(*window, event("Retiring", "lobby-b"), event("DeletionRequested", "lobby-b"))
+        assertEquals(listOf("[-] 2 lobby leaving"), lines(FeedLevel.NORMAL, *more))
+    }
+
+    @Test
+    fun `verbose lists a server once per kind`() {
+        assertEquals(
+            listOf("[+] 2 PodCreated in lobby (lobby-a, lobby-b)"),
+            lines(FeedLevel.VERBOSE, event("PodCreated", "lobby-a"), event("PodCreated", "lobby-a"), event("PodCreated", "lobby-b")),
+        )
+    }
+
+    @Test
     fun `a row the level hides neither shows nor counts`() {
         val window = arrayOf(event("PodCreated", "lobby-a"), event("PodCreated", "lobby-b"), event("ReadyGatePassed", "lobby-c"))
         assertEquals(listOf("[+] 2 lobby"), lines(FeedLevel.MINIMAL, *window))

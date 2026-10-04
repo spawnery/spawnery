@@ -372,7 +372,7 @@ private fun <S> resetScale(
             removed == 0 -> replyOk(adapter, format, source, Style.name(group) + Style.quiet(" has no pin or boost"))
             else -> replyOk(adapter, format, source,
                 Style.quiet("removed ") + Style.number(removed) +
-                    Style.good(if (removed == 1) " pin and boost" else " pins and boosts") +
+                    Style.good(if (removed == 1) " pin or boost" else " pins and boosts") +
                     Style.quiet(" from ") + Style.name(group) +
                     Style.quiet("; it is back to its own floor and ceiling"))
         }

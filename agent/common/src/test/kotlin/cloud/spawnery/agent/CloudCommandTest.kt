@@ -376,6 +376,15 @@ class CloudCommandTest {
     }
 
     @Test
+    fun `reset of exactly one says pin or boost, not both`() {
+        run("cloud scale lobby reset")
+
+        answer { setStopBoost(StopBoostResult.newBuilder().setRemoved(1)) }
+
+        assertTrue(plain(sent.single()).contains("removed 1 pin or boost from lobby"), sent.toString())
+    }
+
+    @Test
     fun `resetting a group with no boosts says so plainly`() {
         run("cloud scale lobby reset")
 
