@@ -2599,7 +2599,7 @@ func (f *fixture) podAnyway(t *testing.T, name string) *corev1.Pod {
 	return pod
 }
 
-func TestAForceStopKillsThePodWithoutAGracePeriod(t *testing.T) {
+func TestAForceStopKillsThePodWithAOneSecondGracePeriod(t *testing.T) {
 	f := newFixture(t)
 	bringUpReady(t, f, "lobby-x7k2")
 	pod, _ := f.pod("lobby-x7k2")
@@ -2614,8 +2614,8 @@ func TestAForceStopKillsThePodWithoutAGracePeriod(t *testing.T) {
 	if got.DeletionTimestamp.IsZero() {
 		t.Fatal("the pod was not deleted")
 	}
-	if g := got.DeletionGracePeriodSeconds; g == nil || *g != 0 {
-		t.Errorf("deletionGracePeriodSeconds = %v, want 0", g)
+	if g := got.DeletionGracePeriodSeconds; g == nil || *g != 1 {
+		t.Errorf("deletionGracePeriodSeconds = %v, want 1", ptr.Deref(g, -1))
 	}
 	if phase.Phase(f.server("lobby-x7k2").Status.Phase) != phase.Terminating {
 		t.Errorf("phase = %s, want Terminating", f.server("lobby-x7k2").Status.Phase)
@@ -2638,14 +2638,14 @@ func TestAForceStopShortensAGracePeriodAlreadyRunning(t *testing.T) {
 	if err := f.c.Delete(f.ctx, pod); err != nil {
 		t.Fatalf("delete the pod gracefully: %v", err)
 	}
-	if g := f.podAnyway(t, "lobby-x7k2").DeletionGracePeriodSeconds; g == nil || *g == 0 {
+	if g := f.podAnyway(t, "lobby-x7k2").DeletionGracePeriodSeconds; g == nil || *g <= 1 {
 		t.Fatalf("the ordinary delete left grace %v; the test needs a running grace period", g)
 	}
 
 	f.forceStop(t, "lobby-x7k2")
 	f.reconcile("lobby-x7k2")
 
-	if g := f.podAnyway(t, "lobby-x7k2").DeletionGracePeriodSeconds; g == nil || *g != 0 {
-		t.Errorf("deletionGracePeriodSeconds = %v, want 0 after the force-stop", g)
+	if g := f.podAnyway(t, "lobby-x7k2").DeletionGracePeriodSeconds; g == nil || *g != 1 {
+		t.Errorf("deletionGracePeriodSeconds = %v, want 1 after the force-stop", ptr.Deref(g, -1))
 	}
 }
