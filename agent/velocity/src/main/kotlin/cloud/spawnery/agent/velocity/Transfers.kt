@@ -61,7 +61,12 @@ class Transfers(
         val movable = players.filter { it.virtualHost != null }.associateBy { it.uuid }
         val occupants = movable.values.map { TransferPolicy.Occupant(it.uuid, it.currentServer) }
         for (warning in policy.warnings(picture, occupants, TransferWarning.LEAD_MILLIS)) {
-            movable[warning.id]?.tell(TransferWarning.message(warning.seconds))
+            val player = movable[warning.id] ?: continue
+            try {
+                player.tell(TransferWarning.message(warning.seconds))
+            } catch (e: Exception) {
+                warn("spawnery: could not warn '${player.username}' of the coming transfer", e)
+            }
         }
         if (!myTurn(picture, now)) return
         val chosen = mutableSetOf<InetAddress>()
