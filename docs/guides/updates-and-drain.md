@@ -320,6 +320,7 @@ spec:
   update:
     transfer:                 # unset = today's behaviour
       forceAfterSeconds: 120  # default 120, minimum 0
+      forceGroups: [hub]      # optional; unset forces in every group
 ```
 
 **Enabling it rolls the group once.** A proxy only accepts a transferred
@@ -353,6 +354,13 @@ Once enabled, a leaving proxy moves players in two moments:
   closed (`AcceptJoins` false, a round in progress) is never forced; once the
   door opens and the deadline has passed, they go on the next pass, which
   runs once a second.
+
+  With `forceGroups` set, only players on servers of those server groups are
+  forced, and only they get the warning below. Everyone else stays until
+  they change server, which transfers them at once as above, or until
+  `maxStaleSeconds` and the drain deadline. That suits a network whose
+  players sit in a hub between rounds: the hub is emptied on time, and
+  nobody is pulled out of a game or a build world.
 
 Ten seconds before the forced transfer, or at once when `forceAfterSeconds` is
 shorter, the proxy sends each player it will move a chat line: `You will be
