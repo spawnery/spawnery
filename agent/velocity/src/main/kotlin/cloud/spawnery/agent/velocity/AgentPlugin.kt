@@ -2,6 +2,7 @@ package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.CloudConnector
 import cloud.spawnery.agent.CloudEvents
+import cloud.spawnery.agent.ProxyCommands
 import cloud.spawnery.agent.cloudCommand
 import cloud.spawnery.agent.Feed
 import cloud.spawnery.agent.FeedState
@@ -23,6 +24,7 @@ import cloud.spawnery.agent.pb.PlayerJoinedServer
 import cloud.spawnery.agent.pb.ProxyMessage
 import com.google.inject.Inject
 import com.velocitypowered.api.command.BrigadierCommand
+import com.velocitypowered.api.command.CommandSource
 import com.velocitypowered.api.event.EventTask
 import com.velocitypowered.api.event.Subscribe
 import com.velocitypowered.api.event.connection.DisconnectEvent
@@ -37,6 +39,7 @@ import com.velocitypowered.api.event.proxy.ProxyInitializeEvent
 import com.velocitypowered.api.event.proxy.ProxyShutdownEvent
 import com.velocitypowered.api.network.HandshakeIntent
 import com.velocitypowered.api.plugin.Plugin
+import com.velocitypowered.api.proxy.Player
 import com.velocitypowered.api.proxy.ProxyServer
 import com.velocitypowered.api.scheduler.ScheduledTask
 import net.kyori.adventure.text.Component
@@ -193,7 +196,10 @@ class AgentPlugin @Inject constructor(
         LuckPermsContexts.registerIfPresent(self, logger::info)
         // Not the deprecated one-argument register(), which files the command
         // under no plugin.
-        val command = BrigadierCommand(cloudCommand(api, VelocitySource, feedState, mirror::feedFormat).build())
+        val proxyCommands = ProxyCommands<CommandSource>(connector) { source -> (source as? Player)?.username ?: "console" }
+        val command = BrigadierCommand(
+            cloudCommand(api, VelocitySource, feedState, mirror::feedFormat, proxyCommands).build(),
+        )
         proxy.commandManager.register(
             proxy.commandManager.metaBuilder(command).plugin(this).build(),
             command,

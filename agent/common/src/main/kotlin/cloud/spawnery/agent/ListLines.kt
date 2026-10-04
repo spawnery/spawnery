@@ -118,6 +118,15 @@ internal fun groupInfoLines(g: Group, servers: List<ServerInfo>, proxies: List<P
                 Style.number("${g.onlinePlayers()} / $capacity") + Style.quiet(" · ") +
                 Style.number(g.freeSlots()) + Style.quiet(" free"),
         )
+        if (g.pinned()) {
+            val count = Style.number(g.pinnedReplicas()) + Style.quiet(if (g.pinnedReplicas() == 1) " server" else " servers")
+            val until = g.pinnedUntil()
+            lines += Layout.field(
+                "Pinned",
+                if (until == null) count + Style.quiet(", no end")
+                else count + Style.quiet(" until ") + Style.number(AT_MINUTE_UTC.format(until)) + Style.quiet(" UTC"),
+            )
+        }
         val members = servers.filter { it.group() == g.name() }.sortedBy { it.name() }
         if (members.isNotEmpty()) {
             lines += Layout.section("Servers")

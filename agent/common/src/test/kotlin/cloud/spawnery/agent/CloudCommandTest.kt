@@ -3,7 +3,10 @@ package cloud.spawnery.agent
 import cloud.spawnery.agent.api.ProxySelf
 import cloud.spawnery.agent.api.SpawneryApi
 import cloud.spawnery.agent.pb.CloudRequest
-import cloud.spawnery.agent.pb.BoostResult
+import cloud.spawnery.agent.pb.ExecuteOutcome
+import cloud.spawnery.agent.pb.ExecuteResult
+import cloud.spawnery.agent.pb.ForceStopResult
+import cloud.spawnery.agent.pb.ScaleResult as PbScaleResult
 import cloud.spawnery.agent.pb.CloudResponse
 import cloud.spawnery.agent.pb.GroupState
 import cloud.spawnery.agent.pb.RequestError
@@ -137,15 +140,15 @@ class CloudCommandTest {
     fun `every reply wears it, not only the first`() {
         format = "<gray>PREFIX</gray> ${Feed.MESSAGE_TOKEN}"
 
-        run("cloud start lobby 2")
+        run("cloud scale lobby 2")
         answer {
-            setBoost(
-                BoostResult.newBuilder().setReplicas(2)
+            setScale(
+                PbScaleResult.newBuilder().setReplicas(2)
                     .setExpiresAtUnix(java.time.Instant.parse("2026-08-30T20:00:00Z").epochSecond),
             )
         }
 
-        assertEquals(3, sent.size, sent.toString())
+        assertEquals(2, sent.size, sent.toString())
         for (line in sent) {
             assertTrue(line.startsWith("<gray>PREFIX</gray> "), "unwrapped: $line")
         }
@@ -264,8 +267,8 @@ class CloudCommandTest {
         run("cloud list")
         run("cloud info lobby-a")
         run("cloud retire lobby-a")
-        run("cloud start lobby")
-        run("cloud stop lobby")
+        run("cloud scale lobby 1")
+        run("cloud scale lobby reset")
         run("cloud events off")
 
         assertEquals(
@@ -327,71 +330,66 @@ class CloudCommandTest {
     }
 
     @Test
-    fun `start says what it created, that it is temporary, and where a lasting change lives`() {
-        run("cloud start lobby 2 for 30m")
+    fun `scale says what it pinned, until when, and how to end it`() {
+        run("cloud scale lobby 0 for 2d")
 
-        val request = requested.single().boost
+        val request = requested.single().scale
         assertEquals("lobby", request.group)
-        assertEquals(2, request.replicas)
-        assertEquals(1_800L, request.durationSeconds)
+        assertEquals(0, request.replicas)
+        assertEquals(172_800L, request.durationSeconds)
 
         answer {
-            setBoost(
-                BoostResult.newBuilder()
-                    .setReplicas(2)
-                    .setExpiresAtUnix(java.time.Instant.parse("2026-08-28T20:00:00Z").epochSecond),
-            )
+            setScale(PbScaleResult.newBuilder().setReplicas(0)
+                .setExpiresAtUnix(java.time.Instant.parse("2026-10-06T18:00:00Z").epochSecond))
         }
 
-        assertEquals(3, sent.size, "the three lines section 5.3 requires: $sent")
-        assertTrue(sent[0].contains("+2 servers") && sent[0].contains("20:00"), sent[0])
-        assertTrue(sent[1].contains("not a spec change"), sent[1])
-        assertTrue(sent[1].contains("/cloud stop lobby"), "it did not say how to end it early: ${sent[1]}")
-        assertTrue(sent[2].contains("edit the ServerGroup"), sent[2])
+        assertEquals(2, sent.size, sent.toString())
+        assertTrue(plain(sent[0]).contains("lobby is pinned to 0 servers until 18:00 UTC"), sent[0])
+        assertTrue(plain(sent[1]).contains("/cloud scale lobby reset"), sent[1])
     }
 
     @Test
-    fun `start without a count asks for one`() {
-        run("cloud start lobby")
+    fun `scale without a duration leaves it to the operator`() {
+        run("cloud scale lobby 3")
 
-        assertEquals(1, requested.single().boost.replicas)
-        assertEquals(0L, requested.single().boost.durationSeconds)
+        assertEquals(3, requested.single().scale.replicas)
+        assertEquals(0L, requested.single().scale.durationSeconds)
     }
 
     @Test
     fun `an unreadable duration is named rather than silently defaulted`() {
-        run("cloud start lobby 2 for 2hh")
+        run("cloud scale lobby 2 for 2hh")
 
         assertTrue(requested.isEmpty(), "an unreadable duration still reached the operator: $requested")
         assertTrue(sent.single().contains("2hh"), "the answer did not name what it could not read: $sent")
     }
 
     @Test
-    fun `stop says how many it removed`() {
-        run("cloud stop lobby")
+    fun `reset says how many it removed`() {
+        run("cloud scale lobby reset")
 
         assertEquals("lobby", requested.single().stopBoost.group)
 
         answer { setStopBoost(StopBoostResult.newBuilder().setRemoved(2)) }
 
-        assertTrue(plain(sent.single()).contains("removed 2 boosts"), sent.toString())
+        assertTrue(plain(sent.single()).contains("removed 2"), sent.toString())
     }
 
     @Test
-    fun `stopping a group with no boosts says so plainly`() {
-        run("cloud stop lobby")
+    fun `resetting a group with no boosts says so plainly`() {
+        run("cloud scale lobby reset")
 
         answer { setStopBoost(StopBoostResult.newBuilder().setRemoved(0)) }
 
-        assertTrue(sent.single().contains("no boosts running"), sent.toString())
+        assertTrue(plain(sent.single()).contains("had no pin or boost"), sent.toString())
     }
 
     @Test
     fun `scaling is invisible without its own permission`() {
         permissions = setOf(PERMISSION_READ, PERMISSION_RETIRE)
 
-        assertFailsWith<CommandSyntaxException> { run("cloud start lobby") }
-        assertFailsWith<CommandSyntaxException> { run("cloud stop lobby") }
+        assertFailsWith<CommandSyntaxException> { run("cloud scale lobby 1") }
+        assertFailsWith<CommandSyntaxException> { run("cloud scale lobby reset") }
         assertTrue(requested.isEmpty(), "an unpermitted source reached the operator: $requested")
     }
 
@@ -399,9 +397,125 @@ class CloudCommandTest {
     fun `holding only scale still opens the root`() {
         permissions = setOf(PERMISSION_SCALE)
 
-        run("cloud start lobby")
+        run("cloud scale lobby 1")
 
-        assertEquals("lobby", requested.single().boost.group)
+        assertEquals("lobby", requested.single().scale.group)
+    }
+
+    @Test
+    fun `start and stop are gone`() {
+        assertFailsWith<CommandSyntaxException> { run("cloud start lobby 2") }
+        assertFailsWith<CommandSyntaxException> { run("cloud stop lobby") }
+    }
+
+    @Test
+    fun `durations at the edges are named, never sent and never thrown`() {
+        for (text in listOf("0d", "0m", "99999999999999999d", "-1h", "5w")) {
+            sent.clear()
+            run("cloud scale lobby 1 for $text")
+            assertTrue(requested.isEmpty(), "$text reached the operator: $requested")
+            assertTrue(sent.single().contains(text), "the answer did not name $text: $sent")
+        }
+        run("cloud scale lobby 1 for 8d")
+        assertEquals(691_200L, requested.single().scale.durationSeconds, "8d is the operator's to refuse")
+    }
+
+    @Test
+    fun `a negative count is a syntax error`() {
+        assertFailsWith<CommandSyntaxException> { run("cloud scale lobby -1") }
+    }
+
+    @Test
+    fun `info on a pinned group says to what and until when`() {
+        val state = NetworkState.newBuilder()
+            .addGroups(GroupState.newBuilder().setName("lobby").setKind(GroupState.Kind.EPHEMERAL)
+                .setPinned(true).setPinnedReplicas(0)
+                .setPinnedUntilUnix(java.time.Instant.parse("2026-10-04T18:00:00Z").epochSecond))
+            .build()
+
+        run("cloud info lobby", api(state))
+
+        assertTrue(sent.any { plain(it).contains("Pinned") && plain(it).contains("0 servers until 18:00 UTC") }, "$sent")
+    }
+
+    private val proxyCommands = ProxyCommands<Int>(connector) { "alice" }
+
+    private fun runOnProxy(command: String): Int {
+        val dispatcher = CommandDispatcher<Int>()
+        dispatcher.register(cloudCommand(api(), adapter, feed, { format }, proxyCommands))
+        return dispatcher.execute(command, 0)
+    }
+
+    @Test
+    fun `forcestop and execute exist only on a proxy`() {
+        permissions = permissions + PERMISSION_FORCESTOP + PERMISSION_EXECUTE
+        assertFailsWith<CommandSyntaxException> { run("cloud forcestop lobby-a") }
+        assertFailsWith<CommandSyntaxException> { run("cloud execute lobby-a list") }
+    }
+
+    @Test
+    fun `on a backend forcestop and execute alone do not open the root`() {
+        permissions = setOf(PERMISSION_FORCESTOP, PERMISSION_EXECUTE)
+        assertFailsWith<CommandSyntaxException> { run("cloud list") }
+    }
+
+    @Test
+    fun `forcestop answers at once and names the issuer to the operator`() {
+        permissions = setOf(PERMISSION_FORCESTOP)
+
+        runOnProxy("cloud forcestop lobby-a")
+
+        assertEquals("lobby-a", requested.single().forceStop.server)
+        assertEquals("alice", requested.single().forceStop.issuer)
+        answer { setForceStop(ForceStopResult.newBuilder().setServer("lobby-a")) }
+        assertTrue(plain(sent.single()).contains("lobby-a is being killed."), sent.single())
+    }
+
+    @Test
+    fun `execute sends the rest of the line without its slash`() {
+        permissions = setOf(PERMISSION_EXECUTE)
+
+        runOnProxy("cloud execute lobby /say hello world")
+
+        val request = requested.single().execute
+        assertEquals("lobby", request.target)
+        assertEquals("say hello world", request.command)
+        assertEquals("alice", request.issuer)
+    }
+
+    @Test
+    fun `execute refuses a command longer than the operator carries before sending it`() {
+        permissions = setOf(PERMISSION_EXECUTE)
+
+        runOnProxy("cloud execute lobby " + "x".repeat(257))
+
+        assertTrue(requested.isEmpty(), "an over-long command reached the operator")
+        assertTrue(sent.single().contains("256"), sent.single())
+    }
+
+    @Test
+    fun `execute without the network switch says so in the operator's words`() {
+        permissions = setOf(PERMISSION_EXECUTE)
+        runOnProxy("cloud execute lobby list")
+        answer {
+            setError(RequestError.newBuilder().setReason(RequestError.Reason.REFUSED)
+                .setMessage("execute is not enabled on this network"))
+        }
+        assertTrue(sent.single().contains("execute is not enabled on this network"), sent.single())
+    }
+
+    @Test
+    fun `forcestop and execute each need their own node`() {
+        permissions = setOf(PERMISSION_READ)
+        assertFailsWith<CommandSyntaxException> { runOnProxy("cloud forcestop lobby-a") }
+        assertFailsWith<CommandSyntaxException> { runOnProxy("cloud execute lobby-a list") }
+    }
+
+    @Test
+    fun `holding only execute opens the root on a proxy`() {
+        permissions = setOf(PERMISSION_EXECUTE)
+        runOnProxy("cloud execute lobby-a list")
+        assertEquals("lobby-a", requested.single().execute.target)
     }
 
     @Test
@@ -937,9 +1051,21 @@ class CloudCompletionTest {
     }
 
     @Test
-    fun `start and stop offer groups and no server`() {
-        assertEquals(listOf("bingo", "lobby"), completions("cloud start ").sorted())
-        assertEquals(listOf("bingo", "lobby"), completions("cloud stop ").sorted())
+    fun `scale offers groups and no server`() {
+        assertEquals(listOf("bingo", "lobby"), completions("cloud scale ").sorted())
+    }
+
+    private fun proxyCompletions(command: String): List<String> {
+        val dispatcher = CommandDispatcher<Int>()
+        val connector = CloudConnector(Requests(timeoutMillis = 1_000, clock = System::currentTimeMillis)) { }
+        dispatcher.register(cloudCommand(api(), adapter, FeedState(), { Feed.MESSAGE_TOKEN }, ProxyCommands(connector) { "x" }))
+        return dispatcher.getCompletionSuggestions(dispatcher.parse(command, 0)).join().list.map { it.text }
+    }
+
+    @Test
+    fun `forcestop offers servers and execute offers servers and groups`() {
+        assertEquals(listOf("bingo-x", "lobby-a"), proxyCompletions("cloud forcestop ").sorted())
+        assertEquals(listOf("bingo", "bingo-x", "lobby", "lobby-a"), proxyCompletions("cloud execute ").sorted())
     }
 
     @Test
