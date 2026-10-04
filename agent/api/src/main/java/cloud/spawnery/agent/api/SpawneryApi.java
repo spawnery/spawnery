@@ -72,6 +72,41 @@ public interface SpawneryApi {
     Optional<CloudPlayer> player(UUID id);
 
     /**
+     * Whether this player's connection to this proxy is a transfer from
+     * another proxy of the network, carrying a cookie this agent verified.
+     *
+     * <p>For a plugin that announces joins: a player who arrived this way
+     * was already online a moment ago, and to their friends nothing happened.
+     * A transfer intent alone is not enough for that, because any client can
+     * claim one; this is true only when the signed cookie checked out.
+     *
+     * <p>Known from {@code LoginEvent} on, for a listener that runs after the
+     * agent's own (the agent asks for the cookie there and holds the login
+     * until it has the answer). Stays true until the player disconnects from
+     * this proxy. Always false on a server, and on a proxy whose group does
+     * not have {@code spec.update.transfer}.
+     *
+     * <p>Agents older than 0.19.0 do not have this method.
+     */
+    boolean arrivedByTransfer(UUID player);
+
+    /**
+     * Whether this proxy has sent this player to another proxy of the
+     * network, because this proxy is leaving.
+     *
+     * <p>For a plugin that cleans up after a player: the disconnect that
+     * follows is not a quit. True from the moment the transfer is sent until
+     * every listener of the player's {@code DisconnectEvent} on this proxy has
+     * run. It says the player was sent, not that they arrived; a client that
+     * fails to reconnect is gone like any other, so a plugin that keeps state
+     * for them should still let it lapse if they do not turn up elsewhere.
+     * Always false on a server.
+     *
+     * <p>Agents older than 0.19.0 do not have this method.
+     */
+    boolean leavingByTransfer(UUID player);
+
+    /**
      * Asks the operator to move a player.
      *
      * <p><b>Asynchronous on both platforms</b>, although a proxy could answer

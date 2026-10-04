@@ -29,6 +29,8 @@ class MirrorApi(
     private val readiness: ReadinessGate? = null,
     /** Null on a proxy. */
     private val playable: ((Int) -> Unit)? = null,
+    /** Null on a server. */
+    private val transfers: TransferView? = null,
 ) : SpawneryApi {
     override fun self(): Self = self
 
@@ -51,6 +53,10 @@ class MirrorApi(
 
     override fun player(id: UUID): Optional<CloudPlayer> =
         Optional.ofNullable(mirror.players().firstOrNull { it.id() == id })
+
+    override fun arrivedByTransfer(player: UUID): Boolean = transfers?.arrived(player) ?: false
+
+    override fun leavingByTransfer(player: UUID): Boolean = transfers?.leaving(player) ?: false
 
     override fun connect(player: UUID, to: Target): CompletionStage<ConnectResult> =
         connector.connect(player, to)
@@ -113,4 +119,10 @@ class MirrorApi(
         connector.stopBoosts(group)
 
     override fun events(): EventBus = events
+}
+
+interface TransferView {
+    fun arrived(player: UUID): Boolean
+
+    fun leaving(player: UUID): Boolean
 }

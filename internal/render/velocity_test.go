@@ -290,6 +290,46 @@ func TestVelocityCarriesTheMotdAndLimit(t *testing.T) {
 
 // All four attacked and asserted at once, so dropping any one reassertion
 // line fails.
+func TestVelocityRefusesATransferGroupWhoseOverlayPredatesTransfers(t *testing.T) {
+	values := velocityValues()
+	values.AcceptsTransfers = true
+	_, err := Velocity(values, testSecretPath, map[string]string{
+		"velocity.toml": `config-version = "2.6"` + "\n",
+	})
+	if err == nil {
+		t.Fatal("Velocity accepted an overlay at config-version 2.6 for a group with transfer; Velocity's migration would switch accepts-transfers off")
+	}
+	for _, want := range []string{"config-version", "2.6", "accepts-transfers"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("the refusal does not name %q: %v", want, err)
+		}
+	}
+}
+
+func TestVelocityKeepsAnOldOverlayVersionWithoutTransfer(t *testing.T) {
+	files, err := Velocity(velocityValues(), testSecretPath, map[string]string{
+		"velocity.toml": `config-version = "2.6"` + "\n",
+	})
+	if err != nil {
+		t.Fatalf("Velocity: %v", err)
+	}
+	if !containsTOMLString(string(files["velocity.toml"]), "config-version", "2.6") {
+		t.Errorf("the overlay's config-version did not reach velocity.toml:\n%s", files["velocity.toml"])
+	}
+}
+
+func TestVelocityAcceptsACurrentOverlayVersionWithTransfer(t *testing.T) {
+	values := velocityValues()
+	values.AcceptsTransfers = true
+	for _, version := range []string{"2.7", velocityConfigVersion} {
+		if _, err := Velocity(values, testSecretPath, map[string]string{
+			"velocity.toml": `config-version = "` + version + `"` + "\n",
+		}); err != nil {
+			t.Errorf("config-version %s: %v", version, err)
+		}
+	}
+}
+
 func TestVelocityOverlayCannotMoveCriticalKeys(t *testing.T) {
 	files, err := Velocity(velocityValues(), testSecretPath, map[string]string{
 		"velocity.toml": "online-mode = false\n" +

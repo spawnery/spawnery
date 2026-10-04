@@ -274,6 +274,22 @@ is stale) is removed once it has been unreadable that long, so a dead proxy
 does not drain forever; an operator restart, after which every count is
 unreadable until the agents reconnect, does not end a drain.
 
+A forced pass sends at most one player per client address at a time. The next
+player from that address goes once the proxy's `login-ratelimit` (3 s unless an
+overlay changes it) and another half second have passed, because the receiving
+proxy refuses a second login from one address inside that window as too fast.
+That matters for a household or a school behind one address. Proxies of a group
+that leave together (both halves of a blue/green roll) take turns: each sends
+only in its own window of that length, with an empty window between any two,
+so players behind one address who sit on different old proxies do not collide
+either. A server switch from an address that was just used, or outside the
+proxy's window, goes ahead on the old proxy without a transfer. Behind a front end that does not pass the client's address on (no
+PROXY protocol), every player shares the front end's address, and a forced pass
+moves one player every few seconds.
+
+A plugin that announces quits and joins can ask whether one is a transfer; see
+[A player who changed proxies](../plugin-api/index.md#a-player-who-changed-proxies).
+
 A roll replaces proxies blue/green, not one at a time: every stale pod gets
 its own replacement up front, one extra pod for each proxy being replaced. A
 stale pod serving nobody is marked to drain at once, so a crashlooping proxy
@@ -311,6 +327,11 @@ operator renders only for a group with `transfer` set, and that line is part
 of the rendered config the group's pod hash covers. The proxies doing that
 first roll do not have the setting yet, so they still drain the old way;
 every roll after that transfers.
+
+A group whose `configOverlay` sets a `config-version` older than 2.7 in
+`velocity.toml` is refused while `transfer` is set: Velocity would migrate such
+a file on start and switch `accepts-transfers` off again. Drop the key from the
+overlay, or bring the overlay up to the current version.
 
 **Disabling it is safe.** It rolls the group the same way, and the old
 proxies, which still transfer, only send players to proxies that accept

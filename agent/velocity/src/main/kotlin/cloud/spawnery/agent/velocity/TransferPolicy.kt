@@ -30,7 +30,11 @@ class TransferPolicy(private val forceAfterMillis: Long, private val clock: () -
         return true
     }
 
-    fun forced(picture: Picture, occupants: List<Occupant>): List<Pair<UUID, String>> {
+    fun forced(
+        picture: Picture,
+        occupants: List<Occupant>,
+        admit: (UUID) -> Boolean = { true },
+    ): List<Pair<UUID, String>> {
         if (!leaving(picture) || !somewhereElse(picture)) return emptyList()
         if (clock() - firstLeavingAt.get() < forceAfterMillis) return emptyList()
 
@@ -38,7 +42,9 @@ class TransferPolicy(private val forceAfterMillis: Long, private val clock: () -
         for (occupant in occupants) {
             val server = occupant.server ?: continue
             if (server in picture.closedDoors) continue
-            if (tried.add(occupant.id)) result += occupant.id to server
+            if (occupant.id in tried || !admit(occupant.id)) continue
+            tried += occupant.id
+            result += occupant.id to server
         }
         return result
     }

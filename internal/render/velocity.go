@@ -93,6 +93,9 @@ func velocityToml(v Values, secretPath, overlay string) (string, error) {
 		if err := checkDeclaredKeys(velocityDeclared, fragment, "velocity.toml"); err != nil {
 			return "", err
 		}
+		if err := checkTransferVersion(v, fragment); err != nil {
+			return "", err
+		}
 		for k, val := range fragment {
 			doc[k] = val
 		}
@@ -136,4 +139,23 @@ func velocityToml(v Values, secretPath, overlay string) (string, error) {
 		return "", fmt.Errorf("velocity.toml: marshalling failed: %w", err)
 	}
 	return string(out), nil
+}
+
+// Velocity migrates a velocity.toml older than the jar's, and the migration
+// to 2.7 writes accepts-transfers = false over what the renderer set.
+func checkTransferVersion(v Values, fragment map[string]any) error {
+	version, ok := fragment["config-version"].(string)
+	if !ok || !v.AcceptsTransfers {
+		return nil
+	}
+	var major, minor int
+	if _, err := fmt.Sscanf(version, "%d.%d", &major, &minor); err != nil {
+		return fmt.Errorf("velocity.toml: overlay config-version %q is not major.minor", version)
+	}
+	if major < 2 || (major == 2 && minor < 7) {
+		return fmt.Errorf("velocity.toml: the overlay sets config-version %q, older than 2.7; Velocity would "+
+			"migrate the file on start and turn accepts-transfers off, which spec.update.transfer needs on. "+
+			"Drop config-version from the overlay or bring the overlay up to %s", version, velocityConfigVersion)
+	}
+	return nil
 }

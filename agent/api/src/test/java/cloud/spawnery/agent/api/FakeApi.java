@@ -44,6 +44,8 @@ final class FakeApi implements SpawneryApi {
     @Override public Optional<ProxyInfo> proxy(String name) { return Optional.empty(); }
     @Override public List<CloudPlayer> players() { return List.of(); }
     @Override public Optional<CloudPlayer> player(UUID id) { return Optional.empty(); }
+    @Override public boolean arrivedByTransfer(UUID player) { return false; }
+    @Override public boolean leavingByTransfer(UUID player) { return false; }
 
     @Override
     public CompletionStage<ConnectResult> connect(UUID player, Target to) {
