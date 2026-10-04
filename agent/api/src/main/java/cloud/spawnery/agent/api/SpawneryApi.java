@@ -211,7 +211,8 @@ public interface SpawneryApi {
      * group the newest wins, and boosts do not count while one holds.
      *
      * <p>The stage fails when the operator refuses: a group it does not have,
-     * a group that is not ephemeral, more than {@code maxReplicas}, or longer
+     * a group that is not ephemeral, more than {@code maxReplicas}, fewer
+     * than {@code minReplicas} from a caller that is not a proxy, or longer
      * than seven days. Each says which.
      *
      * @param forHowLong how long the pin holds, or {@code null} for the
