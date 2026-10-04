@@ -28,7 +28,7 @@ import (
 // Sink is where derived events go. No error: a feed nobody is watching must not
 // fail a reconcile.
 type Sink interface {
-	Publish(namespace string, ev *agentpb.CloudEvent)
+	Publish(namespace string, ev *agentpb.CloudEvent, private bool)
 }
 
 // Recorder records an event to Kubernetes and derives a CloudEvent from the
@@ -60,6 +60,6 @@ func (r Recorder) Eventf(
 		formatted = fmt.Sprintf(note, args...)
 	}
 	if namespace, ev, ok := Derive(regarding, eventtype, reason, formatted); ok {
-		r.Sink.Publish(namespace, ev)
+		r.Sink.Publish(namespace, ev, Private(regarding))
 	}
 }

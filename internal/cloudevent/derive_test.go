@@ -21,6 +21,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/podspec"
@@ -105,5 +106,38 @@ func TestAGamePodIsNotAnEvent(t *testing.T) {
 		Labels: map[string]string{podspec.LabelRole: podspec.RoleServer, podspec.LabelGroup: "lobby"}}}
 	if _, _, ok := Derive(pod, corev1.EventTypeWarning, "Unhealthy", "probe failed"); ok {
 		t.Error("a game pod's event reached the feed")
+	}
+}
+
+func TestPrivateMarksOnDemandMembersAndTheirGroups(t *testing.T) {
+	member := aServer()
+	member.Name, member.Spec.GroupRef.Name, member.Spec.Key = "challenge-3f2b1c9a", "challenge", "3f2b1c9a"
+	onDemand := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "challenge", Namespace: "minecraft"},
+		Spec:       spawneryv1alpha1.ServerGroupSpec{Type: spawneryv1alpha1.ServerGroupOnDemand},
+	}
+	ephemeral := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "lobby", Namespace: "minecraft"},
+		Spec:       spawneryv1alpha1.ServerGroupSpec{Type: spawneryv1alpha1.ServerGroupEphemeral},
+	}
+	proxyPod := &corev1.Pod{ObjectMeta: metav1.ObjectMeta{
+		Name: "gateway-abc", Namespace: "minecraft",
+		Labels: map[string]string{podspec.LabelRole: podspec.RoleProxy, podspec.LabelGroup: "gateway"},
+	}}
+
+	for name, tc := range map[string]struct {
+		obj  runtime.Object
+		want bool
+	}{
+		"an on-demand member": {member, true},
+		"an on-demand group":  {onDemand, true},
+		"an ephemeral server": {aServer(), false},
+		"an ephemeral group":  {ephemeral, false},
+		"a proxy pod":         {proxyPod, false},
+		"nothing at all":      {nil, false},
+	} {
+		if got := Private(tc.obj); got != tc.want {
+			t.Errorf("%s: Private = %v, want %v", name, got, tc.want)
+		}
 	}
 }

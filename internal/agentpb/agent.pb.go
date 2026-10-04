@@ -3920,7 +3920,7 @@ type NetworkState struct {
 	//
 	// A backend's picture leaves out on-demand groups and their members but
 	// keeps every player; for a player on such a server, server is blank. A
-	// CloudEvent can still name a private member to a backend.
+	// CloudEvent about either reaches proxies only.
 	Players []*RosterEntry `protobuf:"bytes,3,rep,name=players,proto3" json:"players,omitempty"`
 	// The line a cloud event becomes in chat, from the Network's own spec.
 	// Empty means the agent's own default.

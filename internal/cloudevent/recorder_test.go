@@ -45,11 +45,13 @@ func (f *fakeRecorder) Eventf(
 type fakeSink struct {
 	namespaces []string
 	events     []*agentpb.CloudEvent
+	private    []bool
 }
 
-func (f *fakeSink) Publish(namespace string, ev *agentpb.CloudEvent) {
+func (f *fakeSink) Publish(namespace string, ev *agentpb.CloudEvent, private bool) {
 	f.namespaces = append(f.namespaces, namespace)
 	f.events = append(f.events, ev)
+	f.private = append(f.private, private)
 }
 
 func TestTheWrapperStillRecordsToKubernetes(t *testing.T) {
@@ -114,5 +116,19 @@ func TestANilSinkIsNotACrash(t *testing.T) {
 
 	if len(inner.calls) != 1 {
 		t.Error("a nil sink cost Kubernetes its event")
+	}
+}
+
+func TestTheRecorderTellsTheSinkWhichEventsArePrivate(t *testing.T) {
+	inner, sink := &fakeRecorder{}, &fakeSink{}
+	r := Recorder{Inner: inner, Sink: sink}
+	member := aServer()
+	member.Spec.Key = "3f2b1c9a"
+
+	r.Eventf(aServer(), nil, corev1.EventTypeNormal, "PodCreated", "CreatePod", "created pod %s", "lobby-a3f9")
+	r.Eventf(member, nil, corev1.EventTypeNormal, "PodCreated", "CreatePod", "created pod %s", "x")
+
+	if len(sink.private) != 2 || sink.private[0] || !sink.private[1] {
+		t.Fatalf("private = %v, want [false true]", sink.private)
 	}
 }

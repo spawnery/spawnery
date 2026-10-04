@@ -41,9 +41,9 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
-	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/agentserver"
 	"github.com/spawnery/spawnery/internal/certs"
+	"github.com/spawnery/spawnery/internal/cloudevent"
 	"github.com/spawnery/spawnery/internal/controller"
 	"github.com/spawnery/spawnery/internal/grpcauth"
 	"github.com/spawnery/spawnery/internal/netstate"
@@ -408,7 +408,7 @@ func main() {
 
 	if err := controller.SetupAll(mgr, controller.Options{
 		Agents:               registry,
-		Events:               bothFanouts{servers: servers, proxies: proxies},
+		Events:               cloudevent.Fanout{Backends: servers, Proxies: proxies},
 		AllowPluginVolumes:   allowPluginVolumes,
 		AllowFileVolumes:     allowFileVolumes,
 		AllowMountVolumes:    allowMountVolumes,
@@ -450,16 +450,4 @@ func main() {
 		setupLog.Error(err, "manager exited with an error")
 		os.Exit(1)
 	}
-}
-
-// bothFanouts sends a cloud event to the backends and to the proxies, since an
-// administrator may be on either.
-type bothFanouts struct {
-	servers *serverreg.Registry
-	proxies *proxyreg.Fleet
-}
-
-func (b bothFanouts) Publish(namespace string, ev *agentpb.CloudEvent) {
-	b.servers.Publish(namespace, ev)
-	b.proxies.Publish(namespace, ev)
 }

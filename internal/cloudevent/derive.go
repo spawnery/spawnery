@@ -66,3 +66,16 @@ func Derive(
 		Warning: eventtype == corev1.EventTypeWarning,
 	}, true
 }
+
+// Private reports whether an event may reach proxies only. An on-demand
+// member is named by its own events and by its group's, and the backends'
+// network picture leaves both out.
+func Private(regarding runtime.Object) bool {
+	switch o := regarding.(type) {
+	case *spawneryv1alpha1.Server:
+		return o.Spec.Key != ""
+	case *spawneryv1alpha1.ServerGroup:
+		return o.IsOnDemand()
+	}
+	return false
+}
