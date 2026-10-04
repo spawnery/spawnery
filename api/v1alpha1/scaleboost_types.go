@@ -18,14 +18,32 @@ package v1alpha1
 
 import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
+// +kubebuilder:validation:Enum=Add;Exact
+type ScaleBoostMode string
+
+const (
+	ScaleBoostAdd   ScaleBoostMode = "Add"
+	ScaleBoostExact ScaleBoostMode = "Exact"
+)
+
 // ScaleBoostSpec is extra capacity for one group, for a while.
+// +kubebuilder:validation:XValidation:rule="(has(self.mode) && self.mode == 'Exact') || self.replicas >= 1",message="an Add boost has to add at least one server"
 type ScaleBoostSpec struct {
 	// GroupRef names the ServerGroup this adds capacity to.
 	GroupRef ObjectRef `json:"groupRef"`
 
-	// Replicas is how many servers to add to the group's own floor. Boosts on
-	// one group add up.
-	// +kubebuilder:validation:Minimum=1
+	// Mode Add raises the group's floor by Replicas; boosts on one group add
+	// up. Mode Exact holds the group at exactly Replicas servers, 0 included:
+	// the group's floor and ceiling both become that number, Add boosts stop
+	// counting, and of several Exact boosts the newest wins. Neither lifts
+	// spec.scaling.maxReplicas.
+	// +kubebuilder:default=Add
+	// +optional
+	Mode ScaleBoostMode `json:"mode,omitempty"`
+
+	// Replicas is how many servers to add (Add, at least 1) or to hold the
+	// group at (Exact, at least 0).
+	// +kubebuilder:validation:Minimum=0
 	Replicas int32 `json:"replicas"`
 
 	// ExpiresAt is when this boost stops counting. A boost without one never
@@ -37,6 +55,7 @@ type ScaleBoostSpec struct {
 // +kubebuilder:object:root=true
 // +kubebuilder:resource:shortName=boost
 // +kubebuilder:printcolumn:name="Group",type=string,JSONPath=`.spec.groupRef.name`
+// +kubebuilder:printcolumn:name="Mode",type=string,JSONPath=`.spec.mode`
 // +kubebuilder:printcolumn:name="Replicas",type=integer,JSONPath=`.spec.replicas`
 // +kubebuilder:printcolumn:name="Expires",type=date,JSONPath=`.spec.expiresAt`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`

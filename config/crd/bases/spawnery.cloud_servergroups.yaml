@@ -2057,6 +2057,18 @@ spec:
                   is up. Compare readyReplicas against replicas for that, or see the
                   Progressing condition.
                 type: string
+              pinnedReplicas:
+                description: |-
+                  PinnedReplicas is the size an Exact ScaleBoost holds this group at,
+                  which can be 0. Absent while no pin holds.
+                format: int32
+                type: integer
+              pinnedUntil:
+                description: |-
+                  PinnedUntil is when that pin ends. Absent without a pin, and for a pin
+                  without an end.
+                format: date-time
+                type: string
               readyReplicas:
                 description: ReadyReplicas is the number of servers in phase Ready.
                 format: int32

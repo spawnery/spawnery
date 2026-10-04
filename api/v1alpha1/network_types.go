@@ -45,6 +45,11 @@ type NetworkSpec struct {
 	// Update is how the network's groups change over to a new spec.
 	// +optional
 	Update *NetworkUpdateSpec `json:"update,omitempty"`
+
+	// Commands opens in-game commands that reach past the operator's own
+	// objects. Absent, all of them are off.
+	// +optional
+	Commands *NetworkCommands `json:"commands,omitempty"`
 }
 
 // NetworkUpdateSpec bounds changeovers across the network's groups.
@@ -65,6 +70,19 @@ func (n *Network) ChangeoverBudget() int32 {
 		return 0
 	}
 	return *n.Spec.Update.MaxConcurrentChangeovers
+}
+
+// NetworkCommands switches on the /cloud verbs that run code on a server.
+type NetworkCommands struct {
+	// Execute lets an administrator on a proxy run a console command on one
+	// server or on every server of a group with /cloud execute. Off, the
+	// operator refuses every such request.
+	// +optional
+	Execute bool `json:"execute,omitempty"`
+}
+
+func (n *Network) ExecuteEnabled() bool {
+	return n.Spec.Commands != nil && n.Spec.Commands.Execute
 }
 
 // SchedulingPolicy names what a group's spec.scheduling may contain. Each

@@ -57,6 +57,18 @@ spec:
               NetworkSpec describes one Minecraft network. Exactly one Network may exist
               per namespace; further ones are rejected with an Accepted=False condition.
             properties:
+              commands:
+                description: |-
+                  Commands opens in-game commands that reach past the operator's own
+                  objects. Absent, all of them are off.
+                properties:
+                  execute:
+                    description: |-
+                      Execute lets an administrator on a proxy run a console command on one
+                      server or on every server of a group with /cloud execute. Off, the
+                      operator refuses every such request.
+                    type: boolean
+                type: object
               defaults:
                 description: Defaults are inherited by all groups of this network.
                 properties:
@@ -3237,6 +3249,9 @@ spec:
     - jsonPath: .spec.groupRef.name
       name: Group
       type: string
+    - jsonPath: .spec.mode
+      name: Mode
+      type: string
     - jsonPath: .spec.replicas
       name: Replicas
       type: integer
@@ -3296,17 +3311,32 @@ spec:
                 required:
                 - name
                 type: object
+              mode:
+                default: Add
+                description: |-
+                  Mode Add raises the group's floor by Replicas; boosts on one group add
+                  up. Mode Exact holds the group at exactly Replicas servers, 0 included:
+                  the group's floor and ceiling both become that number, Add boosts stop
+                  counting, and of several Exact boosts the newest wins. Neither lifts
+                  spec.scaling.maxReplicas.
+                enum:
+                - Add
+                - Exact
+                type: string
               replicas:
                 description: |-
-                  Replicas is how many servers to add to the group's own floor. Boosts on
-                  one group add up.
+                  Replicas is how many servers to add (Add, at least 1) or to hold the
+                  group at (Exact, at least 0).
                 format: int32
-                minimum: 1
+                minimum: 0
                 type: integer
             required:
             - groupRef
             - replicas
             type: object
+            x-kubernetes-validations:
+            - message: an Add boost has to add at least one server
+              rule: (has(self.mode) && self.mode == 'Exact') || self.replicas >= 1
         type: object
     served: true
     storage: true
@@ -5372,6 +5402,18 @@ spec:
                   is up. Compare readyReplicas against replicas for that, or see the
                   Progressing condition.
                 type: string
+              pinnedReplicas:
+                description: |-
+                  PinnedReplicas is the size an Exact ScaleBoost holds this group at,
+                  which can be 0. Absent while no pin holds.
+                format: int32
+                type: integer
+              pinnedUntil:
+                description: |-
+                  PinnedUntil is when that pin ends. Absent without a pin, and for a pin
+                  without an end.
+                format: date-time
+                type: string
               readyReplicas:
                 description: ReadyReplicas is the number of servers in phase Ready.
                 format: int32
@@ -5453,6 +5495,13 @@ spec:
               ServerSpec describes one running Minecraft server instance. It is created
               and owned by a ServerGroup and is not meant to be edited by hand.
             properties:
+              forceStop:
+                description: |-
+                  ForceStop kills this server's pod at once, with no drain and a grace
+                  period of zero: its players lose their connection and the world loses
+                  whatever it had not saved. Set by the agent endpoint's force-stop
+                  request, which only a proxy may send.
+                type: boolean
               groupGeneration:
                 description: |-
                   GroupGeneration is the metadata.generation of the group at creation

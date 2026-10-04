@@ -106,6 +106,7 @@ const (
 	ReasonReconciling            = "Reconciling"
 	ReasonExposeNotImplemented   = "ExposeStrategyNotImplemented"
 	ReasonMaxReplicasReached     = "MaxReplicasReached"
+	ReasonPinned                 = "Pinned"
 	ReasonWithinLimits           = "WithinLimits"
 	ReasonNoRecentFailures       = "NoRecentFailures"
 	ReasonReadinessDiverged      = "ReadinessDiverged"

@@ -20,6 +20,7 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+	"time"
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
@@ -667,5 +668,31 @@ func TestJoinPermissionIsAllowedOnEveryType(t *testing.T) {
 	o.Spec.JoinPermission = &spawneryv1alpha1.JoinPermission{Mode: spawneryv1alpha1.JoinPermissionDenyOnly}
 	if err := c.Create(ctx, o); err != nil {
 		t.Fatalf("on-demand: %v", err)
+	}
+}
+
+// Zero is a pin and absent is none; omitempty on a plain int32 would lose the difference.
+func TestAPinToZeroSurvivesTheStatusWrite(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	g := ephemeralGroup(ns, "lobby")
+	if err := c.Create(ctx, g); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	until := metav1.NewTime(time.Now().Add(time.Hour).Truncate(time.Second))
+	g.Status.PinnedReplicas = ptr.To[int32](0)
+	g.Status.PinnedUntil = &until
+	if err := c.Status().Update(ctx, g); err != nil {
+		t.Fatalf("status update: %v", err)
+	}
+	got := &spawneryv1alpha1.ServerGroup{}
+	if err := c.Get(ctx, client.ObjectKeyFromObject(g), got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Status.PinnedReplicas == nil || *got.Status.PinnedReplicas != 0 {
+		t.Errorf("pinnedReplicas = %v, want a present 0", got.Status.PinnedReplicas)
+	}
+	if got.Status.PinnedUntil == nil || !got.Status.PinnedUntil.Time.Equal(until.Time) {
+		t.Errorf("pinnedUntil = %v, want %v", got.Status.PinnedUntil, until)
 	}
 }

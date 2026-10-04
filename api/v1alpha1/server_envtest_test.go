@@ -77,3 +77,25 @@ func TestServerRequiresGroupRef(t *testing.T) {
 		t.Fatal("create without groupRef succeeded, want rejection")
 	}
 }
+
+func TestServerCarriesForceStop(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	if err := c.Create(ctx, &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "lobby-x7k2", Namespace: ns},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef:  spawneryv1alpha1.ObjectRef{Name: "lobby"},
+			ForceStop: true,
+		},
+	}); err != nil {
+		t.Fatalf("create Server: %v", err)
+	}
+	got := &spawneryv1alpha1.Server{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "lobby-x7k2", Namespace: ns}, got); err != nil {
+		t.Fatalf("get Server: %v", err)
+	}
+	if !got.Spec.ForceStop {
+		t.Error("spec.forceStop did not survive a write and a read")
+	}
+}
