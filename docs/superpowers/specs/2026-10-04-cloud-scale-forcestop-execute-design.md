@@ -32,6 +32,9 @@ Three commands for administrators, typed on a proxy:
 - `duration` is a number followed by `s`, `m`, `h` or `d`. Without one the pin
   lasts 1 hour; the longest is 7 days. A pin forgotten at 0 would otherwise
   keep a group off for weeks without anyone noticing.
+- A pin below the group's `minReplicas` is accepted only from a proxy agent.
+  A plugin on a backend may still pin between `minReplicas` and
+  `maxReplicas`, so one compromised game server cannot shut the network.
 - Only ephemeral groups. A persistent group is sized by its replica count and
   an on-demand group by requests, so both are refused with that reason.
 - `reset` removes every boost on the group, pins and the older additive
