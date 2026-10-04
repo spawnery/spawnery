@@ -268,4 +268,25 @@ class ProxyEnvironmentTest {
             assertTrue(reason.contains(path.toString()), reason)
         }
     }
+
+    @Test
+    fun `force groups are read as a trimmed list and default to every group`(@TempDir dir: Path) {
+        val secret = dir.resolve("forwarding.secret")
+        Files.writeString(secret, "s3cret")
+
+        val all = configured(
+            dir,
+            "SPAWNERY_TRANSFER_FORCE_AFTER_SECONDS" to "90",
+            "SPAWNERY_FORWARDING_SECRET_FILE" to secret.toString(),
+        )
+        val some = configured(
+            dir,
+            "SPAWNERY_TRANSFER_FORCE_AFTER_SECONDS" to "90",
+            "SPAWNERY_FORWARDING_SECRET_FILE" to secret.toString(),
+            "SPAWNERY_TRANSFER_FORCE_GROUPS" to " hub, lobby ,",
+        )
+
+        assertEquals(emptySet<String>(), assertNotNull(all.transfer).forceGroups)
+        assertEquals(setOf("hub", "lobby"), assertNotNull(some.transfer).forceGroups)
+    }
 }

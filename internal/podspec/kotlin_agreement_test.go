@@ -67,6 +67,7 @@ func TestTheTransferEnvNamesAgreeWithTheVelocityAgent(t *testing.T) {
 	for constant, want := range map[string]string{
 		"TRANSFER_FORCE_AFTER_SECONDS": EnvTransferForceAfterSeconds,
 		"FORWARDING_SECRET_FILE":       EnvForwardingSecretFile,
+		"TRANSFER_FORCE_GROUPS":        EnvTransferForceGroups,
 	} {
 		re := regexp.MustCompile(`(?m)^\s*const val ` + constant + `\s*=\s*"([^"]*)"\s*$`)
 		m := re.FindSubmatch(raw)

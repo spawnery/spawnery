@@ -100,7 +100,7 @@ func TestTheTransferVariablesSitWithTheOperatorsOwn(t *testing.T) {
 	if strings.Join(got, ",") != strings.Join(want, ",") {
 		t.Fatalf("env = %v, want %v", got, want)
 	}
-	for _, name := range []string{EnvTransferForceAfterSeconds, EnvForwardingSecretFile} {
+	for _, name := range []string{EnvTransferForceAfterSeconds, EnvForwardingSecretFile, EnvTransferForceGroups} {
 		if !strings.HasPrefix(name, spawneryv1alpha1.ReservedEnvPrefix) {
 			t.Errorf("%s is outside the reserved prefix %s, so a group's spec.env could shadow it",
 				name, spawneryv1alpha1.ReservedEnvPrefix)

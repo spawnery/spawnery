@@ -12,7 +12,8 @@ class TransferPolicyTest {
     private val bob = UUID.fromString("00000000-0000-0000-0000-00000000000b")
     private var now = 1_000L
 
-    private fun policy(forceAfterMillis: Long = 1_000L) = TransferPolicy(forceAfterMillis) { now }
+    private fun policy(forceAfterMillis: Long = 1_000L, forceGroups: Set<String> = emptySet()) =
+        TransferPolicy(forceAfterMillis, forceGroups) { now }
 
     private fun picture(
         proxies: List<ProxyInfo>,
@@ -20,7 +21,8 @@ class TransferPolicyTest {
         group: String = "edge",
         closedDoors: Set<String> = emptySet(),
         accepting: Set<String> = proxies.map { it.name() }.toSet(),
-    ) = TransferPolicy.Picture(self, group, proxies, closedDoors, accepting)
+        serverGroups: Map<String, String> = emptyMap(),
+    ) = TransferPolicy.Picture(self, group, proxies, closedDoors, accepting, serverGroups)
 
     private val leavingAlone = listOf(
         ProxyInfo("edge-1", "edge", false, true, 0, ""),
@@ -232,5 +234,38 @@ class TransferPolicyTest {
         assertTrue(p.onSwitch(pic, alice))
 
         assertEquals(emptyList(), p.warnings(pic, occupants(alice), 10_000L))
+    }
+
+    @Test
+    fun `with force groups only players on their servers are forced, the rest wait for a switch`() {
+        val p = policy(forceAfterMillis = 0L, forceGroups = setOf("hub"))
+        val pic = picture(leavingAlone, serverGroups = mapOf("hub-1" to "hub", "bingo-1" to "bingo"))
+        val carol = UUID.fromString("00000000-0000-0000-0000-00000000000c")
+
+        val forced = p.forced(
+            pic,
+            listOf(
+                TransferPolicy.Occupant(alice, "hub-1"),
+                TransferPolicy.Occupant(bob, "bingo-1"),
+                TransferPolicy.Occupant(carol, "unknown-1"),
+            ),
+        )
+
+        assertEquals(listOf(alice to "hub-1"), forced)
+        assertTrue(p.onSwitch(pic, bob))
+    }
+
+    @Test
+    fun `with force groups only players on their servers are warned`() {
+        val p = policy(forceAfterMillis = 0L, forceGroups = setOf("hub"))
+        val pic = picture(leavingAlone, serverGroups = mapOf("hub-1" to "hub", "bingo-1" to "bingo"))
+
+        val warned = p.warnings(
+            pic,
+            listOf(TransferPolicy.Occupant(alice, "hub-1"), TransferPolicy.Occupant(bob, "bingo-1")),
+            leadMillis = 10_000L,
+        )
+
+        assertEquals(listOf(alice), warned.map { it.id })
     }
 }

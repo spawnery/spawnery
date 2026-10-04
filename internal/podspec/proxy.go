@@ -49,6 +49,9 @@ const (
 	EnvProxy                     = "SPAWNERY_PROXY"
 	EnvTransferForceAfterSeconds = "SPAWNERY_TRANSFER_FORCE_AFTER_SECONDS"
 	EnvForwardingSecretFile      = "SPAWNERY_FORWARDING_SECRET_FILE"
+	// EnvTransferForceGroups is spec.update.transfer.forceGroups, comma
+	// separated; absent when the list is empty, which forces in every group.
+	EnvTransferForceGroups = "SPAWNERY_TRANSFER_FORCE_GROUPS"
 
 	// DefaultPlayerLimit exists because zero would make the registry discard
 	// every count.
@@ -322,8 +325,12 @@ func transferEnv(group *spawneryv1alpha1.ProxyGroup) []corev1.EnvVar {
 	if !ok {
 		return nil
 	}
-	return []corev1.EnvVar{
+	env := []corev1.EnvVar{
 		{Name: EnvTransferForceAfterSeconds, Value: strconv.FormatInt(int64(after/time.Second), 10)},
 		{Name: EnvForwardingSecretFile, Value: path.Join(ConfigMountPath, configSecretFile)},
 	}
+	if groups := group.TransferForceGroups(); len(groups) > 0 {
+		env = append(env, corev1.EnvVar{Name: EnvTransferForceGroups, Value: strings.Join(groups, ",")})
+	}
+	return env
 }

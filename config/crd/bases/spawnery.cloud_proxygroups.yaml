@@ -1785,6 +1785,17 @@ spec:
                         format: int32
                         minimum: 0
                         type: integer
+                      forceGroups:
+                        description: |-
+                          ForceGroups limits the forced transfer to players on servers of these
+                          server groups; everyone else moves only when they change server. Empty
+                          forces in every group.
+                        items:
+                          minLength: 1
+                          type: string
+                        maxItems: 32
+                        type: array
+                        x-kubernetes-list-type: set
                     type: object
                 type: object
             required:
