@@ -139,6 +139,7 @@ func (s *Server) answerExecute(
 		forget func()
 	}
 	var waits []waiting
+	var outcomes []*agentpb.ExecuteOutcome
 	for i := range targets {
 		srv := &targets[i]
 		execID, answer, forget := s.executions.open(srv.Status.PodUID)
@@ -149,6 +150,7 @@ func (s *Server) answerExecute(
 		})
 		if !sent {
 			forget()
+			outcomes = append(outcomes, &agentpb.ExecuteOutcome{Server: srv.Name, Error: "agent not connected"})
 			continue
 		}
 		s.recordOn(ctx, id.Namespace, srv.Name, corev1.EventTypeNormal, "CommandExecuted", "Execute",
@@ -169,18 +171,17 @@ func (s *Server) answerExecute(
 	}
 	deadline, cancel := context.WithTimeout(ctx, wait)
 	defer cancel()
-	outcomes := make([]*agentpb.ExecuteOutcome, 0, len(waits))
 	for _, w := range waits {
 		select {
 		case got := <-w.answer:
-			outcomes = append(outcomes, bounded(w.server, got))
+			outcomes = append(outcomes, bounded(w.server, got, single))
 		case <-deadline.Done():
 			w.forget()
 			// select picks at random between ready cases, and an answer that
 			// came in before the deadline must not be reported as missing.
 			select {
 			case got := <-w.answer:
-				outcomes = append(outcomes, bounded(w.server, got))
+				outcomes = append(outcomes, bounded(w.server, got, single))
 			default:
 				outcomes = append(outcomes, &agentpb.ExecuteOutcome{
 					Server: w.server, Error: fmt.Sprintf("no answer within %s", wait),
@@ -233,15 +234,16 @@ func (s *Server) executeTargets(ctx context.Context, namespace, target string) (
 }
 
 // bounded applies the agent's limits again: the operator does not trust a
-// backend to have kept them.
-func bounded(server string, got *agentpb.ExecuteOutcome) *agentpb.ExecuteOutcome {
+// backend to have kept them. A group's answer carries no output: the proxy
+// prints none for a group, and N outputs could outgrow its inbound limit.
+func bounded(server string, got *agentpb.ExecuteOutcome, single bool) *agentpb.ExecuteOutcome {
 	out := &agentpb.ExecuteOutcome{
 		Server: server,
 		Ok:     got.GetOk(),
 		Error:  clip(got.GetError(), ExecuteMaxLineLength),
 	}
 	for i, line := range got.GetOutput() {
-		if i == ExecuteMaxLines {
+		if !single || i == ExecuteMaxLines {
 			break
 		}
 		out.Output = append(out.Output, clip(line, ExecuteMaxLineLength))

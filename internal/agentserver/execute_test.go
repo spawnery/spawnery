@@ -167,14 +167,38 @@ func TestAServerThatDoesNotAnswerIsListedAndTheRestStillArrive(t *testing.T) {
 	if took := time.Since(start); took > 2*time.Second {
 		t.Errorf("the answer took %s; the wait is 300ms", took)
 	}
-	if len(got) != 2 {
-		t.Fatalf("outcomes = %+v, want lobby-a and lobby-b: lobby-c has no session", got)
+	if len(got) != 3 {
+		t.Fatalf("outcomes = %+v, want all three: lobby-c has no session and is counted", got)
 	}
 	if got[0].GetServer() != "lobby-a" || !got[0].GetOk() {
 		t.Errorf("first = %+v, want lobby-a ok", got[0])
 	}
 	if got[1].GetServer() != "lobby-b" || got[1].GetOk() || !strings.Contains(got[1].GetError(), "no answer within") {
 		t.Errorf("second = %+v, want lobby-b with no answer", got[1])
+	}
+	if got[2].GetServer() != "lobby-c" || got[2].GetOk() || got[2].GetError() != "agent not connected" {
+		t.Errorf("third = %+v, want lobby-c with agent not connected", got[2])
+	}
+}
+
+func TestAGroupAnswerCarriesNoOutput(t *testing.T) {
+	s, _, _ := commandFixture(t, network(true),
+		readyServer("lobby-a", "lobby", "pod-a"), readyServer("lobby-b", "lobby", "pod-b"))
+	fan := s.opts.Servers.(*recordingFanout)
+	fan.live["pod-a"], fan.live["pod-b"] = true, true
+	answering(s, fan, func(_ string, cmd *agentpb.ExecuteCommand) *agentpb.ExecuteOutcome {
+		return &agentpb.ExecuteOutcome{Id: cmd.GetId(), Ok: true, Output: []string{"a line"}}
+	})
+
+	got := askExecute(s, proxyCaller, "lobby", "list").GetExecute().GetOutcomes()
+
+	if len(got) != 2 {
+		t.Fatalf("outcomes = %+v, want two", got)
+	}
+	for _, o := range got {
+		if !o.GetOk() || len(o.GetOutput()) != 0 {
+			t.Errorf("outcome %+v, want ok with no output", o)
+		}
 	}
 }
 

@@ -82,6 +82,11 @@ func (s *Server) answerScale(
 			fmt.Sprintf("that group's maxReplicas is %d; a pin may not lift it", headroom.MaxReplicas))
 	}
 
+	if req.GetReplicas() < headroom.MinReplicas && id.Role != agent.RoleProxy {
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			fmt.Sprintf("that group's minReplicas is %d; only a proxy may pin below the floor", headroom.MinReplicas))
+	}
+
 	expiresAt := s.opts.Clock().Add(duration)
 	if err := s.opts.Writer.Pin(ctx, id.Namespace, req.GetGroup(), req.GetReplicas(), expiresAt); err != nil {
 		if errors.Is(err, ErrNoSuchGroup) {

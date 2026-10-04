@@ -92,7 +92,7 @@ func askScale(s *Server, id grpcauth.Identity, group string, replicas int32, sec
 func TestAScaleCreatesAnExactBoostOwnedByTheGroup(t *testing.T) {
 	s, c, _ := commandFixture(t, scalableGroup("lobby", 1, 5))
 
-	resp := askScale(s, serverCaller, "lobby", 0, 0)
+	resp := askScale(s, proxyCaller, "lobby", 0, 0)
 
 	if resp.GetScale().GetReplicas() != 0 || resp.GetScale().GetExpiresAtUnix() != commandNow.Add(time.Hour).Unix() {
 		t.Fatalf("answer = %+v, want a pin of 0 for the default hour", resp.GetResult())
@@ -141,6 +141,21 @@ func TestAScaleIsRefusedWhereItCannotHold(t *testing.T) {
 		if got.GetReason() != c.reason || !strings.Contains(got.GetMessage(), c.says) {
 			t.Errorf("%s: error = %v, want %s mentioning %q", name, got, c.reason, c.says)
 		}
+	}
+}
+
+func TestOnlyAProxyMayPinBelowTheFloor(t *testing.T) {
+	s, _, _ := commandFixture(t, scalableGroup("lobby", 2, 5))
+
+	got := askScale(s, serverCaller, "lobby", 1, 0).GetError()
+	if got.GetReason() != agentpb.RequestError_REFUSED || !strings.Contains(got.GetMessage(), "only a proxy may pin below") {
+		t.Errorf("backend below the floor: %v, want REFUSED saying only a proxy may pin below the floor", got)
+	}
+	if resp := askScale(s, serverCaller, "lobby", 2, 0); resp.GetScale() == nil {
+		t.Errorf("backend at the floor: %+v, want a pin", resp.GetResult())
+	}
+	if resp := askScale(s, proxyCaller, "lobby", 0, 0); resp.GetScale() == nil {
+		t.Errorf("proxy at 0: %+v, want a pin", resp.GetResult())
 	}
 }
 
