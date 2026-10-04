@@ -195,4 +195,31 @@ java.lang.String defaultValue);
    * @return The joinPermissionDenyOnly.
    */
   boolean getJoinPermissionDenyOnly();
+
+  /**
+   * <pre>
+   * An Exact ScaleBoost holds the group at pinned_replicas servers, which can
+   * be 0. Without a pin both fields below are zero and mean nothing.
+   * </pre>
+   *
+   * <code>bool pinned = 13;</code>
+   * @return The pinned.
+   */
+  boolean getPinned();
+
+  /**
+   * <code>int32 pinned_replicas = 14;</code>
+   * @return The pinnedReplicas.
+   */
+  int getPinnedReplicas();
+
+  /**
+   * <pre>
+   * When the pin ends, on the operator's clock; 0 for a pin without an end.
+   * </pre>
+   *
+   * <code>int64 pinned_until_unix = 15;</code>
+   * @return The pinnedUntilUnix.
+   */
+  long getPinnedUntilUnix();
 }

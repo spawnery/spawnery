@@ -59,6 +59,7 @@ private static final long serialVersionUID = 0L;
     PLAYER_COUNT(3),
     CLOUD_REQUEST(4),
     EVENT_INTEREST(5),
+    EXECUTE_OUTCOME(6),
     MESSAGE_NOT_SET(0);
     private final int value;
     private MessageCase(int value) {
@@ -81,6 +82,7 @@ private static final long serialVersionUID = 0L;
         case 3: return PLAYER_COUNT;
         case 4: return CLOUD_REQUEST;
         case 5: return EVENT_INTEREST;
+        case 6: return EXECUTE_OUTCOME;
         case 0: return MESSAGE_NOT_SET;
         default: return null;
       }
@@ -251,6 +253,37 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.EventInterest.getDefaultInstance();
   }
 
+  public static final int EXECUTE_OUTCOME_FIELD_NUMBER = 6;
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteOutcome execute_outcome = 6;</code>
+   * @return Whether the executeOutcome field is set.
+   */
+  @java.lang.Override
+  public boolean hasExecuteOutcome() {
+    return messageCase_ == 6;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteOutcome execute_outcome = 6;</code>
+   * @return The executeOutcome.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.ExecuteOutcome getExecuteOutcome() {
+    if (messageCase_ == 6) {
+       return (cloud.spawnery.agent.pb.ExecuteOutcome) message_;
+    }
+    return cloud.spawnery.agent.pb.ExecuteOutcome.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteOutcome execute_outcome = 6;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.ExecuteOutcomeOrBuilder getExecuteOutcomeOrBuilder() {
+    if (messageCase_ == 6) {
+       return (cloud.spawnery.agent.pb.ExecuteOutcome) message_;
+    }
+    return cloud.spawnery.agent.pb.ExecuteOutcome.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -280,6 +313,9 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 5) {
       output.writeMessage(5, (cloud.spawnery.agent.pb.EventInterest) message_);
     }
+    if (messageCase_ == 6) {
+      output.writeMessage(6, (cloud.spawnery.agent.pb.ExecuteOutcome) message_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -303,6 +339,10 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 5) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(5, (cloud.spawnery.agent.pb.EventInterest) message_);
+    }
+    if (messageCase_ == 6) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(6, (cloud.spawnery.agent.pb.ExecuteOutcome) message_);
     }
     return size;
   }
@@ -350,6 +390,10 @@ private static final long serialVersionUID = 0L;
         if (!getEventInterest()
             .equals(other.getEventInterest())) return false;
         break;
+      case 6:
+        if (!getExecuteOutcome()
+            .equals(other.getExecuteOutcome())) return false;
+        break;
       case 0:
       default:
     }
@@ -384,6 +428,10 @@ private static final long serialVersionUID = 0L;
       case 5:
         hash = (37 * hash) + EVENT_INTEREST_FIELD_NUMBER;
         hash = (53 * hash) + getEventInterest().hashCode();
+        break;
+      case 6:
+        hash = (37 * hash) + EXECUTE_OUTCOME_FIELD_NUMBER;
+        hash = (53 * hash) + getExecuteOutcome().hashCode();
         break;
       case 0:
       default:
@@ -534,6 +582,9 @@ private static final long serialVersionUID = 0L;
       if (eventInterestBuilder_ != null) {
         eventInterestBuilder_.clear();
       }
+      if (executeOutcomeBuilder_ != null) {
+        executeOutcomeBuilder_.clear();
+      }
       messageCase_ = 0;
       message_ = null;
       return this;
@@ -595,6 +646,10 @@ private static final long serialVersionUID = 0L;
           eventInterestBuilder_ != null) {
         result.message_ = eventInterestBuilder_.build();
       }
+      if (messageCase_ == 6 &&
+          executeOutcomeBuilder_ != null) {
+        result.message_ = executeOutcomeBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -628,6 +683,10 @@ private static final long serialVersionUID = 0L;
         }
         case EVENT_INTEREST: {
           mergeEventInterest(other.getEventInterest());
+          break;
+        }
+        case EXECUTE_OUTCOME: {
+          mergeExecuteOutcome(other.getExecuteOutcome());
           break;
         }
         case MESSAGE_NOT_SET: {
@@ -695,6 +754,13 @@ private static final long serialVersionUID = 0L;
               messageCase_ = 5;
               break;
             } // case 42
+            case 50: {
+              input.readMessage(
+                  internalGetExecuteOutcomeFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              messageCase_ = 6;
+              break;
+            } // case 50
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1435,6 +1501,148 @@ private static final long serialVersionUID = 0L;
       messageCase_ = 5;
       onChanged();
       return eventInterestBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.ExecuteOutcome, cloud.spawnery.agent.pb.ExecuteOutcome.Builder, cloud.spawnery.agent.pb.ExecuteOutcomeOrBuilder> executeOutcomeBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteOutcome execute_outcome = 6;</code>
+     * @return Whether the executeOutcome field is set.
+     */
+    @java.lang.Override
+    public boolean hasExecuteOutcome() {
+      return messageCase_ == 6;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteOutcome execute_outcome = 6;</code>
+     * @return The executeOutcome.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.ExecuteOutcome getExecuteOutcome() {
+      if (executeOutcomeBuilder_ == null) {
+        if (messageCase_ == 6) {
+          return (cloud.spawnery.agent.pb.ExecuteOutcome) message_;
+        }
+        return cloud.spawnery.agent.pb.ExecuteOutcome.getDefaultInstance();
+      } else {
+        if (messageCase_ == 6) {
+          return executeOutcomeBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.ExecuteOutcome.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteOutcome execute_outcome = 6;</code>
+     */
+    public Builder setExecuteOutcome(cloud.spawnery.agent.pb.ExecuteOutcome value) {
+      if (executeOutcomeBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        message_ = value;
+        onChanged();
+      } else {
+        executeOutcomeBuilder_.setMessage(value);
+      }
+      messageCase_ = 6;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteOutcome execute_outcome = 6;</code>
+     */
+    public Builder setExecuteOutcome(
+        cloud.spawnery.agent.pb.ExecuteOutcome.Builder builderForValue) {
+      if (executeOutcomeBuilder_ == null) {
+        message_ = builderForValue.build();
+        onChanged();
+      } else {
+        executeOutcomeBuilder_.setMessage(builderForValue.build());
+      }
+      messageCase_ = 6;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteOutcome execute_outcome = 6;</code>
+     */
+    public Builder mergeExecuteOutcome(cloud.spawnery.agent.pb.ExecuteOutcome value) {
+      if (executeOutcomeBuilder_ == null) {
+        if (messageCase_ == 6 &&
+            message_ != cloud.spawnery.agent.pb.ExecuteOutcome.getDefaultInstance()) {
+          message_ = cloud.spawnery.agent.pb.ExecuteOutcome.newBuilder((cloud.spawnery.agent.pb.ExecuteOutcome) message_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          message_ = value;
+        }
+        onChanged();
+      } else {
+        if (messageCase_ == 6) {
+          executeOutcomeBuilder_.mergeFrom(value);
+        } else {
+          executeOutcomeBuilder_.setMessage(value);
+        }
+      }
+      messageCase_ = 6;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteOutcome execute_outcome = 6;</code>
+     */
+    public Builder clearExecuteOutcome() {
+      if (executeOutcomeBuilder_ == null) {
+        if (messageCase_ == 6) {
+          messageCase_ = 0;
+          message_ = null;
+          onChanged();
+        }
+      } else {
+        if (messageCase_ == 6) {
+          messageCase_ = 0;
+          message_ = null;
+        }
+        executeOutcomeBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteOutcome execute_outcome = 6;</code>
+     */
+    public cloud.spawnery.agent.pb.ExecuteOutcome.Builder getExecuteOutcomeBuilder() {
+      return internalGetExecuteOutcomeFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteOutcome execute_outcome = 6;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.ExecuteOutcomeOrBuilder getExecuteOutcomeOrBuilder() {
+      if ((messageCase_ == 6) && (executeOutcomeBuilder_ != null)) {
+        return executeOutcomeBuilder_.getMessageOrBuilder();
+      } else {
+        if (messageCase_ == 6) {
+          return (cloud.spawnery.agent.pb.ExecuteOutcome) message_;
+        }
+        return cloud.spawnery.agent.pb.ExecuteOutcome.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteOutcome execute_outcome = 6;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.ExecuteOutcome, cloud.spawnery.agent.pb.ExecuteOutcome.Builder, cloud.spawnery.agent.pb.ExecuteOutcomeOrBuilder> 
+        internalGetExecuteOutcomeFieldBuilder() {
+      if (executeOutcomeBuilder_ == null) {
+        if (!(messageCase_ == 6)) {
+          message_ = cloud.spawnery.agent.pb.ExecuteOutcome.getDefaultInstance();
+        }
+        executeOutcomeBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.ExecuteOutcome, cloud.spawnery.agent.pb.ExecuteOutcome.Builder, cloud.spawnery.agent.pb.ExecuteOutcomeOrBuilder>(
+                (cloud.spawnery.agent.pb.ExecuteOutcome) message_,
+                getParentForChildren(),
+                isClean());
+        message_ = null;
+      }
+      messageCase_ = 6;
+      onChanged();
+      return executeOutcomeBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.ServerMessage)

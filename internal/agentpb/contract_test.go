@@ -138,3 +138,53 @@ func TestJoinPermissionFieldNumbersAreFixed(t *testing.T) {
 		}
 	}
 }
+
+func TestCloudCommandFieldNumbersAreFixed(t *testing.T) {
+	for _, c := range []struct {
+		msg   proto.Message
+		field protoreflect.Name
+		want  protoreflect.FieldNumber
+	}{
+		{&agentpb.CloudRequest{}, "scale", 13},
+		{&agentpb.CloudRequest{}, "force_stop", 14},
+		{&agentpb.CloudRequest{}, "execute", 15},
+		{&agentpb.CloudResponse{}, "scale", 14},
+		{&agentpb.CloudResponse{}, "force_stop", 15},
+		{&agentpb.CloudResponse{}, "execute", 16},
+		{&agentpb.OperatorToServer{}, "execute_command", 6},
+		{&agentpb.ServerMessage{}, "execute_outcome", 6},
+		{&agentpb.GroupState{}, "pinned", 13},
+		{&agentpb.GroupState{}, "pinned_replicas", 14},
+		{&agentpb.GroupState{}, "pinned_until_unix", 15},
+		{&agentpb.ScaleRequest{}, "group", 1},
+		{&agentpb.ScaleRequest{}, "replicas", 2},
+		{&agentpb.ScaleRequest{}, "duration_seconds", 3},
+		{&agentpb.ScaleResult{}, "replicas", 1},
+		{&agentpb.ScaleResult{}, "expires_at_unix", 2},
+		{&agentpb.ForceStopRequest{}, "server", 1},
+		{&agentpb.ForceStopRequest{}, "issuer", 2},
+		{&agentpb.ForceStopResult{}, "server", 1},
+		{&agentpb.ExecuteRequest{}, "target", 1},
+		{&agentpb.ExecuteRequest{}, "command", 2},
+		{&agentpb.ExecuteRequest{}, "issuer", 3},
+		{&agentpb.ExecuteResult{}, "outcomes", 1},
+		{&agentpb.ExecuteOutcome{}, "server", 1},
+		{&agentpb.ExecuteOutcome{}, "ok", 2},
+		{&agentpb.ExecuteOutcome{}, "output", 3},
+		{&agentpb.ExecuteOutcome{}, "error", 4},
+		{&agentpb.ExecuteOutcome{}, "id", 5},
+		{&agentpb.ExecuteCommand{}, "id", 1},
+		{&agentpb.ExecuteCommand{}, "command", 2},
+	} {
+		md := c.msg.ProtoReflect().Descriptor()
+		fd := md.Fields().ByName(c.field)
+		if fd == nil {
+			t.Errorf("%s has no field %s", md.Name(), c.field)
+			continue
+		}
+		if fd.Number() != c.want {
+			t.Errorf("%s.%s is field %d, want %d: a renumbered field is a silent wire break",
+				md.Name(), c.field, fd.Number(), c.want)
+		}
+	}
+}

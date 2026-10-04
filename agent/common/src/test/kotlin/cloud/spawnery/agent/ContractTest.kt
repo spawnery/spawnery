@@ -1,6 +1,9 @@
 package cloud.spawnery.agent
 
+import cloud.spawnery.agent.pb.ExecuteCommand
+import cloud.spawnery.agent.pb.ExecuteOutcome
 import cloud.spawnery.agent.pb.Hello
+import cloud.spawnery.agent.pb.OperatorToServer
 import cloud.spawnery.agent.pb.PlayerCount
 import cloud.spawnery.agent.pb.ServerMessage
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -31,5 +34,22 @@ class ContractTest {
 
         assertEquals(3, back.playerCount.players)
         assertEquals(100, back.playerCount.slots)
+    }
+
+    @Test
+    fun `an execute command and its outcome round-trip with their id`() {
+        val down = OperatorToServer.newBuilder()
+            .setExecuteCommand(ExecuteCommand.newBuilder().setId(7).setCommand("list"))
+            .build()
+        val downBack = OperatorToServer.parseFrom(down.toByteArray())
+        assertEquals(OperatorToServer.MessageCase.EXECUTE_COMMAND, downBack.messageCase)
+        assertEquals(7L, downBack.executeCommand.id)
+
+        val up = ServerMessage.newBuilder()
+            .setExecuteOutcome(ExecuteOutcome.newBuilder().setId(7).setOk(true).addOutput("There are 0 players"))
+            .build()
+        val upBack = ServerMessage.parseFrom(up.toByteArray())
+        assertEquals(7L, upBack.executeOutcome.id)
+        assertEquals(listOf("There are 0 players"), upBack.executeOutcome.outputList)
     }
 }

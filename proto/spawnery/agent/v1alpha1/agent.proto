@@ -106,6 +106,9 @@ message CloudRequest {
     UnretireRequest unretire = 10;
     StatusRequest status = 11;
     DeleteServerRequest delete_server = 12;
+    ScaleRequest scale = 13;
+    ForceStopRequest force_stop = 14;
+    ExecuteRequest execute = 15;
   }
 }
 
@@ -127,6 +130,9 @@ message CloudResponse {
     UnretireResult unretire = 11;
     StatusResult status = 12;
     DeleteServerResult delete_server = 13;
+    ScaleResult scale = 14;
+    ForceStopResult force_stop = 15;
+    ExecuteResult execute = 16;
   }
 }
 
@@ -280,6 +286,67 @@ message StopBoostRequest {
 // StopBoostResult says how many boosts were removed. Zero is not an error.
 message StopBoostResult {
   int32 removed = 1;
+}
+
+// ScaleRequest holds an ephemeral group at exactly `replicas` servers for a
+// while, 0 included. Its own message and not a field on BoostRequest: an
+// operator older than this one would ignore the field and read "exactly 5" as
+// "5 more", while it refuses a request it does not know. The reset is
+// StopBoostRequest.
+message ScaleRequest {
+  string group = 1;
+  int32 replicas = 2;
+  // Zero means the operator's default of an hour; it refuses more than seven
+  // days.
+  int64 duration_seconds = 3;
+}
+
+// ScaleResult is the pin that now holds.
+message ScaleResult {
+  int32 replicas = 1;
+  int64 expires_at_unix = 2;
+}
+
+// ForceStopRequest kills one server's pod without a drain. Refused from a
+// backend: it can lose unsaved world data, and one compromised server must not
+// be able to do that to its neighbours.
+message ForceStopRequest {
+  string server = 1;
+  // Who typed it, for the operator's record only.
+  string issuer = 2;
+}
+
+message ForceStopResult {
+  string server = 1;
+}
+
+// ExecuteRequest runs one console command on a server, or on every Ready
+// server of a group whose agent is connected. Refused from a backend and on a
+// network without spec.commands.execute.
+message ExecuteRequest {
+  // A server name, else a group name.
+  string target = 1;
+  // Without the leading slash, at most 256 characters.
+  string command = 2;
+  string issuer = 3;
+}
+
+// ExecuteResult has one outcome per server the command reached, sorted by
+// server. A server that did not answer in time is listed with an error.
+message ExecuteResult {
+  repeated ExecuteOutcome outcomes = 1;
+}
+
+// ExecuteOutcome is one server's answer. On the server stream it carries the
+// id of the ExecuteCommand it answers and no server name: the operator knows
+// whom it asked.
+message ExecuteOutcome {
+  string server = 1;
+  bool ok = 2;
+  // The command's feedback as plain text: at most 20 lines of 256 characters.
+  repeated string output = 3;
+  string error = 4;
+  uint64 id = 5;
 }
 
 // AcceptJoinsRequest is a server opening or closing its own door.
@@ -458,6 +525,14 @@ message RequestError {
 // Ready is the immediate notification that the server finished loading.
 message Ready {}
 
+// ExecuteCommand asks this server to run one console command and answer with
+// an ExecuteOutcome carrying the same id. An agent that predates it ignores
+// it, and the operator lists that server as not answering.
+message ExecuteCommand {
+  uint64 id = 1;
+  string command = 2;
+}
+
 message ServerMessage {
   oneof message {
     Hello hello = 1;
@@ -465,6 +540,7 @@ message ServerMessage {
     PlayerCount player_count = 3;
     CloudRequest cloud_request = 4;
     EventInterest event_interest = 5;
+    ExecuteOutcome execute_outcome = 6;
   }
 }
 
@@ -475,6 +551,7 @@ message OperatorToServer {
     NetworkState network_state = 3;
     CloudResponse cloud_response = 4;
     CloudEvent cloud_event = 5;
+    ExecuteCommand execute_command = 6;
   }
 }
 
@@ -583,6 +660,12 @@ message GroupState {
   string join_permission = 11;
   // spec.joinPermission.mode is DenyOnly: only an explicit false refuses.
   bool join_permission_deny_only = 12;
+  // An Exact ScaleBoost holds the group at pinned_replicas servers, which can
+  // be 0. Without a pin both fields below are zero and mean nothing.
+  bool pinned = 13;
+  int32 pinned_replicas = 14;
+  // When the pin ends, on the operator's clock; 0 for a pin without an end.
+  int64 pinned_until_unix = 15;
 }
 
 // ServerState is one backend as the operator last observed it.

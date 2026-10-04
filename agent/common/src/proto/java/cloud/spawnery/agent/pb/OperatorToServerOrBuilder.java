@@ -85,5 +85,20 @@ public interface OperatorToServerOrBuilder extends
    */
   cloud.spawnery.agent.pb.CloudEventOrBuilder getCloudEventOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteCommand execute_command = 6;</code>
+   * @return Whether the executeCommand field is set.
+   */
+  boolean hasExecuteCommand();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteCommand execute_command = 6;</code>
+   * @return The executeCommand.
+   */
+  cloud.spawnery.agent.pb.ExecuteCommand getExecuteCommand();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteCommand execute_command = 6;</code>
+   */
+  cloud.spawnery.agent.pb.ExecuteCommandOrBuilder getExecuteCommandOrBuilder();
+
   cloud.spawnery.agent.pb.OperatorToServer.MessageCase getMessageCase();
 }

@@ -85,5 +85,20 @@ public interface ServerMessageOrBuilder extends
    */
   cloud.spawnery.agent.pb.EventInterestOrBuilder getEventInterestOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteOutcome execute_outcome = 6;</code>
+   * @return Whether the executeOutcome field is set.
+   */
+  boolean hasExecuteOutcome();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteOutcome execute_outcome = 6;</code>
+   * @return The executeOutcome.
+   */
+  cloud.spawnery.agent.pb.ExecuteOutcome getExecuteOutcome();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteOutcome execute_outcome = 6;</code>
+   */
+  cloud.spawnery.agent.pb.ExecuteOutcomeOrBuilder getExecuteOutcomeOrBuilder();
+
   cloud.spawnery.agent.pb.ServerMessage.MessageCase getMessageCase();
 }

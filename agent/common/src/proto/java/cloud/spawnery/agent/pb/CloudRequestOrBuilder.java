@@ -181,5 +181,50 @@ public interface CloudRequestOrBuilder extends
    */
   cloud.spawnery.agent.pb.DeleteServerRequestOrBuilder getDeleteServerOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.ScaleRequest scale = 13;</code>
+   * @return Whether the scale field is set.
+   */
+  boolean hasScale();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ScaleRequest scale = 13;</code>
+   * @return The scale.
+   */
+  cloud.spawnery.agent.pb.ScaleRequest getScale();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ScaleRequest scale = 13;</code>
+   */
+  cloud.spawnery.agent.pb.ScaleRequestOrBuilder getScaleOrBuilder();
+
+  /**
+   * <code>.spawnery.agent.v1alpha1.ForceStopRequest force_stop = 14;</code>
+   * @return Whether the forceStop field is set.
+   */
+  boolean hasForceStop();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ForceStopRequest force_stop = 14;</code>
+   * @return The forceStop.
+   */
+  cloud.spawnery.agent.pb.ForceStopRequest getForceStop();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ForceStopRequest force_stop = 14;</code>
+   */
+  cloud.spawnery.agent.pb.ForceStopRequestOrBuilder getForceStopOrBuilder();
+
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteRequest execute = 15;</code>
+   * @return Whether the execute field is set.
+   */
+  boolean hasExecute();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteRequest execute = 15;</code>
+   * @return The execute.
+   */
+  cloud.spawnery.agent.pb.ExecuteRequest getExecute();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteRequest execute = 15;</code>
+   */
+  cloud.spawnery.agent.pb.ExecuteRequestOrBuilder getExecuteOrBuilder();
+
   cloud.spawnery.agent.pb.CloudRequest.RequestCase getRequestCase();
 }

@@ -196,5 +196,50 @@ public interface CloudResponseOrBuilder extends
    */
   cloud.spawnery.agent.pb.DeleteServerResultOrBuilder getDeleteServerOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.ScaleResult scale = 14;</code>
+   * @return Whether the scale field is set.
+   */
+  boolean hasScale();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ScaleResult scale = 14;</code>
+   * @return The scale.
+   */
+  cloud.spawnery.agent.pb.ScaleResult getScale();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ScaleResult scale = 14;</code>
+   */
+  cloud.spawnery.agent.pb.ScaleResultOrBuilder getScaleOrBuilder();
+
+  /**
+   * <code>.spawnery.agent.v1alpha1.ForceStopResult force_stop = 15;</code>
+   * @return Whether the forceStop field is set.
+   */
+  boolean hasForceStop();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ForceStopResult force_stop = 15;</code>
+   * @return The forceStop.
+   */
+  cloud.spawnery.agent.pb.ForceStopResult getForceStop();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ForceStopResult force_stop = 15;</code>
+   */
+  cloud.spawnery.agent.pb.ForceStopResultOrBuilder getForceStopOrBuilder();
+
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteResult execute = 16;</code>
+   * @return Whether the execute field is set.
+   */
+  boolean hasExecute();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteResult execute = 16;</code>
+   * @return The execute.
+   */
+  cloud.spawnery.agent.pb.ExecuteResult getExecute();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteResult execute = 16;</code>
+   */
+  cloud.spawnery.agent.pb.ExecuteResultOrBuilder getExecuteOrBuilder();
+
   cloud.spawnery.agent.pb.CloudResponse.ResultCase getResultCase();
 }
