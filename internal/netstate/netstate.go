@@ -25,6 +25,7 @@ import (
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -114,6 +115,9 @@ func (s Source) Build(ctx context.Context, namespace string, audience Audience) 
 			EnforcePlayableSlots:   g.Spec.EnforcePlayableSlots,
 			JoinPermission:         g.Spec.JoinPermission.ResolvedNode(g.Name),
 			JoinPermissionDenyOnly: g.Spec.JoinPermission.DenyOnly(),
+			Pinned:                 g.Status.PinnedReplicas != nil,
+			PinnedReplicas:         ptr.Deref(g.Status.PinnedReplicas, 0),
+			PinnedUntilUnix:        unixOrZero(g.Status.PinnedUntil),
 		})
 	}
 
@@ -271,4 +275,11 @@ func podReady(pod *corev1.Pod) bool {
 		}
 	}
 	return false
+}
+
+func unixOrZero(t *metav1.Time) int64 {
+	if t == nil {
+		return 0
+	}
+	return t.Unix()
 }

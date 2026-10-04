@@ -109,6 +109,16 @@ can move first and the worlds later: `purpur:26.2-<release>` next to
 `purpur:26.3-<release>`. The one Velocity image serves both. Worlds only go
 forward, so move a persistent group to the new version once, and not back.
 
+## `/cloud start` and `/cloud stop` are gone
+
+Since 0.19.0, `/cloud scale <group> <count> [for <duration>]` replaces
+`start`. Where `start` raised a group's floor, `scale` holds the group at
+exactly that many servers, so it can also take a group below `minReplicas`.
+`/cloud scale <group> reset` replaces `stop` and removes pins and boosts
+alike. The node is still `spawnery.cloud.scale`. A plugin calling `boost` or
+`stopBoosts` keeps working; both are deprecated in favour of `scale` and
+`resetScale`.
+
 ## Older installations
 
 [Release notes](../archive/release-notes.md) carries the notes release by

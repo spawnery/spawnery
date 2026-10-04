@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"slices"
 	"testing"
 	"time"
 
@@ -1745,5 +1746,196 @@ func TestReadyContributionCountsPlayableSeats(t *testing.T) {
 	v.Playable = 12
 	if got := readyContribution(v); got != 3 {
 		t.Errorf("readyContribution = %d, want 3", got)
+	}
+}
+
+func TestAPinIsTheFloor(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		MinReplicas: 1, MaxReplicas: 10,
+		SpareSlots: 40, MaxPlayers: 100,
+		Pinned: true, Pin: 3,
+		PodHash: "current",
+	})
+	if got.Create != 3 {
+		t.Errorf("Create = %d, want 3: the pin", got.Create)
+	}
+}
+
+func TestAPinIsTheCeilingAgainstDemand(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		MinReplicas: 1, MaxReplicas: 10,
+		SpareSlots: 400, MaxPlayers: 100,
+		Pinned: true, Pin: 2,
+		PodHash: "current",
+	})
+	if got.Create != 2 || !got.Limited {
+		t.Errorf("Create = %d, Limited = %v; want 2 and limited: demand asks for 4", got.Create, got.Limited)
+	}
+}
+
+func TestAPinOfZeroRemovesEveryServer(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{ready("a", 0, 100), ready("b", 5, 100), ready("c", 0, 100)},
+		MinReplicas: 1, MaxReplicas: 10,
+		SpareSlots: 40, MaxPlayers: 100,
+		Pinned: true, Pin: 0,
+		PodHash: "current",
+	})
+	slices.Sort(got.Delete)
+	if got.Surplus != 3 || !slices.Equal(got.Delete, []string{"a", "c"}) {
+		t.Errorf("Surplus = %d, Delete = %v; want a and c gone: b carries players and is never taken", got.Surplus, got.Delete)
+	}
+}
+
+func TestAPinBelowTheRunningCountNeverTakesAServerWithPlayers(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{ready("a", 10, 100), ready("b", 0, 100), ready("c", 3, 100)},
+		MinReplicas: 1, MaxReplicas: 10,
+		SpareSlots: 0, MaxPlayers: 100,
+		Pinned: true, Pin: 1,
+		PodHash: "current",
+	})
+	slices.Sort(got.Delete)
+	if !slices.Equal(got.Delete, []string{"b"}) {
+		t.Errorf("Delete = %v, want only b: a and c carry players", got.Delete)
+	}
+}
+
+func TestAnAddBoostDoesNotCountWhileAPinHolds(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		MinReplicas: 1, MaxReplicas: 10,
+		SpareSlots: 0, MaxPlayers: 100,
+		Boost:  5,
+		Pinned: true, Pin: 2,
+		PodHash: "current",
+	})
+	if got.Create != 2 {
+		t.Errorf("Create = %d, want 2: the pin, not the floor plus a boost", got.Create)
+	}
+}
+
+func TestAPinAboveMaxReplicasStopsAtTheCeiling(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		MinReplicas: 1, MaxReplicas: 3,
+		SpareSlots: 0, MaxPlayers: 100,
+		Pinned: true, Pin: 20,
+		PodHash: "current",
+	})
+	if got.Create != 3 {
+		t.Errorf("Create = %d, want maxReplicas 3", got.Create)
+	}
+}
+
+func TestAPinOfZeroLeavesAHeldServer(t *testing.T) {
+	held := ready("a", 0, 100)
+	held.Hold = true
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{held},
+		MinReplicas: 1, MaxReplicas: 10,
+		SpareSlots: 0, MaxPlayers: 100,
+		Pinned: true, Pin: 0,
+		PodHash: "current",
+	})
+	if len(got.Delete) != 0 {
+		t.Errorf("Delete = %v, want none: a held server ends by itself", got.Delete)
+	}
+}
+
+func TestAPinOfZeroDeletesTheEmptiesBeforeItRetiresTheOccupied(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{ready("a", 0, 100), ready("b", 5, 100), ready("c", 0, 100)},
+		MinReplicas: 1, MaxReplicas: 10,
+		SpareSlots: 0, MaxPlayers: 100,
+		Pinned: true, Pin: 0,
+		PodHash: "current",
+	})
+	slices.Sort(got.Delete)
+	if !slices.Equal(got.Delete, []string{"a", "c"}) || len(got.Retire) != 0 {
+		t.Errorf("Delete = %v, Retire = %v; want a and c deleted and nothing retired in the same pass", got.Delete, got.Retire)
+	}
+}
+
+func TestAPinOfZeroRetiresAnOccupiedServerOnceNoEmptyOneIsLeft(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{ready("b", 5, 100)},
+		MinReplicas: 1, MaxReplicas: 10,
+		SpareSlots: 0, MaxPlayers: 100,
+		Pinned: true, Pin: 0,
+		PodHash: "current",
+	})
+	if !slices.Equal(got.Retire, []string{"b"}) || len(got.Delete) != 0 {
+		t.Errorf("Retire = %v, Delete = %v; want b retired", got.Retire, got.Delete)
+	}
+}
+
+func TestAPinRetiresTheOccupiedServersWithTheFewestPlayers(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{ready("a", 10, 100), ready("b", 7, 100), ready("c", 3, 100)},
+		MinReplicas: 1, MaxReplicas: 10,
+		SpareSlots: 0, MaxPlayers: 100,
+		Pinned: true, Pin: 1,
+		PodHash: "current",
+	})
+	slices.Sort(got.Retire)
+	if !slices.Equal(got.Retire, []string{"b", "c"}) || len(got.Delete) != 0 {
+		t.Errorf("Retire = %v, Delete = %v; want b and c retired, the busiest stays", got.Retire, got.Delete)
+	}
+}
+
+func TestAPinBreaksATieOnPlayersByTheYoungestServer(t *testing.T) {
+	old, young := ready("a", 4, 100), ready("b", 4, 100)
+	old.CreatedAt = time.Unix(100, 0)
+	young.CreatedAt = time.Unix(200, 0)
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{old, young},
+		MinReplicas: 1, MaxReplicas: 10,
+		SpareSlots: 0, MaxPlayers: 100,
+		Pinned: true, Pin: 1,
+		PodHash: "current",
+	})
+	if !slices.Equal(got.Retire, []string{"b"}) {
+		t.Errorf("Retire = %v, want the younger b", got.Retire)
+	}
+}
+
+func TestAPinNeitherRetiresNorDeletesAHeldOccupiedServer(t *testing.T) {
+	held := ready("a", 3, 100)
+	held.Hold = true
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{held},
+		MinReplicas: 1, MaxReplicas: 10,
+		SpareSlots: 0, MaxPlayers: 100,
+		Pinned: true, Pin: 0,
+		PodHash: "current",
+	})
+	if len(got.Delete) != 0 || len(got.Retire) != 0 {
+		t.Errorf("Delete = %v, Retire = %v; want neither: a held server ends by itself", got.Delete, got.Retire)
+	}
+}
+
+func TestAServerAlreadyRetiringIsNotRetiredAgainUnderAPin(t *testing.T) {
+	leaving := ready("a", 3, 100)
+	leaving.Retire = true
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{leaving, ready("b", 5, 100)},
+		MinReplicas: 1, MaxReplicas: 10,
+		SpareSlots: 0, MaxPlayers: 100,
+		Pinned: true, Pin: 1,
+		PodHash: "current",
+	})
+	if len(got.Retire) != 0 {
+		t.Errorf("Retire = %v, want none: a is already leaving", got.Retire)
+	}
+}
+
+func TestLoweringMaxReplicasWithoutAPinRetiresNoOccupiedServer(t *testing.T) {
+	got := DecideSize(ScalingInputs{
+		Views:       []ServerView{ready("a", 10, 100), ready("b", 7, 100), ready("c", 3, 100)},
+		MinReplicas: 1, MaxReplicas: 1,
+		SpareSlots: 0, MaxPlayers: 100,
+		PodHash: "current",
+	})
+	if got.Surplus != 2 || len(got.Delete) != 0 || len(got.Retire) != 0 {
+		t.Errorf("Surplus = %d, Delete = %v, Retire = %v; want the surplus reported and nothing taken", got.Surplus, got.Delete, got.Retire)
 	}
 }

@@ -36,6 +36,8 @@ NetworkSpec describes one Minecraft network. Exactly one Network may exist per n
 <div style="overflow-x: auto;"><table>
 <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Default</th><th>Description</th></tr></thead>
 <tbody>
+<tr><td><code>commands</code></td><td>object</td><td align="center"></td><td></td><td>Commands opens in-game commands that reach past the operator&#x27;s own objects. Absent, all of them are off.</td></tr>
+<tr><td><code>commands.execute</code></td><td>boolean</td><td align="center"></td><td></td><td>Execute lets an administrator on a proxy run a console command on one server or on every server of a group with /cloud execute. Off, the operator refuses every such request.</td></tr>
 <tr><td><code>defaults</code></td><td>object</td><td align="center"></td><td></td><td>Defaults are inherited by all groups of this network.</td></tr>
 <tr><td><code>defaults.feedFormat</code></td><td>string</td><td align="center"></td><td><code>&lt;gray&gt;»&lt;/gray&gt; &lt;gradient:aqua:green&gt;Spawnery&lt;/gradient&gt; &lt;dark_gray&gt;|&lt;/dark_gray&gt; &lt;gray&gt;$EVENT_MESSAGE</code></td><td>FeedFormat is the line the agent&#x27;s chat output wears: announcements about the cloud and replies to a <code>/cloud</code> command alike.<details><summary>more</summary>MiniMessage. <code>$EVENT_MESSAGE</code> is replaced by what the line has to say; everything around it is yours.<br><br>Changing it rolls no pod and takes effect within a resync interval. A value that MiniMessage cannot parse makes the agent send the message alone.</details></td></tr>
 <tr><td><code>defaults.imagePullSecrets</code></td><td>array</td><td align="center"></td><td></td><td>ImagePullSecrets are attached to every managed pod.</td></tr>
@@ -199,6 +201,8 @@ Read by observers; the operator writes it and reads nothing back from it.
 <tr><td><code>observedGeneration</code></td><td>integer (int64)</td><td align="center"></td><td></td><td>ObservedGeneration is the spec generation this status was computed from.</td></tr>
 <tr><td><code>onlinePlayers</code></td><td>integer (int32)</td><td align="center"></td><td></td><td>OnlinePlayers is the sum of players across all ready servers.</td></tr>
 <tr><td><code>phase</code></td><td>string</td><td align="center"></td><td></td><td>Phase says whether players can join: Ready means the group&#x27;s *floor* is met -- spec.replicas for a persistent group, spec.scaling.minReplicas for an ephemeral one -- not that every server the scaler decided to run is up. Compare readyReplicas against replicas for that, or see the Progressing condition.</td></tr>
+<tr><td><code>pinnedReplicas</code></td><td>integer (int32)</td><td align="center"></td><td></td><td>PinnedReplicas is the size an Exact ScaleBoost holds this group at, which can be 0. Absent while no pin holds.</td></tr>
+<tr><td><code>pinnedUntil</code></td><td>string (date-time)</td><td align="center"></td><td></td><td>PinnedUntil is when that pin ends. Absent without a pin, and for a pin without an end.</td></tr>
 <tr><td><code>readyReplicas</code></td><td>integer (int32)</td><td align="center"></td><td></td><td>ReadyReplicas is the number of servers in phase Ready.</td></tr>
 <tr><td><code>replicas</code></td><td>integer (int32)</td><td align="center"></td><td></td><td>Replicas is the number of Server objects owned by this group.</td></tr>
 </tbody></table></div>
@@ -340,6 +344,7 @@ ServerSpec describes one running Minecraft server instance. It is created and ow
 <div style="overflow-x: auto;"><table>
 <thead><tr><th>Field</th><th>Type</th><th>Required</th><th>Default</th><th>Description</th></tr></thead>
 <tbody>
+<tr><td><code>forceStop</code></td><td>boolean</td><td align="center"></td><td></td><td>ForceStop kills this server&#x27;s pod at once, with no drain and a grace period of one second: its players lose their connection and the world loses whatever it had not saved. Set by the agent endpoint&#x27;s force-stop request, which only a proxy may send.</td></tr>
 <tr><td><code>groupGeneration</code></td><td>integer (int64)</td><td align="center"></td><td></td><td>GroupGeneration is the metadata.generation of the group at creation time. A server whose value is behind the group&#x27;s is stale.</td></tr>
 <tr><td><code>groupRef</code></td><td>object</td><td align="center">&#10003;</td><td></td><td>GroupRef names the owning ServerGroup.</td></tr>
 <tr><td><code>groupRef.name</code></td><td>string (length &gt;= 1)</td><td align="center">&#10003;</td><td></td><td>Name of the referenced object.</td></tr>
@@ -399,6 +404,7 @@ ScaleBoost is extra capacity for a group, for a while.<details><summary>more</su
 <thead><tr><th>Column</th><th>Type</th><th>JSONPath</th></tr></thead>
 <tbody>
 <tr><td>Group</td><td>string</td><td><code>.spec.groupRef.name</code></td></tr>
+<tr><td>Mode</td><td>string</td><td><code>.spec.mode</code></td></tr>
 <tr><td>Replicas</td><td>integer</td><td><code>.spec.replicas</code></td></tr>
 <tr><td>Expires</td><td>date</td><td><code>.spec.expiresAt</code></td></tr>
 <tr><td>Age</td><td>date</td><td><code>.metadata.creationTimestamp</code></td></tr>
@@ -414,5 +420,6 @@ ScaleBoostSpec is extra capacity for one group, for a while.
 <tr><td><code>expiresAt</code></td><td>string (date-time)</td><td align="center"></td><td></td><td>ExpiresAt is when this boost stops counting. A boost without one never expires; the tools that create boosts supply a default.</td></tr>
 <tr><td><code>groupRef</code></td><td>object</td><td align="center">&#10003;</td><td></td><td>GroupRef names the ServerGroup this adds capacity to.</td></tr>
 <tr><td><code>groupRef.name</code></td><td>string (length &gt;= 1)</td><td align="center">&#10003;</td><td></td><td>Name of the referenced object.</td></tr>
-<tr><td><code>replicas</code></td><td>integer (int32) (&gt;= 1)</td><td align="center">&#10003;</td><td></td><td>Replicas is how many servers to add to the group&#x27;s own floor. Boosts on one group add up.</td></tr>
+<tr><td><code>mode</code></td><td>string (one of: Add, Exact)</td><td align="center"></td><td><code>Add</code></td><td>Mode Add raises the group&#x27;s floor by Replicas; boosts on one group add up. Mode Exact holds the group at exactly Replicas servers, 0 included: the group&#x27;s floor and ceiling both become that number, Add boosts stop counting, and of several Exact boosts the newest wins. Neither lifts spec.scaling.maxReplicas.</td></tr>
+<tr><td><code>replicas</code></td><td>integer (int32) (&gt;= 0)</td><td align="center">&#10003;</td><td></td><td>Replicas is how many servers to add (Add, at least 1) or to hold the group at (Exact, at least 0).</td></tr>
 </tbody></table></div>

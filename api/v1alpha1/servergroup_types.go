@@ -444,6 +444,16 @@ type ServerGroupStatus struct {
 	// +optional
 	BoostedReplicas int32 `json:"boostedReplicas"`
 
+	// PinnedReplicas is the size an Exact ScaleBoost holds this group at,
+	// which can be 0. Absent while no pin holds.
+	// +optional
+	PinnedReplicas *int32 `json:"pinnedReplicas,omitempty"`
+
+	// PinnedUntil is when that pin ends. Absent without a pin, and for a pin
+	// without an end.
+	// +optional
+	PinnedUntil *metav1.Time `json:"pinnedUntil,omitempty"`
+
 	// ObservedGeneration is the spec generation this status was computed from.
 	// +optional
 	ObservedGeneration int64 `json:"observedGeneration,omitempty"`

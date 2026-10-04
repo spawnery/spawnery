@@ -2579,3 +2579,73 @@ func TestTheMirroredCountCarriesThePlayableFigure(t *testing.T) {
 		t.Errorf("playable = %d without a group, want the report's 20", gone.Status.PlayableSlots)
 	}
 }
+
+func (f *fixture) forceStop(t *testing.T, name string) {
+	t.Helper()
+	srv := f.server(name)
+	patch := client.MergeFrom(srv.DeepCopy())
+	srv.Spec.ForceStop = true
+	if err := f.c.Patch(f.ctx, srv, patch); err != nil {
+		t.Fatalf("set spec.forceStop on %s: %v", name, err)
+	}
+}
+
+func (f *fixture) podAnyway(t *testing.T, name string) *corev1.Pod {
+	t.Helper()
+	pod := &corev1.Pod{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: name, Namespace: f.ns}, pod); err != nil {
+		t.Fatalf("get pod %s: %v", name, err)
+	}
+	return pod
+}
+
+func TestAForceStopKillsThePodWithAOneSecondGracePeriod(t *testing.T) {
+	f := newFixture(t)
+	bringUpReady(t, f, "lobby-x7k2")
+	pod, _ := f.pod("lobby-x7k2")
+	f.bindPodToNode(t, pod, f.ensureNode(t, "node-force-"+f.ns, false).Name)
+	f.holdPodOnDelete(t, pod)
+	t.Cleanup(func() { f.retirePodTheWayAKubeletWould(t, pod) })
+
+	f.forceStop(t, "lobby-x7k2")
+	f.reconcile("lobby-x7k2")
+
+	got := f.podAnyway(t, "lobby-x7k2")
+	if got.DeletionTimestamp.IsZero() {
+		t.Fatal("the pod was not deleted")
+	}
+	if g := got.DeletionGracePeriodSeconds; g == nil || *g != 1 {
+		t.Errorf("deletionGracePeriodSeconds = %v, want 1", ptr.Deref(g, -1))
+	}
+	if phase.Phase(f.server("lobby-x7k2").Status.Phase) != phase.Terminating {
+		t.Errorf("phase = %s, want Terminating", f.server("lobby-x7k2").Status.Phase)
+	}
+	if !slices.Contains(f.registrar.deregistered, "lobby-x7k2") {
+		t.Errorf("deregistered = %v, want the server taken out of the proxies", f.registrar.deregistered)
+	}
+	if len(f.registrar.drained) != 0 {
+		t.Errorf("drained = %v, want no drain", f.registrar.drained)
+	}
+}
+
+func TestAForceStopShortensAGracePeriodAlreadyRunning(t *testing.T) {
+	f := newFixture(t)
+	bringUpReady(t, f, "lobby-x7k2")
+	pod, _ := f.pod("lobby-x7k2")
+	f.bindPodToNode(t, pod, f.ensureNode(t, "node-force-"+f.ns, false).Name)
+	f.holdPodOnDelete(t, pod)
+	t.Cleanup(func() { f.retirePodTheWayAKubeletWould(t, pod) })
+	if err := f.c.Delete(f.ctx, pod); err != nil {
+		t.Fatalf("delete the pod gracefully: %v", err)
+	}
+	if g := f.podAnyway(t, "lobby-x7k2").DeletionGracePeriodSeconds; g == nil || *g <= 1 {
+		t.Fatalf("the ordinary delete left grace %v; the test needs a running grace period", g)
+	}
+
+	f.forceStop(t, "lobby-x7k2")
+	f.reconcile("lobby-x7k2")
+
+	if g := f.podAnyway(t, "lobby-x7k2").DeletionGracePeriodSeconds; g == nil || *g != 1 {
+		t.Errorf("deletionGracePeriodSeconds = %v, want 1 after the force-stop", ptr.Deref(g, -1))
+	}
+}

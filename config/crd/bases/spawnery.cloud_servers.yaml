@@ -62,6 +62,13 @@ spec:
               ServerSpec describes one running Minecraft server instance. It is created
               and owned by a ServerGroup and is not meant to be edited by hand.
             properties:
+              forceStop:
+                description: |-
+                  ForceStop kills this server's pod at once, with no drain and a grace
+                  period of one second: its players lose their connection and the world
+                  loses whatever it had not saved. Set by the agent endpoint's force-stop
+                  request, which only a proxy may send.
+                type: boolean
               groupGeneration:
                 description: |-
                   GroupGeneration is the metadata.generation of the group at creation

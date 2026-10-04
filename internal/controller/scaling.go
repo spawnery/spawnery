@@ -37,6 +37,10 @@ type ScalingInputs struct {
 	// else. maxReplicas still applies after it.
 	Boost       int32
 	MaxReplicas int32
+	// Pinned is an Exact ScaleBoost on the group. Pin is then both the floor
+	// and the ceiling, bounded by MaxReplicas, and Boost does not count.
+	Pinned bool
+	Pin    int32
 	// SpareSlots is the free player capacity the group keeps available.
 	SpareSlots int32
 	// MaxPlayers is the capacity of a single server of this group.
@@ -74,9 +78,22 @@ type ScalingInputs struct {
 	WhenEmpty bool
 }
 
-// floor is MinReplicas plus live boosts. Both the create rule and the guard
-// against shedding below the floor must read the same number.
-func (in ScalingInputs) floor() int32 { return in.MinReplicas + in.Boost }
+// floor is MinReplicas plus live boosts, or the pin. Both the create rule and
+// the guard against shedding below the floor must read the same number.
+func (in ScalingInputs) floor() int32 {
+	if in.Pinned {
+		return in.ceiling()
+	}
+	return in.MinReplicas + in.Boost
+}
+
+// ceiling is maxReplicas, lowered to the pin while one holds.
+func (in ScalingInputs) ceiling() int32 {
+	if in.Pinned && in.Pin < in.MaxReplicas {
+		return in.Pin
+	}
+	return in.MaxReplicas
+}
 
 // capacity is what one server brings before it has reported anything.
 func (in ScalingInputs) capacity() int32 {
@@ -373,6 +390,40 @@ func staleRemains(in ScalingInputs) bool {
 	return false
 }
 
+// shedSurplus removes empty servers above the ceiling. Under a pin, once no
+// empty one is left, it retires the occupied ones with the fewest players: the
+// players stay until they leave. Retire never shares a pass with Delete.
+func shedSurplus(in ScalingInputs, surplus int32) (del, retire []string) {
+	pool := deletable(in)
+	if del = SelectDeletionCandidates(pool, int(surplus)); len(del) > 0 || !in.Pinned {
+		return del, nil
+	}
+	for _, v := range in.Views {
+		if v.countsTowardSize() && (v.Retire || in.PendingRetires[v.Name]) {
+			surplus--
+		}
+	}
+	occupied := make([]ServerView, 0, len(pool))
+	for _, v := range pool {
+		if v.countsTowardSize() {
+			occupied = append(occupied, v)
+		}
+	}
+	sort.SliceStable(occupied, func(i, j int) bool {
+		if occupied[i].Players != occupied[j].Players {
+			return occupied[i].Players < occupied[j].Players
+		}
+		if !occupied[i].CreatedAt.Equal(occupied[j].CreatedAt) {
+			return occupied[i].CreatedAt.After(occupied[j].CreatedAt)
+		}
+		return occupied[i].Name < occupied[j].Name
+	})
+	for i := 0; i < len(occupied) && i < int(surplus); i++ {
+		retire = append(retire, occupied[i].Name)
+	}
+	return nil, retire
+}
+
 // DecideSize is the group's sizing rule plus condemnation, which rides
 // alongside: a node drain answers to none of decideSize's branches, so none
 // may decline or bound it.
@@ -432,7 +483,7 @@ func decideSize(in ScalingInputs) SizeDecision {
 	if cold && create < 1 {
 		create = 1
 	}
-	room := in.MaxReplicas - alive
+	room := in.ceiling() - alive
 	if room < 0 {
 		room = 0
 	}
@@ -452,13 +503,15 @@ func decideSize(in ScalingInputs) SizeDecision {
 		}
 		// No room to grow, but a lowered maxReplicas must still be carried out. The
 		// demand removal below stays forbidden: the group just said it is short.
-		if surplus := alive - in.MaxReplicas; surplus > 0 {
+		if surplus := alive - in.ceiling(); surplus > 0 {
+			del, retire := shedSurplus(in, surplus)
 			return SizeDecision{
 				Wanted:            wanted,
 				Limited:           limited,
 				ColdStartBlocked:  coldBlocked,
 				Surplus:           surplus,
-				Delete:            SelectDeletionCandidates(deletable(in), int(surplus)),
+				Delete:            del,
+				Retire:            retire,
 				ChangeoverWaiting: waiting,
 			}
 		}
@@ -470,10 +523,12 @@ func decideSize(in ScalingInputs) SizeDecision {
 		// server; the changeover filter holds the current spec out.
 	}
 
-	if surplus := alive - in.MaxReplicas; surplus > 0 {
+	if surplus := alive - in.ceiling(); surplus > 0 {
+		del, retire := shedSurplus(in, surplus)
 		return SizeDecision{
 			Surplus:           surplus,
-			Delete:            SelectDeletionCandidates(deletable(in), int(surplus)),
+			Delete:            del,
+			Retire:            retire,
 			ChangeoverWaiting: waiting,
 		}
 	}
@@ -489,7 +544,7 @@ func decideSize(in ScalingInputs) SizeDecision {
 	if floorHeld {
 		floorOpen = joinableCount(in)
 		if in.PendingCreates == 0 && !currentStarting(in) {
-			if alive < in.MaxReplicas {
+			if alive < in.ceiling() {
 				return SizeDecision{Create: 1, FloorHeld: true, Joinable: floorOpen, ChangeoverWaiting: waiting}
 			}
 			floorBlocked = true

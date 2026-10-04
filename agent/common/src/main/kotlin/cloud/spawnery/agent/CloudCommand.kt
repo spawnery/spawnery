@@ -19,8 +19,16 @@ const val PERMISSION_READ: String = "spawnery.cloud.read"
 /** Its own node, not implied by [PERMISSION_READ]: reading is for moderators, retiring changes the fleet. */
 const val PERMISSION_RETIRE: String = "spawnery.cloud.retire"
 
-/** Covers both `start` and `stop`, so whoever adds capacity can take it back. */
+/** Covers pinning and resetting, so whoever holds a group at a size can let it go. */
 const val PERMISSION_SCALE: String = "spawnery.cloud.scale"
+
+/** Proxy only. Kills a pod without a drain. */
+const val PERMISSION_FORCESTOP: String = "spawnery.cloud.forcestop"
+
+/** Proxy only, and only on a network with spec.commands.execute. */
+const val PERMISSION_EXECUTE: String = "spawnery.cloud.execute"
+
+internal const val EXECUTE_MAX_COMMAND: Int = 256
 
 /** `/cloud status`, which asks the operator and so is not part of reading the mirror. */
 const val PERMISSION_STATUS: String = "spawnery.cloud.status"
@@ -39,16 +47,11 @@ fun <S> cloudCommand(
     feed: FeedState,
     /** A lambda so a Network edit lands at the next resync, not the next pod. */
     format: () -> String = { Feed.DEFAULT_FORMAT },
-): LiteralArgumentBuilder<S> =
-    LiteralArgumentBuilder.literal<S>("cloud")
+    proxy: ProxyCommands<S>? = null,
+): LiteralArgumentBuilder<S> {
+    val root = LiteralArgumentBuilder.literal<S>("cloud")
         // Any branch's permission opens the root; the branches gate themselves.
-        .requires {
-            adapter.hasPermission(it, PERMISSION_READ) ||
-                adapter.hasPermission(it, PERMISSION_RETIRE) ||
-                adapter.hasPermission(it, PERMISSION_SCALE) ||
-                adapter.hasPermission(it, PERMISSION_STATUS) ||
-                adapter.hasPermission(it, PERMISSION_EVENTS)
-        }
+        .requires { source -> rootNodes(proxy != null).any { adapter.hasPermission(source, it) } }
         .then(
             LiteralArgumentBuilder.literal<S>("list")
                 .requires { adapter.hasPermission(it, PERMISSION_READ) }
@@ -179,17 +182,18 @@ fun <S> cloudCommand(
                 ),
         )
         .then(
-            LiteralArgumentBuilder.literal<S>("start")
+            LiteralArgumentBuilder.literal<S>("scale")
                 .requires { adapter.hasPermission(it, PERMISSION_SCALE) }
                 .then(
                     RequiredArgumentBuilder.argument<S, String>("group", StringArgumentType.word())
-                        .suggests(suggesting { api.groups().map(Group::name) })
-                        .executes { ctx -> startBoost(api, adapter, format, ctx.source, group(ctx), 1, null) }
+                        .suggests(suggesting { api.groups().filter { it.kind() == Group.Kind.EPHEMERAL }.map(Group::name) })
                         .then(
-                            RequiredArgumentBuilder.argument<S, Int>("count", IntegerArgumentType.integer(1))
-                                .executes { ctx ->
-                                    startBoost(api, adapter, format, ctx.source, group(ctx), count(ctx), null)
-                                }
+                            LiteralArgumentBuilder.literal<S>("reset")
+                                .executes { ctx -> resetScale(api, adapter, format, ctx.source, group(ctx)) },
+                        )
+                        .then(
+                            RequiredArgumentBuilder.argument<S, Int>("count", IntegerArgumentType.integer(0))
+                                .executes { ctx -> pin(api, adapter, format, ctx.source, group(ctx), count(ctx), null) }
                                 .then(
                                     LiteralArgumentBuilder.literal<S>("for")
                                         .then(
@@ -200,57 +204,22 @@ fun <S> cloudCommand(
                                                 val text = StringArgumentType.getString(ctx, "duration")
                                                 val span = parseDuration(text)
                                                 if (span == null) {
-                                                    replyFail(adapter, format, 
+                                                    replyFail(adapter, format,
                                                         ctx.source,
                                                         Style.bad("could not read") + " " +
                                                             Style.name(text) +
                                                             Style.quiet(" as a length of time. Try ") +
                                                             Style.number("30m") + Style.quiet(", ") +
                                                             Style.number("2h") + Style.quiet(" or ") +
-                                                            Style.number("90s") + Style.quiet("."),
+                                                            Style.number("3d") + Style.quiet("."),
                                                     )
                                                     return@executes 0
                                                 }
-                                                startBoost(api, adapter, format, ctx.source, group(ctx), count(ctx), span)
+                                                pin(api, adapter, format, ctx.source, group(ctx), count(ctx), span)
                                             },
                                         ),
                                 ),
                         ),
-                ),
-        )
-        .then(
-            LiteralArgumentBuilder.literal<S>("stop")
-                .requires { adapter.hasPermission(it, PERMISSION_SCALE) }
-                .then(
-                    RequiredArgumentBuilder.argument<S, String>("group", StringArgumentType.word())
-                        .suggests(suggesting { api.groups().map(Group::name) })
-                        .executes { ctx ->
-                            val name = group(ctx)
-                            val source = ctx.source
-                            api.stopBoosts(name).whenComplete { removed, failure ->
-                                when {
-                                    failure != null ->
-                                        replyFail(adapter, format, 
-                                            source,
-                                            Style.bad("could not stop boosts on") + " " + Style.name(name) +
-                                                Style.quiet(": ") + Style.bad(reason(failure)),
-                                        )
-                                    removed == 0 ->
-                                        replyOk(adapter, format, 
-                                            source,
-                                            Style.name(name) + Style.quiet(" had no boosts running"),
-                                        )
-                                    else -> replyOk(adapter, format, 
-                                        source,
-                                        Style.name(name) + Style.quiet(": removed ") +
-                                            Style.number(removed) +
-                                            Style.good(" boost${if (removed == 1) "" else "s"}.") +
-                                            Style.quiet(" The group returns to its own floor as servers empty."),
-                                    )
-                                }
-                            }
-                            1
-                        },
                 ),
         )
 
@@ -268,6 +237,17 @@ fun <S> cloudCommand(
                         .executes { ctx -> setFeed(adapter, format, feed, ctx.source, on = false) },
                 ),
         )
+
+    if (proxy != null) {
+        root.then(forceStopBranch(api, adapter, format, proxy)).then(executeBranch(api, adapter, format, proxy))
+    }
+    return root
+}
+
+/** Read first, so a reader is asked one question, as before. */
+private fun rootNodes(onProxy: Boolean): List<String> =
+    listOf(PERMISSION_READ, PERMISSION_RETIRE, PERMISSION_SCALE, PERMISSION_STATUS, PERMISSION_EVENTS) +
+        if (onProxy) listOf(PERMISSION_FORCESTOP, PERMISSION_EXECUTE) else emptyList()
 
 private fun <S> setFeed(
     adapter: SourceAdapter<S>,
@@ -337,7 +317,7 @@ private fun <S> group(ctx: com.mojang.brigadier.context.CommandContext<S>): Stri
 private fun <S> count(ctx: com.mojang.brigadier.context.CommandContext<S>): Int =
     IntegerArgumentType.getInteger(ctx, "count")
 
-private fun <S> startBoost(
+private fun <S> pin(
     api: SpawneryApi,
     adapter: SourceAdapter<S>,
     format: () -> String,
@@ -346,33 +326,114 @@ private fun <S> startBoost(
     replicas: Int,
     forHowLong: java.time.Duration?,
 ): Int {
-    api.boost(group, replicas, forHowLong).whenComplete { result, failure ->
+    api.scale(group, replicas, forHowLong).whenComplete { result, failure ->
         if (failure != null) {
-            replyFail(adapter, format, 
-                source,
-                Style.bad("could not boost") + " " + Style.name(group) +
-                    Style.quiet(": ") + Style.bad(reason(failure)),
-            )
+            replyFail(adapter, format, source,
+                Style.bad("could not scale") + " " + Style.name(group) + Style.quiet(": ") + Style.bad(reason(failure)))
             return@whenComplete
         }
-        replyOk(adapter, format, 
-            source,
-            Style.name(group) + Style.quiet(": ") +
-                Style.good("+${result.replicas()} server${if (result.replicas() == 1) "" else "s"}") +
-                Style.quiet(" until ") + Style.number(AT_MINUTE_UTC.format(result.expiresAt())) +
-                Style.quiet(" UTC"),
-        )
-        reply(adapter, format, 
-            source,
-            Style.quiet("This is a boost, not a spec change. It expires on its own; ") +
-                Style.number("/cloud stop $group") + Style.quiet(" ends it early."),
-        )
-        reply(adapter, format, source, Style.quiet("For a lasting change, edit the ServerGroup."))
+        replyOk(adapter, format, source,
+            Style.name(group) + Style.quiet(" is pinned to ") + Style.number(result.replicas()) +
+                Style.quiet(if (result.replicas() == 1) " server" else " servers") +
+                Style.quiet(" until ") + Style.number(AT_MINUTE_UTC.format(result.expiresAt())) + Style.quiet(" UTC"))
+        reply(adapter, format, source,
+            Style.quiet("It ends on its own; ") + Style.number("/cloud scale $group reset") + Style.quiet(" ends it early."))
     }
     return 1
 }
 
-private val AT_MINUTE_UTC: DateTimeFormatter =
+private fun <S> resetScale(
+    api: SpawneryApi,
+    adapter: SourceAdapter<S>,
+    format: () -> String,
+    source: S,
+    group: String,
+): Int {
+    api.resetScale(group).whenComplete { removed, failure ->
+        when {
+            failure != null -> replyFail(adapter, format, source,
+                Style.bad("could not reset") + " " + Style.name(group) + Style.quiet(": ") + Style.bad(reason(failure)))
+            removed == 0 -> replyOk(adapter, format, source, Style.name(group) + Style.quiet(" had no pin or boost"))
+            else -> replyOk(adapter, format, source,
+                Style.name(group) + Style.quiet(": removed ") + Style.number(removed) +
+                    Style.good(" pin${if (removed == 1) "" else "s"} and boosts.") +
+                    Style.quiet(" The group returns to its own floor and ceiling."))
+        }
+    }
+    return 1
+}
+
+private fun <S> forceStopBranch(
+    api: SpawneryApi,
+    adapter: SourceAdapter<S>,
+    format: () -> String,
+    proxy: ProxyCommands<S>,
+): LiteralArgumentBuilder<S> =
+    LiteralArgumentBuilder.literal<S>("forcestop")
+        .requires { adapter.hasPermission(it, PERMISSION_FORCESTOP) }
+        .then(
+            RequiredArgumentBuilder.argument<S, String>("server", StringArgumentType.word())
+                .suggests(suggesting { api.servers().map(ServerInfo::name) })
+                .executes { ctx ->
+                    val name = StringArgumentType.getString(ctx, "server")
+                    val source = ctx.source
+                    proxy.connector.forceStop(name, proxy.issuer(source)).whenComplete { _, failure ->
+                        if (failure == null) {
+                            replyOk(adapter, format, source,
+                                Style.name(name) + Style.bad(" is being killed.") +
+                                    Style.quiet(" /cloud info shows when its pod is gone."))
+                        } else {
+                            replyFail(adapter, format, source,
+                                Style.bad("could not force-stop") + " " + Style.name(name) +
+                                    Style.quiet(": ") + Style.bad(reason(failure)))
+                        }
+                    }
+                    1
+                },
+        )
+
+private fun <S> executeBranch(
+    api: SpawneryApi,
+    adapter: SourceAdapter<S>,
+    format: () -> String,
+    proxy: ProxyCommands<S>,
+): LiteralArgumentBuilder<S> =
+    LiteralArgumentBuilder.literal<S>("execute")
+        .requires { adapter.hasPermission(it, PERMISSION_EXECUTE) }
+        .then(
+            RequiredArgumentBuilder.argument<S, String>("target", StringArgumentType.word())
+                .suggests(suggesting {
+                    api.servers().map(ServerInfo::name) +
+                        api.groups().filter { it.kind() != Group.Kind.PROXY }.map(Group::name)
+                })
+                .then(
+                    RequiredArgumentBuilder.argument<S, String>("command", StringArgumentType.greedyString())
+                        .executes { ctx ->
+                            val target = StringArgumentType.getString(ctx, "target")
+                            val command = StringArgumentType.getString(ctx, "command").trim().removePrefix("/")
+                            val source = ctx.source
+                            if (command.length > EXECUTE_MAX_COMMAND) {
+                                replyFail(adapter, format, source,
+                                    Style.bad("that command is ") + Style.number(command.length) +
+                                        Style.bad(" characters; the operator carries at most ") +
+                                        Style.number(EXECUTE_MAX_COMMAND))
+                                return@executes 0
+                            }
+                            proxy.connector.execute(target, command, proxy.issuer(source)).whenComplete { outcomes, failure ->
+                                if (failure != null) {
+                                    replyFail(adapter, format, source,
+                                        Style.bad("could not run it on") + " " + Style.name(target) +
+                                            Style.quiet(": ") + Style.bad(reason(failure)))
+                                } else {
+                                    executeLines(target, outcomes).forEach { reply(adapter, format, source, it) }
+                                }
+                            }
+                            1
+                        },
+                ),
+        )
+
+internal val AT_MINUTE_UTC: DateTimeFormatter =
     DateTimeFormatter.ofPattern("HH:mm").withZone(ZoneOffset.UTC)
 
 /** Not java.time's ISO-8601 parser: nobody types `PT30M` into a chat window. */
@@ -380,11 +441,16 @@ internal fun parseDuration(text: String): java.time.Duration? {
     if (text.length < 2) return null
     val amount = text.dropLast(1).toLongOrNull() ?: return null
     if (amount <= 0) return null
-    return when (text.last()) {
-        's' -> java.time.Duration.ofSeconds(amount)
-        'm' -> java.time.Duration.ofMinutes(amount)
-        'h' -> java.time.Duration.ofHours(amount)
-        else -> null
+    return try {
+        when (text.last()) {
+            's' -> java.time.Duration.ofSeconds(amount)
+            'm' -> java.time.Duration.ofMinutes(amount)
+            'h' -> java.time.Duration.ofHours(amount)
+            'd' -> java.time.Duration.ofDays(amount)
+            else -> null
+        }
+    } catch (_: ArithmeticException) {
+        null
     }
 }
 

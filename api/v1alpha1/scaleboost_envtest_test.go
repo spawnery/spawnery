@@ -17,6 +17,7 @@ limitations under the License.
 package v1alpha1_test
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -84,5 +85,61 @@ func TestAScaleBoostOfZeroReplicasIsRefused(t *testing.T) {
 		},
 	}); err == nil {
 		t.Error("a boost of zero replicas was accepted")
+	}
+}
+
+func TestAnExactScaleBoostOfZeroIsAccepted(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	if err := c.Create(ctx, &spawneryv1alpha1.ScaleBoost{
+		ObjectMeta: metav1.ObjectMeta{Name: "off", Namespace: ns},
+		Spec: spawneryv1alpha1.ScaleBoostSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "lobby"},
+			Mode:     spawneryv1alpha1.ScaleBoostExact,
+			Replicas: 0,
+		},
+	}); err != nil {
+		t.Fatalf("a pin to zero was refused: %v", err)
+	}
+}
+
+func TestAScaleBoostBelowZeroIsRefusedInEitherMode(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	for _, mode := range []spawneryv1alpha1.ScaleBoostMode{spawneryv1alpha1.ScaleBoostAdd, spawneryv1alpha1.ScaleBoostExact} {
+		if err := c.Create(ctx, &spawneryv1alpha1.ScaleBoost{
+			ObjectMeta: metav1.ObjectMeta{Name: "negative-" + strings.ToLower(string(mode)), Namespace: ns},
+			Spec: spawneryv1alpha1.ScaleBoostSpec{
+				GroupRef: spawneryv1alpha1.ObjectRef{Name: "lobby"},
+				Mode:     mode,
+				Replicas: -1,
+			},
+		}); err == nil {
+			t.Errorf("a %s boost of -1 was accepted", mode)
+		}
+	}
+}
+
+func TestAScaleBoostWithoutAModeAdds(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	if err := c.Create(ctx, &spawneryv1alpha1.ScaleBoost{
+		ObjectMeta: metav1.ObjectMeta{Name: "plain", Namespace: ns},
+		Spec: spawneryv1alpha1.ScaleBoostSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "lobby"},
+			Replicas: 1,
+		},
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	got := &spawneryv1alpha1.ScaleBoost{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "plain", Namespace: ns}, got); err != nil {
+		t.Fatalf("get: %v", err)
+	}
+	if got.Spec.Mode != spawneryv1alpha1.ScaleBoostAdd {
+		t.Errorf("mode = %q, want Add: every boost created before the field means Add", got.Spec.Mode)
 	}
 }

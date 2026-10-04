@@ -116,7 +116,7 @@ jobs:
   # fixed in the docs, not by holding a tag.
   tutorial-e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    timeout-minutes: 40
     env:
       NIGHTLY_LABEL: nightly-tutorial-red
     steps:

@@ -500,6 +500,19 @@ func (r *ServerReconciler) fetchPod(ctx context.Context, srv *spawneryv1alpha1.S
 	}
 }
 
+// forceStopGraceSeconds is 1 and not 0 because the API server removes a pod
+// deleted with 0 at once, before the kubelet has stopped it, which frees the
+// name for a replacement on the same claim.
+const forceStopGraceSeconds = 1
+
+// stillGraceful is a pod whose grace period a force-stop can still shorten.
+// fetchPod reports a terminating pod as not found, so the force-stop branch
+// reads the pod itself.
+func stillGraceful(pod *corev1.Pod) bool {
+	return pod.DeletionTimestamp.IsZero() ||
+		pod.DeletionGracePeriodSeconds == nil || *pod.DeletionGracePeriodSeconds > forceStopGraceSeconds
+}
+
 // groupHasReadyServer reports whether another server of srv's group is Ready.
 func (r *ServerReconciler) groupHasReadyServer(ctx context.Context, srv *spawneryv1alpha1.Server) (bool, error) {
 	var list spawneryv1alpha1.ServerList
@@ -536,6 +549,7 @@ func (r *ServerReconciler) collectInputs(
 		// have players from before, and only status.wasRegistered knows.
 		WasRegistered:       srv.Status.WasRegistered,
 		RetirementRequested: srv.Spec.Retire,
+		ForceStopRequested:  srv.Spec.ForceStop,
 		Registered:          srv.Status.Registered,
 	}
 
@@ -807,7 +821,14 @@ func (r *ServerReconciler) applyDecision(
 		}
 	}
 
-	if d.DeletePod && podFound && pod.DeletionTimestamp.IsZero() {
+	switch {
+	case d.DeletePod && pod != nil && srv.Spec.ForceStop && stillGraceful(pod):
+		if err := r.Delete(ctx, pod, client.GracePeriodSeconds(forceStopGraceSeconds)); err != nil && !apierrors.IsNotFound(err) {
+			return err
+		}
+		r.Recorder.Eventf(srv, nil, corev1.EventTypeWarning, "PodKilled", actionDeletePod,
+			"killed pod %s with a one-second grace period: %s", pod.Name, d.Message)
+	case d.DeletePod && podFound && pod.DeletionTimestamp.IsZero():
 		if err := r.Delete(ctx, pod); err != nil && !apierrors.IsNotFound(err) {
 			return err
 		}

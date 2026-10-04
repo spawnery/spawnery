@@ -78,6 +78,13 @@ type ServerSpec struct {
 	// retire request still retires it.
 	// +optional
 	Hold bool `json:"hold,omitempty"`
+
+	// ForceStop kills this server's pod at once, with no drain and a grace
+	// period of one second: its players lose their connection and the world
+	// loses whatever it had not saved. Set by the agent endpoint's force-stop
+	// request, which only a proxy may send.
+	// +optional
+	ForceStop bool `json:"forceStop,omitempty"`
 }
 
 // ServerStatus is the observed state of a Server.

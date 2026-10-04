@@ -7,6 +7,7 @@ import cloud.spawnery.agent.api.ServerInfo
 import cloud.spawnery.agent.api.ServerPhase
 import cloud.spawnery.agent.pb.GroupState
 import cloud.spawnery.agent.pb.NetworkState
+import java.time.Instant
 import java.util.Optional
 import java.util.UUID
 
@@ -50,6 +51,9 @@ class NetworkMirror {
                     it.freeSlots,
                     it.attributesMap,
                     it.displayName,
+                    it.pinned,
+                    it.pinnedReplicas,
+                    if (it.pinned && it.pinnedUntilUnix > 0) Instant.ofEpochSecond(it.pinnedUntilUnix) else null,
                 )
             },
             servers = state.serversList.map {

@@ -47,3 +47,19 @@ func TestChangeoverBudget(t *testing.T) {
 		})
 	}
 }
+
+func TestExecuteEnabled(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		net  *Network
+		want bool
+	}{
+		{name: "no commands", net: &Network{}, want: false},
+		{name: "commands without execute", net: &Network{Spec: NetworkSpec{Commands: &NetworkCommands{}}}, want: false},
+		{name: "execute on", net: &Network{Spec: NetworkSpec{Commands: &NetworkCommands{Execute: true}}}, want: true},
+	} {
+		if got := tc.net.ExecuteEnabled(); got != tc.want {
+			t.Errorf("%s: ExecuteEnabled() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

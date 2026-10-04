@@ -38,9 +38,10 @@ kubectl apply -f hub.yaml
 kubectl get servergroup hub -n minecraft
 ```
 
-The `PLAYERS`, `FREE SLOTS` and `BOOSTED` columns show the control loop: `FREE SLOTS` is the number the scaler compares against
-`spareSlots`, and `BOOSTED` is how much of the group's floor comes from boosts
-rather than from `minReplicas`.
+The `PLAYERS`, `FREE SLOTS` and `BOOSTED` columns show the control loop:
+`FREE SLOTS` is the number the scaler compares against `spareSlots`, and
+`BOOSTED` is how much of the group's floor comes from boosts rather than from
+`minReplicas`.
 
 ## Two more servers, until Friday night is over
 
@@ -227,6 +228,32 @@ blocks a rolling update rather than a rush: a changeover needs room for one new
 server before anything old can retire, so a group sitting exactly at
 `maxReplicas` stalls until it is raised by one. The message says which of the
 two is happening.
+
+## Holding a group at a size
+
+An `Add` boost raises a floor. To hold an ephemeral group at an exact size,
+including 0, a `ScaleBoost` takes `mode: Exact`:
+
+```yaml
+kind: ScaleBoost
+spec:
+  groupRef: {name: lobby}
+  mode: Exact
+  replicas: 0
+  expiresAt: "2026-10-04T18:00:00Z"
+```
+
+While it lives, the group's floor and its ceiling are both `replicas`, and
+`Add` boosts pause. Of several live `Exact` boosts only the newest counts. Empty servers above the
+number are deleted. Occupied ones are retired:
+the proxies stop sending anyone there, the players stay until they leave, and
+the server goes once it is empty. A pin to 0 therefore admits nobody new
+without ending a running round. A group with `spec.update.maxStaleSeconds`
+also bounds these retirements: after that window the server is drained.
+A rolling update cannot surge above the pin, as at `maxReplicas`.
+
+`status.pinnedReplicas` and `status.pinnedUntil` show the pin on the group.
+`/cloud scale` creates exactly this object, owned by the group.
 
 ## Two things a boost is not
 

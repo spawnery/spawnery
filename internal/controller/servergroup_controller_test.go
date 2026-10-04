@@ -4014,6 +4014,76 @@ func TestABoostActuallyCreatesAServer(t *testing.T) {
 	}
 }
 
+func (f *fixture) createPin(t *testing.T, name string, replicas int32, owner *metav1.OwnerReference) {
+	t.Helper()
+	expires := metav1.NewTime(f.clock.now.Add(time.Hour))
+	b := &spawneryv1alpha1.ScaleBoost{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns},
+		Spec: spawneryv1alpha1.ScaleBoostSpec{
+			GroupRef:  spawneryv1alpha1.ObjectRef{Name: f.group.Name},
+			Mode:      spawneryv1alpha1.ScaleBoostExact,
+			Replicas:  replicas,
+			ExpiresAt: &expires,
+		},
+	}
+	if owner != nil {
+		b.OwnerReferences = []metav1.OwnerReference{*owner}
+	}
+	if err := f.c.Create(f.ctx, b); err != nil {
+		t.Fatalf("create the pin: %v", err)
+	}
+}
+
+func TestAPinOfZeroLeavesTheGroupEmptyAndSaysSo(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPin(t, "lobby-off", 0, nil)
+
+	f.reconcileGroup(t, r)
+
+	if got := len(f.listServers(t)); got != 0 {
+		t.Fatalf("got %d servers, want 0 under a pin of 0", got)
+	}
+	group := f.serverGroup(t, f.group.Name)
+	if group.Status.PinnedReplicas == nil || *group.Status.PinnedReplicas != 0 {
+		t.Errorf("status.pinnedReplicas = %v, want a present 0", group.Status.PinnedReplicas)
+	}
+	if group.Status.PinnedUntil == nil {
+		t.Error("status.pinnedUntil is empty for a pin that ends")
+	}
+}
+
+func TestAPinBuildsExactlyItsNumber(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPin(t, "lobby-four", 4, nil)
+
+	f.reconcileGroup(t, r)
+
+	if got := len(f.listServers(t)); got != 4 {
+		t.Fatalf("got %d servers, want the pinned 4", got)
+	}
+}
+
+// envtest runs no garbage collector, so the stale pin stays as it would for a while in a cluster.
+func TestAPredecessorsPinDoesNotHoldTheGroup(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPin(t, "lobby-stale", 0, &metav1.OwnerReference{
+		APIVersion: spawneryv1alpha1.GroupVersion.String(), Kind: "ServerGroup",
+		Name: f.group.Name, UID: "00000000-0000-0000-0000-00000000dead",
+	})
+
+	f.reconcileGroup(t, r)
+
+	if got := len(f.listServers(t)); got != 1 {
+		t.Fatalf("got %d servers, want the floor of 1: the pin belongs to a group that is gone", got)
+	}
+	if p := f.serverGroup(t, f.group.Name).Status.PinnedReplicas; p != nil {
+		t.Errorf("status.pinnedReplicas = %d, want absent", *p)
+	}
+}
+
 func (f *fixture) pluginPVC(t *testing.T, name string, modes ...corev1.PersistentVolumeAccessMode) {
 	t.Helper()
 	if err := f.c.Create(f.ctx, &corev1.PersistentVolumeClaim{

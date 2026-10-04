@@ -19,6 +19,7 @@ import cloud.spawnery.agent.SessionLoop
 import cloud.spawnery.agent.TokenSource
 import cloud.spawnery.agent.pb.CloudRequest
 import cloud.spawnery.agent.pb.EventInterest
+import cloud.spawnery.agent.pb.ExecuteCommand
 import cloud.spawnery.agent.pb.OperatorToServer
 import cloud.spawnery.agent.pb.ServerMessage
 import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents
@@ -61,7 +62,16 @@ class AgentPlugin : JavaPlugin(), Listener {
     private val feedState = FeedState()
     private val feed = Feed(PaperAudience, feedState, System::currentTimeMillis, format = mirror::feedFormat)
     private val events = CloudEvents()
-    private val role = ServerRole(state, mirror, connector, feed, events)
+    private val role = ServerRole(state, mirror, connector, feed, events, ::execute)
+
+    private fun execute(command: ExecuteCommand) {
+        server.scheduler.runTask(this, Runnable {
+            val outcome = runCommand(command) { line, feedback ->
+                server.dispatchCommand(server.createCommandSender { feedback(it) }, line)
+            }
+            loop?.send(ServerMessage.newBuilder().setExecuteOutcome(outcome).build())
+        })
+    }
 
     /**
      * Null on a new stream: the operator assumes "no" for a session it has

@@ -5,8 +5,9 @@ code in that JVM, so it has the agent's token and can send anything it likes
 down the agent channel.
 
 This page is what that buys an attacker, stated as limits. It is about
-**authenticity**: who the operator believes is speaking. The other half, how many connections a hostile pod can open and what
-is still unbounded there, is in [What the NetworkPolicies buy, and what they
+**authenticity**: who the operator believes is speaking. The other half, how
+many connections a hostile pod can open and what is still unbounded there, is
+in [What the NetworkPolicies buy, and what they
 do not](network-boundaries.md). The shape these limits come from is in
 [Why the game pods never read the Kubernetes API](architecture.md).
 
@@ -66,7 +67,24 @@ limits the lie's blast radius to the liar.
 taking joins. That is a denial of service against itself.
 
 **It can consume operator resources.** How much, and what bounds it, is the
-availability question; see [network-boundaries.md](network-boundaries.md#how-many-agents-may-reach-the-operator).
+availability question; see
+[network-boundaries.md](network-boundaries.md#how-many-agents-may-reach-the-operator).
+
+## What a compromised proxy can do that a server cannot
+
+A proxy's token can force-stop any server in its namespace and, where
+`spec.commands.execute` is on, run any console command on any of them. On a
+server with `op` that means full control of the server. A backend can do
+neither: the operator refuses both requests from a server's token, the Paper
+`/cloud` has neither verb, and the plugin API offers no method for either. On a
+network whose proxies run third-party plugins, `spec.commands.execute` is the
+setting to leave off.
+
+A backend can still pin an ephemeral group to a size between its `minReplicas`
+and `maxReplicas`, and, like any agent, add boosts and retire servers. It cannot
+pin a group below `minReplicas`: a pin to 0 would stop new joins everywhere, and
+the backend could renew it forever. The operator refuses a below-floor pin from
+a server's token; only a proxy may send one.
 
 ## Revocation is not instant, and the delay is chosen
 

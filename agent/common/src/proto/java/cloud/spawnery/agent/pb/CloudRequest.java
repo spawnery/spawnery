@@ -74,6 +74,9 @@ private static final long serialVersionUID = 0L;
     UNRETIRE(10),
     STATUS(11),
     DELETE_SERVER(12),
+    SCALE(13),
+    FORCE_STOP(14),
+    EXECUTE(15),
     REQUEST_NOT_SET(0);
     private final int value;
     private RequestCase(int value) {
@@ -102,6 +105,9 @@ private static final long serialVersionUID = 0L;
         case 10: return UNRETIRE;
         case 11: return STATUS;
         case 12: return DELETE_SERVER;
+        case 13: return SCALE;
+        case 14: return FORCE_STOP;
+        case 15: return EXECUTE;
         case 0: return REQUEST_NOT_SET;
         default: return null;
       }
@@ -469,6 +475,99 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.DeleteServerRequest.getDefaultInstance();
   }
 
+  public static final int SCALE_FIELD_NUMBER = 13;
+  /**
+   * <code>.spawnery.agent.v1alpha1.ScaleRequest scale = 13;</code>
+   * @return Whether the scale field is set.
+   */
+  @java.lang.Override
+  public boolean hasScale() {
+    return requestCase_ == 13;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.ScaleRequest scale = 13;</code>
+   * @return The scale.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.ScaleRequest getScale() {
+    if (requestCase_ == 13) {
+       return (cloud.spawnery.agent.pb.ScaleRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.ScaleRequest.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.ScaleRequest scale = 13;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.ScaleRequestOrBuilder getScaleOrBuilder() {
+    if (requestCase_ == 13) {
+       return (cloud.spawnery.agent.pb.ScaleRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.ScaleRequest.getDefaultInstance();
+  }
+
+  public static final int FORCE_STOP_FIELD_NUMBER = 14;
+  /**
+   * <code>.spawnery.agent.v1alpha1.ForceStopRequest force_stop = 14;</code>
+   * @return Whether the forceStop field is set.
+   */
+  @java.lang.Override
+  public boolean hasForceStop() {
+    return requestCase_ == 14;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.ForceStopRequest force_stop = 14;</code>
+   * @return The forceStop.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.ForceStopRequest getForceStop() {
+    if (requestCase_ == 14) {
+       return (cloud.spawnery.agent.pb.ForceStopRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.ForceStopRequest.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.ForceStopRequest force_stop = 14;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.ForceStopRequestOrBuilder getForceStopOrBuilder() {
+    if (requestCase_ == 14) {
+       return (cloud.spawnery.agent.pb.ForceStopRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.ForceStopRequest.getDefaultInstance();
+  }
+
+  public static final int EXECUTE_FIELD_NUMBER = 15;
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteRequest execute = 15;</code>
+   * @return Whether the execute field is set.
+   */
+  @java.lang.Override
+  public boolean hasExecute() {
+    return requestCase_ == 15;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteRequest execute = 15;</code>
+   * @return The execute.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.ExecuteRequest getExecute() {
+    if (requestCase_ == 15) {
+       return (cloud.spawnery.agent.pb.ExecuteRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.ExecuteRequest.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteRequest execute = 15;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.ExecuteRequestOrBuilder getExecuteOrBuilder() {
+    if (requestCase_ == 15) {
+       return (cloud.spawnery.agent.pb.ExecuteRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.ExecuteRequest.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -518,6 +617,15 @@ private static final long serialVersionUID = 0L;
     }
     if (requestCase_ == 12) {
       output.writeMessage(12, (cloud.spawnery.agent.pb.DeleteServerRequest) request_);
+    }
+    if (requestCase_ == 13) {
+      output.writeMessage(13, (cloud.spawnery.agent.pb.ScaleRequest) request_);
+    }
+    if (requestCase_ == 14) {
+      output.writeMessage(14, (cloud.spawnery.agent.pb.ForceStopRequest) request_);
+    }
+    if (requestCase_ == 15) {
+      output.writeMessage(15, (cloud.spawnery.agent.pb.ExecuteRequest) request_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -570,6 +678,18 @@ private static final long serialVersionUID = 0L;
     if (requestCase_ == 12) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(12, (cloud.spawnery.agent.pb.DeleteServerRequest) request_);
+    }
+    if (requestCase_ == 13) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(13, (cloud.spawnery.agent.pb.ScaleRequest) request_);
+    }
+    if (requestCase_ == 14) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(14, (cloud.spawnery.agent.pb.ForceStopRequest) request_);
+    }
+    if (requestCase_ == 15) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(15, (cloud.spawnery.agent.pb.ExecuteRequest) request_);
     }
     return size;
   }
@@ -643,6 +763,18 @@ private static final long serialVersionUID = 0L;
         if (!getDeleteServer()
             .equals(other.getDeleteServer())) return false;
         break;
+      case 13:
+        if (!getScale()
+            .equals(other.getScale())) return false;
+        break;
+      case 14:
+        if (!getForceStop()
+            .equals(other.getForceStop())) return false;
+        break;
+      case 15:
+        if (!getExecute()
+            .equals(other.getExecute())) return false;
+        break;
       case 0:
       default:
     }
@@ -704,6 +836,18 @@ private static final long serialVersionUID = 0L;
       case 12:
         hash = (37 * hash) + DELETE_SERVER_FIELD_NUMBER;
         hash = (53 * hash) + getDeleteServer().hashCode();
+        break;
+      case 13:
+        hash = (37 * hash) + SCALE_FIELD_NUMBER;
+        hash = (53 * hash) + getScale().hashCode();
+        break;
+      case 14:
+        hash = (37 * hash) + FORCE_STOP_FIELD_NUMBER;
+        hash = (53 * hash) + getForceStop().hashCode();
+        break;
+      case 15:
+        hash = (37 * hash) + EXECUTE_FIELD_NUMBER;
+        hash = (53 * hash) + getExecute().hashCode();
         break;
       case 0:
       default:
@@ -882,6 +1026,15 @@ private static final long serialVersionUID = 0L;
       if (deleteServerBuilder_ != null) {
         deleteServerBuilder_.clear();
       }
+      if (scaleBuilder_ != null) {
+        scaleBuilder_.clear();
+      }
+      if (forceStopBuilder_ != null) {
+        forceStopBuilder_.clear();
+      }
+      if (executeBuilder_ != null) {
+        executeBuilder_.clear();
+      }
       requestCase_ = 0;
       request_ = null;
       return this;
@@ -970,6 +1123,18 @@ private static final long serialVersionUID = 0L;
           deleteServerBuilder_ != null) {
         result.request_ = deleteServerBuilder_.build();
       }
+      if (requestCase_ == 13 &&
+          scaleBuilder_ != null) {
+        result.request_ = scaleBuilder_.build();
+      }
+      if (requestCase_ == 14 &&
+          forceStopBuilder_ != null) {
+        result.request_ = forceStopBuilder_.build();
+      }
+      if (requestCase_ == 15 &&
+          executeBuilder_ != null) {
+        result.request_ = executeBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -1030,6 +1195,18 @@ private static final long serialVersionUID = 0L;
         }
         case DELETE_SERVER: {
           mergeDeleteServer(other.getDeleteServer());
+          break;
+        }
+        case SCALE: {
+          mergeScale(other.getScale());
+          break;
+        }
+        case FORCE_STOP: {
+          mergeForceStop(other.getForceStop());
+          break;
+        }
+        case EXECUTE: {
+          mergeExecute(other.getExecute());
           break;
         }
         case REQUEST_NOT_SET: {
@@ -1144,6 +1321,27 @@ private static final long serialVersionUID = 0L;
               requestCase_ = 12;
               break;
             } // case 98
+            case 106: {
+              input.readMessage(
+                  internalGetScaleFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              requestCase_ = 13;
+              break;
+            } // case 106
+            case 114: {
+              input.readMessage(
+                  internalGetForceStopFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              requestCase_ = 14;
+              break;
+            } // case 114
+            case 122: {
+              input.readMessage(
+                  internalGetExecuteFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              requestCase_ = 15;
+              break;
+            } // case 122
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2768,6 +2966,432 @@ private static final long serialVersionUID = 0L;
       requestCase_ = 12;
       onChanged();
       return deleteServerBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.ScaleRequest, cloud.spawnery.agent.pb.ScaleRequest.Builder, cloud.spawnery.agent.pb.ScaleRequestOrBuilder> scaleBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.ScaleRequest scale = 13;</code>
+     * @return Whether the scale field is set.
+     */
+    @java.lang.Override
+    public boolean hasScale() {
+      return requestCase_ == 13;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ScaleRequest scale = 13;</code>
+     * @return The scale.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.ScaleRequest getScale() {
+      if (scaleBuilder_ == null) {
+        if (requestCase_ == 13) {
+          return (cloud.spawnery.agent.pb.ScaleRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.ScaleRequest.getDefaultInstance();
+      } else {
+        if (requestCase_ == 13) {
+          return scaleBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.ScaleRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ScaleRequest scale = 13;</code>
+     */
+    public Builder setScale(cloud.spawnery.agent.pb.ScaleRequest value) {
+      if (scaleBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        request_ = value;
+        onChanged();
+      } else {
+        scaleBuilder_.setMessage(value);
+      }
+      requestCase_ = 13;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ScaleRequest scale = 13;</code>
+     */
+    public Builder setScale(
+        cloud.spawnery.agent.pb.ScaleRequest.Builder builderForValue) {
+      if (scaleBuilder_ == null) {
+        request_ = builderForValue.build();
+        onChanged();
+      } else {
+        scaleBuilder_.setMessage(builderForValue.build());
+      }
+      requestCase_ = 13;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ScaleRequest scale = 13;</code>
+     */
+    public Builder mergeScale(cloud.spawnery.agent.pb.ScaleRequest value) {
+      if (scaleBuilder_ == null) {
+        if (requestCase_ == 13 &&
+            request_ != cloud.spawnery.agent.pb.ScaleRequest.getDefaultInstance()) {
+          request_ = cloud.spawnery.agent.pb.ScaleRequest.newBuilder((cloud.spawnery.agent.pb.ScaleRequest) request_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          request_ = value;
+        }
+        onChanged();
+      } else {
+        if (requestCase_ == 13) {
+          scaleBuilder_.mergeFrom(value);
+        } else {
+          scaleBuilder_.setMessage(value);
+        }
+      }
+      requestCase_ = 13;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ScaleRequest scale = 13;</code>
+     */
+    public Builder clearScale() {
+      if (scaleBuilder_ == null) {
+        if (requestCase_ == 13) {
+          requestCase_ = 0;
+          request_ = null;
+          onChanged();
+        }
+      } else {
+        if (requestCase_ == 13) {
+          requestCase_ = 0;
+          request_ = null;
+        }
+        scaleBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ScaleRequest scale = 13;</code>
+     */
+    public cloud.spawnery.agent.pb.ScaleRequest.Builder getScaleBuilder() {
+      return internalGetScaleFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ScaleRequest scale = 13;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.ScaleRequestOrBuilder getScaleOrBuilder() {
+      if ((requestCase_ == 13) && (scaleBuilder_ != null)) {
+        return scaleBuilder_.getMessageOrBuilder();
+      } else {
+        if (requestCase_ == 13) {
+          return (cloud.spawnery.agent.pb.ScaleRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.ScaleRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ScaleRequest scale = 13;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.ScaleRequest, cloud.spawnery.agent.pb.ScaleRequest.Builder, cloud.spawnery.agent.pb.ScaleRequestOrBuilder> 
+        internalGetScaleFieldBuilder() {
+      if (scaleBuilder_ == null) {
+        if (!(requestCase_ == 13)) {
+          request_ = cloud.spawnery.agent.pb.ScaleRequest.getDefaultInstance();
+        }
+        scaleBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.ScaleRequest, cloud.spawnery.agent.pb.ScaleRequest.Builder, cloud.spawnery.agent.pb.ScaleRequestOrBuilder>(
+                (cloud.spawnery.agent.pb.ScaleRequest) request_,
+                getParentForChildren(),
+                isClean());
+        request_ = null;
+      }
+      requestCase_ = 13;
+      onChanged();
+      return scaleBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.ForceStopRequest, cloud.spawnery.agent.pb.ForceStopRequest.Builder, cloud.spawnery.agent.pb.ForceStopRequestOrBuilder> forceStopBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.ForceStopRequest force_stop = 14;</code>
+     * @return Whether the forceStop field is set.
+     */
+    @java.lang.Override
+    public boolean hasForceStop() {
+      return requestCase_ == 14;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ForceStopRequest force_stop = 14;</code>
+     * @return The forceStop.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.ForceStopRequest getForceStop() {
+      if (forceStopBuilder_ == null) {
+        if (requestCase_ == 14) {
+          return (cloud.spawnery.agent.pb.ForceStopRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.ForceStopRequest.getDefaultInstance();
+      } else {
+        if (requestCase_ == 14) {
+          return forceStopBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.ForceStopRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ForceStopRequest force_stop = 14;</code>
+     */
+    public Builder setForceStop(cloud.spawnery.agent.pb.ForceStopRequest value) {
+      if (forceStopBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        request_ = value;
+        onChanged();
+      } else {
+        forceStopBuilder_.setMessage(value);
+      }
+      requestCase_ = 14;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ForceStopRequest force_stop = 14;</code>
+     */
+    public Builder setForceStop(
+        cloud.spawnery.agent.pb.ForceStopRequest.Builder builderForValue) {
+      if (forceStopBuilder_ == null) {
+        request_ = builderForValue.build();
+        onChanged();
+      } else {
+        forceStopBuilder_.setMessage(builderForValue.build());
+      }
+      requestCase_ = 14;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ForceStopRequest force_stop = 14;</code>
+     */
+    public Builder mergeForceStop(cloud.spawnery.agent.pb.ForceStopRequest value) {
+      if (forceStopBuilder_ == null) {
+        if (requestCase_ == 14 &&
+            request_ != cloud.spawnery.agent.pb.ForceStopRequest.getDefaultInstance()) {
+          request_ = cloud.spawnery.agent.pb.ForceStopRequest.newBuilder((cloud.spawnery.agent.pb.ForceStopRequest) request_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          request_ = value;
+        }
+        onChanged();
+      } else {
+        if (requestCase_ == 14) {
+          forceStopBuilder_.mergeFrom(value);
+        } else {
+          forceStopBuilder_.setMessage(value);
+        }
+      }
+      requestCase_ = 14;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ForceStopRequest force_stop = 14;</code>
+     */
+    public Builder clearForceStop() {
+      if (forceStopBuilder_ == null) {
+        if (requestCase_ == 14) {
+          requestCase_ = 0;
+          request_ = null;
+          onChanged();
+        }
+      } else {
+        if (requestCase_ == 14) {
+          requestCase_ = 0;
+          request_ = null;
+        }
+        forceStopBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ForceStopRequest force_stop = 14;</code>
+     */
+    public cloud.spawnery.agent.pb.ForceStopRequest.Builder getForceStopBuilder() {
+      return internalGetForceStopFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ForceStopRequest force_stop = 14;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.ForceStopRequestOrBuilder getForceStopOrBuilder() {
+      if ((requestCase_ == 14) && (forceStopBuilder_ != null)) {
+        return forceStopBuilder_.getMessageOrBuilder();
+      } else {
+        if (requestCase_ == 14) {
+          return (cloud.spawnery.agent.pb.ForceStopRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.ForceStopRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ForceStopRequest force_stop = 14;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.ForceStopRequest, cloud.spawnery.agent.pb.ForceStopRequest.Builder, cloud.spawnery.agent.pb.ForceStopRequestOrBuilder> 
+        internalGetForceStopFieldBuilder() {
+      if (forceStopBuilder_ == null) {
+        if (!(requestCase_ == 14)) {
+          request_ = cloud.spawnery.agent.pb.ForceStopRequest.getDefaultInstance();
+        }
+        forceStopBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.ForceStopRequest, cloud.spawnery.agent.pb.ForceStopRequest.Builder, cloud.spawnery.agent.pb.ForceStopRequestOrBuilder>(
+                (cloud.spawnery.agent.pb.ForceStopRequest) request_,
+                getParentForChildren(),
+                isClean());
+        request_ = null;
+      }
+      requestCase_ = 14;
+      onChanged();
+      return forceStopBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.ExecuteRequest, cloud.spawnery.agent.pb.ExecuteRequest.Builder, cloud.spawnery.agent.pb.ExecuteRequestOrBuilder> executeBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteRequest execute = 15;</code>
+     * @return Whether the execute field is set.
+     */
+    @java.lang.Override
+    public boolean hasExecute() {
+      return requestCase_ == 15;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteRequest execute = 15;</code>
+     * @return The execute.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.ExecuteRequest getExecute() {
+      if (executeBuilder_ == null) {
+        if (requestCase_ == 15) {
+          return (cloud.spawnery.agent.pb.ExecuteRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.ExecuteRequest.getDefaultInstance();
+      } else {
+        if (requestCase_ == 15) {
+          return executeBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.ExecuteRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteRequest execute = 15;</code>
+     */
+    public Builder setExecute(cloud.spawnery.agent.pb.ExecuteRequest value) {
+      if (executeBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        request_ = value;
+        onChanged();
+      } else {
+        executeBuilder_.setMessage(value);
+      }
+      requestCase_ = 15;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteRequest execute = 15;</code>
+     */
+    public Builder setExecute(
+        cloud.spawnery.agent.pb.ExecuteRequest.Builder builderForValue) {
+      if (executeBuilder_ == null) {
+        request_ = builderForValue.build();
+        onChanged();
+      } else {
+        executeBuilder_.setMessage(builderForValue.build());
+      }
+      requestCase_ = 15;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteRequest execute = 15;</code>
+     */
+    public Builder mergeExecute(cloud.spawnery.agent.pb.ExecuteRequest value) {
+      if (executeBuilder_ == null) {
+        if (requestCase_ == 15 &&
+            request_ != cloud.spawnery.agent.pb.ExecuteRequest.getDefaultInstance()) {
+          request_ = cloud.spawnery.agent.pb.ExecuteRequest.newBuilder((cloud.spawnery.agent.pb.ExecuteRequest) request_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          request_ = value;
+        }
+        onChanged();
+      } else {
+        if (requestCase_ == 15) {
+          executeBuilder_.mergeFrom(value);
+        } else {
+          executeBuilder_.setMessage(value);
+        }
+      }
+      requestCase_ = 15;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteRequest execute = 15;</code>
+     */
+    public Builder clearExecute() {
+      if (executeBuilder_ == null) {
+        if (requestCase_ == 15) {
+          requestCase_ = 0;
+          request_ = null;
+          onChanged();
+        }
+      } else {
+        if (requestCase_ == 15) {
+          requestCase_ = 0;
+          request_ = null;
+        }
+        executeBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteRequest execute = 15;</code>
+     */
+    public cloud.spawnery.agent.pb.ExecuteRequest.Builder getExecuteBuilder() {
+      return internalGetExecuteFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteRequest execute = 15;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.ExecuteRequestOrBuilder getExecuteOrBuilder() {
+      if ((requestCase_ == 15) && (executeBuilder_ != null)) {
+        return executeBuilder_.getMessageOrBuilder();
+      } else {
+        if (requestCase_ == 15) {
+          return (cloud.spawnery.agent.pb.ExecuteRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.ExecuteRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteRequest execute = 15;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.ExecuteRequest, cloud.spawnery.agent.pb.ExecuteRequest.Builder, cloud.spawnery.agent.pb.ExecuteRequestOrBuilder> 
+        internalGetExecuteFieldBuilder() {
+      if (executeBuilder_ == null) {
+        if (!(requestCase_ == 15)) {
+          request_ = cloud.spawnery.agent.pb.ExecuteRequest.getDefaultInstance();
+        }
+        executeBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.ExecuteRequest, cloud.spawnery.agent.pb.ExecuteRequest.Builder, cloud.spawnery.agent.pb.ExecuteRequestOrBuilder>(
+                (cloud.spawnery.agent.pb.ExecuteRequest) request_,
+                getParentForChildren(),
+                isClean());
+        request_ = null;
+      }
+      requestCase_ = 15;
+      onChanged();
+      return executeBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.CloudRequest)

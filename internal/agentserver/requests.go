@@ -162,6 +162,12 @@ func (s *Server) answerCloudRequest(
 		return s.answerUnretire(ctx, logger, id, req.GetId(), req.GetUnretire())
 	case req.GetStatus() != nil:
 		return s.answerStatus(ctx, logger, id, req.GetId(), req.GetStatus())
+	case req.GetScale() != nil:
+		return s.answerScale(ctx, logger, id, req.GetId(), req.GetScale())
+	case req.GetForceStop() != nil:
+		return s.answerForceStop(ctx, logger, id, req.GetId(), req.GetForceStop())
+	case req.GetExecute() != nil:
+		return s.answerExecute(ctx, logger, id, req.GetId(), req.GetExecute())
 	default:
 		return refuse(req.GetId(), agentpb.RequestError_REASON_UNSPECIFIED,
 			"this operator does not know that request")

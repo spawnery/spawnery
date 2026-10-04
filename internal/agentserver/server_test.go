@@ -65,6 +65,8 @@ func (stubFanout) Join(context.Context, string, string) (<-chan *agentpb.Operato
 
 func (stubFanout) SetInterest(string, bool) {}
 
+func (stubFanout) Send(string, *agentpb.OperatorToServer) bool { return false }
+
 type stubFleet struct{}
 
 func (stubFleet) Join(context.Context, string, string, string) (<-chan *agentpb.OperatorToProxy, func(), error) {

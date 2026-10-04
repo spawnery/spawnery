@@ -20,6 +20,9 @@ spec:
     - jsonPath: .spec.groupRef.name
       name: Group
       type: string
+    - jsonPath: .spec.mode
+      name: Mode
+      type: string
     - jsonPath: .spec.replicas
       name: Replicas
       type: integer
@@ -79,17 +82,32 @@ spec:
                 required:
                 - name
                 type: object
+              mode:
+                default: Add
+                description: |-
+                  Mode Add raises the group's floor by Replicas; boosts on one group add
+                  up. Mode Exact holds the group at exactly Replicas servers, 0 included:
+                  the group's floor and ceiling both become that number, Add boosts stop
+                  counting, and of several Exact boosts the newest wins. Neither lifts
+                  spec.scaling.maxReplicas.
+                enum:
+                - Add
+                - Exact
+                type: string
               replicas:
                 description: |-
-                  Replicas is how many servers to add to the group's own floor. Boosts on
-                  one group add up.
+                  Replicas is how many servers to add (Add, at least 1) or to hold the
+                  group at (Exact, at least 0).
                 format: int32
-                minimum: 1
+                minimum: 0
                 type: integer
             required:
             - groupRef
             - replicas
             type: object
+            x-kubernetes-validations:
+            - message: an Add boost has to add at least one server
+              rule: (has(self.mode) && self.mode == 'Exact') || self.replicas >= 1
         type: object
     served: true
     storage: true

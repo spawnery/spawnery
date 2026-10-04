@@ -35,6 +35,7 @@ import (
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
 	"google.golang.org/grpc/status"
+	"k8s.io/client-go/tools/events"
 	"sigs.k8s.io/controller-runtime/pkg/log"
 
 	"github.com/spawnery/spawnery/internal/agent"
@@ -106,6 +107,8 @@ type StatusSource interface {
 type ServerFanout interface {
 	Join(ctx context.Context, namespace, podUID string) (<-chan *agentpb.OperatorToServer, func(), error)
 	SetInterest(podUID string, wanted bool)
+	// Send queues one message for one session and reports whether it went out.
+	Send(podUID string, msg *agentpb.OperatorToServer) bool
 }
 
 // Options carries the three durations the operator dictates to its agents;
@@ -120,7 +123,12 @@ type Options struct {
 	State    netstate.Source
 	Writer   ClusterWriter
 	// Status nil refuses StatusRequest as unavailable.
-	Status         StatusSource
+	Status StatusSource
+	// Recorder records ForceStopped and CommandExecuted on the Server. Nil
+	// records nothing.
+	Recorder events.EventRecorder
+	// ExecuteWait zero means ExecuteWait.
+	ExecuteWait    time.Duration
 	ReportInterval time.Duration
 	RenewAfter     time.Duration
 	// HardDeadline must be above RenewAfter, or a well-behaved agent would be
@@ -140,6 +148,7 @@ type Server struct {
 	sessions *sessions
 	// requestRate is a bucket separate from grpcauth's; see requestLimiter.
 	requestRate *requestLimiter
+	executions  executions
 	addr        atomic.Pointer[string]
 }
 
@@ -409,6 +418,8 @@ func (s *Server) handle(
 			RejectedReports.WithLabelValues(string(agent.RoleServer)).Inc()
 			logger.V(1).Info("discarded a heap report", "reason", err.Error())
 		}
+	case *agentpb.ServerMessage_ExecuteOutcome:
+		s.executions.deliver(id.PodUID, m.ExecuteOutcome)
 	case *agentpb.ServerMessage_CloudRequest:
 		return &agentpb.OperatorToServer{
 			Message: &agentpb.OperatorToServer_CloudResponse{
@@ -451,6 +462,7 @@ func (s *Server) ProxySession(stream agentpb.AgentService_ProxySessionServer) er
 	defer leaveFleet()
 
 	received, errs := recvPump(ctx, stream.Recv)
+	late := make(chan *agentpb.OperatorToProxy)
 
 	for {
 		select {
@@ -462,10 +474,14 @@ func (s *Server) ProxySession(stream agentpb.AgentService_ProxySessionServer) er
 			}
 			return err
 		case msg := <-received:
-			if answer := s.handleProxy(ctx, logger, id, msg); answer != nil {
+			if answer := s.handleProxy(ctx, logger, id, msg, late); answer != nil {
 				if err := sendBounded(SendDeadline, "an answer", func() error { return stream.Send(answer) }); err != nil {
 					return err
 				}
+			}
+		case answer := <-late:
+			if err := sendBounded(SendDeadline, "an answer", func() error { return stream.Send(answer) }); err != nil {
+				return err
 			}
 		case msg, ok := <-outbox:
 			if !ok {
@@ -492,6 +508,7 @@ func (s *Server) handleProxy(
 	logger logr.Logger,
 	id grpcauth.Identity,
 	msg *agentpb.ProxyMessage,
+	late chan<- *agentpb.OperatorToProxy,
 ) *agentpb.OperatorToProxy {
 	switch m := msg.GetMessage().(type) {
 	case *agentpb.ProxyMessage_Hello:
@@ -557,6 +574,22 @@ func (s *Server) handleProxy(
 		logger.V(1).Info("player joined a server",
 			"player", m.PlayerJoinedServer.GetPlayer(), "server", m.PlayerJoinedServer.GetServer())
 	case *agentpb.ProxyMessage_CloudRequest:
+		if m.CloudRequest.GetExecute() != nil {
+			// Waits on servers for up to ExecuteWait; inline, it would hold this
+			// proxy's outbox as long.
+			go func() {
+				answer := &agentpb.OperatorToProxy{
+					Message: &agentpb.OperatorToProxy_CloudResponse{
+						CloudResponse: s.answerCloudRequest(ctx, logger, id, m.CloudRequest),
+					},
+				}
+				select {
+				case late <- answer:
+				case <-ctx.Done():
+				}
+			}()
+			return nil
+		}
 		return &agentpb.OperatorToProxy{
 			Message: &agentpb.OperatorToProxy_CloudResponse{
 				CloudResponse: s.answerCloudRequest(ctx, logger, id, m.CloudRequest),

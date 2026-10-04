@@ -566,6 +566,48 @@ java.lang.String defaultValue) {
     return joinPermissionDenyOnly_;
   }
 
+  public static final int PINNED_FIELD_NUMBER = 13;
+  private boolean pinned_ = false;
+  /**
+   * <pre>
+   * An Exact ScaleBoost holds the group at pinned_replicas servers, which can
+   * be 0. Without a pin both fields below are zero and mean nothing.
+   * </pre>
+   *
+   * <code>bool pinned = 13;</code>
+   * @return The pinned.
+   */
+  @java.lang.Override
+  public boolean getPinned() {
+    return pinned_;
+  }
+
+  public static final int PINNED_REPLICAS_FIELD_NUMBER = 14;
+  private int pinnedReplicas_ = 0;
+  /**
+   * <code>int32 pinned_replicas = 14;</code>
+   * @return The pinnedReplicas.
+   */
+  @java.lang.Override
+  public int getPinnedReplicas() {
+    return pinnedReplicas_;
+  }
+
+  public static final int PINNED_UNTIL_UNIX_FIELD_NUMBER = 15;
+  private long pinnedUntilUnix_ = 0L;
+  /**
+   * <pre>
+   * When the pin ends, on the operator's clock; 0 for a pin without an end.
+   * </pre>
+   *
+   * <code>int64 pinned_until_unix = 15;</code>
+   * @return The pinnedUntilUnix.
+   */
+  @java.lang.Override
+  public long getPinnedUntilUnix() {
+    return pinnedUntilUnix_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -618,6 +660,15 @@ java.lang.String defaultValue) {
     }
     if (joinPermissionDenyOnly_ != false) {
       output.writeBool(12, joinPermissionDenyOnly_);
+    }
+    if (pinned_ != false) {
+      output.writeBool(13, pinned_);
+    }
+    if (pinnedReplicas_ != 0) {
+      output.writeInt32(14, pinnedReplicas_);
+    }
+    if (pinnedUntilUnix_ != 0L) {
+      output.writeInt64(15, pinnedUntilUnix_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -674,6 +725,18 @@ java.lang.String defaultValue) {
       size += com.google.protobuf.CodedOutputStream
         .computeBoolSize(12, joinPermissionDenyOnly_);
     }
+    if (pinned_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(13, pinned_);
+    }
+    if (pinnedReplicas_ != 0) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeInt32Size(14, pinnedReplicas_);
+    }
+    if (pinnedUntilUnix_ != 0L) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeInt64Size(15, pinnedUntilUnix_);
+    }
     return size;
   }
   @java.lang.Override
@@ -721,6 +784,12 @@ java.lang.String defaultValue) {
         .equals(other.getJoinPermission())) return false;
     if (getJoinPermissionDenyOnly()
         != other.getJoinPermissionDenyOnly()) return false;
+    if (getPinned()
+        != other.getPinned()) return false;
+    if (getPinnedReplicas()
+        != other.getPinnedReplicas()) return false;
+    if (getPinnedUntilUnix()
+        != other.getPinnedUntilUnix()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -760,6 +829,14 @@ java.lang.String defaultValue) {
     hash = (37 * hash) + JOIN_PERMISSION_DENY_ONLY_FIELD_NUMBER;
     hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
         getJoinPermissionDenyOnly());
+    hash = (37 * hash) + PINNED_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getPinned());
+    hash = (37 * hash) + PINNED_REPLICAS_FIELD_NUMBER;
+    hash = (53 * hash) + getPinnedReplicas();
+    hash = (37 * hash) + PINNED_UNTIL_UNIX_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
+        getPinnedUntilUnix());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -929,6 +1006,9 @@ java.lang.String defaultValue) {
       enforcePlayableSlots_ = false;
       joinPermission_ = "";
       joinPermissionDenyOnly_ = false;
+      pinned_ = false;
+      pinnedReplicas_ = 0;
+      pinnedUntilUnix_ = 0L;
       return this;
     }
 
@@ -999,6 +1079,15 @@ java.lang.String defaultValue) {
       if (((from_bitField0_ & 0x00000800) != 0)) {
         result.joinPermissionDenyOnly_ = joinPermissionDenyOnly_;
       }
+      if (((from_bitField0_ & 0x00001000) != 0)) {
+        result.pinned_ = pinned_;
+      }
+      if (((from_bitField0_ & 0x00002000) != 0)) {
+        result.pinnedReplicas_ = pinnedReplicas_;
+      }
+      if (((from_bitField0_ & 0x00004000) != 0)) {
+        result.pinnedUntilUnix_ = pinnedUntilUnix_;
+      }
     }
 
     @java.lang.Override
@@ -1054,6 +1143,15 @@ java.lang.String defaultValue) {
       }
       if (other.getJoinPermissionDenyOnly() != false) {
         setJoinPermissionDenyOnly(other.getJoinPermissionDenyOnly());
+      }
+      if (other.getPinned() != false) {
+        setPinned(other.getPinned());
+      }
+      if (other.getPinnedReplicas() != 0) {
+        setPinnedReplicas(other.getPinnedReplicas());
+      }
+      if (other.getPinnedUntilUnix() != 0L) {
+        setPinnedUntilUnix(other.getPinnedUntilUnix());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -1145,6 +1243,21 @@ java.lang.String defaultValue) {
               bitField0_ |= 0x00000800;
               break;
             } // case 96
+            case 104: {
+              pinned_ = input.readBool();
+              bitField0_ |= 0x00001000;
+              break;
+            } // case 104
+            case 112: {
+              pinnedReplicas_ = input.readInt32();
+              bitField0_ |= 0x00002000;
+              break;
+            } // case 112
+            case 120: {
+              pinnedUntilUnix_ = input.readInt64();
+              bitField0_ |= 0x00004000;
+              break;
+            } // case 120
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1916,6 +2029,129 @@ java.lang.String defaultValue) {
     public Builder clearJoinPermissionDenyOnly() {
       bitField0_ = (bitField0_ & ~0x00000800);
       joinPermissionDenyOnly_ = false;
+      onChanged();
+      return this;
+    }
+
+    private boolean pinned_ ;
+    /**
+     * <pre>
+     * An Exact ScaleBoost holds the group at pinned_replicas servers, which can
+     * be 0. Without a pin both fields below are zero and mean nothing.
+     * </pre>
+     *
+     * <code>bool pinned = 13;</code>
+     * @return The pinned.
+     */
+    @java.lang.Override
+    public boolean getPinned() {
+      return pinned_;
+    }
+    /**
+     * <pre>
+     * An Exact ScaleBoost holds the group at pinned_replicas servers, which can
+     * be 0. Without a pin both fields below are zero and mean nothing.
+     * </pre>
+     *
+     * <code>bool pinned = 13;</code>
+     * @param value The pinned to set.
+     * @return This builder for chaining.
+     */
+    public Builder setPinned(boolean value) {
+
+      pinned_ = value;
+      bitField0_ |= 0x00001000;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * An Exact ScaleBoost holds the group at pinned_replicas servers, which can
+     * be 0. Without a pin both fields below are zero and mean nothing.
+     * </pre>
+     *
+     * <code>bool pinned = 13;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearPinned() {
+      bitField0_ = (bitField0_ & ~0x00001000);
+      pinned_ = false;
+      onChanged();
+      return this;
+    }
+
+    private int pinnedReplicas_ ;
+    /**
+     * <code>int32 pinned_replicas = 14;</code>
+     * @return The pinnedReplicas.
+     */
+    @java.lang.Override
+    public int getPinnedReplicas() {
+      return pinnedReplicas_;
+    }
+    /**
+     * <code>int32 pinned_replicas = 14;</code>
+     * @param value The pinnedReplicas to set.
+     * @return This builder for chaining.
+     */
+    public Builder setPinnedReplicas(int value) {
+
+      pinnedReplicas_ = value;
+      bitField0_ |= 0x00002000;
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>int32 pinned_replicas = 14;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearPinnedReplicas() {
+      bitField0_ = (bitField0_ & ~0x00002000);
+      pinnedReplicas_ = 0;
+      onChanged();
+      return this;
+    }
+
+    private long pinnedUntilUnix_ ;
+    /**
+     * <pre>
+     * When the pin ends, on the operator's clock; 0 for a pin without an end.
+     * </pre>
+     *
+     * <code>int64 pinned_until_unix = 15;</code>
+     * @return The pinnedUntilUnix.
+     */
+    @java.lang.Override
+    public long getPinnedUntilUnix() {
+      return pinnedUntilUnix_;
+    }
+    /**
+     * <pre>
+     * When the pin ends, on the operator's clock; 0 for a pin without an end.
+     * </pre>
+     *
+     * <code>int64 pinned_until_unix = 15;</code>
+     * @param value The pinnedUntilUnix to set.
+     * @return This builder for chaining.
+     */
+    public Builder setPinnedUntilUnix(long value) {
+
+      pinnedUntilUnix_ = value;
+      bitField0_ |= 0x00004000;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * When the pin ends, on the operator's clock; 0 for a pin without an end.
+     * </pre>
+     *
+     * <code>int64 pinned_until_unix = 15;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearPinnedUntilUnix() {
+      bitField0_ = (bitField0_ & ~0x00004000);
+      pinnedUntilUnix_ = 0L;
       onChanged();
       return this;
     }

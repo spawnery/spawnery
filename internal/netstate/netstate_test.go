@@ -25,6 +25,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
@@ -748,5 +749,24 @@ func TestAClosedDoorOnTheCurrentPodSurvivesADisconnect(t *testing.T) {
 	}
 	if !got.GetServers()[0].GetJoinsClosed() {
 		t.Errorf("survival-0 = %+v, want the closed door to survive a disconnect", got.GetServers()[0])
+	}
+}
+
+func TestBuildCarriesAGroupsPin(t *testing.T) {
+	pinned := ephemeralGroup("ns", "lobby")
+	until := metav1.NewTime(time.Unix(1_800_000_000, 0))
+	pinned.Status.PinnedReplicas = ptr.To[int32](0)
+	pinned.Status.PinnedUntil = &until
+	src, _ := source(t, pinned, ephemeralGroup("ns", "arena"))
+
+	got, err := src.Build(context.Background(), "ns", netstate.ForServers)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	if g := got.GetGroups()[0]; g.GetPinned() {
+		t.Errorf("arena = %+v, want no pin", g)
+	}
+	if g := got.GetGroups()[1]; !g.GetPinned() || g.GetPinnedReplicas() != 0 || g.GetPinnedUntilUnix() != 1_800_000_000 {
+		t.Errorf("lobby = %+v, want pinned to 0 until 1800000000", g)
 	}
 }

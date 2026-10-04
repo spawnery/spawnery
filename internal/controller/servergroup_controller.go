@@ -34,6 +34,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"k8s.io/client-go/tools/events"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -357,13 +358,18 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 
 	// A failed boost list sizes on the declared floor alone rather than failing
 	// the pass, so dead servers are still replaced.
-	var boost int32
+	var boosts groupBoosts
 	boostList := &spawneryv1alpha1.ScaleBoostList{}
 	if err := r.List(ctx, boostList, client.InNamespace(group.Namespace)); err != nil {
 		log.FromContext(ctx).V(1).Info("could not read scale boosts; sizing on the declared floor alone",
 			"group", group.Name, "reason", err.Error())
 	} else {
-		boost = boostpkg.Live(boostList.Items, group.Name, r.Clock())
+		mine := boostpkg.Of(boostList.Items, group)
+		now := r.Clock()
+		boosts.Add = boostpkg.Live(mine, group.Name, now)
+		if group.IsEphemeral() && group.Spec.Scaling != nil {
+			boosts.Pin, boosts.Pinned = boostpkg.Exact(mine, group.Name, now)
+		}
 	}
 
 	var siblings []ChangeoverView
@@ -374,7 +380,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, err
 		}
 	}
-	decision, err := r.size(ctx, group, views, servers, backoff, mayResize, podHash, boost, siblings, budget)
+	decision, err := r.size(ctx, group, views, servers, backoff, mayResize, podHash, boosts, siblings, budget)
 	if err != nil {
 		return ctrl.Result{}, err
 	}
@@ -394,17 +400,23 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if decision.Limited {
 			limited.Status = metav1.ConditionTrue
 			limited.Reason = spawneryv1alpha1.ReasonMaxReplicasReached
-			if decision.ColdStartBlocked {
+			switch {
+			case boosts.Pinned:
+				limited.Reason = spawneryv1alpha1.ReasonPinned
+				limited.Message = fmt.Sprintf(
+					"a ScaleBoost pins the group to %d server(s); spareSlots %d asks for %d more",
+					boosts.Pin.Replicas, group.Spec.Scaling.SpareSlots, decision.Wanted)
+			case decision.ColdStartBlocked:
 				// Wanted and Create are both 0 here, so the shortfall message would say
 				// nothing is needed.
 				limited.Message = fmt.Sprintf(
 					"changeover cannot begin: the group is already at maxReplicas %d; raise it by at least 1 to start the new generation",
 					group.Spec.Scaling.MaxReplicas)
-			} else if decision.FloorBlocked {
+			case decision.FloorBlocked:
 				limited.Message = fmt.Sprintf(
 					"the changeover keeps minAvailable %d joinable and needs one extra server; the group is at maxReplicas %d",
 					group.UpdateMinAvailable(), group.Spec.Scaling.MaxReplicas)
-			} else {
+			default:
 				limited.Message = fmt.Sprintf(
 					"%d more server(s) needed to cover spareSlots %d; maxReplicas %d allows %d now",
 					decision.Wanted, group.Spec.Scaling.SpareSlots,
@@ -543,7 +555,12 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	group.Status.ReadyReplicas = totals.ReadyReplicas
 	group.Status.OnlinePlayers = totals.OnlinePlayers
 	group.Status.FreeSlots = totals.FreeSlots
-	group.Status.BoostedReplicas = boost
+	group.Status.BoostedReplicas = boosts.Add
+	group.Status.PinnedReplicas, group.Status.PinnedUntil = nil, nil
+	if boosts.Pinned {
+		group.Status.PinnedReplicas = ptr.To(boosts.Pin.Replicas)
+		group.Status.PinnedUntil = boosts.Pin.ExpiresAt
+	}
 	group.Status.ObservedGeneration = group.Generation
 	group.Status.Phase = derivePhase(group, totals)
 	// Independent of derivePhase; see ConditionProgressing. The floor is only
@@ -624,6 +641,13 @@ func hashOfAttempt(key string) string {
 	return hash
 }
 
+// groupBoosts is what a group's ScaleBoosts say this pass.
+type groupBoosts struct {
+	Add    int32
+	Pin    boostpkg.Pin
+	Pinned bool
+}
+
 // size brings the group to the size its rule asks for (DecideSize for an
 // ephemeral group, DecidePersistentSize for a persistent one) and condemns the
 // servers on departing nodes, whether or not mayResize allows sizing. Without
@@ -636,7 +660,7 @@ func (r *ServerGroupReconciler) size(
 	backoff BackoffDecision,
 	mayResize bool,
 	podHash string,
-	boost int32,
+	boosts groupBoosts,
 	siblings []ChangeoverView,
 	budget int32,
 ) (SizeDecision, error) {
@@ -664,7 +688,9 @@ func (r *ServerGroupReconciler) size(
 			decision = DecideSize(ScalingInputs{
 				Views:         views,
 				MinReplicas:   group.Spec.Scaling.MinReplicas,
-				Boost:         boost,
+				Boost:         boosts.Add,
+				Pinned:        boosts.Pinned,
+				Pin:           boosts.Pin.Replicas,
 				MaxReplicas:   group.Spec.Scaling.MaxReplicas,
 				SpareSlots:    group.Spec.Scaling.SpareSlots,
 				MaxPlayers:    group.Spec.MaxPlayers,
@@ -1254,7 +1280,7 @@ func (r *ServerGroupReconciler) retireServer(
 		return err
 	}
 	r.Recorder.Eventf(group, nil, corev1.EventTypeNormal, "ServerRetiring", actionRetireServer,
-		"retiring server %s for a rolling update", name)
+		"retiring server %s", name)
 	return nil
 }
 

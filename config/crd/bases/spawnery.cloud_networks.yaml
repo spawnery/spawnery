@@ -53,6 +53,18 @@ spec:
               NetworkSpec describes one Minecraft network. Exactly one Network may exist
               per namespace; further ones are rejected with an Accepted=False condition.
             properties:
+              commands:
+                description: |-
+                  Commands opens in-game commands that reach past the operator's own
+                  objects. Absent, all of them are off.
+                properties:
+                  execute:
+                    description: |-
+                      Execute lets an administrator on a proxy run a console command on one
+                      server or on every server of a group with /cloud execute. Off, the
+                      operator refuses every such request.
+                    type: boolean
+                type: object
               defaults:
                 description: Defaults are inherited by all groups of this network.
                 properties:

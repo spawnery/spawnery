@@ -59,6 +59,7 @@ private static final long serialVersionUID = 0L;
     NETWORK_STATE(3),
     CLOUD_RESPONSE(4),
     CLOUD_EVENT(5),
+    EXECUTE_COMMAND(6),
     MESSAGE_NOT_SET(0);
     private final int value;
     private MessageCase(int value) {
@@ -81,6 +82,7 @@ private static final long serialVersionUID = 0L;
         case 3: return NETWORK_STATE;
         case 4: return CLOUD_RESPONSE;
         case 5: return CLOUD_EVENT;
+        case 6: return EXECUTE_COMMAND;
         case 0: return MESSAGE_NOT_SET;
         default: return null;
       }
@@ -251,6 +253,37 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.CloudEvent.getDefaultInstance();
   }
 
+  public static final int EXECUTE_COMMAND_FIELD_NUMBER = 6;
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteCommand execute_command = 6;</code>
+   * @return Whether the executeCommand field is set.
+   */
+  @java.lang.Override
+  public boolean hasExecuteCommand() {
+    return messageCase_ == 6;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteCommand execute_command = 6;</code>
+   * @return The executeCommand.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.ExecuteCommand getExecuteCommand() {
+    if (messageCase_ == 6) {
+       return (cloud.spawnery.agent.pb.ExecuteCommand) message_;
+    }
+    return cloud.spawnery.agent.pb.ExecuteCommand.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.ExecuteCommand execute_command = 6;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.ExecuteCommandOrBuilder getExecuteCommandOrBuilder() {
+    if (messageCase_ == 6) {
+       return (cloud.spawnery.agent.pb.ExecuteCommand) message_;
+    }
+    return cloud.spawnery.agent.pb.ExecuteCommand.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -280,6 +313,9 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 5) {
       output.writeMessage(5, (cloud.spawnery.agent.pb.CloudEvent) message_);
     }
+    if (messageCase_ == 6) {
+      output.writeMessage(6, (cloud.spawnery.agent.pb.ExecuteCommand) message_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -303,6 +339,10 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 5) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(5, (cloud.spawnery.agent.pb.CloudEvent) message_);
+    }
+    if (messageCase_ == 6) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(6, (cloud.spawnery.agent.pb.ExecuteCommand) message_);
     }
     return size;
   }
@@ -350,6 +390,10 @@ private static final long serialVersionUID = 0L;
         if (!getCloudEvent()
             .equals(other.getCloudEvent())) return false;
         break;
+      case 6:
+        if (!getExecuteCommand()
+            .equals(other.getExecuteCommand())) return false;
+        break;
       case 0:
       default:
     }
@@ -384,6 +428,10 @@ private static final long serialVersionUID = 0L;
       case 5:
         hash = (37 * hash) + CLOUD_EVENT_FIELD_NUMBER;
         hash = (53 * hash) + getCloudEvent().hashCode();
+        break;
+      case 6:
+        hash = (37 * hash) + EXECUTE_COMMAND_FIELD_NUMBER;
+        hash = (53 * hash) + getExecuteCommand().hashCode();
         break;
       case 0:
       default:
@@ -534,6 +582,9 @@ private static final long serialVersionUID = 0L;
       if (cloudEventBuilder_ != null) {
         cloudEventBuilder_.clear();
       }
+      if (executeCommandBuilder_ != null) {
+        executeCommandBuilder_.clear();
+      }
       messageCase_ = 0;
       message_ = null;
       return this;
@@ -595,6 +646,10 @@ private static final long serialVersionUID = 0L;
           cloudEventBuilder_ != null) {
         result.message_ = cloudEventBuilder_.build();
       }
+      if (messageCase_ == 6 &&
+          executeCommandBuilder_ != null) {
+        result.message_ = executeCommandBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -628,6 +683,10 @@ private static final long serialVersionUID = 0L;
         }
         case CLOUD_EVENT: {
           mergeCloudEvent(other.getCloudEvent());
+          break;
+        }
+        case EXECUTE_COMMAND: {
+          mergeExecuteCommand(other.getExecuteCommand());
           break;
         }
         case MESSAGE_NOT_SET: {
@@ -695,6 +754,13 @@ private static final long serialVersionUID = 0L;
               messageCase_ = 5;
               break;
             } // case 42
+            case 50: {
+              input.readMessage(
+                  internalGetExecuteCommandFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              messageCase_ = 6;
+              break;
+            } // case 50
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -1435,6 +1501,148 @@ private static final long serialVersionUID = 0L;
       messageCase_ = 5;
       onChanged();
       return cloudEventBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.ExecuteCommand, cloud.spawnery.agent.pb.ExecuteCommand.Builder, cloud.spawnery.agent.pb.ExecuteCommandOrBuilder> executeCommandBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteCommand execute_command = 6;</code>
+     * @return Whether the executeCommand field is set.
+     */
+    @java.lang.Override
+    public boolean hasExecuteCommand() {
+      return messageCase_ == 6;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteCommand execute_command = 6;</code>
+     * @return The executeCommand.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.ExecuteCommand getExecuteCommand() {
+      if (executeCommandBuilder_ == null) {
+        if (messageCase_ == 6) {
+          return (cloud.spawnery.agent.pb.ExecuteCommand) message_;
+        }
+        return cloud.spawnery.agent.pb.ExecuteCommand.getDefaultInstance();
+      } else {
+        if (messageCase_ == 6) {
+          return executeCommandBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.ExecuteCommand.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteCommand execute_command = 6;</code>
+     */
+    public Builder setExecuteCommand(cloud.spawnery.agent.pb.ExecuteCommand value) {
+      if (executeCommandBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        message_ = value;
+        onChanged();
+      } else {
+        executeCommandBuilder_.setMessage(value);
+      }
+      messageCase_ = 6;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteCommand execute_command = 6;</code>
+     */
+    public Builder setExecuteCommand(
+        cloud.spawnery.agent.pb.ExecuteCommand.Builder builderForValue) {
+      if (executeCommandBuilder_ == null) {
+        message_ = builderForValue.build();
+        onChanged();
+      } else {
+        executeCommandBuilder_.setMessage(builderForValue.build());
+      }
+      messageCase_ = 6;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteCommand execute_command = 6;</code>
+     */
+    public Builder mergeExecuteCommand(cloud.spawnery.agent.pb.ExecuteCommand value) {
+      if (executeCommandBuilder_ == null) {
+        if (messageCase_ == 6 &&
+            message_ != cloud.spawnery.agent.pb.ExecuteCommand.getDefaultInstance()) {
+          message_ = cloud.spawnery.agent.pb.ExecuteCommand.newBuilder((cloud.spawnery.agent.pb.ExecuteCommand) message_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          message_ = value;
+        }
+        onChanged();
+      } else {
+        if (messageCase_ == 6) {
+          executeCommandBuilder_.mergeFrom(value);
+        } else {
+          executeCommandBuilder_.setMessage(value);
+        }
+      }
+      messageCase_ = 6;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteCommand execute_command = 6;</code>
+     */
+    public Builder clearExecuteCommand() {
+      if (executeCommandBuilder_ == null) {
+        if (messageCase_ == 6) {
+          messageCase_ = 0;
+          message_ = null;
+          onChanged();
+        }
+      } else {
+        if (messageCase_ == 6) {
+          messageCase_ = 0;
+          message_ = null;
+        }
+        executeCommandBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteCommand execute_command = 6;</code>
+     */
+    public cloud.spawnery.agent.pb.ExecuteCommand.Builder getExecuteCommandBuilder() {
+      return internalGetExecuteCommandFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteCommand execute_command = 6;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.ExecuteCommandOrBuilder getExecuteCommandOrBuilder() {
+      if ((messageCase_ == 6) && (executeCommandBuilder_ != null)) {
+        return executeCommandBuilder_.getMessageOrBuilder();
+      } else {
+        if (messageCase_ == 6) {
+          return (cloud.spawnery.agent.pb.ExecuteCommand) message_;
+        }
+        return cloud.spawnery.agent.pb.ExecuteCommand.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ExecuteCommand execute_command = 6;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.ExecuteCommand, cloud.spawnery.agent.pb.ExecuteCommand.Builder, cloud.spawnery.agent.pb.ExecuteCommandOrBuilder> 
+        internalGetExecuteCommandFieldBuilder() {
+      if (executeCommandBuilder_ == null) {
+        if (!(messageCase_ == 6)) {
+          message_ = cloud.spawnery.agent.pb.ExecuteCommand.getDefaultInstance();
+        }
+        executeCommandBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.ExecuteCommand, cloud.spawnery.agent.pb.ExecuteCommand.Builder, cloud.spawnery.agent.pb.ExecuteCommandOrBuilder>(
+                (cloud.spawnery.agent.pb.ExecuteCommand) message_,
+                getParentForChildren(),
+                isClean());
+        message_ = null;
+      }
+      messageCase_ = 6;
+      onChanged();
+      return executeCommandBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.OperatorToServer)

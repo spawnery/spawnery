@@ -174,3 +174,25 @@ func TestNetworkStatusRejectsAMalformedForwardingSecretHash(t *testing.T) {
 		})
 	}
 }
+
+func TestNetworkCarriesTheExecuteSwitch(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	if err := c.Create(ctx, &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: ns},
+		Spec: spawneryv1alpha1.NetworkSpec{
+			ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "velocity-forwarding-secret"},
+			Commands:            &spawneryv1alpha1.NetworkCommands{Execute: true},
+		},
+	}); err != nil {
+		t.Fatalf("create Network: %v", err)
+	}
+	got := &spawneryv1alpha1.Network{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "production", Namespace: ns}, got); err != nil {
+		t.Fatalf("get Network: %v", err)
+	}
+	if !got.ExecuteEnabled() {
+		t.Error("spec.commands.execute did not survive a write and a read")
+	}
+}
