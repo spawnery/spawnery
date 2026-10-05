@@ -32,6 +32,24 @@ cache only holds classes from the JDK's built-in loaders. The 36 % came from
 the JDK's classes and the part of Minecraft's the bundler leaves to the
 application loader.
 
+The spike the first version of this design asked for ran on the same node
+and image the same day:
+
+| | JVM start to `Done` |
+|---|---|
+| bundler launch, no cache | 8.9 s |
+| flat launch, no cache | 8.0 s |
+| flat launch, cache | 3.7 s, 3.8 s |
+| flat launch, cache trained under another directory | 3.5 s |
+
+- The flat launch needs the server jar from `versions/` ahead of the
+  libraries on the class path; the other way round, Mojang's logging library
+  shadows the server's patched `LogUtils` (`NoSuchMethodError`).
+- Two training runs on the same input gave different cache files (196 MB,
+  different SHA-256), so the training cannot sit in the reproducible build.
+- A cache trained with the class path under another directory was mapped
+  and used, so the training does not need the runtime paths.
+
 ## 2. The shape
 
 Two changes to the game images (Paper and Purpur); Velocity and the operator
@@ -55,19 +73,16 @@ a group's plugins cost what they cost today.
   depends on the JDK build and the exact class path, both fixed by the image
   tag; it does not depend on a group's plugins, files or world. One cache per
   image serves every group.
-- **Where the training runs is decided by a spike, first task of the plan.**
-  The images are bit-for-bit reproducible (`make image-repro`), and that
-  stays:
-  - If two training runs in the Nix build give identical cache files, and the
-    JVM accepts a cache trained under `/nix/store/…/opt/paper` when the same
-    layout sits at `/opt/paper` (relocated class path, JDK 19 and later), the
-    training runs in the Nix build and the cache is part of the image.
-  - Otherwise the cache becomes a separate image,
-    `ghcr.io/spawnery/<flavor>-aot:<tag>`, built and trained by the release
-    workflow from the published game image. The operator mounts it as an
-    image volume at `/var/run/spawnery/aot` for every server whose image has
-    one. The game image stays reproducible, and the cache image is declared
-    as not being so.
+- **The cache is a separate image.** Training output is not reproducible
+  (above), and the game images are bit-for-bit reproducible
+  (`make image-repro`), which stays. The release workflow trains each game
+  image it publishes and pushes the cache as
+  `ghcr.io/spawnery/<flavor>-aot:<tag>`, an image holding `/server.aot` and
+  nothing else, declared as not reproducible. The operator mounts it as an
+  image volume at `/var/run/spawnery/aot` for servers running one of
+  spawnery's own game images at an image version that has caches; for any
+  other image, or a version from before, nothing is mounted and the server
+  starts as today.
 - **A cache that does not fit is ignored, not fatal.** The JVM prints a
   warning and starts without it when the JDK, the class path or a relevant
   flag differs. The entrypoint passes the flag only when the file exists,
@@ -89,15 +104,17 @@ a group's plugins cost what they cost today.
   class from the bundler manifests.
 - `image/entrypoint.sh`: `exec java … -cp "$(cat classpath)" <main>` instead
   of `-jar`, plus `-XX:AOTCache=<file>` when the cache file exists.
-- The training, in the Nix build or the release workflow per the spike.
+- `hack/aot-image.sh`: trains a game image and builds its cache image; the
+  release workflow calls it after publishing each game image.
+- `internal/podspec`: the cache image volume for spawnery's own game images.
 - `hack/image-test.sh`: the cache is used, and the flat launch reaches
   `Done`.
 
 ## 5. Versions
 
 The image changes (entrypoint, contents): a minor step for `imageVersion`.
-If the spike chooses the separate cache image, the operator changes too (it
-mounts the volume): a minor step for the operator and the chart.
+The operator changes too (it mounts the volume): a minor step for the
+operator and the chart.
 
 ## 6. Testing
 
