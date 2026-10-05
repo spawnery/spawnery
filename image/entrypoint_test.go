@@ -64,10 +64,29 @@ func runScript(t *testing.T, repoScript, workDir string, configExit int, env ...
 	return string(out), err
 }
 
+// writeLaunchFiles gives home the two files nix/flat-launch.nix writes into an
+// image, and returns the class path it wrote.
+func writeLaunchFiles(t *testing.T, home string) string {
+	t.Helper()
+	if err := os.MkdirAll(home, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	classpath := home + "/repo/versions/26.3/purpur-26.3.jar:" + home + "/repo/libraries/lib.jar"
+	if err := os.WriteFile(filepath.Join(home, "launch.classpath"), []byte(classpath+"\n"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(home, "launch.main"), []byte("org.bukkit.craftbukkit.Main"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	return classpath
+}
+
 func runEntrypoint(t *testing.T, workDir string, configExit int, env ...string) (string, error) {
 	t.Helper()
+	home := filepath.Join(t.TempDir(), "opt", "purpur")
+	writeLaunchFiles(t, home)
 	return runScript(t, "image/entrypoint.sh", workDir, configExit,
-		append([]string{"SPAWNERY_PAPER_HOME=/opt/paper"}, env...)...)
+		append([]string{"SPAWNERY_PAPER_HOME=" + home}, env...)...)
 }
 
 func TestEntrypointAcceptsTheEula(t *testing.T) {
@@ -98,24 +117,48 @@ func TestEntrypointInvokesSpawneryConfigWithThePaperFlavor(t *testing.T) {
 	}
 }
 
-func TestEntrypointExecsJavaWithTheBundlerRepo(t *testing.T) {
-	dir := t.TempDir()
+func TestEntrypointStartsTheServerFlatFromTheLaunchFiles(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "opt", "purpur")
+	classpath := writeLaunchFiles(t, home)
 
-	out, err := runEntrypoint(t, dir, 0)
+	out, err := runEntrypoint(t, t.TempDir(), 0, "SPAWNERY_PAPER_HOME="+home)
 	if err != nil {
-		t.Fatalf("entrypoint: %v", err)
+		t.Fatalf("entrypoint: %v\n%s", err, out)
 	}
-
-	for _, want := range []string{
-		"JAVA_ARGV:",
-		"-DbundlerRepoDir=/opt/paper/repo",
-		"-jar /opt/paper/paper.jar",
-		"--nogui",
-		"-XX:MaxRAMPercentage=75",
-	} {
-		if !strings.Contains(out, want) {
-			t.Errorf("java was not invoked with %q; got: %s", want, out)
+	argv := javaArgv(t, out)
+	if !strings.HasSuffix(argv, " -cp "+classpath+" org.bukkit.craftbukkit.Main --nogui") {
+		t.Errorf("java was not started flat from the launch files; got: %s", argv)
+	}
+	for _, unwanted := range []string{"-jar", "bundlerRepoDir"} {
+		if strings.Contains(argv, unwanted) {
+			t.Errorf("java still carries the bundler's %q; got: %s", unwanted, argv)
 		}
+	}
+	if !strings.Contains(argv, "-XX:MaxRAMPercentage=75") {
+		t.Errorf("the heap flag is gone; got: %s", argv)
+	}
+}
+
+func TestEntrypointRefusesAnImageWithoutLaunchFiles(t *testing.T) {
+	for _, missing := range []string{"launch.classpath", "launch.main"} {
+		t.Run(missing, func(t *testing.T) {
+			home := filepath.Join(t.TempDir(), "opt", "purpur")
+			writeLaunchFiles(t, home)
+			if err := os.Remove(filepath.Join(home, missing)); err != nil {
+				t.Fatal(err)
+			}
+
+			out, err := runEntrypoint(t, t.TempDir(), 0, "SPAWNERY_PAPER_HOME="+home)
+			if err == nil {
+				t.Fatalf("entrypoint succeeded without %s; output: %s", missing, out)
+			}
+			if !strings.Contains(out, home+"/"+missing+" is missing") {
+				t.Errorf("the refusal does not name %s; output: %s", missing, out)
+			}
+			if strings.Contains(out, "JAVA_ARGV:") {
+				t.Errorf("java was started anyway; output: %s", out)
+			}
+		})
 	}
 }
 
@@ -128,6 +171,7 @@ func TestEntrypointStopsIfSpawneryConfigRefuses(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(paperHome, "agent"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeLaunchFiles(t, paperHome)
 	if err := os.WriteFile(filepath.Join(paperHome, "agent", "spawnery-agent.jar"), []byte("fresh"), 0o444); err != nil {
 		t.Fatal(err)
 	}
@@ -162,6 +206,7 @@ func TestCopiesTheAgentPluginIntoAWritablePluginsDirectory(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(paperHome, "agent"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeLaunchFiles(t, paperHome)
 	jar := filepath.Join(paperHome, "agent", "spawnery-agent.jar")
 	if err := os.WriteFile(jar, []byte("fresh"), 0o444); err != nil {
 		t.Fatal(err)
@@ -197,6 +242,7 @@ func TestCopiesTheAgentPluginOnASecondStartEvenThoughTheFirstLeftItReadOnly(t *t
 	if err := os.MkdirAll(filepath.Join(paperHome, "agent"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeLaunchFiles(t, paperHome)
 	jar := filepath.Join(paperHome, "agent", "spawnery-agent.jar")
 	if err := os.WriteFile(jar, []byte("v1"), 0o444); err != nil {
 		t.Fatal(err)
@@ -389,6 +435,7 @@ func TestTheAgentJarWinsOverOneOnTheVolume(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(paperHome, "agent"), 0o755); err != nil {
 		t.Fatal(err)
 	}
+	writeLaunchFiles(t, paperHome)
 	if err := os.WriteFile(filepath.Join(paperHome, "agent", "spawnery-agent.jar"),
 		[]byte("from the image"), 0o444); err != nil {
 		t.Fatal(err)
@@ -466,23 +513,6 @@ func TestNoSourceDirectoryIsNotAnError(t *testing.T) {
 	if _, err := runEntrypoint(t, dir, 0,
 		"SPAWNERY_PLUGIN_SOURCE="+filepath.Join(dir, "nothing-here")); err != nil {
 		t.Fatalf("a missing plugin source failed the start: %v", err)
-	}
-}
-
-func TestEntrypointExecsThePurpurJarWhenTheImageNamesOne(t *testing.T) {
-	dir := t.TempDir()
-
-	out, err := runEntrypoint(t, dir, 0,
-		"SPAWNERY_PAPER_HOME=/opt/purpur",
-		"SPAWNERY_SERVER_JAR=/opt/purpur/purpur.jar")
-	if err != nil {
-		t.Fatalf("entrypoint: %v\n%s", err, out)
-	}
-	if !strings.Contains(out, "-jar /opt/purpur/purpur.jar") {
-		t.Errorf("java was not invoked with the named jar:\n%s", out)
-	}
-	if !strings.Contains(out, "-DbundlerRepoDir=/opt/purpur/repo") {
-		t.Errorf("the bundler repo did not follow SPAWNERY_PAPER_HOME:\n%s", out)
 	}
 }
 

@@ -7,6 +7,7 @@
 , findutils
 , paper-jre
 , runCommand
+, unzip
 , purpur
 , spawnery-slp
 , spawnery-config
@@ -22,6 +23,13 @@ let
     cp -r ${purpur.repo} $out/opt/purpur/repo
     chmod -R a-w $out/opt/purpur
   '';
+
+  launch = import ./flat-launch.nix { inherit runCommand unzip; } {
+    name = "purpur";
+    serverJar = purpur.purpurJar;
+    inherit (purpur) repo;
+    home = "/opt/purpur";
+  };
 
   agent = runCommand "purpur-agent-image-path" { } ''
     mkdir -p $out/opt/purpur/agent
@@ -45,6 +53,7 @@ oci-common.layeredImage {
     oci-common.passwd
     oci-common.group
     purpurHome
+    launch
     agent
     (oci-common.binIn { package = spawnery-slp; name = "spawnery-slp"; })
     (oci-common.binIn { package = spawnery-config; name = "spawnery-config"; })
@@ -52,12 +61,11 @@ oci-common.layeredImage {
   ];
 
   config = {
-    # SPAWNERY_PAPER_HOME keeps its name while the entrypoint is shared.
+    # The entrypoint reads SPAWNERY_PAPER_HOME; Purpur keeps Paper's name for it.
     Env = [
       "HOME=/data"
       "PATH=/bin:/usr/local/bin"
       "SPAWNERY_PAPER_HOME=/opt/purpur"
-      "SPAWNERY_SERVER_JAR=/opt/purpur/purpur.jar"
     ];
     ExposedPorts = { "25565/tcp" = { }; };
     Entrypoint = [ "/usr/local/bin/spawnery-entrypoint" ];
