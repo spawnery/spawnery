@@ -69,12 +69,18 @@ func Run(dir string, keep, replace []string, mountinfo string, pairs []sourcetre
 		return err
 	}
 	for _, rel := range doomed {
-		if kept(repl, strings.Split(rel, "/")) {
+		segs := strings.Split(rel, "/")
+		if kept(repl, segs) {
 			continue
 		}
 		world, err := holdsWorld(filepath.Join(root, rel))
 		if err != nil {
 			return fmt.Errorf("cannot tell whether %s holds a world: %w", rel, err)
+		}
+		if !world {
+			if world, err = splitWorld(root, segs, pats, mounts); err != nil {
+				return fmt.Errorf("cannot tell whether %s is part of a world: %w", rel, err)
+			}
 		}
 		if !world {
 			continue
@@ -84,7 +90,8 @@ func Run(dir string, keep, replace []string, mountinfo string, pairs []sourcetre
 			return fmt.Errorf("cannot tell whether a source ships %s: %w", rel, err)
 		}
 		if !whole {
-			return fmt.Errorf("spec.storage.keep does not keep %s, which holds a world", rel)
+			return fmt.Errorf("spec.storage.keep does not keep %s, which holds a world; "+
+				"list it in spec.storage.replace if the sources own it", rel)
 		}
 	}
 	for _, p := range pairs {
@@ -189,6 +196,28 @@ func onTheWay(pats, mounts [][]string, rel []string) bool {
 		}
 	}
 	return false
+}
+
+// splitWorld reports whether an ancestor of rel, entered only on the way to a
+// replace entry, is itself a world, whose pieces would otherwise pass one by one.
+func splitWorld(root string, rel []string, pats, mounts [][]string) (bool, error) {
+	for i := 1; i < len(rel); i++ {
+		anc := rel[:i]
+		if onTheWay(pats, mounts, anc) {
+			continue
+		}
+		entries, err := os.ReadDir(filepath.Join(append([]string{root}, anc...)...))
+		if err != nil {
+			return false, err
+		}
+		for _, e := range entries {
+			n := e.Name()
+			if e.IsDir() && n == "region" || !e.IsDir() && strings.HasPrefix(n, "level.dat") {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // holdsWorld reports whether p is, or holds, a level.dat or one of its

@@ -553,3 +553,43 @@ func TestABadReplaceEntryRefusesAndNamesTheField(t *testing.T) {
 		}
 	}
 }
+
+func TestAReplaceEntryInsideAnUnkeptWorldDoesNotOpenIt(t *testing.T) {
+	dir := claim(t, "world/level.dat", "world/region/r.0.0.mca", "world/playerdata/u.dat",
+		"world/stats/u.json", "world/datapacks/old.zip")
+	src := claim(t, "world/level.dat", "world/region/r.0.0.mca", "world/datapacks/new.zip")
+	err := runReplacing(dir, []string{"plugins/x/state"}, []string{"world/datapacks"}, noMounts(t),
+		sourcetree.Pair{From: src, Into: "."})
+	if err == nil || !strings.Contains(err.Error(), "world/") {
+		t.Fatalf("err = %v, want a refusal naming a path of world", err)
+	}
+	if got := left(t, dir); len(got) != 5 {
+		t.Errorf("deleted before refusing: %v", got)
+	}
+}
+
+func TestAReplaceEntryAloneLeadsTheWalk(t *testing.T) {
+	dir := claim(t, "world/level.dat", "worlds/templates/lobby/region/r.0.0.mca", "worlds/other/region/r.0.0.mca")
+	err := runReplacing(dir, []string{"world"}, []string{"worlds/templates"}, noMounts(t))
+	if err == nil || !strings.Contains(err.Error(), "worlds/other") {
+		t.Fatalf("err = %v, want a refusal naming worlds/other, not all of worlds", err)
+	}
+}
+
+func TestAReplaceEntryBelowAKeptPathLeavesItAlone(t *testing.T) {
+	dir := claim(t, "world/level.dat", "world/datapacks/x.zip")
+	if err := runReplacing(dir, []string{"world"}, []string{"world/datapacks"}, noMounts(t)); err != nil {
+		t.Fatal(err)
+	}
+	if got := left(t, dir); fmt.Sprint(got) != "[world/datapacks/x.zip world/level.dat]" {
+		t.Errorf("left %v", got)
+	}
+}
+
+func TestTheWorldRefusalPointsToReplace(t *testing.T) {
+	dir := claim(t, "world/level.dat", "old/world/level.dat")
+	err := run(dir, []string{"world"}, noMounts(t))
+	if err == nil || !strings.Contains(err.Error(), "spec.storage.replace") {
+		t.Fatalf("err = %v, want the refusal to name spec.storage.replace as the remedy", err)
+	}
+}
