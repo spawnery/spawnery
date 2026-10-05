@@ -29,6 +29,9 @@ const EnvSubstitutionPrefix = "SPAWNERY_SUBSTITUTION_PREFIX"
 // EnvKeep carries spec.storage.keep to the entrypoint, one entry per line.
 const EnvKeep = "SPAWNERY_KEEP"
 
+// EnvReplace carries spec.storage.replace to the entrypoint, one entry per line.
+const EnvReplace = "SPAWNERY_REPLACE"
+
 // sourceVolume renders a read-only claim, or an image volume for an image source.
 func sourceVolume(name, claim, image string, pull corev1.PullPolicy) corev1.Volume {
 	if image != "" {
@@ -56,4 +59,11 @@ func keepEnv(s *spawneryv1alpha1.StorageSpec) []corev1.EnvVar {
 		return nil
 	}
 	return []corev1.EnvVar{{Name: EnvKeep, Value: strings.Join(s.Keep, "\n")}}
+}
+
+func replaceEnv(s *spawneryv1alpha1.StorageSpec) []corev1.EnvVar {
+	if s == nil || len(s.Replace) == 0 {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: EnvReplace, Value: strings.Join(s.Replace, "\n")}}
 }

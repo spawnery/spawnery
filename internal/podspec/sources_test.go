@@ -92,6 +92,30 @@ func TestKeepReachesTheContainerOneEntryPerLine(t *testing.T) {
 	}
 }
 
+func TestReplaceReachesTheContainerOneEntryPerLine(t *testing.T) {
+	storage := &spawneryv1alpha1.StorageSpec{Size: resource.MustParse("1Gi"),
+		Keep: []string{"world"}, Replace: []string{"worlds/templates", "worlds/arena"}}
+	pod := build(t, func(_ *spawneryv1alpha1.Network, g *spawneryv1alpha1.ServerGroup) {
+		g.Spec.Storage = storage
+	})
+	var got string
+	for _, e := range pod.Spec.Containers[0].Env {
+		if e.Name == EnvReplace {
+			got = e.Value
+		}
+	}
+	if got != "worlds/templates\nworlds/arena" {
+		t.Errorf("%s = %q", EnvReplace, got)
+	}
+
+	storage.Replace = nil
+	if bare := build(t, func(_ *spawneryv1alpha1.Network, g *spawneryv1alpha1.ServerGroup) {
+		g.Spec.Storage = storage
+	}); envHas(bare, EnvReplace) {
+		t.Error("a group without replace got the variable")
+	}
+}
+
 func TestAChangedImageReferenceMovesThePodHash(t *testing.T) {
 	net, group := testNetwork(), testGroup()
 	group.Spec.ExtraPlugins = &spawneryv1alpha1.ExtraPlugins{Image: "registry.example.net/lobby-plugins@sha256:" + sixtyFour("a")}
