@@ -833,3 +833,20 @@ func TestEntrypointStopsIfPruneRefuses(t *testing.T) {
 		t.Errorf("the start went on after a refusal:\n%s", out)
 	}
 }
+
+func TestPrunePassesTheReplaceEntries(t *testing.T) {
+	out, err := runEntrypoint(t, t.TempDir(), 0, "SPAWNERY_KEEP=world", "SPAWNERY_REPLACE=worlds/templates\nworlds/arena")
+	if err != nil {
+		t.Fatalf("entrypoint: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "--replace worlds/templates\nworlds/arena") {
+		t.Errorf("replace entries did not reach the prune:\n%s", out)
+	}
+	out, err = runEntrypoint(t, t.TempDir(), 0, "SPAWNERY_REPLACE=worlds/templates")
+	if err != nil {
+		t.Fatalf("entrypoint: %v\n%s", err, out)
+	}
+	if strings.Contains(out, "--prune") {
+		t.Errorf("prune ran with replace entries but no keep entries:\n%s", out)
+	}
+}
