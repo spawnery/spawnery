@@ -83,11 +83,12 @@ if [ -d "$PLUGIN_SOURCE" ]; then
 	refuse_mounted "$PLUGIN_SOURCE" plugins extraPlugins || exit 1
 fi
 
-# spec.storage.keep. It cannot run at stop: the JVM is PID 1 and a hard kill
-# runs no hook.
+# spec.storage.keep and spec.storage.replace. It cannot run at stop: the JVM
+# is PID 1 and a hard kill runs no hook.
 if [ -n "${SPAWNERY_KEEP:-}" ]; then
 	spawnery-config --prune "$SPAWNERY_KEEP" --mountinfo "$MOUNTINFO" \
-		--pair "$FILE_SOURCE=." --pair "$PLUGIN_SOURCE=plugins" || exit 1
+		--pair "$FILE_SOURCE=." --pair "$PLUGIN_SOURCE=plugins" \
+		--replace "${SPAWNERY_REPLACE:-}" || exit 1
 fi
 
 printf 'eula=true\n' >eula.txt

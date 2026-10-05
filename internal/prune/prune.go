@@ -35,10 +35,15 @@ import (
 // path to log first. It refuses, before deleting anything, when that would
 // delete a world that the pairs' sources do not ship whole, at the same
 // paths, or when a pair's source carries a path that keep holds at its
-// destination. mountinfo is read for the mount points below dir, which are
-// never entered.
-func Run(dir string, keep []string, mountinfo string, pairs []sourcetree.Pair, log io.Writer) error {
-	pats, err := parseKeep(keep)
+// destination. A path a replace entry matches, or one below it, is deleted
+// without the world check. mountinfo is read for the mount points below dir,
+// which are never entered.
+func Run(dir string, keep, replace []string, mountinfo string, pairs []sourcetree.Pair, log io.Writer) error {
+	pats, err := parseEntries("spec.storage.keep", keep)
+	if err != nil {
+		return err
+	}
+	repl, err := parseEntries("spec.storage.replace", replace)
 	if err != nil {
 		return err
 	}
@@ -55,7 +60,8 @@ func Run(dir string, keep []string, mountinfo string, pairs []sourcetree.Pair, l
 		return err
 	}
 	var doomed []string
-	if err := plan(root, nil, pats, mounts, &doomed); err != nil {
+	ways := append(append([][]string{}, pats...), repl...)
+	if err := plan(root, nil, pats, ways, mounts, &doomed); err != nil {
 		return err
 	}
 	ship, err := shipped(pairs)
@@ -63,9 +69,18 @@ func Run(dir string, keep []string, mountinfo string, pairs []sourcetree.Pair, l
 		return err
 	}
 	for _, rel := range doomed {
+		segs := strings.Split(rel, "/")
+		if kept(repl, segs) {
+			continue
+		}
 		world, err := holdsWorld(filepath.Join(root, rel))
 		if err != nil {
 			return fmt.Errorf("cannot tell whether %s holds a world: %w", rel, err)
+		}
+		if !world {
+			if world, err = splitWorld(root, segs, pats, mounts); err != nil {
+				return fmt.Errorf("cannot tell whether %s is part of a world: %w", rel, err)
+			}
 		}
 		if !world {
 			continue
@@ -75,7 +90,8 @@ func Run(dir string, keep []string, mountinfo string, pairs []sourcetree.Pair, l
 			return fmt.Errorf("cannot tell whether a source ships %s: %w", rel, err)
 		}
 		if !whole {
-			return fmt.Errorf("spec.storage.keep does not keep %s, which holds a world", rel)
+			return fmt.Errorf("spec.storage.keep does not keep %s, which holds a world; "+
+				"list it in spec.storage.replace if the sources own it", rel)
 		}
 	}
 	for _, p := range pairs {
@@ -92,13 +108,13 @@ func Run(dir string, keep []string, mountinfo string, pairs []sourcetree.Pair, l
 	return nil
 }
 
-func parseKeep(keep []string) ([][]string, error) {
+func parseEntries(field string, entries []string) ([][]string, error) {
 	var pats [][]string
-	for _, k := range keep {
+	for _, k := range entries {
 		segs := strings.Split(k, "/")
 		for _, s := range segs {
 			if _, err := path.Match(s, ""); err != nil || s == "" || s == "." || s == ".." {
-				return nil, fmt.Errorf("spec.storage.keep entry %q is not a relative path of plain, * and ? segments", k)
+				return nil, fmt.Errorf("%s entry %q is not a relative path of plain, * and ? segments", field, k)
 			}
 		}
 		pats = append(pats, segs)
@@ -131,8 +147,8 @@ func kept(pats [][]string, rel []string) bool {
 }
 
 // plan appends to doomed the relative paths below root that are neither kept
-// nor on the way to something that is.
-func plan(root string, rel []string, pats, mounts [][]string, doomed *[]string) error {
+// nor on the way to something keep or replace could match.
+func plan(root string, rel []string, pats, ways, mounts [][]string, doomed *[]string) error {
 	entries, err := os.ReadDir(filepath.Join(append([]string{root}, rel...)...))
 	if err != nil {
 		return err
@@ -146,8 +162,8 @@ func plan(root string, rel []string, pats, mounts [][]string, doomed *[]string) 
 		r := append(append([]string{}, rel...), name)
 		switch {
 		case kept(pats, r) || isOneOf(mounts, r):
-		case e.Type()&fs.ModeType == fs.ModeDir && onTheWay(pats, mounts, r):
-			if err := plan(root, r, pats, mounts, doomed); err != nil {
+		case e.Type()&fs.ModeType == fs.ModeDir && onTheWay(ways, mounts, r):
+			if err := plan(root, r, pats, ways, mounts, doomed); err != nil {
 				return err
 			}
 		default:
@@ -180,6 +196,28 @@ func onTheWay(pats, mounts [][]string, rel []string) bool {
 		}
 	}
 	return false
+}
+
+// splitWorld reports whether an ancestor of rel, entered only on the way to a
+// replace entry, is itself a world, whose pieces would otherwise pass one by one.
+func splitWorld(root string, rel []string, pats, mounts [][]string) (bool, error) {
+	for i := 1; i < len(rel); i++ {
+		anc := rel[:i]
+		if onTheWay(pats, mounts, anc) {
+			continue
+		}
+		entries, err := os.ReadDir(filepath.Join(append([]string{root}, anc...)...))
+		if err != nil {
+			return false, err
+		}
+		for _, e := range entries {
+			n := e.Name()
+			if e.IsDir() && n == "region" || !e.IsDir() && strings.HasPrefix(n, "level.dat") {
+				return true, nil
+			}
+		}
+	}
+	return false, nil
 }
 
 // holdsWorld reports whether p is, or holds, a level.dat or one of its

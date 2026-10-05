@@ -200,6 +200,26 @@ refuses, be it player data, a file from an older version of the source, or the
 the list keeps is the other: the copy would replace saved state with the
 shipped file on every start, so keep one or ship the other.
 
+A world template that changes between releases trips the first refusal on
+every claim that still holds the old copy. `spec.storage.replace` names such
+paths. They are deleted at start without the check, and the copy writes the
+current version back:
+
+```yaml
+spec:
+  storage:
+    keep:
+      - world
+    replace:
+      - worlds/templates
+```
+
+Entries follow the syntax of `keep`. A path both lists match is kept, the same
+entry in both lists is refused, and so is `replace` without `keep`, because
+without `keep` nothing is deleted at all. A `replace` entry inside a world that
+`keep` does not list replaces only that part: the rest of the world is still
+checked as a world, so its `playerdata` stops the start as before.
+
 There is no dry-run field. Every path the start removes is logged as
 `spawnery: keep: removing <path>`, so the first start after a change shows what
 the list does.
@@ -209,10 +229,13 @@ On an on-demand group nothing rolls: a running member keeps its pod and its old
 list, and gets the new list, and the current image, at its next start, because
 the server is created from the group as it is then.
 
-Upgrade the operator and the chart before a group uses `keep`, and the image
-with them. An operator older than the field drops it from the spec, and an
-image older than the field ignores `SPAWNERY_KEEP`. Both keep everything, so the
-group runs without the cleanup it asks for and nothing says so.
+Upgrade the operator and the chart before a group uses `keep` or `replace`,
+and the image with them. An operator older than the field drops it from the
+spec, and an image older than the field ignores `SPAWNERY_KEEP`. Both keep
+everything, so the group runs without the cleanup it asks for and nothing says
+so. For `replace` it is the other way round: an operator older than the field
+drops it, an image older than it ignores `SPAWNERY_REPLACE`, and either way the
+start refuses a stale template as before.
 
 ## Claims that grow by themselves
 

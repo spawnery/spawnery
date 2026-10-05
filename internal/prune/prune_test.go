@@ -87,7 +87,26 @@ func noMounts(t *testing.T) string {
 }
 
 func run(dir string, keep []string, mountinfo string, pairs ...sourcetree.Pair) error {
-	return Run(dir, keep, mountinfo, pairs, io.Discard)
+	return Run(dir, keep, nil, mountinfo, pairs, io.Discard)
+}
+
+func runReplacing(dir string, keep, replace []string, mountinfo string, pairs ...sourcetree.Pair) error {
+	return Run(dir, keep, replace, mountinfo, pairs, io.Discard)
+}
+
+// mountinfoWith writes a mount table holding one writable mount at rel below dir.
+func mountinfoWith(t *testing.T, dir, rel string) string {
+	t.Helper()
+	root, err := filepath.EvalSymlinks(dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := filepath.Join(t.TempDir(), "mountinfo")
+	line := fmt.Sprintf("2 1 0:2 / %s rw,relatime - ext4 /dev/b rw\n", filepath.Join(root, rel))
+	if err := os.WriteFile(p, []byte(line), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	return p
 }
 
 func TestPrune(t *testing.T) {
@@ -252,7 +271,7 @@ func TestASymlinkIsRemovedAndItsTargetStays(t *testing.T) {
 func TestEachRemovalIsLogged(t *testing.T) {
 	dir := claim(t, "keep/a", "plugins/old.jar")
 	var log strings.Builder
-	if err := Run(dir, []string{"keep"}, noMounts(t), nil, &log); err != nil {
+	if err := Run(dir, []string{"keep"}, nil, noMounts(t), nil, &log); err != nil {
 		t.Fatal(err)
 	}
 	if log.String() != "spawnery: keep: removing plugins\n" {
@@ -453,5 +472,124 @@ func TestAShippedEntryOfAnotherKindDoesNotExempt(t *testing.T) {
 				t.Errorf("deleted before refusing: %v", err)
 			}
 		})
+	}
+}
+
+func TestAReplacedWorldIsDeletedEvenWithFilesNoSourceShips(t *testing.T) {
+	dir := claim(t, "worlds/world/level.dat",
+		"worlds/templates/lobby/region/r.0.0.mca", "worlds/templates/lobby/region/r.0.-2.mca")
+	src := claim(t, "worlds/templates/lobby/region/r.0.0.mca")
+	err := runReplacing(dir, []string{"worlds/world"}, []string{"worlds/templates"}, noMounts(t),
+		sourcetree.Pair{From: src, Into: "."})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := left(t, dir); fmt.Sprint(got) != "[worlds/world/level.dat]" {
+		t.Errorf("left %v", got)
+	}
+}
+
+func TestAWorldBesideAReplacedPathStillRefuses(t *testing.T) {
+	dir := claim(t, "worlds/world/level.dat",
+		"worlds/templates/lobby/region/r.0.0.mca", "worlds/other/region/r.0.0.mca")
+	err := runReplacing(dir, []string{"worlds/world"}, []string{"worlds/templates"}, noMounts(t))
+	if err == nil || !strings.Contains(err.Error(), "worlds/other") {
+		t.Fatalf("err = %v, want a refusal naming worlds/other", err)
+	}
+	if got := left(t, dir); len(got) != 3 {
+		t.Errorf("deleted before refusing: %v", got)
+	}
+}
+
+func TestAReplaceGlobMatchesPerSegment(t *testing.T) {
+	dir := claim(t, "world/level.dat", "worlds/templates/lobby/region/r.0.0.mca",
+		"worlds/templates/arena/level.dat", "worlds/templates/readme")
+	err := runReplacing(dir, []string{"world"}, []string{"worlds/templates/*"}, noMounts(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := left(t, dir); fmt.Sprint(got) != "[world/level.dat]" {
+		t.Errorf("left %v", got)
+	}
+}
+
+func TestKeepWinsOverReplace(t *testing.T) {
+	dir := claim(t, "worlds/templates/lobby/level.dat", "worlds/templates/old/region/r.0.0.mca")
+	err := runReplacing(dir, []string{"worlds/templates/lobby"}, []string{"worlds/templates"}, noMounts(t))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := left(t, dir); fmt.Sprint(got) != "[worlds/templates/lobby/level.dat]" {
+		t.Errorf("left %v", got)
+	}
+}
+
+func TestAMountUnderAReplacedPathSurvives(t *testing.T) {
+	dir := claim(t, "world/level.dat", "worlds/templates/shared/region/r.0.0.mca", "worlds/templates/old/level.dat")
+	err := runReplacing(dir, []string{"world"}, []string{"worlds/templates"},
+		mountinfoWith(t, dir, "worlds/templates/shared"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := "[world/level.dat worlds/templates/shared/region/r.0.0.mca]"
+	if got := left(t, dir); fmt.Sprint(got) != want {
+		t.Errorf("left %v, want %s", got, want)
+	}
+}
+
+func TestAReplaceEntryWithNothingToMatchChangesNothing(t *testing.T) {
+	dir := claim(t, "world/level.dat", "old/world/level.dat")
+	err := runReplacing(dir, []string{"world"}, []string{"worlds/templates"}, noMounts(t))
+	if err == nil || !strings.Contains(err.Error(), "old") {
+		t.Fatalf("err = %v, want the usual refusal naming old", err)
+	}
+}
+
+func TestABadReplaceEntryRefusesAndNamesTheField(t *testing.T) {
+	for _, r := range []string{"", "/x", "a//b", "a[b"} {
+		err := runReplacing(claim(t), []string{"world"}, []string{r}, "none")
+		if err == nil || !strings.Contains(err.Error(), "spec.storage.replace") {
+			t.Errorf("entry %q: err = %v, want a refusal naming spec.storage.replace", r, err)
+		}
+	}
+}
+
+func TestAReplaceEntryInsideAnUnkeptWorldDoesNotOpenIt(t *testing.T) {
+	dir := claim(t, "world/level.dat", "world/region/r.0.0.mca", "world/playerdata/u.dat",
+		"world/stats/u.json", "world/datapacks/old.zip")
+	src := claim(t, "world/level.dat", "world/region/r.0.0.mca", "world/datapacks/new.zip")
+	err := runReplacing(dir, []string{"plugins/x/state"}, []string{"world/datapacks"}, noMounts(t),
+		sourcetree.Pair{From: src, Into: "."})
+	if err == nil || !strings.Contains(err.Error(), "world/") {
+		t.Fatalf("err = %v, want a refusal naming a path of world", err)
+	}
+	if got := left(t, dir); len(got) != 5 {
+		t.Errorf("deleted before refusing: %v", got)
+	}
+}
+
+func TestAReplaceEntryAloneLeadsTheWalk(t *testing.T) {
+	dir := claim(t, "world/level.dat", "worlds/templates/lobby/region/r.0.0.mca", "worlds/other/region/r.0.0.mca")
+	err := runReplacing(dir, []string{"world"}, []string{"worlds/templates"}, noMounts(t))
+	if err == nil || !strings.Contains(err.Error(), "worlds/other") {
+		t.Fatalf("err = %v, want a refusal naming worlds/other, not all of worlds", err)
+	}
+}
+
+func TestAReplaceEntryBelowAKeptPathLeavesItAlone(t *testing.T) {
+	dir := claim(t, "world/level.dat", "world/datapacks/x.zip")
+	if err := runReplacing(dir, []string{"world"}, []string{"world/datapacks"}, noMounts(t)); err != nil {
+		t.Fatal(err)
+	}
+	if got := left(t, dir); fmt.Sprint(got) != "[world/datapacks/x.zip world/level.dat]" {
+		t.Errorf("left %v", got)
+	}
+}
+
+func TestTheWorldRefusalPointsToReplace(t *testing.T) {
+	dir := claim(t, "world/level.dat", "old/world/level.dat")
+	err := run(dir, []string{"world"}, noMounts(t))
+	if err == nil || !strings.Contains(err.Error(), "spec.storage.replace") {
+		t.Fatalf("err = %v, want the refusal to name spec.storage.replace as the remedy", err)
 	}
 }

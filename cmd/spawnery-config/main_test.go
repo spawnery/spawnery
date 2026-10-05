@@ -223,3 +223,38 @@ func TestPruneRefusesALevelDatItWouldDelete(t *testing.T) {
 		t.Errorf("stderr = %q", stderr.String())
 	}
 }
+
+func TestPruneReplaceSkipsTheWorldGuard(t *testing.T) {
+	dir := t.TempDir()
+	for _, f := range []string{"keep/a", "old/level.dat"} {
+		if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(f)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, f), nil, 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	t.Chdir(dir)
+	var stderr bytes.Buffer
+	if code := run([]string{"--prune", "keep", "--mountinfo", emptyMountinfo(t), "--replace", "old"}, &stderr); code != 0 {
+		t.Fatalf("exit %d: %s", code, stderr.String())
+	}
+	if _, err := os.Stat(filepath.Join(dir, "old")); err == nil {
+		t.Error("old survived")
+	}
+}
+
+func TestAnEmptyReplaceIsNoReplace(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(dir, "old"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "old", "level.dat"), nil, 0o644); err != nil {
+		t.Fatal(err)
+	}
+	t.Chdir(dir)
+	var stderr bytes.Buffer
+	if code := run([]string{"--prune", "world", "--mountinfo", emptyMountinfo(t), "--replace", ""}, &stderr); code != 1 {
+		t.Errorf("exit code is %d, want 1: an empty --replace must not exempt anything", code)
+	}
+}
