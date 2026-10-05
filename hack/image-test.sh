@@ -14,10 +14,13 @@ CONFDIR="$(mktemp -d)"
 SUBNAME="$NAME-substitute"
 SUBVOLUME="$VOLUME-substitute"
 SUBDIR=""
+AOTNAME="$NAME-aot"
+AOTVOLUME="$VOLUME-aot"
+AOTDIR=""
 cleanup() {
-	"$CONTAINER" rm -f "$NAME" "$SUBNAME" >/dev/null 2>&1 || true
-	"$CONTAINER" volume rm -f "$VOLUME" "$SUBVOLUME" >/dev/null 2>&1 || true
-	rm -rf "$CONFDIR" ${SUBDIR:+"$SUBDIR"}
+	"$CONTAINER" rm -f "$NAME" "$SUBNAME" "$AOTNAME" >/dev/null 2>&1 || true
+	"$CONTAINER" volume rm -f "$VOLUME" "$SUBVOLUME" "$AOTVOLUME" >/dev/null 2>&1 || true
+	rm -rf "$CONFDIR" ${SUBDIR:+"$SUBDIR"} ${AOTDIR:+"$AOTDIR"}
 }
 trap cleanup EXIT
 
@@ -177,5 +180,55 @@ if [ "$got" != 'password: a$b&c' ]; then
 	exit 1
 fi
 echo "substitution: a placeholder in a mounted plugin source was filled from the environment"
+
+# The startup cache: trained under one memory limit, mapped under another, and
+# dropped with a warning, not a failed start, when a group's JAVA_TOOL_OPTIONS
+# changes a flag it depends on.
+AOTDIR="$(mktemp -d)"
+# mktemp -d is 0700, and the container reads the cache as uid 10001.
+chmod 755 "$AOTDIR"
+CONTAINER="$CONTAINER" IMAGE="$IMAGE" OUT="$AOTDIR" hack/aot-train.sh
+aot_boot() {
+	"$CONTAINER" volume create "$AOTVOLUME" >/dev/null
+	"$CONTAINER" run -d --name "$AOTNAME" \
+		--network none \
+		--read-only --tmpfs /tmp:rw,exec,size=256m \
+		--cap-drop ALL \
+		--security-opt no-new-privileges \
+		--memory 3g \
+		-v "$AOTVOLUME:/data" \
+		-v "$CONFDIR:/etc/spawnery:ro" \
+		-v "$AOTDIR:/var/run/spawnery/aot:ro" \
+		-e "JAVA_TOOL_OPTIONS=$1" \
+		"$IMAGE" >/dev/null
+	start=$SECONDS
+	until "$CONTAINER" exec "$AOTNAME" /usr/local/bin/spawnery-slp --host 127.0.0.1 --port 25565 >/dev/null 2>&1; do
+		if [ $((SECONDS - start)) -gt "$DEADLINE" ] || [ -z "$("$CONTAINER" ps -q --filter "name=^${AOTNAME}$")" ]; then
+			echo "no server list ping with the cache mounted (JAVA_TOOL_OPTIONS=$1):" >&2
+			"$CONTAINER" logs "$AOTNAME" >&2
+			exit 1
+		fi
+		sleep 1
+	done
+	echo "answered after $((SECONDS - start))s with the cache mounted (JAVA_TOOL_OPTIONS=$1)"
+	aot_logs="$("$CONTAINER" logs "$AOTNAME" 2>&1)"
+	"$CONTAINER" rm -f "$AOTNAME" >/dev/null
+	"$CONTAINER" volume rm -f "$AOTVOLUME" >/dev/null
+}
+aot_boot "-Xlog:aot"
+if ! grep -q 'Opened AOT cache' <<<"$aot_logs" || grep -qiE 'unable to (use|map)|mismatch' <<<"$aot_logs"; then
+	echo "the shipped cache was not used:" >&2
+	grep -iE '\[aot' <<<"$aot_logs" | head -30 >&2
+	exit 1
+fi
+echo "the startup cache was mapped"
+aot_boot "-Xlog:aot -XX:-UseCompressedOops"
+if grep -q 'Opened AOT cache' <<<"$aot_logs" && ! grep -qiE 'unable to (use|map)|mismatch|disabled' <<<"$aot_logs"; then
+	echo "the JVM claims to have used a cache trained with compressed oops without them:" >&2
+	grep -iE '\[aot' <<<"$aot_logs" | head -30 >&2
+	exit 1
+fi
+echo "a cache that does not fit is dropped and the server starts anyway"
+rm -rf "$AOTDIR"
 
 echo "image-test: ok"

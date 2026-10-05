@@ -147,10 +147,14 @@ agent-deps:
 	"$$(nix build --no-link --print-out-paths .#agents.mitmCache.updateScript)"
 
 .PHONY: image-test
-image-test: purpur-image-load velocity-image-load images-26-2-load
+image-test: purpur-image-load velocity-image-load images-26-2-load aot-train-test
 	CONTAINER=$(CONTAINER) IMAGE=$(PURPUR_IMAGE) hack/image-test.sh
 	CONTAINER=$(CONTAINER) IMAGE=$(PURPUR_IMAGE_26_2) hack/image-test.sh
 	CONTAINER=$(CONTAINER) IMAGE=$(VELOCITY_IMAGE) hack/velocity-image-test.sh
+
+.PHONY: aot-train-test
+aot-train-test: purpur-image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(PURPUR_IMAGE) hack/aot-train-test.sh
 
 # Not part of `test` or `all`: needs a container runtime and x86_64-linux.
 .PHONY: agent-test
