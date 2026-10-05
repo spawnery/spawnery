@@ -65,6 +65,10 @@ operator:
   # Lets a group's spec.mounts name a PersistentVolumeClaim.
   allowMountVolumes: false
 
+  # Mounts the startup cache published with spawnery's own Purpur images into
+  # their servers. Needs the ImageVolume feature on the cluster.
+  aotCache: false
+
 # The namespaces that hold a Network, and the forwarding secret in each.
 # Renders a Role with resourceNames and a RoleBinding to this release's
 # namespace; config/rbac/forwarding-secret-reader.yaml covers namespaces not

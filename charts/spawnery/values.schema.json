@@ -150,6 +150,10 @@
         "allowMountVolumes": {
           "type": "boolean",
           "description": "A bool, for the reason leaderElect is one. Lets a group's spec.mounts name a PersistentVolumeClaim rather than a ConfigMap or a Secret (docs/guides/mounts-and-files.md). Until 0.2.x this was governed by allowPluginVolumes. Not a security control -- a PersistentVolumeClaim is in the same trust domain as the group naming it."
+        },
+        "aotCache": {
+          "type": "boolean",
+          "description": "A bool, for the reason leaderElect is one. Mounts the startup cache published with spawnery's own Purpur images (0.23.0 and later) into their servers as an image volume. Needs Kubernetes with the ImageVolume feature; on a cluster without it every server pod is refused."
         }
       }
     },

@@ -1201,4 +1201,7 @@ func TestEveryReservedVolumeNameIsRefusedAsAUserMount(t *testing.T) {
 	if !slices.Contains(reservedVolumeNames, PluginSourceVolumeName) {
 		t.Error("extra-plugins is not among the reserved names")
 	}
+	if !slices.Contains(reservedVolumeNames, AOTCacheVolumeName) {
+		t.Error("aot-cache is not among the reserved names")
+	}
 }

@@ -229,3 +229,15 @@ Lets a group's `spec.mounts` name a `PersistentVolumeClaim` rather than only a
 `ConfigMap` or a `Secret`. Split out of `--allow-plugin-volumes` in 0.2.x, so
 that turning on plugin claims does not also turn on arbitrary claim mounts.
 See [mounts and files](../guides/mounts-and-files.md).
+
+### `--aot-cache`
+
+Default: `false`
+
+Mounts the startup cache that each release publishes beside its Purpur
+images (`ghcr.io/spawnery/purpur-aot`, from image version 0.23.0) into the
+servers running them, at `/var/run/spawnery/aot`. The JVM then maps the
+classes it would otherwise load and link on every start. Other images get
+nothing. Like an image source for plugins, it needs the `ImageVolume` feature;
+see [plugins from a volume](../guides/plugins-from-a-volume.md). Turning it on
+restarts nothing: servers pick it up at their next start.

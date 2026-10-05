@@ -721,6 +721,51 @@ func TestReconcileCreatesThePod(t *testing.T) {
 	}
 }
 
+func TestTheServerPodMountsTheStartupCacheWhenTheOperatorIsToldTo(t *testing.T) {
+	f := newFixture(t)
+	f.reconc.AOTCache = true
+	f.group.Spec.Image = "ghcr.io/spawnery/purpur:26.3-0.23.0"
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatal(err)
+	}
+	f.createServer("lobby-aot1")
+	f.reconcile("lobby-aot1")
+
+	pod, ok := f.pod("lobby-aot1")
+	if !ok {
+		t.Fatal("no pod created")
+	}
+	var reference string
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == podspec.AOTCacheVolumeName && v.Image != nil {
+			reference = v.Image.Reference
+		}
+	}
+	if reference != "ghcr.io/spawnery/purpur-aot:26.3-0.23.0" {
+		t.Errorf("cache volume reference = %q, want the purpur-aot image", reference)
+	}
+}
+
+func TestTheServerPodHasNoStartupCacheByDefault(t *testing.T) {
+	f := newFixture(t)
+	f.group.Spec.Image = "ghcr.io/spawnery/purpur:26.3-0.23.0"
+	if err := f.c.Update(f.ctx, f.group); err != nil {
+		t.Fatal(err)
+	}
+	f.createServer("lobby-aot2")
+	f.reconcile("lobby-aot2")
+
+	pod, ok := f.pod("lobby-aot2")
+	if !ok {
+		t.Fatal("no pod created")
+	}
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == podspec.AOTCacheVolumeName {
+			t.Errorf("a cache volume without --aot-cache: %+v", v)
+		}
+	}
+}
+
 func TestReconcileIsIdempotent(t *testing.T) {
 	f := newFixture(t)
 	f.createServer("lobby-x7k2")
