@@ -136,8 +136,8 @@ a group's plugins cost what they cost today.
   file and the main class from the bundler manifests.
 - `image/entrypoint.sh`: `exec java … -cp "$(cat classpath)" <main>` instead
   of `-jar`, plus `-XX:AOTCache=<file>` when the cache file exists.
-- `hack/aot-image.sh`: trains a game image and builds its cache image; the
-  release workflow calls it after publishing each game image.
+- `hack/aot-train.sh`: trains a Purpur image; `hack/publish.sh` builds the
+  cache image from it and pushes it before the game image.
 - `internal/podspec`, `internal/controller`, `cmd/spawnery-operator`, the
   chart: the cache image volume for spawnery's own game images behind
   `--aot-cache`.

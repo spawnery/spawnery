@@ -104,8 +104,7 @@ type ServerReconciler struct {
 	// AgentEndpoint is the address the in-game agent dials, e.g.
 	// "spawnery-operator.spawnery-system.svc:9443".
 	AgentEndpoint string
-	// AOTCache mounts the startup cache of spawnery's own Purpur images.
-	AOTCache bool
+	AOTCache      bool
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servers,verbs=get;list;watch;create;update;patch;delete

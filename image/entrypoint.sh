@@ -193,7 +193,15 @@ if [ -n "${SPAWNERY_AOT_OUTPUT:-}" ]; then
 	# this one still holds its heap; both pre-touching overruns the limit.
 	PRETOUCH=""
 elif [ -f "$AOT_CACHE" ]; then
-	AOT="-XX:AOTCache=$AOT_CACHE"
+	# The JVM refuses to start, rather than drop the cache, next to these.
+	case " ${JAVA_TOOL_OPTIONS:-} ${JDK_JAVA_OPTIONS:-} " in
+	*" -Xshare:"* | *SharedArchiveFile* | *SharedClassListFile* | *DumpLoadedClassList*)
+		echo "spawnery: JAVA_TOOL_OPTIONS or JDK_JAVA_OPTIONS carries a CDS option, so starting without the startup cache." >&2
+		;;
+	*)
+		AOT="-XX:AOTCache=$AOT_CACHE"
+		;;
+	esac
 fi
 
 exec java \

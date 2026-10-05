@@ -933,3 +933,47 @@ func TestEntrypointTrainsInsteadOfUsingACacheWhenAskedTo(t *testing.T) {
 		t.Errorf("a training run pre-touches, and the cache's child JVM would be OOM-killed; got: %s", argv)
 	}
 }
+
+// The JVM refuses to start, rather than drop the cache, when -XX:AOTCache
+// meets one of the CDS options a group can pass through the JVM's own variables.
+func TestEntrypointLeavesTheCacheOutForAGroupsCDSOptions(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "server.aot")
+	if err := os.WriteFile(cache, []byte("cache"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	for _, env := range []string{
+		"JAVA_TOOL_OPTIONS=-Xshare:off",
+		"JAVA_TOOL_OPTIONS=-Xlog:gc -Xshare:auto",
+		"JAVA_TOOL_OPTIONS=-XX:SharedArchiveFile=/data/app.jsa",
+		"JDK_JAVA_OPTIONS=-XX:SharedClassListFile=/data/classes.lst",
+		"JDK_JAVA_OPTIONS=-XX:DumpLoadedClassList=/data/classes.lst",
+	} {
+		t.Run(env, func(t *testing.T) {
+			out, err := runEntrypoint(t, t.TempDir(), 0, "SPAWNERY_AOT_CACHE="+cache, env)
+			if err != nil {
+				t.Fatalf("entrypoint: %v\n%s", err, out)
+			}
+			if argv := javaArgv(t, out); strings.Contains(argv, "AOTCache") {
+				t.Errorf("the cache flag next to %s stops the JVM; got: %s", env, argv)
+			}
+			if !strings.Contains(out, "starting without the startup cache") {
+				t.Errorf("nothing says why the cache was left out; output: %s", out)
+			}
+		})
+	}
+}
+
+func TestEntrypointKeepsTheCacheForOtherJVMOptions(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "server.aot")
+	if err := os.WriteFile(cache, []byte("cache"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+	out, err := runEntrypoint(t, t.TempDir(), 0, "SPAWNERY_AOT_CACHE="+cache,
+		"JAVA_TOOL_OPTIONS=-Xlog:gc -Dfoo=bar")
+	if err != nil {
+		t.Fatalf("entrypoint: %v\n%s", err, out)
+	}
+	if argv := javaArgv(t, out); !strings.Contains(argv, "-XX:AOTCache="+cache) {
+		t.Errorf("the cache was dropped for options that do not touch it; got: %s", argv)
+	}
+}

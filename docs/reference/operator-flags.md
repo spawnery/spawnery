@@ -239,5 +239,7 @@ images (`ghcr.io/spawnery/purpur-aot`, from image version 0.23.0) into the
 servers running them, at `/var/run/spawnery/aot`. The JVM then maps the
 classes it would otherwise load and link on every start. Other images get
 nothing. Like an image source for plugins, it needs the `ImageVolume` feature;
-see [plugins from a volume](../guides/plugins-from-a-volume.md). Turning it on
-restarts nothing: servers pick it up at their next start.
+see [plugins from a volume](../guides/plugins-from-a-volume.md), a container
+runtime that supports them, and nodes that can pull
+`ghcr.io/spawnery/purpur-aot`. Turning it on restarts nothing: servers pick it
+up at their next start.

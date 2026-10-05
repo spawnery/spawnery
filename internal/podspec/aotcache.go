@@ -76,7 +76,6 @@ func atLeast(version string, floor [3]int) bool {
 	return true
 }
 
-// WithAOTCache mounts the startup cache of the pod's game image, if it has one.
 func WithAOTCache(pod *corev1.Pod) {
 	for i := range pod.Spec.Containers {
 		c := &pod.Spec.Containers[i]

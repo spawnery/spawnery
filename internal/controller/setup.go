@@ -40,9 +40,7 @@ type Options struct {
 	AllowFileVolumes bool
 	// AllowMountVolumes lets a group name a PersistentVolumeClaim in
 	// spec.mounts; an operational switch like AllowPluginVolumes.
-	AllowMountVolumes bool
-	// AOTCache is --aot-cache: mount each Purpur server's startup cache
-	// image. Image volumes need the ImageVolume feature on the cluster.
+	AllowMountVolumes    bool
 	AOTCache             bool
 	Clock                func() time.Time
 	StartupDeadline      time.Duration

@@ -109,7 +109,7 @@ covers this image beside the other two and the agent jars.
 
 Five artefacts, three scripts, none of them part of another target.
 
-`make publish` (`hack/publish.sh`) copies the three images from their Nix
+`make publish` (`hack/publish.sh`) copies the images from their Nix
 archives straight to `ghcr.io/spawnery/` with `skopeo`, so the registry gets
 what the flake describes, not what a previous `podman load` left in a local
 store. It needs a GitHub token with `write:packages`.
@@ -119,6 +119,15 @@ needing no credential. `FORCE=1` overwrites a tag that already exists, which it
 otherwise refuses to do with exit 3. `WRITE_DIGEST=1` writes the digest `skopeo
 copy` reported into `charts/spawnery/values.yaml`'s `image.digest` key. The
 chart is the only installation form, so the only place a digest means anything.
+
+Each Purpur image also gets its startup cache. Before copying the image, the
+script loads it into a local container store (`CONTAINER`, default `docker`),
+trains it with `hack/aot-train.sh` (two boots of the server) and pushes the
+result as `ghcr.io/spawnery/purpur-aot:<tag>` first: an operator running with
+`--aot-cache` mounts that image, and its servers do not start while it cannot
+be pulled. `DRY_RUN=1` trains too. A new package on ghcr.io starts private, so
+after the first release that publishes `purpur-aot`, set the package to public
+in the organisation's package settings.
 
 `make publish IMAGES=operator-image` publishes one image, the ordinary case:
 `flake.nix` keeps `operatorVersion` apart from `imageVersion`, so a reconciler

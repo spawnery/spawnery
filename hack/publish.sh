@@ -2,7 +2,9 @@
 # Publish Spawnery images to ghcr.io.
 #
 # Images are copied from their Nix archives straight to the registry, with
-# no local container store in between.
+# no local container store in between. The one exception is each Purpur
+# image's startup cache: it is trained and built in the local store of
+# CONTAINER and pushed as <name>-aot:<tag> before the image itself.
 #
 # Usage:
 #   hack/publish.sh                     publish every image

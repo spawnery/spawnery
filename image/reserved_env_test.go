@@ -22,6 +22,10 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
+// The JVM reads these itself whatever the entrypoint does; the entrypoint only
+// looks at them to leave its own flags out of their way.
+var jvmOwnVariables = map[string]bool{"JAVA_TOOL_OPTIONS": true, "JDK_JAVA_OPTIONS": true}
+
 // A variable spec.env could set would let a group choose the jar that runs.
 func TestEveryVariableTheEntrypointsReadIsReserved(t *testing.T) {
 	// `${NAME:-default}` is the one form the scripts use to read their environment.
@@ -36,6 +40,9 @@ func TestEveryVariableTheEntrypointsReadIsReserved(t *testing.T) {
 			t.Fatalf("%s reads no environment variable at all; the pattern this test scans for has drifted", script)
 		}
 		for _, m := range found {
+			if jvmOwnVariables[m[1]] {
+				continue
+			}
 			if !strings.HasPrefix(m[1], spawneryv1alpha1.ReservedEnvPrefix) {
 				t.Errorf("%s reads %s from its environment, which a group's spec.env may set; "+
 					"the reservation only covers the %s prefix", script, m[1], spawneryv1alpha1.ReservedEnvPrefix)

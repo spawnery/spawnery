@@ -229,6 +229,13 @@ if grep -q 'Opened AOT cache' <<<"$aot_logs" && ! grep -qiE 'unable to (use|map)
 	exit 1
 fi
 echo "a cache that does not fit is dropped and the server starts anyway"
+aot_boot "-Xshare:off"
+if ! grep -q 'starting without the startup cache' <<<"$aot_logs"; then
+	echo "-Xshare:off next to the cache started without the entrypoint leaving the cache out:" >&2
+	echo "$aot_logs" | head -20 >&2
+	exit 1
+fi
+echo "a group's -Xshare:off starts without the cache instead of failing"
 rm -rf "$AOTDIR"
 
 echo "image-test: ok"
