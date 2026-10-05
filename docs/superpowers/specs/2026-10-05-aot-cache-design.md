@@ -1,6 +1,6 @@
 # A JVM startup cache in the game images
 
-**Status:** design, in review
+**Status:** approved, planned (docs/superpowers/plans/2026-10-05-aot-cache.md)
 **Date:** 2026-10-05
 
 ## 1. What goes wrong today
@@ -50,19 +50,31 @@ and image the same day:
 - A cache trained with the class path under another directory was mapped
   and used, so the training does not need the runtime paths.
 
+Training under the image's entrypoint, on the dev VM the same day:
+
+- On a world the training boot creates, writing the cache failed twice in a
+  row: the JDK's interned MethodType table grew past 256 KiB, the most the
+  cache holds for one object. On a world an earlier boot created, the cache
+  was written (193 MB) each time.
+- The JVM writes the cache from a child process that inherits every flag
+  while the training JVM still holds its heap. With `AlwaysPreTouch` under
+  a 2 GiB limit the child was OOM-killed; without it, under 4 GiB, the cache
+  was written.
+
 ## 2. The shape
 
-Two changes to the game images (Paper and Purpur); Velocity and the operator
-are unchanged.
+Two changes to the Purpur images, and an operator flag that mounts the
+cache (§3). Velocity is unchanged.
 
 1. **A flat launch.** The entrypoint starts the server's main class directly
    on a class path built from the bundler's own manifests, instead of
    `-jar paper.jar`. Minecraft's and Paper's classes then load through the
    application loader and land in the cache.
-2. **A trained cache in the image.** A training run boots the server once,
-   with a flat world and no plugins, until `Done`, and stops it. The cache it
-   writes ships in the image, and the entrypoint passes `-XX:AOTCache=…`
-   when the file is there.
+2. **A trained cache beside the image.** A training run boots the server on
+   a flat world it created in an earlier boot, with no plugins, until
+   `Done`, and stops it. The cache it writes ships as an image of its own
+   (below), and the entrypoint passes `-XX:AOTCache=…` when the file is
+   mounted.
 
 Plugins load through Paper's plugin class loaders and stay out of the cache;
 a group's plugins cost what they cost today.
@@ -77,7 +89,7 @@ a group's plugins cost what they cost today.
   (above), and the game images are bit-for-bit reproducible
   (`make image-repro`), which stays. The release workflow trains each game
   image it publishes and pushes the cache as
-  `ghcr.io/spawnery/<flavor>-aot:<tag>`, an image holding `/server.aot` and
+  `ghcr.io/spawnery/purpur-aot:<tag>`, an image holding `/server.aot` and
   nothing else, declared as not reproducible. The operator mounts it as an
   image volume at `/var/run/spawnery/aot` for servers running one of
   spawnery's own game images at an image version that has caches; for any
@@ -88,9 +100,29 @@ a group's plugins cost what they cost today.
   flag differs. The entrypoint passes the flag only when the file exists,
   and the image tests assert that the shipped cache is actually used (no
   "unable to use" in the start log, `-Xlog:aot` reports it mapped).
-- **Training flags match the entrypoint's.** The GC and heap flags the
-  entrypoint passes are the ones the training uses, so the cache is never
-  refused over a flag.
+- **Training runs through the entrypoint.** `SPAWNERY_AOT_OUTPUT` makes the
+  entrypoint pass `-XX:AOTCacheOutput` instead of `-XX:AOTCache`, so the GC
+  and heap flags are the ones every server starts with. The one flag it
+  drops while training is `AlwaysPreTouch` (above); pre-touching is not part
+  of what the cache records.
+- **The cache is behind an operator flag, off by default.** An image volume
+  needs the `ImageVolume` feature, and on a cluster without it the API
+  server refuses every pod that carries one. `--aot-cache` (chart value
+  `operator.aotCache`) turns the mount on. The volume is added after the pod
+  is rendered, outside the pod hash, so turning the flag on restarts no
+  server; each picks it up at its next start.
+- **The cache goes up before its game image.** A mounted image that cannot
+  be pulled keeps the pod from starting, so the release pushes
+  `purpur-aot:<tag>` first. A new package on ghcr.io starts private; the
+  first release needs both switched to public.
+- **Purpur only; the Paper image is retired.** `ghcr.io/spawnery/paper` has
+  been deprecated since 0.2.15. This release stops building and publishing
+  it rather than giving it a flat launch and a cache; tags already published
+  stay on the registry. `nix/paper.nix` stays, as the source of Purpur's
+  Mojang jar and of the renderer tests' Paper repo.
+- **No bundler fallback.** An image without the launch files refuses to
+  start with a message naming the missing file, rather than starting the old
+  way without a cache and without anyone noticing.
 - **The flat launch reads the bundler's manifests at build time.** The class
   path and main class come from `META-INF/libraries.list`,
   `META-INF/versions.list` and `META-INF/main-class` inside the server jar.
@@ -100,13 +132,15 @@ a group's plugins cost what they cost today.
 
 ## 4. Delivery
 
-- `nix/paper.nix`, `nix/purpur.nix`: derive the class path file and the main
-  class from the bundler manifests.
+- `nix/flat-launch.nix`, used by `nix/purpur-image.nix`: derives the class path
+  file and the main class from the bundler manifests.
 - `image/entrypoint.sh`: `exec java … -cp "$(cat classpath)" <main>` instead
   of `-jar`, plus `-XX:AOTCache=<file>` when the cache file exists.
 - `hack/aot-image.sh`: trains a game image and builds its cache image; the
   release workflow calls it after publishing each game image.
-- `internal/podspec`: the cache image volume for spawnery's own game images.
+- `internal/podspec`, `internal/controller`, `cmd/spawnery-operator`, the
+  chart: the cache image volume for spawnery's own game images behind
+  `--aot-cache`.
 - `hack/image-test.sh`: the cache is used, and the flat launch reaches
   `Done`.
 
@@ -120,8 +154,11 @@ operator and the chart.
 
 - Entrypoint tests: the flat launch's command line, with and without a cache
   file.
-- Image test: the server reaches `Done` with the flat launch; the start log
-  shows the cache mapped and no refusal.
+- Image test: the server reaches `Done` with the flat launch; trained under
+  one memory limit and run under another, the start log shows the cache
+  mapped; with `-XX:-UseCompressedOops` in `JAVA_TOOL_OPTIONS` the cache is
+  dropped and the server starts anyway.
+- The trainer fails, naming the boot, when the server does not reach `Done`.
 - Measurement, recorded in the release notes: JVM start to `Done` with and
   without the cache, flat launch, on the same node as above.
 - `make image-repro` stays green.
