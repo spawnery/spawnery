@@ -144,7 +144,7 @@ func runPrune(args []string, stderr io.Writer) int {
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
-	if err := prune.Run(".", keep, *mountinfo, ps, stderr); err != nil {
+	if err := prune.Run(".", keep, nil, *mountinfo, ps, stderr); err != nil {
 		_, _ = fmt.Fprintf(stderr, "spawnery: %v\nspawnery: refusing to start\n", err)
 		return 1
 	}
