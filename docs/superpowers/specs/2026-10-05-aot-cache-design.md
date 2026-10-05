@@ -1,6 +1,6 @@
 # A JVM startup cache in the game images
 
-**Status:** approved, planned (docs/superpowers/plans/2026-10-05-aot-cache.md)
+**Status:** implemented (branch feat/aot-cache)
 **Date:** 2026-10-05
 
 ## 1. What goes wrong today
