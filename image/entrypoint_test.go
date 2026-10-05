@@ -880,3 +880,56 @@ func TestPrunePassesTheReplaceEntries(t *testing.T) {
 		t.Errorf("prune ran with replace entries but no keep entries:\n%s", out)
 	}
 }
+
+func TestEntrypointUsesAMountedAOTCache(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "server.aot")
+	if err := os.WriteFile(cache, []byte("cache"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runEntrypoint(t, t.TempDir(), 0, "SPAWNERY_AOT_CACHE="+cache)
+	if err != nil {
+		t.Fatalf("entrypoint: %v\n%s", err, out)
+	}
+	argv := javaArgv(t, out)
+	flag := "-XX:AOTCache=" + cache
+	at, cp := strings.Index(argv, flag), strings.Index(argv, " -cp ")
+	if at < 0 || cp < 0 || at > cp {
+		t.Errorf("want %s among the JVM options, before -cp; got: %s", flag, argv)
+	}
+}
+
+func TestEntrypointStartsWithoutACacheWhenNoneIsMounted(t *testing.T) {
+	out, err := runEntrypoint(t, t.TempDir(), 0,
+		"SPAWNERY_AOT_CACHE="+filepath.Join(t.TempDir(), "server.aot"))
+	if err != nil {
+		t.Fatalf("entrypoint: %v\n%s", err, out)
+	}
+	if argv := javaArgv(t, out); strings.Contains(argv, "AOTCache") {
+		t.Errorf("an AOT flag without a cache file; got: %s", argv)
+	}
+}
+
+func TestEntrypointTrainsInsteadOfUsingACacheWhenAskedTo(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "server.aot")
+	if err := os.WriteFile(cache, []byte("cache"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runEntrypoint(t, t.TempDir(), 0,
+		"SPAWNERY_AOT_CACHE="+cache, "SPAWNERY_AOT_OUTPUT=/aot/server.aot",
+		cgroupRoot(t, "4294967296", false))
+	if err != nil {
+		t.Fatalf("entrypoint: %v\n%s", err, out)
+	}
+	argv := javaArgv(t, out)
+	if !strings.Contains(argv, "-XX:AOTCacheOutput=/aot/server.aot") {
+		t.Errorf("no training flag; got: %s", argv)
+	}
+	if strings.Contains(argv, "-XX:AOTCache=") {
+		t.Errorf("a training run also maps the old cache; got: %s", argv)
+	}
+	if strings.Contains(argv, "AlwaysPreTouch") {
+		t.Errorf("a training run pre-touches, and the cache's child JVM would be OOM-killed; got: %s", argv)
+	}
+}

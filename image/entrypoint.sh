@@ -10,6 +10,7 @@ PAPER_HOME="${SPAWNERY_PAPER_HOME:-/opt/paper}"
 MOUNTINFO="${SPAWNERY_MOUNTINFO:-/proc/self/mountinfo}"
 FILE_SOURCE="${SPAWNERY_FILE_SOURCE:-/var/run/spawnery/files}"
 PLUGIN_SOURCE="${SPAWNERY_PLUGIN_SOURCE:-/var/run/spawnery/plugins}"
+AOT_CACHE="${SPAWNERY_AOT_CACHE:-/var/run/spawnery/aot/server.aot}"
 
 # mountinfo writes a space in a path as \040, which printf %b turns back.
 readonly_mounts_below_here() {
@@ -182,6 +183,19 @@ for launch in launch.classpath launch.main; do
 	fi
 done
 
+# The cache is mounted only for an image the operator knows has one. The JVM
+# drops a cache that does not fit (another JDK, class path or GC flag) with a
+# warning and starts without it.
+AOT=""
+if [ -n "${SPAWNERY_AOT_OUTPUT:-}" ]; then
+	AOT="-XX:AOTCacheOutput=$SPAWNERY_AOT_OUTPUT"
+	# The JVM writes the cache from a child that inherits these flags while
+	# this one still holds its heap; both pre-touching overruns the limit.
+	PRETOUCH=""
+elif [ -f "$AOT_CACHE" ]; then
+	AOT="-XX:AOTCache=$AOT_CACHE"
+fi
+
 exec java \
 	-XX:MaxRAMPercentage=75 \
 	-XX:+UseG1GC \
@@ -200,5 +214,6 @@ exec java \
 	-XX:G1MixedGCLiveThresholdPercent=90 \
 	-XX:G1RSetUpdatingPauseTimePercent=5 \
 	-XX:InitiatingHeapOccupancyPercent=15 \
+	${AOT:+"$AOT"} \
 	-cp "$(cat "$PAPER_HOME/launch.classpath")" \
 	"$(cat "$PAPER_HOME/launch.main")" --nogui
