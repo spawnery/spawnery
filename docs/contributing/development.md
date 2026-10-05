@@ -35,8 +35,7 @@ and are therefore part of no other target, not even `make all`: `agent-deps`,
 | `make agent-deps` | Regenerates `agent/deps.json`. Reaches Maven Central, so it is part of no other target |
 | `make agent-test` | Both real images against the stub operator in `cmd/spawnery-stubop` |
 | `make paper-pin` | Computes the Paper pin; `paper-pin-check` fails if `nix/paper.nix` is behind |
-| `make image` | The Paper base image (`image-load`, `image-test` follow it) |
-| `make purpur-image` | The Purpur base image, the backend image going forward; `purpur-image-load`, `purpur-image-test` |
+| `make purpur-image` | The Purpur base image; `purpur-image-load`, `purpur-image-test` |
 | `make velocity-image` | The Velocity image, same three steps scoped to it alone |
 | `make operator-image` | The operator's own image, same three steps |
 | `make image-repro` | Builds each image twice and fails if the bytes differ |
@@ -71,36 +70,29 @@ closed until a server list has arrived and opens once one does.
 
 ## The images
 
-`make image-test` runs all three game images (Paper, Purpur and Velocity)
-offline under the same constraints the podspec imposes, loading each first so
-the target needs no separate build step of its own.
+`make image-test` runs the game images (Purpur 26.3, Purpur 26.2 and
+Velocity) offline under the same constraints the podspec imposes, loading each
+first so the target needs no separate build step of its own.
+`hack/image-test.sh` asserts Paper's behaviour (config rewritten, plugin
+loaded, nothing downloaded at start), which Purpur, a Paper fork, keeps.
 
-**Purpur goes through `hack/image-test.sh` unchanged**, the same script the
-Paper image does: its assertions are Paper's behaviour (config rewritten,
-plugin loaded, nothing downloaded at start), and Purpur is a Paper fork that
-does all of it. If they ever diverge enough for that to stop being true, that
-run fails and says so.
-
-Purpur is the backend image going forward and the Paper image is deprecated.
-Both are built, tested and published; see the
-[release notes](../archive/release-notes.md#0215-purpur-is-the-backend-image-and-paper-is-deprecated)
-for what an installation does about it and `nix/paper-image.nix` for why
-nothing is being removed.
-
-`make agent-test` still drives the **Paper** image because the agent jar in the
-two images is the same file; `make image-test` covers the Purpur side.
+The Paper image was deprecated in 0.2.15 and is no longer built from 0.23.0;
+see the
+[release notes](../archive/release-notes.md#0215-purpur-is-the-backend-image-and-paper-is-deprecated).
+`nix/paper.nix` stays: Purpur patches with its Mojang jar, and
+`internal/render`'s tests read its repo.
 
 ### Reproducibility
 
 `make image-repro` is the standing check that the images are reproducible, worth
-running again after any change to `nix/paper.nix` or `nix/paper-image.nix`.
+running again after any change to `nix/paper.nix`, `nix/purpur.nix` or `nix/purpur-image.nix`.
 
 The plain build in front of each `--rebuild` is not redundant. `--rebuild`
 compares a fresh build against the output already in the store, and with
 nothing there it does not fail the check, it declines to run it: "some outputs
 … are not valid, so checking is not possible". All three image derivations take
 the working tree as their source: appending one line to a file in `docs/` was
-measured to change the derivation hash of `paper-image`, `velocity-image` and
+measured to change the derivation hash of `purpur-image`, `velocity-image` and
 `operator-image` alike (`agents` was unaffected). So an edit almost anywhere
 empties the store of them.
 
@@ -244,7 +236,7 @@ systemd-run --scope --user --property=Delegate=yes \
   nix develop -c kind create cluster --name spawnery-dev
 systemd-run --scope --user --property=Delegate=yes \
   env KIND_EXPERIMENTAL_PROVIDER=podman \
-  nix develop -c kind load docker-image ghcr.io/spawnery/paper:26.2-0.2.5 --name spawnery-dev
+  nix develop -c kind load docker-image ghcr.io/spawnery/purpur:26.3-0.22.0 --name spawnery-dev
 nix develop -c kubectl apply -f config/crd/bases
 nix develop -c kubectl apply -f config/samples/network.yaml
 # --leader-elect=false is not needed to *start*, but it is what you want here:
@@ -257,7 +249,7 @@ nix develop -c go run ./cmd/spawnery-operator --leader-elect=false --operator-na
 podman run -d --name spawnery-relay --network kind \
   -v /nix/store:/nix/store:ro \
   --entrypoint "$(nix build --no-link --print-out-paths nixpkgs#socat)/bin/socat" \
-  ghcr.io/spawnery/paper:26.2-0.2.5 \
+  ghcr.io/spawnery/purpur:26.3-0.22.0 \
   TCP-LISTEN:9443,fork,reuseaddr TCP:host.containers.internal:9443
 RELAY_IP=$(podman inspect spawnery-relay \
   --format '{{.NetworkSettings.Networks.kind.IPAddress}}')

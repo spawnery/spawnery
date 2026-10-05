@@ -36,9 +36,7 @@ cd "$repo_root"
 # attr:out-link, in publish order. The operator is last so WRITE_DIGEST does
 # not rewrite the manifest before the game images have succeeded.
 all_images=(
-	"paper-image:result-paper"
 	"purpur-image:result-purpur"
-	"paper-image-26-2:result-paper-26-2"
 	"purpur-image-26-2:result-purpur-26-2"
 	"velocity-image:result-velocity"
 	"operator-image:result-operator"

@@ -129,9 +129,7 @@ jobs:
       - name: Build the game images
         if: steps.changed.outputs.build == 'true'
         run: |
-          nix build .#paper-image --no-link
           nix build .#purpur-image --no-link
-          nix build .#paper-image-26-2 --no-link
           nix build .#purpur-image-26-2 --no-link
           nix build .#velocity-image --no-link
 

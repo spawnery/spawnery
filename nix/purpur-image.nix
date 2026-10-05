@@ -1,6 +1,6 @@
-# The Purpur base image: nix/paper-image.nix with the jar swapped. A separate
-# file rather than a shared function because paper-image.nix is deprecated
-# and will be deleted.
+# The Purpur base image. The pod spec is already written, so this image must
+# provide /usr/local/bin/spawnery-slp, port 25565, working directory /data,
+# scratch /tmp, a numeric user, and nothing else writable.
 { bash
 , buildEnv
 , coreutils
@@ -36,7 +36,9 @@ oci-common.layeredImage {
     (buildEnv {
       name = "purpur-tools";
       # paper-jre: jdeps over Purpur's own classpath gave Paper's module list
-      # exactly; repeat that on a Purpur bump. findutils as in paper-image.nix.
+      # exactly; repeat that on a Purpur bump. findutils for the entrypoint's
+      # chmod walk: find -xdev stops at mounts, chmod -R cannot, and coreutils
+      # has no find.
       paths = [ bash coreutils findutils paper-jre ];
       pathsToLink = [ "/bin" ];
     })
