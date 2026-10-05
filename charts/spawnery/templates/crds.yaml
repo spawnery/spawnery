@@ -5133,7 +5133,7 @@ spec:
                       refused when a path no entry keeps is, or holds, a level.dat* file, a
                       region directory or an .mca file, unless extraFiles and extraPlugins
                       ship every file and directory at and below it at the same path, which
-                      the copy then writes back.
+                      the copy then writes back, or a replace entry matches it.
                     items:
                       maxLength: 256
                       type: string

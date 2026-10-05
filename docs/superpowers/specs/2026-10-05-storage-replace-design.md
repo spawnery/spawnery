@@ -97,7 +97,12 @@ at its next start, which is when prune runs.
    A replaced path is therefore queued as its own unit, and the entries
    beside it are queued and guarded on their own.
 2. The world guard skips a queued path that a replace entry matches, or that
-   lies below one.
+   lies below one. A queued path whose ancestor was entered only on the way
+   to a replace entry, and that ancestor holds a `level.dat*` file or a
+   `region` directory itself, is guarded as part of that world: a replace
+   entry inside a world keep does not list must not let the world's player
+   state through piece by piece. Ancestors entered for keep or a mount are
+   checked as before.
 3. The overlap check (a source carrying a path keep holds) is unchanged.
    Replace adds nothing to it: a source carrying a replaced path is the
    normal case.
@@ -116,7 +121,9 @@ image before the field has any effect.
 
 ## 8. Testing
 
-- **prune:** a world below a replaced path is deleted without refusing, even
+- **prune:** a replace entry inside an unkept world still refuses on its
+  player state; the world refusal names `spec.storage.replace` as the remedy;
+  a world below a replaced path is deleted without refusing, even
   with files no source ships; a world beside a replaced path in the same
   parent still refuses; a replace entry with a glob; a replace entry at or
   below a kept path leaves the kept path alone; with no replace entries,

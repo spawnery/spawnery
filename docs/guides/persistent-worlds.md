@@ -216,7 +216,9 @@ spec:
 
 Entries follow the syntax of `keep`. A path both lists match is kept, the same
 entry in both lists is refused, and so is `replace` without `keep`, because
-without `keep` nothing is deleted at all.
+without `keep` nothing is deleted at all. A `replace` entry inside a world that
+`keep` does not list replaces only that part: the rest of the world is still
+checked as a world, so its `playerdata` stops the start as before.
 
 There is no dry-run field. Every path the start removes is logged as
 `spawnery: keep: removing <path>`, so the first start after a change shows what
@@ -231,8 +233,9 @@ Upgrade the operator and the chart before a group uses `keep` or `replace`,
 and the image with them. An operator older than the field drops it from the
 spec, and an image older than the field ignores `SPAWNERY_KEEP`. Both keep
 everything, so the group runs without the cleanup it asks for and nothing says
-so. An image older than `replace` ignores `SPAWNERY_REPLACE` and refuses a
-stale template as before.
+so. For `replace` it is the other way round: an operator older than the field
+drops it, an image older than it ignores `SPAWNERY_REPLACE`, and either way the
+start refuses a stale template as before.
 
 ## Claims that grow by themselves
 

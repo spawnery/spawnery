@@ -196,7 +196,7 @@ type StorageSpec struct {
 	// refused when a path no entry keeps is, or holds, a level.dat* file, a
 	// region directory or an .mca file, unless extraFiles and extraPlugins
 	// ship every file and directory at and below it at the same path, which
-	// the copy then writes back.
+	// the copy then writes back, or a replace entry matches it.
 	// +kubebuilder:validation:MinItems=1
 	// +kubebuilder:validation:MaxItems=64
 	// +kubebuilder:validation:items:MaxLength=256
