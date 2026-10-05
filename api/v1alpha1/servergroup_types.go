@@ -160,6 +160,8 @@ type DrainSpec struct {
 }
 
 // StorageSpec describes the PVC of a persistent or on-demand group.
+// +kubebuilder:validation:XValidation:rule="!has(self.replace) || has(self.keep)",message="spec.storage.replace needs spec.storage.keep"
+// +kubebuilder:validation:XValidation:rule="!has(self.replace) || !has(self.keep) || self.replace.all(r, !(r in self.keep))",message="a path cannot be in both spec.storage.keep and spec.storage.replace"
 type StorageSpec struct {
 	// Size of each new claim. Raising it grows existing claims up to the new
 	// size (needs allowVolumeExpansion on the StorageClass); lowering it
@@ -201,6 +203,20 @@ type StorageSpec struct {
 	// +kubebuilder:validation:items:XValidation:rule="!self.startsWith('/') && !self.contains('[') && !self.contains(']') && !self.contains('\\\\') && !self.contains('\\n') && !self.contains('\\r') && self.split('/').all(s, s != '' && s != '.' && s != '..')",message="a keep entry is a relative path without [ ] \\, line breaks or empty, . and .. segments"
 	// +optional
 	Keep []string `json:"keep,omitempty"`
+
+	// Replace lists paths on the data claim, relative to /data, that the
+	// sources own. A start deletes them like any other path keep does not
+	// match, without the check for worlds, and the copy after it writes
+	// back what extraFiles and extraPlugins ship now. Meant for world
+	// templates the server copies from and never loads, whose shipped form
+	// changes between releases. Same syntax as keep; where both match, keep
+	// wins. Needs keep.
+	// +kubebuilder:validation:MinItems=1
+	// +kubebuilder:validation:MaxItems=64
+	// +kubebuilder:validation:items:MaxLength=256
+	// +kubebuilder:validation:items:XValidation:rule="!self.startsWith('/') && !self.contains('[') && !self.contains(']') && !self.contains('\\\\') && !self.contains('\\n') && !self.contains('\\r') && self.split('/').all(s, s != '' && s != '.' && s != '..')",message="a replace entry is a relative path without [ ] \\, line breaks or empty, . and .. segments"
+	// +optional
+	Replace []string `json:"replace,omitempty"`
 }
 
 // ServerGroupSpec describes a group of Minecraft servers.

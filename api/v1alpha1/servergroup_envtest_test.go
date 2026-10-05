@@ -696,3 +696,46 @@ func TestAPinToZeroSurvivesTheStatusWrite(t *testing.T) {
 		t.Errorf("pinnedUntil = %v, want %v", got.Status.PinnedUntil, until)
 	}
 }
+
+func TestServerGroupStorageReplaceAccepted(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	g := onDemandGroup(ns, "replaces-on-demand")
+	g.Spec.Storage.Keep = []string{"world"}
+	g.Spec.Storage.Replace = []string{"worlds/templates", "worlds/arena-*"}
+	if err := c.Create(ctx, g); err != nil {
+		t.Fatalf("create on-demand group with replace: %v", err)
+	}
+}
+
+func TestServerGroupStorageReplaceRefusals(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	tests := map[string]struct {
+		keep, replace []string
+		msg           string
+	}{
+		"without keep":   {nil, []string{"worlds/templates"}, "spec.storage.replace needs spec.storage.keep"},
+		"in both lists":  {[]string{"world"}, []string{"world"}, "a path cannot be in both"},
+		"absolute":       {[]string{"world"}, []string{"/x"}, "a replace entry is a relative path"},
+		"parent segment": {[]string{"world"}, []string{"a/../b"}, "a replace entry is a relative path"},
+		"empty segment":  {[]string{"world"}, []string{"a//b"}, "a replace entry is a relative path"},
+		"bracket":        {[]string{"world"}, []string{"a[b"}, "a replace entry is a relative path"},
+	}
+	for name, tc := range tests {
+		t.Run(name, func(t *testing.T) {
+			g := onDemandGroup(ns, "replace-"+strings.ReplaceAll(name, " ", "-"))
+			g.Spec.Storage.Keep = tc.keep
+			g.Spec.Storage.Replace = tc.replace
+			err := c.Create(ctx, g)
+			if err == nil {
+				t.Fatalf("keep %q, replace %q was accepted", tc.keep, tc.replace)
+			}
+			if !strings.Contains(err.Error(), tc.msg) {
+				t.Errorf("err = %v, want %q", err, tc.msg)
+			}
+		})
+	}
+}
