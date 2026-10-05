@@ -139,12 +139,17 @@ func runPrune(args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("spawnery-config --prune", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 	mountinfo := fs.String("mountinfo", "/proc/self/mountinfo", "the mount table to read the mount points below the working directory from")
+	replace := fs.String("replace", "", "the spec.storage.replace entries, one per line; empty for none")
 	var ps pairs
 	fs.Var(&ps, "pair", "a source and where it is copied, FROM=INTO; repeatable")
 	if err := fs.Parse(args[1:]); err != nil {
 		return 2
 	}
-	if err := prune.Run(".", keep, nil, *mountinfo, ps, stderr); err != nil {
+	var repl []string
+	if *replace != "" {
+		repl = strings.Split(*replace, "\n")
+	}
+	if err := prune.Run(".", keep, repl, *mountinfo, ps, stderr); err != nil {
 		_, _ = fmt.Fprintf(stderr, "spawnery: %v\nspawnery: refusing to start\n", err)
 		return 1
 	}
