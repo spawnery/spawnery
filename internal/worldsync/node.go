@@ -28,10 +28,10 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
-	"syscall"
 	"time"
 
 	"github.com/go-logr/logr"
+	"golang.org/x/sys/unix"
 
 	"github.com/spawnery/spawnery/internal/prune"
 )
@@ -238,7 +238,7 @@ func checkWorld(world string) error {
 }
 
 func notMounted(err error) bool {
-	return errors.Is(err, syscall.EINVAL) || errors.Is(err, fs.ErrNotExist)
+	return errors.Is(err, unix.EINVAL) || errors.Is(err, fs.ErrNotExist)
 }
 
 func (n *Node) Resume(ctx context.Context) error {
@@ -1136,8 +1136,8 @@ func (n *Node) drop(s *worldState) {
 }
 
 func (n *Node) freeFraction() float64 {
-	var st syscall.Statfs_t
-	if err := syscall.Statfs(n.cfg.Root, &st); err != nil || st.Blocks == 0 {
+	var st unix.Statfs_t
+	if err := unix.Statfs(n.cfg.Root, &st); err != nil || st.Blocks == 0 {
 		return 1
 	}
 	return float64(st.Bavail) / float64(st.Blocks)

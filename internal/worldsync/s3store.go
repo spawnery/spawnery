@@ -46,13 +46,13 @@ func S3ConfigFromEnv(getenv func(string) string) (S3Config, string, error) {
 		AccessKey: getenv("AWS_ACCESS_KEY_ID"),
 		SecretKey: getenv("AWS_SECRET_ACCESS_KEY"),
 	}
-	for name, v := range map[string]string{
-		"WORLDSYNC_ENDPOINT": cfg.Endpoint, "WORLDSYNC_REGION": cfg.Region,
-		"WORLDSYNC_BUCKET": cfg.Bucket, "AWS_ACCESS_KEY_ID": cfg.AccessKey,
-		"AWS_SECRET_ACCESS_KEY": cfg.SecretKey,
+	for _, e := range []struct{ name, v string }{
+		{"WORLDSYNC_ENDPOINT", cfg.Endpoint}, {"WORLDSYNC_REGION", cfg.Region},
+		{"WORLDSYNC_BUCKET", cfg.Bucket}, {"AWS_ACCESS_KEY_ID", cfg.AccessKey},
+		{"AWS_SECRET_ACCESS_KEY", cfg.SecretKey},
 	} {
-		if v == "" {
-			return S3Config{}, "", fmt.Errorf("%s is not set", name)
+		if e.v == "" {
+			return S3Config{}, "", fmt.Errorf("%s is not set", e.name)
 		}
 	}
 	return cfg, getenv("WORLDSYNC_PREFIX"), nil
