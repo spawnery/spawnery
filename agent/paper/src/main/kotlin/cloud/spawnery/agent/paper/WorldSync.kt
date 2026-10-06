@@ -17,10 +17,10 @@ class WorldSync(
     }
 
     fun awaitReady(timeoutMillis: Long): Outcome = poll(timeoutMillis) {
-        val failed = controlDir.resolve("failed")
+        val failed = controlDir.resolve(FAILED_FILE)
         when {
             Files.exists(failed) -> Outcome.Failed(Files.readString(failed).trim())
-            Files.exists(controlDir.resolve("ready")) -> Outcome.Ready
+            Files.exists(controlDir.resolve(READY_FILE)) -> Outcome.Ready
             else -> null
         }
     }
@@ -31,14 +31,14 @@ class WorldSync(
         Files.writeString(tmp, seq.toString())
         Files.move(
             tmp,
-            controlDir.resolve("snapshot.request"),
+            controlDir.resolve(REQUEST_FILE),
             StandardCopyOption.ATOMIC_MOVE,
             StandardCopyOption.REPLACE_EXISTING,
         )
     }
 
     fun awaitSnapshot(seq: Long, timeoutMillis: Long): Outcome = poll(timeoutMillis) {
-        val done = controlDir.resolve("snapshot.done")
+        val done = controlDir.resolve(DONE_FILE)
         if (!Files.exists(done)) return@poll null
         val answer = Files.readString(done).trim()
         when {
@@ -46,6 +46,23 @@ class WorldSync(
             answer.startsWith("failed $seq ") -> Outcome.Failed(answer.removePrefix("failed $seq "))
             else -> null
         }
+    }
+
+    /**
+     * The node agent answers only sequences above the last it answered, and a
+     * restarted container does not reset that, so a new run starts above
+     * every number already in the control files.
+     */
+    fun nextSequence(): Long {
+        var highest = 0L
+        for (name in listOf(REQUEST_FILE, DONE_FILE)) {
+            val file = controlDir.resolve(name)
+            if (!Files.exists(file)) continue
+            val first = runCatching { Files.readString(file).trim().removePrefix("failed ").trim().split(' ').first() }
+                .getOrNull()
+            highest = maxOf(highest, first?.toLongOrNull() ?: 0L)
+        }
+        return highest + 1
     }
 
     private fun poll(timeoutMillis: Long, check: () -> Outcome?): Outcome {
@@ -59,6 +76,10 @@ class WorldSync(
 
     companion object {
         const val POLL_MILLIS = 100L
+        const val READY_FILE = "ready"
+        const val FAILED_FILE = "failed"
+        const val REQUEST_FILE = "snapshot.request"
+        const val DONE_FILE = "snapshot.done"
         const val CONTROL_DIR = ".spawnery-worldsync"
         const val ENV_ENABLED = "SPAWNERY_WORLD_SYNC"
         const val ENV_INTERVAL = "SPAWNERY_WORLD_SYNC_INTERVAL"

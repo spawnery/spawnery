@@ -18,12 +18,14 @@ package podspec
 
 import (
 	"os"
+	"path"
 	"regexp"
 	"strconv"
 	"testing"
 
 	"github.com/spawnery/spawnery/internal/prune"
 	"github.com/spawnery/spawnery/internal/testenv"
+	"github.com/spawnery/spawnery/internal/worldsync"
 )
 
 // A divergence makes the readiness probe dial a port nothing listens on, so
@@ -100,6 +102,10 @@ func TestTheWorldSyncNamesAgreeWithThePaperAgent(t *testing.T) {
 		"ENV_ENABLED":  EnvWorldSync,
 		"ENV_INTERVAL": EnvWorldSyncInterval,
 		"CONTROL_DIR":  prune.ControlDir,
+		"READY_FILE":   path.Base(worldsync.ReadyFile),
+		"FAILED_FILE":  path.Base(worldsync.FailedFile),
+		"REQUEST_FILE": path.Base(worldsync.RequestFile),
+		"DONE_FILE":    path.Base(worldsync.DoneFile),
 	} {
 		re := regexp.MustCompile(`(?m)^\s*const val ` + constant + `\s*=\s*"([^"]*)"\s*$`)
 		m := re.FindSubmatch(worldSync)

@@ -63,4 +63,14 @@ class WorldSyncTest {
         assertNull(WorldSync.parseInterval("soon"))
         assertNull(WorldSync.parseInterval(null))
     }
+
+    @Test
+    fun `a restarted run starts above every number already answered`() {
+        assertEquals(1L, sync().nextSequence())
+        Files.writeString(dir.resolve("snapshot.request"), "7")
+        Files.writeString(dir.resolve("snapshot.done"), "failed 9 x")
+        assertEquals(10L, sync().nextSequence())
+        Files.writeString(dir.resolve("snapshot.done"), "garbage")
+        assertEquals(8L, sync().nextSequence())
+    }
 }

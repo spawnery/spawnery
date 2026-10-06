@@ -91,28 +91,9 @@ class AgentPlugin : JavaPlugin(), Listener {
     private var snapshotSeq = 0L
     private var snapshotInFlight = false
 
-    // Paper loads the worlds after every plugin's onLoad, so waiting here keeps
-    // the server off a world that is still arriving. halt, not exit: no
-    // shutdown hook may save a half-downloaded world.
-    override fun onLoad() {
-        val sync = worldSync ?: return
-        val started = System.currentTimeMillis()
-        when (val outcome = sync.awaitReady(WORLD_WAIT_MILLIS)) {
-            WorldSync.Outcome.Ready ->
-                logger.info("spawnery world sync: world ready after ${System.currentTimeMillis() - started} ms")
-            is WorldSync.Outcome.Failed -> {
-                logger.severe("spawnery world sync: the world could not be downloaded: ${outcome.reason}")
-                Runtime.getRuntime().halt(1)
-            }
-            WorldSync.Outcome.TimedOut -> {
-                logger.severe("spawnery world sync: no world after ${WORLD_WAIT_MILLIS / 1000} s")
-                Runtime.getRuntime().halt(1)
-            }
-        }
-    }
-
     private fun startSnapshots() {
         val sync = worldSync ?: return
+        snapshotSeq = sync.nextSequence() - 1
         val millis = WorldSync.parseInterval(System.getenv(WorldSync.ENV_INTERVAL)) ?: DEFAULT_SNAPSHOT_MILLIS
         val ticks = millis / 50
         server.scheduler.runTaskTimer(this, Runnable { snapshot(sync) }, ticks, ticks)
@@ -123,15 +104,29 @@ class AgentPlugin : JavaPlugin(), Listener {
         if (snapshotInFlight) return
         snapshotInFlight = true
         val autosave = server.worlds.associateWith { it.isAutoSave }
-        autosave.keys.forEach { it.isAutoSave = false }
-        server.dispatchCommand(server.consoleSender, "save-all flush")
-        val seq = ++snapshotSeq
-        sync.requestSnapshot(seq)
+        val restore = Runnable {
+            autosave.forEach { (world, on) -> world.isAutoSave = on }
+            snapshotInFlight = false
+        }
+        val seq: Long
+        try {
+            autosave.keys.forEach { it.isAutoSave = false }
+            server.dispatchCommand(server.consoleSender, "save-all flush")
+            seq = ++snapshotSeq
+            sync.requestSnapshot(seq)
+        } catch (t: Throwable) {
+            restore.run()
+            logger.log(Level.WARNING, "spawnery world sync: could not ask for a snapshot", t)
+            return
+        }
         server.scheduler.runTaskAsynchronously(this, Runnable {
-            val outcome = sync.awaitSnapshot(seq, SNAPSHOT_WAIT_MILLIS)
+            val outcome: Any = try {
+                sync.awaitSnapshot(seq, SNAPSHOT_WAIT_MILLIS)
+            } catch (t: Throwable) {
+                t
+            }
             server.scheduler.runTask(this, Runnable {
-                autosave.forEach { (world, on) -> world.isAutoSave = on }
-                snapshotInFlight = false
+                restore.run()
                 if (outcome != WorldSync.Outcome.Ready) {
                     logger.warning("spawnery world sync: snapshot $seq: $outcome")
                 }
@@ -285,7 +280,6 @@ class AgentPlugin : JavaPlugin(), Listener {
         // One second at 20 ticks.
         const val SAMPLE_TICKS = 20L
 
-        const val WORLD_WAIT_MILLIS = 10 * 60 * 1000L
         const val SNAPSHOT_WAIT_MILLIS = 60 * 1000L
         const val DEFAULT_SNAPSHOT_MILLIS = 5 * 60 * 1000L
     }

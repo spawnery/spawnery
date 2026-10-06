@@ -1,5 +1,6 @@
 name: SpawneryAgent
 version: '${version}'
+bootstrapper: cloud.spawnery.agent.paper.WorldSyncBootstrap
 main: cloud.spawnery.agent.paper.AgentPlugin
 # 26.2 while the 26.2 images ship this same jar: Paper refuses a newer one.
 api-version: '26.2'
