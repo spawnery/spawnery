@@ -97,7 +97,7 @@ spec:
   networkRef:
     name: production
   type: OnDemand
-  image: ghcr.io/spawnery/purpur:26.3-0.22.0
+  image: ghcr.io/spawnery/purpur:26.3-0.23.0
   maxPlayers: 10
   maxInstances: 4
   storage:
