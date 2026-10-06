@@ -39,7 +39,7 @@ dump() {
 	echo "================ the private server's own log ================"
 	kubectl -n "$GAME_NAMESPACE" logs private-servers-c0ffee --tail=-1 2>&1 || true
 	echo "================ the node agents' logs ================"
-	kubectl -n "$WORLDSYNC_NAMESPACE" logs daemonset/spawnery-worldsync --all-containers --tail=-1 --prefix 2>&1 || true
+	kubectl -n "$WORLDSYNC_NAMESPACE" logs -l app.kubernetes.io/name=spawnery-worldsync --all-containers --tail=-1 --prefix 2>&1 || true
 	echo "================ the bucket ================"
 	kubectl -n "$WORLDSYNC_NAMESPACE" exec deploy/minio -- mc ls --recursive local/worlds 2>&1 || true
 	echo "================ events ================"
