@@ -31,26 +31,7 @@ import (
 	"github.com/spawnery/spawnery/internal/prune"
 )
 
-// A pod may swap any entry below its data directory for a symlink, a FIFO
-// or a device node at any moment. The functions here never resolve a path
-// below root by name: they walk it one component at a time from an open
-// directory with O_NOFOLLOW and act on the last component with *at calls.
-
 const dirFlags = unix.O_RDONLY | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC
-
-func relParts(rel string) ([]string, error) {
-	parts := strings.Split(rel, "/")
-	for _, p := range parts {
-		if p == "" || p == "." || p == ".." {
-			return nil, fmt.Errorf("worldsync: path %q leaves the world", rel)
-		}
-	}
-	return parts, nil
-}
-
-func pathErr(op, root string, parts []string, err error) error {
-	return &fs.PathError{Op: op, Path: filepath.Join(root, filepath.Join(parts...)), Err: err}
-}
 
 func openDir(root string, parts []string, create bool) (int, error) {
 	fd, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
@@ -84,7 +65,8 @@ func parentOf(root, rel string, create bool) (int, string, error) {
 
 // openRegular opens root/rel for reading only if it is a regular file. The
 // O_PATH descriptor is checked before the file is opened through it, so a
-// FIFO or device swapped in is never opened.
+// FIFO or device swapped in is never opened. O_NONBLOCK makes a pod's write
+// lease fail the open instead of holding it for fs.lease-break-time.
 func openRegular(root, rel string) (*os.File, error) {
 	dir, name, err := parentOf(root, rel, false)
 	if err != nil {
@@ -104,20 +86,11 @@ func openRegular(root, rel string) (*os.File, error) {
 	if st.Mode&unix.S_IFMT != unix.S_IFREG {
 		return nil, fmt.Errorf("worldsync: %s is not a regular file", path)
 	}
-	fd, err := unix.Open("/proc/self/fd/"+strconv.Itoa(pfd), unix.O_RDONLY|unix.O_CLOEXEC, 0)
+	fd, err := unix.Open("/proc/self/fd/"+strconv.Itoa(pfd), unix.O_RDONLY|unix.O_NONBLOCK|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return nil, &fs.PathError{Op: "open", Path: path, Err: err}
 	}
 	return os.NewFile(uintptr(fd), path), nil
-}
-
-func readSmall(root, rel string, limit int64) ([]byte, error) {
-	f, err := openRegular(root, rel)
-	if err != nil {
-		return nil, err
-	}
-	defer func() { _ = f.Close() }()
-	return io.ReadAll(io.LimitReader(f, limit))
 }
 
 func lstatAt(root, rel string) error {
@@ -182,65 +155,52 @@ func place(root, rel string, r io.Reader, mode uint32, mtime int64) error {
 	return nil
 }
 
-// removeAllAt removes a symlink at root/name itself, not what it points to.
-func removeAllAt(root, name string) error {
-	r, err := os.OpenRoot(root)
-	if errors.Is(err, fs.ErrNotExist) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	defer func() { _ = r.Close() }()
-	return r.RemoveAll(name)
-}
-
 // walkKept visits every entry below root other than a directory that keep
 // holds or leads toward, and descends into such directories only. dir is
 // the open directory that holds name.
 func walkKept(root string, keep prune.Keep, visit func(dir int, name, rel string, st *unix.Stat_t) error) error {
-	return walkKeptBelow(root, nil, keep, visit)
+	fd, err := openDir(root, nil, false)
+	if err != nil {
+		return err
+	}
+	return walkKeptIn(root, fd, nil, keep, visit)
 }
 
-func walkKeptBelow(root string, parts []string, keep prune.Keep, visit func(dir int, name, rel string, st *unix.Stat_t) error) error {
-	fd, err := openDir(root, parts, false)
+// walkKeptIn takes over fd.
+func walkKeptIn(root string, fd int, parts []string, keep prune.Keep, visit func(dir int, name, rel string, st *unix.Stat_t) error) error {
+	d := os.NewFile(uintptr(fd), root)
+	defer func() { _ = d.Close() }()
+	names, err := d.Readdirnames(-1)
 	if err != nil {
 		return err
 	}
-	dirs, err := func() ([][]string, error) {
-		d := os.NewFile(uintptr(fd), filepath.Join(root, filepath.Join(parts...)))
-		defer func() { _ = d.Close() }()
-		names, err := d.Readdirnames(-1)
+	for _, name := range names {
+		if len(parts) == 0 && name == prune.ControlDir {
+			continue
+		}
+		child := append(append([]string(nil), parts...), name)
+		rel := strings.Join(child, "/")
+		if len(rel) > maxRel {
+			return fmt.Errorf("worldsync: %s holds a path longer than the %d bytes a world may hold", root, maxRel)
+		}
+		if !keep.Holds(rel) && !keep.Toward(rel) {
+			continue
+		}
+		var st unix.Stat_t
+		if err := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			return pathErr("lstat", root, child, err)
+		}
+		if st.Mode&unix.S_IFMT != unix.S_IFDIR {
+			if err := visit(fd, name, rel, &st); err != nil {
+				return err
+			}
+			continue
+		}
+		sub, err := unix.Openat(fd, name, dirFlags, 0)
 		if err != nil {
-			return nil, err
+			return pathErr("open", root, child, err)
 		}
-		var dirs [][]string
-		for _, name := range names {
-			if len(parts) == 0 && name == prune.ControlDir {
-				continue
-			}
-			child := append(append([]string(nil), parts...), name)
-			rel := strings.Join(child, "/")
-			if !keep.Holds(rel) && !keep.Toward(rel) {
-				continue
-			}
-			var st unix.Stat_t
-			if err := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
-				return nil, pathErr("lstat", root, child, err)
-			}
-			if st.Mode&unix.S_IFMT == unix.S_IFDIR {
-				dirs = append(dirs, child)
-			} else if err := visit(fd, name, rel, &st); err != nil {
-				return nil, err
-			}
-		}
-		return dirs, nil
-	}()
-	if err != nil {
-		return err
-	}
-	for _, c := range dirs {
-		if err := walkKeptBelow(root, c, keep, visit); err != nil {
+		if err := walkKeptIn(root, sub, child, keep, visit); err != nil {
 			return err
 		}
 	}
