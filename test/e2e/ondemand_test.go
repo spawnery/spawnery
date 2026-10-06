@@ -87,7 +87,7 @@ func TestAPrivateServersWorldOutlivesItsServer(t *testing.T) {
 	}
 	claim := podspec.DataClaimName(server)
 
-	proxy := aProxyPodOf(t, onDemandProxyGroup)
+	proxy := aProxyPodOf(t, onDemandNamespace, onDemandProxyGroup)
 
 	first := startServer(t, proxy, onDemandGroup, onDemandKey)
 	if first.GetServer() != server {
@@ -100,7 +100,7 @@ func TestAPrivateServersWorldOutlivesItsServer(t *testing.T) {
 			"everything below would be measuring a member this test did not start", server)
 	}
 
-	waitReady(t, server, "the first start")
+	waitReady(t, onDemandNamespace, server, "the first start")
 
 	if err := k8s.Get(ctx, client.ObjectKey{Namespace: onDemandNamespace, Name: claim},
 		&corev1.PersistentVolumeClaim{}); err != nil {
@@ -110,7 +110,7 @@ func TestAPrivateServersWorldOutlivesItsServer(t *testing.T) {
 
 	// Unique per run, for clusters kept with E2E_KEEP=1.
 	marker := fmt.Sprintf("spawnery-e2e %d", time.Now().UnixNano())
-	writeMarker(t, server, marker)
+	writeMarker(t, onDemandNamespace, server, marker)
 
 	stopServer(t, proxy, server)
 
@@ -162,9 +162,9 @@ func TestAPrivateServersWorldOutlivesItsServer(t *testing.T) {
 			"were both observed gone above")
 	}
 
-	waitReady(t, server, "the second start")
+	waitReady(t, onDemandNamespace, server, "the second start")
 
-	got := readMarker(t, server)
+	got := readMarker(t, onDemandNamespace, server)
 	if got != marker {
 		t.Fatalf("the world of %s came back with %q, want %q. This is the promise the on-demand "+
 			"type exists for: the server is gone and made again, and the player's world is the "+
@@ -174,25 +174,25 @@ func TestAPrivateServersWorldOutlivesItsServer(t *testing.T) {
 
 // waitReady waits for phase Ready, when a generated world exists; which says
 // which of the two starts timed out.
-func waitReady(t *testing.T, server, which string) {
+func waitReady(t *testing.T, namespace, server, which string) {
 	t.Helper()
 	eventually(t, 6*time.Minute, "the private server to reach Ready on "+which, func() (bool, string) {
 		var srv spawneryv1alpha1.Server
-		if err := k8s.Get(ctx, client.ObjectKey{Namespace: onDemandNamespace, Name: server}, &srv); err != nil {
+		if err := k8s.Get(ctx, client.ObjectKey{Namespace: namespace, Name: server}, &srv); err != nil {
 			return false, err.Error()
 		}
 		if srv.Status.Phase == string(phase.Ready) {
 			return true, ""
 		}
-		return false, fmt.Sprintf("phase %s; %s", srv.Status.Phase, podTrouble(t, server))
+		return false, fmt.Sprintf("phase %s; %s", srv.Status.Phase, podTrouble(t, namespace, server))
 	})
 }
 
 // podTrouble is what a wait that gave up adds about the pod's containers.
-func podTrouble(t *testing.T, name string) string {
+func podTrouble(t *testing.T, namespace, name string) string {
 	t.Helper()
 	var pod corev1.Pod
-	if err := k8s.Get(ctx, client.ObjectKey{Namespace: onDemandNamespace, Name: name}, &pod); err != nil {
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &pod); err != nil {
 		return "pod: " + err.Error()
 	}
 	var states []string
@@ -210,13 +210,13 @@ func podTrouble(t *testing.T, name string) string {
 }
 
 // aProxyPodOf waits for a pod of the proxy group to bind a token to.
-func aProxyPodOf(t *testing.T, group string) *corev1.Pod {
+func aProxyPodOf(t *testing.T, namespace, group string) *corev1.Pod {
 	t.Helper()
 	var found corev1.Pod
 	eventually(t, 2*time.Minute, "a pod of the "+group+" proxy group", func() (bool, string) {
 		var pods corev1.PodList
 		err := k8s.List(ctx, &pods,
-			client.InNamespace(onDemandNamespace),
+			client.InNamespace(namespace),
 			client.MatchingLabels{
 				podspec.LabelGroup: group,
 				podspec.LabelRole:  podspec.RoleProxy,
@@ -238,18 +238,18 @@ func aProxyPodOf(t *testing.T, group string) *corev1.Pod {
 // kubectl exec rather than client-go, whose SPDY transport would add
 // moby/spdystream to go.mod for a test. `test -d` first, because Paper names
 // the world directory from level-name.
-func writeMarker(t *testing.T, server, marker string) {
+func writeMarker(t *testing.T, namespace, server, marker string) {
 	t.Helper()
-	out, err := kubectlExec(t, server, fmt.Sprintf(
+	out, err := kubectlExec(t, namespace, server, fmt.Sprintf(
 		"set -e; test -d /data/world; printf %%s %q > %s", marker, markerPath))
 	if err != nil {
 		t.Fatalf("write the marker into %s's world: %v\n%s", server, err, out)
 	}
 }
 
-func readMarker(t *testing.T, server string) string {
+func readMarker(t *testing.T, namespace, server string) string {
 	t.Helper()
-	out, err := kubectlExec(t, server, "cat "+markerPath)
+	out, err := kubectlExec(t, namespace, server, "cat "+markerPath)
 	if err != nil {
 		t.Fatalf("read the marker out of %s's world: %v\n%s\n\nThe world of a private server is "+
 			"the claim, and a marker that is not there means the second start either got a "+
@@ -258,9 +258,9 @@ func readMarker(t *testing.T, server string) string {
 	return strings.TrimSpace(out)
 }
 
-func kubectlExec(t *testing.T, pod, script string) (string, error) {
+func kubectlExec(t *testing.T, namespace, pod, script string) (string, error) {
 	t.Helper()
-	cmd := exec.Command("kubectl", "-n", onDemandNamespace, "exec", pod, "--", "sh", "-c", script)
+	cmd := exec.Command("kubectl", "-n", namespace, "exec", pod, "--", "sh", "-c", script)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }
@@ -350,6 +350,23 @@ func stopServer(t *testing.T, proxy *corev1.Pod, server string) {
 	}
 }
 
+func deleteServer(t *testing.T, proxy *corev1.Pod, group, key string) *agentpb.DeleteServerResult {
+	t.Helper()
+	s := openProxySession(t, proxy)
+	defer s.close()
+	resp := s.ask(t, &agentpb.CloudRequest{
+		Request: &agentpb.CloudRequest_DeleteServer{
+			DeleteServer: &agentpb.DeleteServerRequest{Group: group, Key: key},
+		},
+	})
+	result := resp.GetDeleteServer()
+	if result == nil {
+		t.Fatalf("deleting key %q of group %q was answered %v, not with a deletion",
+			key, group, resp.GetError())
+	}
+	return result
+}
+
 // ask sends one request and returns the answer that carries its id, reading
 // past whatever else the operator sends.
 func (s *proxySession) ask(t *testing.T, req *agentpb.CloudRequest) *agentpb.CloudResponse {
@@ -404,7 +421,7 @@ func (s *proxySession) recv(t *testing.T, within time.Duration) (*agentpb.Operat
 // for the proxy ServiceAccount, in the agent audience, bound to that pod.
 func proxyToken(t *testing.T, pod *corev1.Pod) string {
 	t.Helper()
-	tr, err := clientset.CoreV1().ServiceAccounts(onDemandNamespace).CreateToken(ctx,
+	tr, err := clientset.CoreV1().ServiceAccounts(pod.Namespace).CreateToken(ctx,
 		podspec.ProxyServiceAccountName,
 		&authnv1.TokenRequest{Spec: authnv1.TokenRequestSpec{
 			Audiences:         []string{podspec.AgentTokenAudience},
