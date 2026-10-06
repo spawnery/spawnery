@@ -183,8 +183,8 @@ A stop always uploads, whether or not the agent ever asked for a snapshot.
 
 ## Deleting a world
 
-`deleteServer(group, key)` deletes the member's `Server` and writes a deletion
-marker into the bucket. The operator sweeps marked worlds once a minute, as
+`deleteServer(group, key)` writes a deletion marker into the bucket and then
+deletes the member's `Server`. The operator sweeps marked worlds once a minute, as
 soon as no node holds their lease. Until the sweep is done, `startServer` for
 the same key answers `UNAVAILABLE`; after it, the key starts an empty world.
 Without `--world-sync`, `startServer` refuses every key of an `ObjectStore`

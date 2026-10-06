@@ -627,13 +627,15 @@ func (w KubeWriter) deleteObjectStoreWorld(ctx context.Context, namespace, group
 	if !haveServer && !haveWorld {
 		return DeletedServer{}, ErrNoSuchServer
 	}
+	// The marker first: a member deleted without it uploads its world at
+	// the stop, and that world would outlive a failed request.
+	if err := w.Worlds.MarkDeleted(ctx, world); err != nil {
+		return DeletedServer{}, err
+	}
 	if haveServer {
 		if err := w.Client.Delete(ctx, &srv); err != nil && !apierrors.IsNotFound(err) {
 			return DeletedServer{}, err
 		}
-	}
-	if err := w.Worlds.MarkDeleted(ctx, world); err != nil {
-		return DeletedServer{}, err
 	}
 	return DeletedServer{Name: name, World: haveWorld}, nil
 }

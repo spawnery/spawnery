@@ -77,15 +77,19 @@ func TestDeleteSeesAClaimTheCacheCannot(t *testing.T) {
 }
 
 type fakeWorlds struct {
-	exists  bool
-	pending bool
-	deleted []string
+	exists   bool
+	pending  bool
+	markFail error
+	deleted  []string
 }
 
 func (f *fakeWorlds) DeletionPending(context.Context, string) (bool, error) { return f.pending, nil }
 
 func (f *fakeWorlds) Exists(context.Context, string) (bool, error) { return f.exists, nil }
 func (f *fakeWorlds) MarkDeleted(_ context.Context, w string) error {
+	if f.markFail != nil {
+		return f.markFail
+	}
 	f.deleted = append(f.deleted, w)
 	return nil
 }
@@ -193,5 +197,20 @@ func TestStartOfAnObjectStoreWorldCreatesTheMember(t *testing.T) {
 	}
 	if !memberExists(t, w) {
 		t.Fatal("no member")
+	}
+}
+
+func TestAFailedMarkLeavesTheMemberInPlace(t *testing.T) {
+	member := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "private-servers-c0ffee", Namespace: "minecraft"},
+		Spec:       spawneryv1alpha1.ServerSpec{GroupRef: spawneryv1alpha1.ObjectRef{Name: "private-servers"}, Key: "c0ffee"},
+	}
+	c := fakeClient(t, objectStoreGroup(), member)
+	w := KubeWriter{Client: c, Reader: c, Clock: time.Now, Worlds: &fakeWorlds{markFail: errors.New("store down")}}
+	if _, err := w.DeleteServer(context.Background(), "minecraft", "private-servers", "c0ffee"); err == nil {
+		t.Fatal("the delete succeeded without its marker")
+	}
+	if !memberExists(t, w) {
+		t.Fatal("the member is gone although its world was never marked: its stop uploads a world nothing deletes")
 	}
 }

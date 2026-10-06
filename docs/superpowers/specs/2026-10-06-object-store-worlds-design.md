@@ -411,8 +411,11 @@ other user on the node reaches a world or its setgid directories.
 
 ### 5.1 Deleting a world
 
-`DeleteServer(group, key)` deletes the `Server`, as today, and then writes a
-marker `<prefix>/.deletions/<namespace>/<group>/<key>`. The markers live
+`DeleteServer(group, key)` writes a marker
+`<prefix>/.deletions/<namespace>/<group>/<key>` and then deletes the
+`Server`, as today. When the marker cannot be written, the member keeps
+running and the caller can ask again; the other order would let the
+member's last upload bring back a world nothing deletes. The markers live
 under one prefix of their own so that finding them is one listing, not a
 walk over every world. A runnable in the operator, under leader election,
 lists them once a minute. For each world whose lease is absent, released or
