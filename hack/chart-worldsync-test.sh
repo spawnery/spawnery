@@ -29,7 +29,8 @@ on="$(cat "$tmp/on.yaml")"
 for want in 'kind: CSIDriver' 'name: worldsync.spawnery.cloud' 'kind: DaemonSet' 'namespace: ws' \
 	'--world-sync=true' '--world-sync-snapshot-interval=5m' 'WORLDSYNC_BUCKET' \
 	'mountPropagation: Bidirectional' 'privileged: true' \
-	'podInfoOnMount: true' 'attachRequired: false' '- Ephemeral'; do
+	'podInfoOnMount: true' 'attachRequired: false' '- Ephemeral' 'fsGroupPolicy: File' \
+	'priorityClassName: system-node-critical'; do
 	grep -qF -- "$want" <<<"$on" || fail "world sync on: the render lacks '$want'"
 done
 
@@ -58,7 +59,30 @@ for name in ("WORLDSYNC_ENDPOINT", "WORLDSYNC_REGION", "WORLDSYNC_BUCKET", "WORL
         raise SystemExit(f"{name}: operator {operator.get(name)!r}, node agent {agent.get(name)!r}")
 if agent["WORLDSYNC_PREFIX"] != "private-servers":
     raise SystemExit("the prefix did not reach the node agent")
+
+for d in docs:
+    if d["kind"] in ("CSIDriver", "DaemonSet") or d["kind"] == "ServiceAccount" and d["metadata"]["name"] == "spawnery-worldsync":
+        component = d["metadata"]["labels"].get("app.kubernetes.io/component")
+        if component != "worldsync":
+            raise SystemExit(f"{d['kind']} {d['metadata']['name']}: component label {component!r}, want 'worldsync'")
+ds = next(d for d in docs if d["kind"] == "DaemonSet")
+if ds["spec"]["template"]["spec"].get("tolerations") != [{"operator": "Exists"}]:
+    raise SystemExit(f"the node agent tolerates {ds['spec']['template']['spec'].get('tolerations')!r} by default, want every taint")
 PY
+
+custom="$(helm template t charts/spawnery --namespace ops \
+	--set worldSync.enabled=true \
+	--set worldSync.objectStore.endpoint=https://s3.example \
+	--set worldSync.objectStore.region=r \
+	--set worldSync.objectStore.bucket=b \
+	--set worldSync.objectStore.credentialsSecret=creds \
+	--set worldSync.priorityClassName= \
+	--set 'worldSync.tolerations[0].key=dedicated' \
+	--set 'worldSync.tolerations[0].operator=Exists')"
+if grep -q 'priorityClassName' <<<"$custom"; then
+	fail "an empty worldSync.priorityClassName still renders one"
+fi
+grep -qF -- 'key: dedicated' <<<"$custom" || fail "worldSync.tolerations did not replace the default"
 
 if helm template t charts/spawnery --set worldSync.enabled=true >/dev/null 2>&1; then
 	fail "world sync on without a bucket rendered; it must fail"

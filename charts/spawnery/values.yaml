@@ -110,7 +110,13 @@ worldSync:
   # loss costs.
   snapshotInterval: 5m
   nodeSelector: {}
-  tolerations: []
+  # Every taint: a game pod scheduled onto a tainted node needs the driver
+  # there, or its world volume never mounts.
+  tolerations:
+    - operator: Exists
+  # Keeps the node agent from being evicted ahead of the game pods whose
+  # worlds it holds. Empty: none.
+  priorityClassName: system-node-critical
   resources:
     requests:
       cpu: 50m

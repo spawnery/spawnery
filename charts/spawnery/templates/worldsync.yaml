@@ -5,10 +5,13 @@ kind: CSIDriver
 metadata:
   name: worldsync.spawnery.cloud
   labels:
-    {{- include "spawnery.labels" . | nindent 4 }}
+    {{- include "spawnery.worldSyncLabels" . | nindent 4 }}
 spec:
   attachRequired: false
   podInfoOnMount: true
+  # With the node capability VOLUME_MOUNT_GROUP the kubelet hands the pod's
+  # fsGroup to the node agent instead of changing ownership itself.
+  fsGroupPolicy: File
   volumeLifecycleModes:
     - Ephemeral
 ---
@@ -18,7 +21,7 @@ metadata:
   name: spawnery-worldsync
   namespace: {{ $ns }}
   labels:
-    {{- include "spawnery.labels" . | nindent 4 }}
+    {{- include "spawnery.worldSyncLabels" . | nindent 4 }}
 automountServiceAccountToken: false
 ---
 apiVersion: apps/v1
@@ -27,7 +30,7 @@ metadata:
   name: spawnery-worldsync
   namespace: {{ $ns }}
   labels:
-    {{- include "spawnery.labels" . | nindent 4 }}
+    {{- include "spawnery.worldSyncLabels" . | nindent 4 }}
 spec:
   selector:
     matchLabels:
@@ -38,6 +41,9 @@ spec:
         app.kubernetes.io/name: spawnery-worldsync
     spec:
       serviceAccountName: spawnery-worldsync
+      {{- with .Values.worldSync.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
       # Uploads after a pod's stop continue across a restart from state.json;
       # the grace only lets an upload in flight finish its object.
       terminationGracePeriodSeconds: 30

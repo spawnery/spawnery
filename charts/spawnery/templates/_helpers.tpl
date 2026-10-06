@@ -20,9 +20,23 @@ it manages. Never used in a selector -- see above.
 */}}
 {{- define "spawnery.labels" -}}
 {{ include "spawnery.selectorLabels" . }}
+{{ include "spawnery.commonLabels" . }}
+{{- end }}
+
+{{- define "spawnery.commonLabels" -}}
 helm.sh/chart: {{ printf "%s-%s" .Chart.Name .Chart.Version }}
 app.kubernetes.io/managed-by: {{ .Release.Service }}
 app.kubernetes.io/version: {{ .Chart.AppVersion | quote }}
+{{- end }}
+
+{{/*
+Metadata labels of the world sync objects. They leave out the operator's
+selector pair, so nothing that selects the operator matches them.
+*/}}
+{{- define "spawnery.worldSyncLabels" -}}
+app.kubernetes.io/name: spawnery
+app.kubernetes.io/component: worldsync
+{{ include "spawnery.commonLabels" . }}
 {{- end }}
 
 {{/*
