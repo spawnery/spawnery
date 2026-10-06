@@ -159,6 +159,9 @@ func plan(root string, rel []string, pats, ways, mounts [][]string, doomed *[]st
 		if name == "lost+found" && len(rel) == 0 {
 			continue
 		}
+		if name == ControlDir && len(rel) == 0 {
+			continue
+		}
 		r := append(append([]string{}, rel...), name)
 		switch {
 		case kept(pats, r) || isOneOf(mounts, r):
