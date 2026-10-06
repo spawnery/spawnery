@@ -137,8 +137,8 @@ The node agent and the game server talk through files in
 | `snapshot.request` | agent | a sequence number, asking for a snapshot |
 | `snapshot.done` | node agent | the sequence number of the finished copy, or `failed <seq> <reason>` |
 
-The prune never deletes this directory when `SPAWNERY_WORLD_SYNC` is set.
-It is not synced.
+The prune never deletes this directory, whatever the backend. It is not
+synced.
 
 ### 3.4 The agent
 
@@ -169,12 +169,13 @@ Under `<prefix>/<namespace>/<group>/<key>/`:
   `worldId` is random and set at the first upload. A world deleted and
   started again under the same key gets a new one, so no node mistakes an
   old cache for it.
-- `objects/<sha256>`: one object per file of 1 MiB or more, by content. Region
-  files are already compressed and are stored as they are.
-- `packs/<generation>.tar.zst`: all smaller files of that generation in one
-  object. A pack is always fetched whole.
+- `objects/<sha256>`: one object per file of 64 KiB or more, by content.
+  Region files are already compressed and are stored as they are. The store
+  bills at least 64 kB per object, so smaller ones would cost more than they
+  hold.
+- `packs/<generation>.tar.gz`: every smaller file of that generation in one
+  object, written anew each generation. A pack is always fetched whole.
 - `lease.json`: `{node, pod, world, renewedAt}`.
-- `deleted`: present while a deletion is pending (§5).
 
 A manifest is written last, with `If-Match` on the previous manifest's
 ETag (or `If-None-Match: *` for the first). Objects a manifest no longer
@@ -202,6 +203,11 @@ compared with the `Date` header of the response that read the lease.
 
 Called by the kubelet before the containers start.
 
+0. Refuse a `world` whose namespace is not the pod's
+   (`csi.storage.k8s.io/pod.namespace`), with `PERMISSION_DENIED`. Anyone
+   who may create a pod can name the driver and any world in its
+   attributes; without this check a pod could mount another namespace's
+   world.
 1. Take the lease, or confirm this node holds it. If another node holds a
    fresh lease, return `UNAVAILABLE`; the kubelet retries with back-off and
    the pod stays in `ContainerCreating`. This is the case of a world
@@ -296,13 +302,14 @@ mounts its root with `Bidirectional` propagation for that reason.
 
 ### 5.1 Deleting a world
 
-`DeleteServer(group, key)` deletes the `Server`, as today, and then writes
-`deleted` under the world's prefix. A runnable in the operator lists
-`deleted` markers once a minute. For each world whose lease is absent or
-stale it deletes the lease, every object and pack, the manifest, and the
-marker last.
+`DeleteServer(group, key)` deletes the `Server`, as today, and then writes a
+marker `<prefix>/.deletions/<namespace>/<group>/<key>`. The markers live
+under one prefix of their own so that finding them is one listing, not a
+walk over every world. A runnable in the operator lists them once a minute.
+For each world whose lease is absent or stale it deletes every object and
+pack, then the manifest, then the marker.
 
-A start of the same key while `deleted` exists is refused by the node agent
+A start of the same key while its marker exists is refused by the node agent
 (`UNAVAILABLE`) until the deletion finished, then begins as a new world with
 a new `worldId`.
 
