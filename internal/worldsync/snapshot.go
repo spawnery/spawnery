@@ -21,10 +21,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
+
+	"golang.org/x/sys/unix"
 
 	"github.com/spawnery/spawnery/internal/prune"
 )
@@ -57,80 +58,56 @@ var copyHook func(path string)
 
 func Scan(dir string, keep prune.Keep) ([]LocalFile, error) {
 	var out []LocalFile
-	err := filepath.WalkDir(dir, func(p string, d fs.DirEntry, err error) error {
-		if err != nil {
-			return err
+	err := walkKept(dir, keep, func(_ int, _, rel string, st *unix.Stat_t) error {
+		if st.Mode&unix.S_IFMT == unix.S_IFREG && keep.Holds(rel) {
+			out = append(out, LocalFile{Path: rel, Size: st.Size, Mode: uint32(st.Mode & 0o777), MTime: st.Mtim.Nano()})
 		}
-		rel, err := filepath.Rel(dir, p)
-		if err != nil || rel == "." {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if rel == prune.ControlDir {
-			return fs.SkipDir
-		}
-		if d.IsDir() {
-			if keep.Holds(rel) || keep.Toward(rel) {
-				return nil
-			}
-			return fs.SkipDir
-		}
-		if !d.Type().IsRegular() || !keep.Holds(rel) {
-			return nil
-		}
-		info, err := d.Info()
-		if err != nil {
-			return err
-		}
-		out = append(out, LocalFile{Path: rel, Size: info.Size(), Mode: uint32(info.Mode().Perm()), MTime: info.ModTime().UnixNano()})
 		return nil
 	})
 	sort.Slice(out, func(i, j int) bool { return out[i].Path < out[j].Path })
 	return out, err
 }
 
-func statOf(path string) (int64, int64, error) {
-	info, err := os.Stat(path)
-	if err != nil {
-		return 0, 0, err
-	}
-	return info.Size(), info.ModTime().UnixNano(), nil
-}
-
-// copyStable copies src to dst and checks that size and mtime did not move
-// during the copy, up to three attempts. It returns the stat it copied at.
-func copyStable(src, dst string) (int64, int64, error) {
+// copyStable copies root/rel to dst and checks that size and mtime did not
+// move during the copy, up to three attempts. It returns the stat it copied at.
+func copyStable(root, rel, dst string) (int64, int64, error) {
 	for attempt := 0; attempt < 3; attempt++ {
-		size, mtime, err := statOf(src)
-		if err != nil {
-			return 0, 0, err
-		}
-		if err := copyFile(src, dst); err != nil {
-			return 0, 0, err
-		}
-		if copyHook != nil {
-			copyHook(src)
-		}
-		size2, mtime2, err := statOf(src)
-		if err != nil {
-			return 0, 0, err
-		}
-		if size == size2 && mtime == mtime2 {
-			return size, mtime, nil
+		size, mtime, settled, err := copyOnce(root, rel, dst)
+		if err != nil || settled {
+			return size, mtime, err
 		}
 	}
-	return 0, 0, fmt.Errorf("%w: %s", ErrUnsettled, src)
+	return 0, 0, fmt.Errorf("%w: %s", ErrUnsettled, filepath.Join(root, rel))
 }
 
-func copyFile(src, dst string) error {
+func copyOnce(root, rel, dst string) (int64, int64, bool, error) {
+	in, err := openRegular(root, rel)
+	if err != nil {
+		return 0, 0, false, err
+	}
+	defer func() { _ = in.Close() }()
+	before, err := in.Stat()
+	if err != nil {
+		return 0, 0, false, err
+	}
+	if err := copyFile(in, dst); err != nil {
+		return 0, 0, false, err
+	}
+	if copyHook != nil {
+		copyHook(in.Name())
+	}
+	after, err := in.Stat()
+	if err != nil {
+		return 0, 0, false, err
+	}
+	settled := before.Size() == after.Size() && before.ModTime().Equal(after.ModTime())
+	return before.Size(), before.ModTime().UnixNano(), settled, nil
+}
+
+func copyFile(in io.Reader, dst string) error {
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
-	in, err := os.Open(src)
-	if err != nil {
-		return err
-	}
-	defer func() { _ = in.Close() }()
 	out, err := os.Create(dst)
 	if err != nil {
 		return err
@@ -165,7 +142,7 @@ func TakeSnapshot(dataDir, snapDir string, keep prune.Keep, base []FileEntry, se
 			s.Files = append(s.Files, SnapFile{FileEntry: b})
 			continue
 		}
-		size, mtime, err := copyStable(filepath.Join(dataDir, f.Path), filepath.Join(snapDir, f.Path))
+		size, mtime, err := copyStable(dataDir, f.Path, filepath.Join(snapDir, filepath.FromSlash(f.Path)))
 		if err != nil {
 			return Snap{}, err
 		}

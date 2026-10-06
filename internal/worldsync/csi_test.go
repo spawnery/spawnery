@@ -19,6 +19,7 @@ package worldsync
 import (
 	"context"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -102,5 +103,60 @@ func TestImportRefusesAnExistingWorld(t *testing.T) {
 	}
 	if _, err := Import(context.Background(), st, "", "ns/g/k", []string{"worlds/world"}, dir); err == nil {
 		t.Fatal("a second import over an existing world succeeded")
+	}
+}
+
+func TestAMalformedWorldIsInvalidArgument(t *testing.T) {
+	for _, world := range []string{"attacker/../victim", "ns/g/k/x", "/ns/g/k", "ns//k", "ns/g/.."} {
+		t.Run(world, func(t *testing.T) {
+			s, _ := csiFor(t)
+			_, err := s.NodePublishVolume(context.Background(), publishReq(t, strings.Split(world, "/")[0], world))
+			if status.Code(err) != codes.InvalidArgument {
+				t.Fatalf("code = %v (%v), want InvalidArgument", status.Code(err), err)
+			}
+		})
+	}
+}
+
+func TestAMalformedKeepIsInvalidArgument(t *testing.T) {
+	s, _ := csiFor(t)
+	req := publishReq(t, "ns", "ns/g/k")
+	req.VolumeContext["keep"] = "worlds/world\n../escape"
+	if _, err := s.NodePublishVolume(context.Background(), req); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("code = %v (%v), want InvalidArgument", status.Code(err), err)
+	}
+}
+
+func TestAnEmptyVolumeIDOrTargetIsInvalidArgument(t *testing.T) {
+	s, _ := csiFor(t)
+	for name, mod := range map[string]func(*csi.NodePublishVolumeRequest){
+		"volume id": func(r *csi.NodePublishVolumeRequest) { r.VolumeId = "" },
+		"target":    func(r *csi.NodePublishVolumeRequest) { r.TargetPath = "" },
+	} {
+		req := publishReq(t, "ns", "ns/g/k")
+		mod(req)
+		if _, err := s.NodePublishVolume(context.Background(), req); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("publish without %s: code = %v, want InvalidArgument", name, status.Code(err))
+		}
+	}
+	for name, req := range map[string]*csi.NodeUnpublishVolumeRequest{
+		"volume id": {TargetPath: filepath.Join(t.TempDir(), "gone")},
+		"target":    {VolumeId: "x"},
+	} {
+		if _, err := s.NodeUnpublishVolume(context.Background(), req); status.Code(err) != codes.InvalidArgument {
+			t.Errorf("unpublish without %s: code = %v, want InvalidArgument", name, status.Code(err))
+		}
+	}
+}
+
+func TestImportRefusesAMalformedWorld(t *testing.T) {
+	st := NewMemStore(time.Now)
+	dir := t.TempDir()
+	writeFile(t, filepath.Join(dir, "worlds/world/level.dat"), 3, time.Unix(1, 0))
+	if _, err := Import(context.Background(), st, "", "ns/../victim", []string{"worlds/world"}, dir); err == nil {
+		t.Fatal("an import into ns/../victim succeeded")
+	}
+	if keys := st.Keys(); len(keys) != 0 {
+		t.Fatalf("the refused import wrote %v", keys)
 	}
 }

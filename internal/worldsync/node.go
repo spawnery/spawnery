@@ -270,7 +270,7 @@ func (n *Node) resumeControl(s *worldState) {
 		return
 	}
 	for _, f := range []string{ReadyFile, FailedFile} {
-		if _, err := os.Stat(filepath.Join(n.dataDir(s.World), f)); err == nil {
+		if err := lstatAt(n.dataDir(s.World), f); err == nil {
 			return
 		}
 	}
@@ -280,27 +280,27 @@ func (n *Node) resumeControl(s *worldState) {
 }
 
 func (n *Node) control(s *worldState, rel, content string) error {
-	return writeFileAtomic(filepath.Join(n.dataOf(s), rel), content)
-}
-
-func writeFileAtomic(path, content string) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+	data := n.dataOf(s)
+	if err := os.MkdirAll(data, 0o755); err != nil {
 		return err
 	}
-	tmp := path + ".tmp"
-	if err := os.WriteFile(tmp, []byte(content), 0o644); err != nil {
-		return err
-	}
-	return os.Rename(tmp, path)
+	return place(data, rel, strings.NewReader(content), 0, time.Now().UnixNano())
 }
 
 func (n *Node) resetControl(s *worldState) error {
-	dir := filepath.Join(n.dataDir(s.World), prune.ControlDir)
-	if err := os.RemoveAll(dir); err != nil {
+	data := n.dataDir(s.World)
+	if err := os.MkdirAll(data, 0o755); err != nil {
+		return err
+	}
+	if err := removeAllAt(data, prune.ControlDir); err != nil {
 		return err
 	}
 	s.LastRequest = 0
-	return os.MkdirAll(dir, 0o755)
+	fd, err := openDir(data, []string{prune.ControlDir}, true)
+	if err != nil {
+		return err
+	}
+	return unix.Close(fd)
 }
 
 func (n *Node) markReady(s *worldState) error {
@@ -315,16 +315,19 @@ func (n *Node) wipeKept(s *worldState) error {
 	if err != nil {
 		return err
 	}
-	files, err := Scan(n.dataDir(s.World), keep)
-	if err != nil && !os.IsNotExist(err) {
-		return err
+	data := n.dataDir(s.World)
+	if _, err := os.Lstat(data); os.IsNotExist(err) {
+		return nil
 	}
-	for _, f := range files {
-		if err := os.Remove(filepath.Join(n.dataDir(s.World), f.Path)); err != nil && !os.IsNotExist(err) {
-			return err
+	return walkKept(data, keep, func(dir int, name, rel string, st *unix.Stat_t) error {
+		if !keep.Holds(rel) && st.Mode&unix.S_IFMT != unix.S_IFLNK {
+			return nil
 		}
-	}
-	return nil
+		if err := unix.Unlinkat(dir, name, 0); err != nil && !errors.Is(err, unix.ENOENT) {
+			return &fs.PathError{Op: "remove", Path: filepath.Join(data, rel), Err: err}
+		}
+		return nil
+	})
 }
 
 func (n *Node) discardLocal(s *worldState) error {
@@ -738,7 +741,7 @@ func (n *Node) pollRequests() {
 		if s.Target == "" {
 			return
 		}
-		b, err := os.ReadFile(filepath.Join(n.dataOf(s), RequestFile))
+		b, err := readSmall(n.dataOf(s), RequestFile, 64)
 		if err != nil {
 			return
 		}
@@ -1029,7 +1032,7 @@ func (n *Node) dropScratch(s *worldState) {
 		if e.Name() == prune.ControlDir || keep.Holds(e.Name()) || keep.Toward(e.Name()) {
 			continue
 		}
-		_ = os.RemoveAll(filepath.Join(n.dataDir(s.World), e.Name()))
+		_ = removeAllAt(n.dataDir(s.World), e.Name())
 	}
 }
 

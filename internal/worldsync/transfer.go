@@ -208,57 +208,10 @@ func dropUnnamed(ctx context.Context, st Store, prefix string, prev *Manifest, m
 	}
 }
 
-func localPath(dir, rel string) (string, error) {
-	if !filepath.IsLocal(filepath.FromSlash(rel)) {
-		return "", fmt.Errorf("worldsync: manifest path %q leaves the world", rel)
-	}
-	return filepath.Join(dir, filepath.FromSlash(rel)), nil
-}
-
-// place writes r to path through a temporary file, then sets mode and mtime.
-func place(path string, r io.Reader, mode uint32, mtime int64) error {
-	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
-		return err
-	}
-	tmp := path + ".worldsync-part"
-	f, err := os.Create(tmp)
-	if err != nil {
-		return err
-	}
-	placed := false
-	defer func() {
-		if !placed {
-			_ = os.Remove(tmp)
-		}
-	}()
-	if _, err := io.Copy(f, r); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Sync(); err != nil {
-		_ = f.Close()
-		return err
-	}
-	if err := f.Close(); err != nil {
-		return err
-	}
-	if mode != 0 {
-		if err := os.Chmod(tmp, os.FileMode(mode)); err != nil {
-			return err
-		}
-	}
-	if err := os.Rename(tmp, path); err != nil {
-		return err
-	}
-	placed = true
-	t := time.Unix(0, mtime)
-	return os.Chtimes(path, t, t)
-}
-
 func Download(ctx context.Context, st Store, prefix, dataDir string, m Manifest, parallel int) error {
 	packs := map[string]map[string]FileEntry{}
 	for _, e := range m.Files {
-		if _, err := localPath(dataDir, e.Path); err != nil {
+		if _, err := relParts(e.Path); err != nil {
 			return err
 		}
 		if e.Size < PackBelow {
@@ -283,8 +236,7 @@ func Download(ctx context.Context, st Store, prefix, dataDir string, m Manifest,
 				return fmt.Errorf("get %s for %s: %w", e.Object, e.Path, err)
 			}
 			defer func() { _ = rc.Close() }()
-			dst, _ := localPath(dataDir, e.Path)
-			return place(dst, rc, e.Mode, e.MTime)
+			return place(dataDir, e.Path, rc, e.Mode, e.MTime)
 		})
 	}
 	return g.Wait()
@@ -317,11 +269,7 @@ func extractPack(ctx context.Context, st Store, key, dataDir string, want map[st
 		if !ok {
 			continue
 		}
-		dst, err := localPath(dataDir, h.Name)
-		if err != nil {
-			return err
-		}
-		if err := place(dst, tr, e.Mode, e.MTime); err != nil {
+		if err := place(dataDir, h.Name, tr, e.Mode, e.MTime); err != nil {
 			return err
 		}
 		placed++

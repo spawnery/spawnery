@@ -72,25 +72,28 @@ func (s *CSIServer) NodeGetCapabilities(context.Context, *csi.NodeGetCapabilitie
 }
 
 func (s *CSIServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
+	if req.GetVolumeId() == "" || req.GetTargetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "a volume id and a target path are required")
+	}
 	vc := req.GetVolumeContext()
 	if vc[ctxEphemeral] != "true" {
 		return nil, status.Error(codes.InvalidArgument, "only inline ephemeral volumes are served")
 	}
 	world, ns := vc[AttrWorld], vc[ctxPodNamespace]
-	parts := strings.Split(world, "/")
-	if len(parts) != 3 || parts[0] == "" || parts[1] == "" || parts[2] == "" {
-		return nil, status.Errorf(codes.InvalidArgument, "world %q is not <namespace>/<group>/<key>", world)
+	if err := checkWorld(world); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	if parts[0] != ns {
+	if strings.Split(world, "/")[0] != ns {
 		return nil, status.Errorf(codes.PermissionDenied, "a pod in namespace %q asked for world %q", ns, world)
 	}
 	if vc[AttrKeep] == "" {
 		return nil, status.Error(codes.InvalidArgument, "the keep attribute is empty")
 	}
-	if req.GetTargetPath() == "" {
-		return nil, status.Error(codes.InvalidArgument, "no target path")
+	keep := strings.Split(vc[AttrKeep], "\n")
+	if _, err := prune.ParseKeep(keep); err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	err := s.node.Publish(ctx, PublishRequest{World: world, Keep: strings.Split(vc[AttrKeep], "\n"), Target: req.GetTargetPath(), Pod: ns + "/" + vc[ctxPodName]})
+	err := s.node.Publish(ctx, PublishRequest{World: world, Keep: keep, Target: req.GetTargetPath(), Pod: ns + "/" + vc[ctxPodName]})
 	switch {
 	case errors.Is(err, ErrUnavailable):
 		return nil, status.Error(codes.Unavailable, err.Error())
@@ -101,6 +104,9 @@ func (s *CSIServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishV
 }
 
 func (s *CSIServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpublishVolumeRequest) (*csi.NodeUnpublishVolumeResponse, error) {
+	if req.GetVolumeId() == "" || req.GetTargetPath() == "" {
+		return nil, status.Error(codes.InvalidArgument, "a volume id and a target path are required")
+	}
 	if err := s.node.Unpublish(ctx, req.GetTargetPath()); err != nil {
 		return nil, status.Error(codes.Internal, err.Error())
 	}
@@ -110,6 +116,9 @@ func (s *CSIServer) NodeUnpublishVolume(ctx context.Context, req *csi.NodeUnpubl
 
 // Import uploads dir's kept paths as generation 1 of a world that has none.
 func Import(ctx context.Context, st Store, base, world string, keep []string, dir string) (Manifest, error) {
+	if err := checkWorld(world); err != nil {
+		return Manifest{}, err
+	}
 	k, err := prune.ParseKeep(keep)
 	if err != nil {
 		return Manifest{}, err
