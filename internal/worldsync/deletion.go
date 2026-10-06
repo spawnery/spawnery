@@ -47,6 +47,20 @@ func WorldExists(ctx context.Context, st Store, base, world string) (bool, error
 	return exists(ctx, st, WorldPrefix(base, world)+ManifestName)
 }
 
+// BucketWorlds is agentserver.WorldDeleter over a Store.
+type BucketWorlds struct {
+	Store Store
+	Base  string
+}
+
+func (b BucketWorlds) Exists(ctx context.Context, world string) (bool, error) {
+	return WorldExists(ctx, b.Store, b.Base, world)
+}
+
+func (b BucketWorlds) MarkDeleted(ctx context.Context, world string) error {
+	return MarkDeleted(ctx, b.Store, b.Base, world)
+}
+
 // Sweeper deletes worlds marked by MarkDeleted once no node holds them.
 type Sweeper struct {
 	Store      Store

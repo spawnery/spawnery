@@ -243,3 +243,23 @@ see [plugins from a volume](../guides/plugins-from-a-volume.md), a container
 runtime that supports them, and nodes that can pull
 `ghcr.io/spawnery/purpur-aot`. Turning it on restarts nothing: servers pick it
 up at their next start.
+
+### `--world-sync`
+
+Default: `false`
+
+Serves groups whose `spec.storage.backend` is `ObjectStore`: their members
+keep the world in a bucket, synced by `spawnery-worldsync` on the nodes, and
+get no data claim. The operator reads the bucket from `WORLDSYNC_ENDPOINT`,
+`WORLDSYNC_REGION`, `WORLDSYNC_BUCKET`, `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY` in its environment, marks a deleted world in it, and
+runs the sweeper that removes marked worlds once no node holds them. While the
+flag is off, a member of such a group gets no pod and its `Accepted` condition
+is `False` with reason `WorldSyncOff`, and deleting one is refused.
+
+### `--world-sync-snapshot-interval`
+
+Default: `5m`
+
+How often a member of an `ObjectStore` group asks for a snapshot of its world.
+It is the most play a node loss costs. Only read with `--world-sync`.

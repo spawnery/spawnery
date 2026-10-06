@@ -57,6 +57,15 @@ var ErrGroupNotScalable = errors.New("that group is not sized by scaling")
 // condemned by the group's next sizing pass.
 var ErrGroupNotOnDemand = errors.New("that group is not on-demand")
 
+var ErrWorldSyncOff = errors.New("the group keeps its worlds in an object store, and world sync is off in this operator")
+
+// WorldDeleter is the operator's hold on a bucket of worlds. Worlds are
+// named "<namespace>/<group>/<key>".
+type WorldDeleter interface {
+	Exists(ctx context.Context, world string) (bool, error)
+	MarkDeleted(ctx context.Context, world string) error
+}
+
 var ErrTooManyInstances = errors.New("that group is at spec.maxInstances")
 
 // ErrNoCeiling is an on-demand group with no spec.maxInstances. The CRD
@@ -175,6 +184,8 @@ type KubeWriter struct {
 	Reader client.Reader
 	// Nil means time.Now.
 	Clock func() time.Time
+	// Nil when the operator runs without --world-sync.
+	Worlds WorldDeleter
 }
 
 func (w KubeWriter) claims() client.Reader {
@@ -530,6 +541,9 @@ func (w KubeWriter) DeleteServer(ctx context.Context, namespace, group, key stri
 	if !g.IsOnDemand() {
 		return DeletedServer{}, ErrGroupNotOnDemand
 	}
+	if g.UsesObjectStore() {
+		return w.deleteObjectStoreWorld(ctx, namespace, group, key, name)
+	}
 
 	var claim corev1.PersistentVolumeClaim
 	haveClaim := true
@@ -572,4 +586,38 @@ func (w KubeWriter) DeleteServer(ctx context.Context, namespace, group, key stri
 		}
 	}
 	return DeletedServer{Name: name, World: haveClaim}, nil
+}
+
+func (w KubeWriter) deleteObjectStoreWorld(ctx context.Context, namespace, group, key, name string) (DeletedServer, error) {
+	if w.Worlds == nil {
+		return DeletedServer{}, ErrWorldSyncOff
+	}
+	world := namespace + "/" + group + "/" + key
+	var srv spawneryv1alpha1.Server
+	haveServer := true
+	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &srv); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return DeletedServer{}, err
+		}
+		haveServer = false
+	}
+	if haveServer && (srv.Spec.GroupRef.Name != group || srv.Spec.Key != key) {
+		haveServer = false
+	}
+	haveWorld, err := w.Worlds.Exists(ctx, world)
+	if err != nil {
+		return DeletedServer{}, err
+	}
+	if !haveServer && !haveWorld {
+		return DeletedServer{}, ErrNoSuchServer
+	}
+	if haveServer {
+		if err := w.Client.Delete(ctx, &srv); err != nil && !apierrors.IsNotFound(err) {
+			return DeletedServer{}, err
+		}
+	}
+	if err := w.Worlds.MarkDeleted(ctx, world); err != nil {
+		return DeletedServer{}, err
+	}
+	return DeletedServer{Name: name, World: haveWorld}, nil
 }

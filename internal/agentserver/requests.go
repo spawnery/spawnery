@@ -706,6 +706,9 @@ func (s *Server) answerDeleteServer(
 	case errors.Is(err, ErrGroupNotOnDemand):
 		return refuse(reqID, agentpb.RequestError_REFUSED,
 			"that group is not on-demand, so it has no member to delete")
+	case errors.Is(err, ErrWorldSyncOff):
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"that group keeps its worlds in an object store, and this operator runs without --world-sync")
 	case errors.Is(err, instance.ErrBadKey):
 		return refuse(reqID, agentpb.RequestError_REFUSED, err.Error())
 	case errors.Is(err, ErrForeignClaim):

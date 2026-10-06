@@ -54,6 +54,7 @@ import (
 	"github.com/spawnery/spawnery/internal/rbacaudit"
 	"github.com/spawnery/spawnery/internal/serverreg"
 	"github.com/spawnery/spawnery/internal/version"
+	"github.com/spawnery/spawnery/internal/worldsync"
 )
 
 var scheme = runtime.NewScheme()
@@ -217,6 +218,8 @@ func main() {
 		allowFileVolumes        bool
 		allowMountVolumes       bool
 		aotCache                bool
+		worldSync               bool
+		worldSyncInterval       time.Duration
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "address the metrics endpoint binds to")
@@ -280,6 +283,13 @@ func main() {
 			"(0.23.0 and later) into their servers, as an image volume. Needs Kubernetes "+
 			"with the ImageVolume feature and a runtime that supports it; without them the "+
 			"API server drops the volume's source and refuses every server pod. Off by default.")
+
+	flag.BoolVar(&worldSync, "world-sync", false,
+		"serve groups with spec.storage.backend ObjectStore; needs spawnery-worldsync on the nodes "+
+			"and WORLDSYNC_ENDPOINT, WORLDSYNC_REGION, WORLDSYNC_BUCKET, AWS_ACCESS_KEY_ID, "+
+			"AWS_SECRET_ACCESS_KEY in the environment")
+	flag.DurationVar(&worldSyncInterval, "world-sync-snapshot-interval", 5*time.Minute,
+		"how often a member of an ObjectStore group asks for a snapshot; the most play a node loss costs")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -380,6 +390,26 @@ func main() {
 		os.Exit(1)
 	}
 
+	var worlds agentserver.WorldDeleter
+	if worldSync {
+		cfg, base, err := worldsync.S3ConfigFromEnv(os.Getenv)
+		if err != nil {
+			setupLog.Error(err, "--world-sync needs the bucket")
+			os.Exit(1)
+		}
+		st, err := worldsync.NewS3Store(cfg)
+		if err != nil {
+			setupLog.Error(err, "world sync store")
+			os.Exit(1)
+		}
+		worlds = worldsync.BucketWorlds{Store: st, Base: base}
+		if err := mgr.Add(&worldsync.Sweeper{Store: st, Base: base, Interval: time.Minute,
+			StaleAfter: worldsync.StaleAfter, Log: ctrl.Log.WithName("worldsync")}); err != nil {
+			setupLog.Error(err, "add world deletion sweeper")
+			os.Exit(1)
+		}
+	}
+
 	if err := mgr.Add(agentserver.New(agentserver.Options{
 		Addr:     agentBindAddress,
 		Provider: provider,
@@ -394,7 +424,7 @@ func main() {
 		Proxies: proxies,
 		Servers: servers,
 		State:   state,
-		Writer:  agentserver.KubeWriter{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Clock: time.Now},
+		Writer:  agentserver.KubeWriter{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Clock: time.Now, Worlds: worlds},
 		Status: netstatus.Source{
 			Reader:  mgr.GetClient(),
 			Agents:  registry,
@@ -420,6 +450,8 @@ func main() {
 		AllowFileVolumes:     allowFileVolumes,
 		AllowMountVolumes:    allowMountVolumes,
 		AOTCache:             aotCache,
+		WorldSync:            worldSync,
+		WorldSyncInterval:    worldSyncInterval,
 		ReportInterval:       reportInterval,
 		Clock:                time.Now,
 		StartupDeadline:      startupDeadline,

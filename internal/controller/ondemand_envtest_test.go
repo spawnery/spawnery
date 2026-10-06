@@ -472,3 +472,74 @@ func TestARefusedClaimCreateIsReported(t *testing.T) {
 		t.Errorf("no event names %s", ReasonServerClaimRejected)
 	}
 }
+
+func (f *fixture) createObjectStoreGroup(t *testing.T, name string) *spawneryv1alpha1.ServerGroup {
+	t.Helper()
+	g := f.createOnDemandGroup(t, name, 50)
+	g.Spec.Storage = &spawneryv1alpha1.StorageSpec{
+		Backend: spawneryv1alpha1.StorageBackendObjectStore,
+		Keep:    []string{"world"},
+	}
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatalf("switch the group to ObjectStore: %v", err)
+	}
+	return g
+}
+
+func TestAnObjectStoreMemberGetsNoClaim(t *testing.T) {
+	f := newFixture(t)
+	f.reconc.WorldSync = true
+	group := f.createObjectStoreGroup(t, "private-servers")
+	member := f.createOnDemandMember(t, group, "c0ffee")
+
+	f.reconcile(member.Name)
+
+	if _, ok := f.pod(member.Name); !ok {
+		t.Fatal("no pod for an ObjectStore member with world sync on")
+	}
+	if claim := f.claim(podspec.DataClaimName(member.Name)); claim != nil {
+		t.Fatalf("an ObjectStore member got the claim %s", claim.Name)
+	}
+}
+
+func TestAnObjectStoreMemberWaitsWhenWorldSyncIsOff(t *testing.T) {
+	f := newFixture(t)
+	group := f.createObjectStoreGroup(t, "private-servers")
+	member := f.createOnDemandMember(t, group, "c0ffee")
+
+	f.reconcile(member.Name)
+
+	if _, ok := f.pod(member.Name); ok {
+		t.Fatal("a pod exists although world sync is off")
+	}
+	got := f.server(member.Name)
+	if !hasCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted,
+		metav1.ConditionFalse, ReasonWorldSyncOff) {
+		t.Errorf("conditions = %+v, want Accepted=False with reason %s",
+			got.Status.Conditions, ReasonWorldSyncOff)
+	}
+}
+
+func TestAnObjectStoreMemberWithoutAKeyGetsNoPod(t *testing.T) {
+	f := newFixture(t)
+	f.reconc.WorldSync = true
+	group := f.createObjectStoreGroup(t, "private-servers")
+	member := f.createOnDemandMember(t, group, "c0ffee")
+	patch := client.MergeFrom(member.DeepCopy())
+	member.Spec.Key = ""
+	if err := f.c.Patch(f.ctx, member, patch); err != nil {
+		t.Skipf("the API server refuses an empty key already: %v", err)
+	}
+
+	f.reconcile(member.Name)
+
+	if _, ok := f.pod(member.Name); ok {
+		t.Fatal("a pod exists for a member without a key")
+	}
+	got := f.server(member.Name)
+	if !hasCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted,
+		metav1.ConditionFalse, ReasonServerKeyMissing) {
+		t.Errorf("conditions = %+v, want Accepted=False with reason %s",
+			got.Status.Conditions, ReasonServerKeyMissing)
+	}
+}
