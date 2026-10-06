@@ -27,7 +27,7 @@ oci-common.layeredImage {
   contents = [
     (buildEnv {
       name = "velocity-tools";
-      # findutils as in paper-image.nix.
+      # findutils as in purpur-image.nix.
       paths = [ bash coreutils findutils velocity-jre ];
       pathsToLink = [ "/bin" ];
     })

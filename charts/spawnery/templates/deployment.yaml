@@ -36,6 +36,7 @@ spec:
             - --allow-plugin-volumes={{ .Values.operator.allowPluginVolumes }}
             - --allow-file-volumes={{ .Values.operator.allowFileVolumes }}
             - --allow-mount-volumes={{ .Values.operator.allowMountVolumes }}
+            - --aot-cache={{ .Values.operator.aotCache }}
             - --startup-deadline={{ .Values.operator.startupDeadline }}
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081

@@ -70,14 +70,14 @@ jobs:
           fi
           tag="${GITHUB_REF_NAME#v}"
           echo "tag                       ${GITHUB_REF_NAME} (${tag})"
-          echo "flake.nix imageVersion    ${agent}   (paper, velocity)"
+          echo "flake.nix imageVersion    ${agent}   (purpur, velocity)"
           echo "flake.nix operatorVersion ${operator}   (operator)"
           echo "Chart.yaml version        ${chart}   (chart)"
           echo "what this tag publishes:"
-          paper_tag="$(nix eval --raw .#paper-image.imageTag)"
+          purpur_tag="$(nix eval --raw .#purpur-image.imageTag)"
           velocity_tag="$(nix eval --raw .#velocity-image.imageTag)"
           operator_tag="$(nix eval --raw .#operator-image.imageTag)"
-          echo "  paper     ${paper_tag}"
+          echo "  purpur    ${purpur_tag}"
           echo "  velocity  ${velocity_tag}"
           echo "  operator  ${operator_tag}"
           echo "  chart     ${chart}"
@@ -170,7 +170,7 @@ jobs:
           fi
           published=0
           operator_published=false
-          for image in paper-image purpur-image paper-image-26-2 purpur-image-26-2 velocity-image operator-image; do
+          for image in purpur-image purpur-image-26-2 velocity-image operator-image; do
             status=0
             nix develop -c env DRY_RUN="$dry_run" WRITE_DIGEST=1 \
               ./hack/publish.sh "$image" || status=$?

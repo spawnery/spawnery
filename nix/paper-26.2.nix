@@ -1,5 +1,5 @@
-# Paper 26.2, built beside 26.3 for the images that still carry it and
-# deleted with them. Frozen: no pin script reads this file.
+# Paper 26.2's pins, kept for the Mojang jar the Purpur 26.2 image patches
+# with, and deleted with that image. Frozen: no pin script reads this file.
 { fetchurl
 , jdk25_headless
 , stdenvNoCC

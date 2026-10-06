@@ -212,20 +212,12 @@
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           # buildLayeredImage does not cross-compile but labels its output amd64,
           # so the images exist only where that label is true.
-          paper-image = pkgs.callPackage ./nix/paper-image.nix {
-            inherit paper spawnery-slp spawnery-config agents imageVersion oci-common paper-jre;
-          };
-
           purpur-image = pkgs.callPackage ./nix/purpur-image.nix {
             inherit purpur spawnery-slp spawnery-config agents imageVersion oci-common paper-jre;
           };
 
-          # The same images over the 26.2 pins and the same agent jar: its
+          # The same image over the 26.2 pins and the same agent jar: its
           # api-version 26.2 loads on both.
-          paper-image-26-2 = pkgs.callPackage ./nix/paper-image.nix {
-            paper = paper-26-2;
-            inherit spawnery-slp spawnery-config agents imageVersion oci-common paper-jre;
-          };
           purpur-image-26-2 = pkgs.callPackage ./nix/purpur-image.nix {
             purpur = purpur-26-2;
             inherit spawnery-slp spawnery-config agents imageVersion oci-common paper-jre;

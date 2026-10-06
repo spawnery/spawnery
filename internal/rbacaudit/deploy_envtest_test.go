@@ -622,6 +622,7 @@ func TestTheOperatorDeploymentCarriesProductionFlags(t *testing.T) {
 		"allow-plugin-volumes",
 		"allow-file-volumes",
 		"allow-mount-volumes",
+		"aot-cache",
 	}
 	for _, name := range want {
 		if _, ok := args[name]; !ok {

@@ -100,12 +100,12 @@ jobs:
           \`\`\`bash
           make paper-pin          # writes the four values into nix/paper.nix
           make image-test         # loads the image into kind and starts a server
-          make agent-test         # the agent against a real Paper
+          make agent-test         # the agent against a real Purpur
           \`\`\`
 
           **CI cannot answer for this build and will look as though it has.**
           No job in this repository runs a Paper server: \`ci.yml\`'s images job
-          builds \`.#paper-image\` without loading it, the \`e2e\` job builds
+          builds the Purpur images without loading them, the \`e2e\` job builds
           \`.#operator-image\` and nothing else, and \`nightly.yml\` builds every
           image twice to compare them. A green pull request for a pin bump
           establishes that the fixed-output hashes are right and nothing else,

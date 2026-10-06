@@ -60,9 +60,9 @@ jobs:
           | commit | \`${GITHUB_SHA}\` |
           | last updated | $(date -u '+%Y-%m-%dT%H:%M:%SZ') |
 
-          This job builds \`.#paper-image\`, \`.#velocity-image\`,
+          This job builds \`.#purpur-image\`, \`.#velocity-image\`,
           \`.#operator-image\` and \`.#agents\`, each twice, and compares. It is
-          the only job in this repository that builds the Paper and Velocity
+          the only job in this repository that builds the Purpur and Velocity
           images at all — \`ci.yml\`'s \`e2e\` job builds
           \`.#operator-image\` and nothing else — so a stale fixed-output hash
           in \`nix/paper.nix\` or \`nix/velocity.nix\` is visible here and

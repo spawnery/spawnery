@@ -1,5 +1,5 @@
 #!/bin/sh
-# Entrypoint of the Spawnery Paper base image: renders configuration and
+# Entrypoint of the Spawnery Purpur base image: renders configuration and
 # starts the server.
 set -eu
 
@@ -7,12 +7,10 @@ set -eu
 # spec.env cannot set; image/reserved_env_test.go fails on an unprefixed one.
 PAPER_HOME="${SPAWNERY_PAPER_HOME:-/opt/paper}"
 
-# Set by the Purpur image, which shares this script.
-SERVER_JAR="${SPAWNERY_SERVER_JAR:-$PAPER_HOME/paper.jar}"
-
 MOUNTINFO="${SPAWNERY_MOUNTINFO:-/proc/self/mountinfo}"
 FILE_SOURCE="${SPAWNERY_FILE_SOURCE:-/var/run/spawnery/files}"
 PLUGIN_SOURCE="${SPAWNERY_PLUGIN_SOURCE:-/var/run/spawnery/plugins}"
+AOT_CACHE="${SPAWNERY_AOT_CACHE:-/var/run/spawnery/aot/server.aot}"
 
 # mountinfo writes a space in a path as \040, which printf %b turns back.
 readonly_mounts_below_here() {
@@ -175,6 +173,37 @@ if memory_unbounded; then
 	echo "spawnery: starting without AlwaysPreTouch. Set resources.limits.memory on the group." >&2
 fi
 
+# Flat rather than -jar: the bundler loads Minecraft through a class loader of
+# its own, and an AOT cache only holds classes from the JDK's built-in loaders.
+# nix/flat-launch.nix writes both files from the bundler's manifests.
+for launch in launch.classpath launch.main; do
+	if [ ! -r "$PAPER_HOME/$launch" ]; then
+		echo "spawnery: $PAPER_HOME/$launch is missing, so this image cannot start the server." >&2
+		exit 1
+	fi
+done
+
+# The cache is mounted only for an image the operator knows has one. The JVM
+# drops a cache that does not fit (another JDK, class path or GC flag) with a
+# warning and starts without it.
+AOT=""
+if [ -n "${SPAWNERY_AOT_OUTPUT:-}" ]; then
+	AOT="-XX:AOTCacheOutput=$SPAWNERY_AOT_OUTPUT"
+	# The JVM writes the cache from a child that inherits these flags while
+	# this one still holds its heap; both pre-touching overruns the limit.
+	PRETOUCH=""
+elif [ -f "$AOT_CACHE" ]; then
+	# The JVM refuses to start, rather than drop the cache, next to these.
+	case " ${JAVA_TOOL_OPTIONS:-} ${JDK_JAVA_OPTIONS:-} " in
+	*" -Xshare:"* | *SharedArchiveFile* | *SharedClassListFile* | *DumpLoadedClassList*)
+		echo "spawnery: JAVA_TOOL_OPTIONS or JDK_JAVA_OPTIONS carries a CDS option, so starting without the startup cache." >&2
+		;;
+	*)
+		AOT="-XX:AOTCache=$AOT_CACHE"
+		;;
+	esac
+fi
+
 exec java \
 	-XX:MaxRAMPercentage=75 \
 	-XX:+UseG1GC \
@@ -193,5 +222,6 @@ exec java \
 	-XX:G1MixedGCLiveThresholdPercent=90 \
 	-XX:G1RSetUpdatingPauseTimePercent=5 \
 	-XX:InitiatingHeapOccupancyPercent=15 \
-	-DbundlerRepoDir="$PAPER_HOME/repo" \
-	-jar "$SERVER_JAR" --nogui
+	${AOT:+"$AOT"} \
+	-cp "$(cat "$PAPER_HOME/launch.classpath")" \
+	"$(cat "$PAPER_HOME/launch.main")" --nogui

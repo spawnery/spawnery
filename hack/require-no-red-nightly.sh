@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Refuses a release while the nightly reproducibility build is known-red.
 #
-# nightly.yml is the only job that builds .#paper-image and .#velocity-image;
+# nightly.yml is the only job that builds .#purpur-image and .#velocity-image;
 # it opens an issue labelled ${NIGHTLY_LABEL} when it fails and closes it when
 # it passes. This script asks whether that issue is open.
 #
@@ -66,4 +66,4 @@ fi
 number="$(printf '%s' "${issues}" | jq -r '.[0].number')"
 url="$(printf '%s' "${issues}" | jq -r '.[0].url')"
 title="$(printf '%s' "${issues}" | jq -r '.[0].title')"
-refuse "the nightly reproducibility build is red: ${repo}#${number} \"${title}\" is open (${url}). nightly.yml is the only job that builds .#paper-image and .#velocity-image, so this is the one signal that a Paper or Velocity hash has gone stale, and ci.yml cannot see it. Read that issue and fix what it names; then close it -- closing it is how you say the cause is fixed, and the next nightly reopens one if you were wrong."
+refuse "the nightly reproducibility build is red: ${repo}#${number} \"${title}\" is open (${url}). nightly.yml is the only job that builds .#purpur-image and .#velocity-image, so this is the one signal that a Paper or Velocity hash has gone stale, and ci.yml cannot see it. Read that issue and fix what it names; then close it -- closing it is how you say the cause is fixed, and the next nightly reopens one if you were wrong."

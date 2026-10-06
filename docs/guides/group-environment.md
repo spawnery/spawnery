@@ -43,6 +43,15 @@ So a group adds what the entrypoint does not set, and cannot displace what it
 does. The JVM prints `Picked up JAVA_TOOL_OPTIONS: …` on stderr at every start,
 which is worth knowing before somebody files it as a warning.
 
+Purpur servers can start from a startup cache trained for their
+image (`--aot-cache` in the [operator flags](../reference/operator-flags.md)).
+An option here that changes how the JVM lays out memory or which collector it
+runs, such as `-XX:-UseCompressedOops` or `-XX:+UseZGC`, makes the cache not
+fit: the JVM says so on stderr and starts without it, as slowly as before.
+A CDS option (`-Xshare:…`, `-XX:SharedArchiveFile`, `-XX:SharedClassListFile`,
+`-XX:DumpLoadedClassList`) would stop the JVM next to the cache, so the
+entrypoint leaves the cache out when it sees one and says so.
+
 It carries **JVM** options only. A Paper or Velocity *program* argument
 (`--world-dir`, `--nogui`) is not reachable this way or any other; those are
 the entrypoint's.

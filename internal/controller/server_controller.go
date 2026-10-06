@@ -104,6 +104,7 @@ type ServerReconciler struct {
 	// AgentEndpoint is the address the in-game agent dials, e.g.
 	// "spawnery-operator.spawnery-system.svc:9443".
 	AgentEndpoint string
+	AOTCache      bool
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servers,verbs=get;list;watch;create;update;patch;delete
@@ -287,6 +288,11 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		built, err := podspec.BuildServerPod(network, group, srv, r.AgentEndpoint)
 		if err != nil {
 			return ctrl.Result{}, err
+		}
+		// After BuildServerPod, so DesiredServerHash leaves it out: turning the
+		// flag on must not restart every world.
+		if r.AOTCache {
+			podspec.WithAOTCache(built)
 		}
 		err = r.Create(ctx, built)
 		switch {

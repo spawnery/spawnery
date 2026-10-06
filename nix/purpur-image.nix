@@ -1,12 +1,13 @@
-# The Purpur base image: nix/paper-image.nix with the jar swapped. A separate
-# file rather than a shared function because paper-image.nix is deprecated
-# and will be deleted.
+# The Purpur base image. The pod spec is already written, so this image must
+# provide /usr/local/bin/spawnery-slp, port 25565, working directory /data,
+# scratch /tmp, a numeric user, and nothing else writable.
 { bash
 , buildEnv
 , coreutils
 , findutils
 , paper-jre
 , runCommand
+, unzip
 , purpur
 , spawnery-slp
 , spawnery-config
@@ -23,6 +24,13 @@ let
     chmod -R a-w $out/opt/purpur
   '';
 
+  launch = import ./flat-launch.nix { inherit runCommand unzip; } {
+    name = "purpur";
+    serverJar = purpur.purpurJar;
+    inherit (purpur) repo;
+    home = "/opt/purpur";
+  };
+
   agent = runCommand "purpur-agent-image-path" { } ''
     mkdir -p $out/opt/purpur/agent
     cp ${agents}/share/spawnery/paper/spawnery-agent.jar $out/opt/purpur/agent/spawnery-agent.jar
@@ -36,13 +44,16 @@ oci-common.layeredImage {
     (buildEnv {
       name = "purpur-tools";
       # paper-jre: jdeps over Purpur's own classpath gave Paper's module list
-      # exactly; repeat that on a Purpur bump. findutils as in paper-image.nix.
+      # exactly; repeat that on a Purpur bump. findutils for the entrypoint's
+      # chmod walk: find -xdev stops at mounts, chmod -R cannot, and coreutils
+      # has no find.
       paths = [ bash coreutils findutils paper-jre ];
       pathsToLink = [ "/bin" ];
     })
     oci-common.passwd
     oci-common.group
     purpurHome
+    launch
     agent
     (oci-common.binIn { package = spawnery-slp; name = "spawnery-slp"; })
     (oci-common.binIn { package = spawnery-config; name = "spawnery-config"; })
@@ -50,12 +61,11 @@ oci-common.layeredImage {
   ];
 
   config = {
-    # SPAWNERY_PAPER_HOME keeps its name while the entrypoint is shared.
+    # The entrypoint reads SPAWNERY_PAPER_HOME; Purpur keeps Paper's name for it.
     Env = [
       "HOME=/data"
       "PATH=/bin:/usr/local/bin"
       "SPAWNERY_PAPER_HOME=/opt/purpur"
-      "SPAWNERY_SERVER_JAR=/opt/purpur/purpur.jar"
     ];
     ExposedPorts = { "25565/tcp" = { }; };
     Entrypoint = [ "/usr/local/bin/spawnery-entrypoint" ];

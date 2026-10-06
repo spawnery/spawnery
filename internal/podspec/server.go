@@ -452,7 +452,7 @@ func renderUserMounts(list []spawneryv1alpha1.Mount) ([]corev1.Volume, []corev1.
 
 var reservedVolumeNames = []string{
 	AgentVolumeName, ConfigVolumeName, ConfigOverlayVolumeName, DataVolumeName,
-	TmpVolumeName, FileSourceVolumeName, PluginSourceVolumeName,
+	TmpVolumeName, FileSourceVolumeName, PluginSourceVolumeName, AOTCacheVolumeName,
 }
 
 // checkMountCollision refuses a user mount that reuses an operator volume

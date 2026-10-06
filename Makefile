@@ -1,10 +1,8 @@
 CONTROLLER_GEN ?= controller-gen
 CONTAINER ?= docker
 # Recursive on purpose: the nix evals run only when image-test expands these.
-IMAGE ?= $(shell nix eval --raw .#paper-image.imageName):$(shell nix eval --raw .#paper-image.imageTag)
 VELOCITY_IMAGE ?= $(shell nix eval --raw .#velocity-image.imageName):$(shell nix eval --raw .#velocity-image.imageTag)
 PURPUR_IMAGE ?= $(shell nix eval --raw .#purpur-image.imageName):$(shell nix eval --raw .#purpur-image.imageTag)
-IMAGE_26_2 ?= $(shell nix eval --raw .#paper-image-26-2.imageName):$(shell nix eval --raw .#paper-image-26-2.imageTag)
 PURPUR_IMAGE_26_2 ?= $(shell nix eval --raw .#purpur-image-26-2.imageName):$(shell nix eval --raw .#purpur-image-26-2.imageTag)
 OPERATOR_IMAGE ?= $(shell nix eval --raw .#operator-image.imageName):$(shell nix eval --raw .#operator-image.imageTag)
 STUBOP ?= $(shell nix build .#spawnery-stubop --no-link --print-out-paths)/bin/spawnery-stubop
@@ -148,29 +146,22 @@ agent:
 agent-deps:
 	"$$(nix build --no-link --print-out-paths .#agents.mitmCache.updateScript)"
 
-.PHONY: image
-image:
-	nix build .#paper-image --out-link result-paper
-
-.PHONY: image-load
-image-load: image
-	$(CONTAINER) load < result-paper
-
 .PHONY: image-test
-image-test: image-load purpur-image-load velocity-image-load images-26-2-load
-	CONTAINER=$(CONTAINER) IMAGE=$(IMAGE) hack/image-test.sh
+image-test: purpur-image-load velocity-image-load images-26-2-load aot-train-test
 	CONTAINER=$(CONTAINER) IMAGE=$(PURPUR_IMAGE) hack/image-test.sh
-	CONTAINER=$(CONTAINER) IMAGE=$(IMAGE_26_2) hack/image-test.sh
 	CONTAINER=$(CONTAINER) IMAGE=$(PURPUR_IMAGE_26_2) hack/image-test.sh
 	CONTAINER=$(CONTAINER) IMAGE=$(VELOCITY_IMAGE) hack/velocity-image-test.sh
 
+.PHONY: aot-train-test
+aot-train-test: purpur-image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(PURPUR_IMAGE) hack/aot-train-test.sh
+
 # Not part of `test` or `all`: needs a container runtime and x86_64-linux.
 .PHONY: agent-test
-agent-test: image-load velocity-image-load
-	CONTAINER=$(CONTAINER) IMAGE=$(IMAGE) VELOCITY_IMAGE=$(VELOCITY_IMAGE) \
+agent-test: purpur-image-load velocity-image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(PURPUR_IMAGE) VELOCITY_IMAGE=$(VELOCITY_IMAGE) \
 		STUBOP=$(STUBOP) hack/agent-test.sh
 
-# Purpur is a Paper fork, so hack/image-test.sh's assertions hold for it unchanged.
 .PHONY: purpur-image
 purpur-image:
 	nix build .#purpur-image --out-link result-purpur
@@ -185,9 +176,7 @@ purpur-image-test: purpur-image-load
 
 .PHONY: images-26-2-load
 images-26-2-load:
-	nix build .#paper-image-26-2 --out-link result-paper-26-2
 	nix build .#purpur-image-26-2 --out-link result-purpur-26-2
-	$(CONTAINER) load < result-paper-26-2
 	$(CONTAINER) load < result-purpur-26-2
 
 .PHONY: velocity-image
@@ -221,12 +210,8 @@ operator-image-test: operator-image-load
 # working tree moves all image derivations.
 .PHONY: image-repro
 image-repro:
-	nix build .#paper-image --no-link
-	nix build .#paper-image --rebuild --no-link
 	nix build .#purpur-image --no-link
 	nix build .#purpur-image --rebuild --no-link
-	nix build .#paper-image-26-2 --no-link
-	nix build .#paper-image-26-2 --rebuild --no-link
 	nix build .#purpur-image-26-2 --no-link
 	nix build .#purpur-image-26-2 --rebuild --no-link
 	nix build .#velocity-image --no-link

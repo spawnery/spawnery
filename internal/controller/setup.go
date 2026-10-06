@@ -41,6 +41,7 @@ type Options struct {
 	// AllowMountVolumes lets a group name a PersistentVolumeClaim in
 	// spec.mounts; an operational switch like AllowPluginVolumes.
 	AllowMountVolumes    bool
+	AOTCache             bool
 	Clock                func() time.Time
 	StartupDeadline      time.Duration
 	PlayerStatusInterval time.Duration
@@ -100,6 +101,7 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 		Registrar:            opts.Registrar,
 		Bootstrap:            opts.Bootstrapper,
 		AgentEndpoint:        opts.AgentEndpoint,
+		AOTCache:             opts.AOTCache,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup server controller: %w", err)
 	}

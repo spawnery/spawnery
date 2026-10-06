@@ -216,6 +216,7 @@ func main() {
 		allowPluginVolumes      bool
 		allowFileVolumes        bool
 		allowMountVolumes       bool
+		aotCache                bool
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "address the metrics endpoint binds to")
@@ -273,6 +274,12 @@ func main() {
 			"control: a claim is a namespaced object in the same trust domain as the "+
 			"group naming it. Until 0.2.x this was governed by --allow-plugin-volumes, "+
 			"which now governs only spec.extraPlugins.")
+
+	flag.BoolVar(&aotCache, "aot-cache", false,
+		"mount the startup cache published with spawnery's own Purpur images "+
+			"(0.23.0 and later) into their servers, as an image volume. Needs Kubernetes "+
+			"with the ImageVolume feature and a runtime that supports it; without them the "+
+			"API server drops the volume's source and refuses every server pod. Off by default.")
 
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
@@ -412,6 +419,7 @@ func main() {
 		AllowPluginVolumes:   allowPluginVolumes,
 		AllowFileVolumes:     allowFileVolumes,
 		AllowMountVolumes:    allowMountVolumes,
+		AOTCache:             aotCache,
 		ReportInterval:       reportInterval,
 		Clock:                time.Now,
 		StartupDeadline:      startupDeadline,
