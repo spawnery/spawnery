@@ -37,6 +37,10 @@ spec:
             - --allow-file-volumes={{ .Values.operator.allowFileVolumes }}
             - --allow-mount-volumes={{ .Values.operator.allowMountVolumes }}
             - --aot-cache={{ .Values.operator.aotCache }}
+            - --world-sync={{ .Values.worldSync.enabled }}
+            {{- if .Values.worldSync.enabled }}
+            - --world-sync-snapshot-interval={{ .Values.worldSync.snapshotInterval }}
+            {{- end }}
             - --startup-deadline={{ .Values.operator.startupDeadline }}
             - --metrics-bind-address=:8080
             - --health-probe-bind-address=:8081
@@ -47,6 +51,9 @@ spec:
               valueFrom:
                 fieldRef:
                   fieldPath: metadata.namespace
+            {{- if .Values.worldSync.enabled }}
+            {{- include "spawnery.worldSyncEnv" . | nindent 12 }}
+            {{- end }}
           ports:
             - name: metrics
               containerPort: 8080

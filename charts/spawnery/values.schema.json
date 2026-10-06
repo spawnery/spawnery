@@ -157,6 +157,45 @@
         }
       }
     },
+    "worldSync": {
+      "type": "object",
+      "additionalProperties": false,
+      "description": "Worlds of groups with spec.storage.backend ObjectStore: a CSI driver, a node agent DaemonSet and the operator's --world-sync flags. Enabling it without the endpoint, region, bucket and credentialsSecret fails the render.",
+      "properties": {
+        "enabled": { "type": "boolean" },
+        "namespace": { "type": "string", "description": "Where the node agent DaemonSet runs. It needs privileged pods, so it cannot share a namespace held to the restricted Pod Security level. The chart does not create it. Empty means the release namespace." },
+        "image": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "repository": { "type": "string", "minLength": 1 },
+            "tag": { "type": "string", "description": "Empty means the chart's appVersion." },
+            "digest": { "type": "string", "pattern": "^$|^[a-z0-9]+:[a-f0-9]{32,}$" }
+          }
+        },
+        "registrarImage": { "type": "string", "minLength": 1, "description": "The csi-node-driver-registrar sidecar that registers the driver with the kubelet." },
+        "objectStore": {
+          "type": "object",
+          "additionalProperties": false,
+          "properties": {
+            "endpoint": { "type": "string" },
+            "region": { "type": "string" },
+            "bucket": { "type": "string" },
+            "prefix": { "type": "string", "description": "A prefix inside the bucket; empty for none." },
+            "credentialsSecret": { "type": "string", "description": "A Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, in both the release namespace (for deletions) and worldSync.namespace." }
+          }
+        },
+        "hostPath": { "type": "string", "minLength": 1, "description": "The node directory for worlds and their snapshots." },
+        "snapshotInterval": {
+          "type": "string",
+          "description": "A Go duration, so it carries a unit: 5m, 90s. How often a running member asks for a snapshot: the most play a node loss costs.",
+          "pattern": "^([0-9]+(\\.[0-9]+)?(ns|us|\u00b5s|ms|s|m|h))+$"
+        },
+        "nodeSelector": { "type": "object" },
+        "tolerations": { "type": "array" },
+        "resources": { "type": "object" }
+      }
+    },
     "networkNamespaces": {
       "description": "Namespaces holding a Network, and the forwarding secret in each. Renders a Role and RoleBinding per entry, narrowed with resourceNames to exactly those secrets. Empty means none are rendered and config/rbac/forwarding-secret-reader.yaml is applied by hand instead.",
       "type": "array",

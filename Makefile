@@ -53,7 +53,7 @@ vet:
 .PHONY: test
 # -race unconditionally: a separate test-race target would go unrun. envtest
 # startup dominates the suite, so it costs about 20% rather than 2-10x.
-test: manifests generate fmt vet chart-lint toolchain-lint image-tag-lint docs-length-lint crd-docs-test chart-values-docs-test metrics-docs-test
+test: manifests generate fmt vet chart-lint toolchain-lint image-tag-lint docs-length-lint crd-docs-test chart-values-docs-test chart-worldsync-test metrics-docs-test
 	go test -race ./... -coverprofile cover.out
 
 # protoc and protoc-gen-grpc-java against the Gradle pins; see flake.nix.
@@ -93,6 +93,10 @@ crd-docs-test:
 .PHONY: chart-values-docs-test
 chart-values-docs-test:
 	hack/chart-values-docs-test.sh
+
+.PHONY: chart-worldsync-test
+chart-worldsync-test:
+	hack/chart-worldsync-test.sh
 
 .PHONY: metrics-docs-test
 metrics-docs-test:
