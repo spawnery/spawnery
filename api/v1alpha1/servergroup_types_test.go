@@ -82,3 +82,18 @@ func TestJoinPermissionResolvesItsNode(t *testing.T) {
 		t.Error("Required mode reads as deny-only")
 	}
 }
+
+func TestUsesClaim(t *testing.T) {
+	g := &ServerGroup{Spec: ServerGroupSpec{Type: ServerGroupOnDemand, Storage: &StorageSpec{}}}
+	if !g.UsesClaim() || g.UsesObjectStore() {
+		t.Fatal("an OnDemand group without backend uses a claim")
+	}
+	g.Spec.Storage.Backend = StorageBackendObjectStore
+	if g.UsesClaim() || !g.UsesObjectStore() {
+		t.Fatal("ObjectStore uses no claim")
+	}
+	e := &ServerGroup{Spec: ServerGroupSpec{Type: ServerGroupEphemeral}}
+	if e.UsesClaim() {
+		t.Fatal("an Ephemeral group uses no claim")
+	}
+}

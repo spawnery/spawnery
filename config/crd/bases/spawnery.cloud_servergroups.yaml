@@ -1764,6 +1764,20 @@ spec:
                       rule: self.all(k, k.matches('^([A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?(\\.[A-Za-z0-9]([-A-Za-z0-9]*[A-Za-z0-9])?)*/)?[A-Za-z0-9]([-A-Za-z0-9_.]*[A-Za-z0-9])?$')
                         && k.split('/')[size(k.split('/')) - 1].size() <= 63 && (!k.contains('/')
                         || k.split('/')[0].size() <= 253))
+                  backend:
+                    description: |-
+                      Backend is where a member's world lives between runs. Claim, the
+                      default, keeps it on a PersistentVolumeClaim per member. ObjectStore
+                      keeps it in the object store configured for the operator (chart value
+                      worldSync) and gives /data from a directory on the node that runs the
+                      member; it needs type OnDemand and keep, and synchronises exactly what
+                      keep matches. Size, storageClassName, accessModes and annotations are
+                      ignored under ObjectStore and stay valid for switching back. The
+                      backend may change either way; nothing is moved across.
+                    enum:
+                    - Claim
+                    - ObjectStore
+                    type: string
                   keep:
                     description: |-
                       Keep lists the paths on the data claim, relative to /data, that survive
@@ -1955,6 +1969,9 @@ spec:
             - message: storage.accessModes is immutable
               rule: '!has(self.storage) || !has(oldSelf.storage) || self.storage.accessModes
                 == oldSelf.storage.accessModes'
+            - message: storage.backend ObjectStore needs type OnDemand and storage.keep
+              rule: '!has(self.storage) || !has(self.storage.backend) || self.storage.backend
+                != ''ObjectStore'' || (self.type == ''OnDemand'' && has(self.storage.keep))'
             - message: spec.playableSlots must be between 1 and spec.maxPlayers
               rule: '!has(self.playableSlots) || (self.playableSlots >= 1 && self.playableSlots
                 <= self.maxPlayers)'
