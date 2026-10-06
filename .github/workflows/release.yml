@@ -81,7 +81,7 @@ jobs:
           echo "  velocity  ${velocity_tag}"
           echo "  operator  ${operator_tag}"
           echo "  chart     ${chart}"
-          for pair in "paper:${paper_tag}" "velocity:${velocity_tag}"; do
+          for pair in "purpur:${purpur_tag}" "velocity:${velocity_tag}"; do
             case "${pair#*:}" in
               *-"${agent}") ;;
               *)
