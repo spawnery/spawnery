@@ -46,6 +46,12 @@ func NewWorldID() string {
 	return hex.EncodeToString(b[:])
 }
 
+func newPackKey(generation int64) string {
+	var b [8]byte
+	_, _ = rand.Read(b[:])
+	return PacksDir + strconv.FormatInt(generation, 10) + "-" + hex.EncodeToString(b[:]) + ".tar.gz"
+}
+
 func hashFile(path string) (string, error) {
 	f, err := os.Open(path)
 	if err != nil {
@@ -64,13 +70,27 @@ func UploadSnapshot(ctx context.Context, st Store, prefix, snapDir string, prev 
 	if err != nil {
 		return Manifest{}, "", err
 	}
+	if prev != nil && prevETag == "" {
+		return Manifest{}, "", errors.New("worldsync: a previous manifest needs its ETag")
+	}
+	prevObjects := map[string]bool{}
+	if prev != nil {
+		for _, e := range prev.Files {
+			prevObjects[e.Object] = true
+		}
+	}
+	for _, f := range snap.Files {
+		if !f.Copied && (f.Object == "" || !prevObjects[f.Object]) {
+			return Manifest{}, "", fmt.Errorf("worldsync: unchanged file %s names object %q, which the previous manifest does not", f.Path, f.Object)
+		}
+	}
 	m := Manifest{Generation: 1}
 	if prev != nil {
 		m.WorldID, m.Generation = prev.WorldID, prev.Generation+1
 	} else {
 		m.WorldID = newWorldID()
 	}
-	pack := PacksDir + strconv.FormatInt(m.Generation, 10) + ".tar.gz"
+	pack := newPackKey(m.Generation)
 
 	var packBuf bytes.Buffer
 	gz := gzip.NewWriter(&packBuf)
@@ -184,6 +204,12 @@ func place(path string, r io.Reader, mode uint32, mtime int64) error {
 	if err != nil {
 		return err
 	}
+	placed := false
+	defer func() {
+		if !placed {
+			os.Remove(tmp)
+		}
+	}()
 	if _, err := io.Copy(f, r); err != nil {
 		f.Close()
 		return err
@@ -203,26 +229,28 @@ func place(path string, r io.Reader, mode uint32, mtime int64) error {
 	if err := os.Rename(tmp, path); err != nil {
 		return err
 	}
+	placed = true
 	t := time.Unix(0, mtime)
 	return os.Chtimes(path, t, t)
 }
 
 func Download(ctx context.Context, st Store, prefix, dataDir string, m Manifest, parallel int) error {
-	byPath := map[string]FileEntry{}
-	packs := map[string]bool{}
+	packs := map[string]map[string]FileEntry{}
 	for _, e := range m.Files {
 		if _, err := localPath(dataDir, e.Path); err != nil {
 			return err
 		}
-		byPath[e.Path] = e
 		if e.Size < PackBelow {
-			packs[e.Object] = true
+			if packs[e.Object] == nil {
+				packs[e.Object] = map[string]FileEntry{}
+			}
+			packs[e.Object][e.Path] = e
 		}
 	}
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(parallel)
-	for pack := range packs {
-		g.Go(func() error { return extractPack(gctx, st, prefix+pack, dataDir, byPath) })
+	for pack, want := range packs {
+		g.Go(func() error { return extractPack(gctx, st, prefix+pack, dataDir, want) })
 	}
 	for _, e := range m.Files {
 		if e.Size < PackBelow {
@@ -241,7 +269,7 @@ func Download(ctx context.Context, st Store, prefix, dataDir string, m Manifest,
 	return g.Wait()
 }
 
-func extractPack(ctx context.Context, st Store, key, dataDir string, byPath map[string]FileEntry) error {
+func extractPack(ctx context.Context, st Store, key, dataDir string, want map[string]FileEntry) error {
 	rc, _, err := st.Get(ctx, key)
 	if err != nil {
 		return fmt.Errorf("get %s: %w", key, err)
@@ -252,17 +280,21 @@ func extractPack(ctx context.Context, st Store, key, dataDir string, byPath map[
 		return err
 	}
 	tr := tar.NewReader(gz)
+	placed := 0
 	for {
 		h, err := tr.Next()
 		if err == io.EOF {
+			if placed != len(want) {
+				return fmt.Errorf("worldsync: %s holds %d of the %d files the manifest names", key, placed, len(want))
+			}
 			return nil
 		}
 		if err != nil {
 			return err
 		}
-		e, ok := byPath[h.Name]
+		e, ok := want[h.Name]
 		if !ok {
-			continue // a pack may hold files an older manifest named
+			continue
 		}
 		dst, err := localPath(dataDir, h.Name)
 		if err != nil {
@@ -271,5 +303,6 @@ func extractPack(ctx context.Context, st Store, key, dataDir string, byPath map[
 		if err := place(dst, tr, e.Mode, e.MTime); err != nil {
 			return err
 		}
+		placed++
 	}
 }
