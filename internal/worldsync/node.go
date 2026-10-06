@@ -65,10 +65,11 @@ type Config struct {
 }
 
 type PublishRequest struct {
-	World  string
-	Keep   []string
-	Target string
-	Pod    string
+	World   string
+	Keep    []string
+	Replace []string
+	Target  string
+	Pod     string
 	// Group is the pod's fsGroup; nil leaves what the node agent creates root's.
 	Group *int
 }
@@ -372,6 +373,9 @@ func (n *Node) Publish(ctx context.Context, req PublishRequest) error {
 	if _, err := prune.ParseKeep(req.Keep); err != nil {
 		return err
 	}
+	if _, err := prune.ParseReplace(req.Replace); err != nil {
+		return err
+	}
 	if req.Group == nil {
 		n.cfg.Log.Info("the pod names no fsGroup: what the node agent writes into its world stays root's, and the pod may not be able to write it", "world", req.World, "pod", req.Pod)
 	}
@@ -405,7 +409,7 @@ func (n *Node) Publish(ctx context.Context, req PublishRequest) error {
 		return fmt.Errorf("%w: the world is being deleted", ErrUnavailable)
 	}
 
-	s.Keep, s.Pod, s.Group = req.Keep, req.Pod, req.Group
+	s.Keep, s.Replace, s.Pod, s.Group = req.Keep, req.Replace, req.Pod, req.Group
 	etag, err := n.takeLease(ctx, s)
 	if errors.Is(err, ErrLeaseLost) {
 		leaseConflicts.Inc()
@@ -664,6 +668,9 @@ func (n *Node) unpublishLocked(s *worldState) error {
 	n.stopDownload(s)
 	n.setTarget(s, "")
 	if s.LeaseETag != "" && !s.Incomplete {
+		if err := n.checkWorldsKept(s); err != nil {
+			n.cfg.Log.Error(err, "the final snapshot saves only what keep holds; the rest stays on this node", "world", s.World)
+		}
 		if err := n.snapshot(s); err != nil {
 			n.cfg.Log.Error(err, "final snapshot failed; retrying in the background", "world", s.World)
 			s.FinalPending = true
@@ -791,7 +798,9 @@ func (n *Node) pollRequests() {
 		case s.Incomplete:
 			err = errors.New("the world is still downloading")
 		default:
-			err = n.snapshot(s)
+			if err = n.checkWorldsKept(s); err == nil {
+				err = n.snapshot(s)
+			}
 		}
 		answer := strconvI(seq)
 		if err != nil {
@@ -1056,18 +1065,57 @@ func (n *Node) release(ctx context.Context, s *worldState) {
 	n.save(s)
 }
 
-// dropScratch deletes what keep does not hold; the next start's prune would.
+// checkWorldsKept refuses a world the prune would refuse to delete: it is
+// not synced, so it would not travel to another node.
+func (n *Node) checkWorldsKept(s *worldState) error {
+	keep, err := prune.ParseKeep(s.Keep)
+	if err != nil {
+		return err
+	}
+	replace, err := prune.ParseReplace(s.Replace)
+	if err != nil {
+		return err
+	}
+	rel, err := worldOutside(n.dataOf(s), keep, replace)
+	if err != nil {
+		return err
+	}
+	if rel != "" {
+		return fmt.Errorf("spec.storage.keep does not keep %s, which holds a world", rel)
+	}
+	return nil
+}
+
+// dropScratch deletes the top-level entries keep does not hold, except one
+// that holds a world outside replace, which the prune would refuse to delete.
 func (n *Node) dropScratch(s *worldState) {
 	keep, err := prune.ParseKeep(s.Keep)
 	if err != nil {
 		return
 	}
-	entries, _ := os.ReadDir(n.dataDir(s.World))
+	replace, err := prune.ParseReplace(s.Replace)
+	if err != nil {
+		return
+	}
+	data := n.dataDir(s.World)
+	entries, _ := os.ReadDir(data)
 	for _, e := range entries {
-		if e.Name() == prune.ControlDir || keep.Holds(e.Name()) || keep.Toward(e.Name()) {
+		name := e.Name()
+		if name == prune.ControlDir || keep.Holds(name) || keep.Toward(name) {
 			continue
 		}
-		_ = removeAllAt(n.dataDir(s.World), e.Name())
+		if !replace.Holds(name) {
+			world, err := entryHoldsWorld(data, name)
+			if err != nil {
+				n.cfg.Log.Error(err, "keeping a path keep does not hold: cannot tell whether it holds a world", "world", s.World, "path", name)
+				continue
+			}
+			if world {
+				n.cfg.Log.Info("keeping a path keep does not hold on this node: it holds a world, which is not synced", "world", s.World, "path", name)
+				continue
+			}
+		}
+		_ = removeAllAt(data, name)
 	}
 }
 

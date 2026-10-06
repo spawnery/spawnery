@@ -879,3 +879,98 @@ func TestAPublishAfterARebootBindsTheSameTargetAgain(t *testing.T) {
 		}
 	}
 }
+
+func (h *harness) publishKeep(id, pod string, keep, replace []string) string {
+	h.t.Helper()
+	target := filepath.Join(h.t.TempDir(), "mount")
+	if err := h.node(id).Publish(context.Background(), PublishRequest{World: w, Keep: keep, Replace: replace, Target: target, Pod: pod}); err != nil {
+		h.t.Fatal(err)
+	}
+	return target
+}
+
+func TestTheReleaseKeepsATopLevelWorldThatKeepMisses(t *testing.T) {
+	h := newHarness(t)
+	target := h.publishKeep("a", "p1", []string{"world"}, nil)
+	writeFile(t, filepath.Join(target, "world/level.dat"), 5, h.now)
+	writeFile(t, filepath.Join(target, "world_nether/DIM-1/region/r.0.0.mca"), 5, h.now)
+	writeFile(t, filepath.Join(target, "logs/latest.log"), 5, h.now)
+	away, _ := outside(t, "level.dat", []byte("not the pod's"))
+	symlink(t, away, filepath.Join(target, "elsewhere"))
+	h.unpublish("a", target)
+	h.node("a").Settle(context.Background())
+
+	data := h.node("a").dataDir(w)
+	if _, err := os.Stat(filepath.Join(data, "world_nether/DIM-1/region/r.0.0.mca")); err != nil {
+		t.Fatalf("the release deleted a world keep does not list: %v", err)
+	}
+	for _, gone := range []string{"logs", "elsewhere"} {
+		if _, err := os.Lstat(filepath.Join(data, gone)); !os.IsNotExist(err) {
+			t.Errorf("%s survived the release: %v", gone, err)
+		}
+	}
+	if _, err := os.Stat(filepath.Join(away, "level.dat")); err != nil {
+		t.Fatalf("the release reached through a symlink: %v", err)
+	}
+	if l, _, err := ReadLease(context.Background(), h.st, WorldPrefix("", w)); err != nil || l.Node != "" {
+		t.Fatalf("lease = %+v, %v; want it released", l, err)
+	}
+}
+
+func TestTheReleaseDropsAWorldThatReplaceOwns(t *testing.T) {
+	h := newHarness(t)
+	target := h.publishKeep("a", "p1", []string{"plugins/Example/data"}, []string{"lobby"})
+	writeFile(t, filepath.Join(target, "lobby/level.dat"), 5, h.now)
+	h.unpublish("a", target)
+	h.node("a").Settle(context.Background())
+	if _, err := os.Lstat(filepath.Join(h.node("a").dataDir(w), "lobby")); !os.IsNotExist(err) {
+		t.Fatalf("a world replace owns survived the release: %v", err)
+	}
+}
+
+func TestASnapshotRefusesAWorldOutsideKeep(t *testing.T) {
+	h := newHarness(t)
+	target := h.publishKeep("a", "p1", []string{"worlds/world"}, nil)
+	writeFile(t, filepath.Join(target, "worlds/world/level.dat"), 5, h.now)
+	writeFile(t, filepath.Join(target, "worlds/world_nether/region/r.0.0.mca"), 5, h.now)
+	h.request(target, "1")
+	want := "failed 1 spec.storage.keep does not keep worlds/world_nether, which holds a world"
+	if got := strings.TrimSpace(h.waitFile(target, DoneFile)); got != want {
+		t.Fatalf("done = %q, want %q", got, want)
+	}
+	if exists, _ := WorldExists(context.Background(), h.st, "", w); exists {
+		t.Fatal("a refused snapshot was uploaded")
+	}
+
+	h.unpublish("a", target)
+	h.node("a").Settle(context.Background())
+	m, _, err := ReadManifest(context.Background(), h.st, WorldPrefix("", w))
+	if err != nil || len(m.Files) != 1 || m.Files[0].Path != "worlds/world/level.dat" {
+		t.Fatalf("the final snapshot did not save what keep holds: %+v, %v", m, err)
+	}
+	if _, err := os.Stat(filepath.Join(h.node("a").dataDir(w), "worlds/world_nether/region/r.0.0.mca")); err != nil {
+		t.Fatalf("the world outside keep is gone from the node: %v", err)
+	}
+}
+
+func TestASnapshotTakesAWorldThatReplaceOwns(t *testing.T) {
+	h := newHarness(t)
+	target := h.publishKeep("a", "p1", []string{"worlds/world"}, []string{"worlds/lobby"})
+	writeFile(t, filepath.Join(target, "worlds/world/level.dat"), 5, h.now)
+	writeFile(t, filepath.Join(target, "worlds/lobby/level.dat"), 5, h.now)
+	h.request(target, "1")
+	if got := strings.TrimSpace(h.waitFile(target, DoneFile)); got != "1" {
+		t.Fatalf("done = %q, want 1", got)
+	}
+}
+
+func TestTheWorldCheckDoesNotFollowSymlinks(t *testing.T) {
+	h := newHarness(t)
+	target := h.publishKeep("a", "p1", []string{"worlds/world"}, nil)
+	away, _ := outside(t, "level.dat", []byte("x"))
+	symlink(t, away, filepath.Join(target, "worlds/link"))
+	h.request(target, "1")
+	if got := strings.TrimSpace(h.waitFile(target, DoneFile)); got != "1" {
+		t.Fatalf("done = %q, want 1", got)
+	}
+}

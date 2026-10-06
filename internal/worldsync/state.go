@@ -26,6 +26,7 @@ import (
 type worldState struct {
 	World        string      `json:"world"`
 	Keep         []string    `json:"keep"`
+	Replace      []string    `json:"replace,omitempty"`
 	WorldID      string      `json:"worldId"`
 	Generation   int64       `json:"generation"`
 	ManifestETag string      `json:"manifestETag"`

@@ -116,9 +116,22 @@ which is the form the node agent sends. Requests use path-style addressing.
 ## What the group needs
 
 The API refuses `ObjectStore` without `type: OnDemand` and `keep`. `keep` is
-what is synced; everything else on the node directory is scratch that the next
-start's prune removes anyway, so list every level directory and every plugin
-directory that holds state.
+exactly what is synced, so list every level directory and every plugin
+directory that holds state. Paper 26.3, which the example's image runs, keeps
+all dimensions of a world inside its level directory
+(`world/dimensions/minecraft/the_nether` and `.../the_end`) and moves the
+`world_nether` and `world_the_end` directories of older versions in there at
+its first start, so `world` covers the nether and the end. On older versions,
+list `world_nether` and `world_the_end` as well.
+
+What `keep` does not match stays on the node and never reaches the bucket.
+When a member stops, the node agent deletes those paths, except one that holds
+a world by the prune's rule (a `level.dat`, a `region` directory or an `.mca`
+file) and that `replace` does not list. Such a path stays on the node, every
+snapshot of a running member fails with `spec.storage.keep does not keep
+<path>, which holds a world`, and the next start on that node is refused by
+the prune as it would be on a claim. The snapshot at a stop still saves what
+`keep` matches. Add the path to `keep`, or to `replace` if the sources ship it.
 
 `size`, `storageClassName`, `accessModes` and `annotations` stay valid and are
 ignored, so a group can switch back to `Claim` without touching the immutable

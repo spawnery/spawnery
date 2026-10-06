@@ -66,8 +66,22 @@ func TestAnObjectStoreMemberGetsTheCSIVolume(t *testing.T) {
 	if got := v.CSI.VolumeAttributes["keep"]; got != "worlds/world\nplugins/Example/data" {
 		t.Errorf("keep = %q", got)
 	}
+	if _, ok := v.CSI.VolumeAttributes["replace"]; ok {
+		t.Error("a group without replace renders a replace attribute")
+	}
 	if envValue(pod, EnvWorldSync) != "1" {
 		t.Error("SPAWNERY_WORLD_SYNC is not set")
+	}
+}
+
+func TestTheNodeAgentLearnsReplace(t *testing.T) {
+	pod := build(t, func(n *spawneryv1alpha1.Network, g *spawneryv1alpha1.ServerGroup) {
+		objectStoreGroup(n, g)
+		g.Spec.Storage.Replace = []string{"worlds/world/datapacks", "lobby"}
+	})
+	v := volumeNamed(pod, DataVolumeName)
+	if got := v.CSI.VolumeAttributes["replace"]; got != "worlds/world/datapacks\nlobby" {
+		t.Errorf("replace = %q", got)
 	}
 }
 

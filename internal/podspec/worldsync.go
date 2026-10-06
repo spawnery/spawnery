@@ -31,19 +31,24 @@ const (
 	WorldSyncDriver      = "worldsync.spawnery.cloud"
 	WorldSyncAttrWorld   = "world"
 	WorldSyncAttrKeep    = "keep"
+	WorldSyncAttrReplace = "replace"
 	EnvWorldSync         = "SPAWNERY_WORLD_SYNC"
 	EnvWorldSyncInterval = "SPAWNERY_WORLD_SYNC_INTERVAL"
 )
 
 func worldSyncVolume(group *spawneryv1alpha1.ServerGroup, srv *spawneryv1alpha1.Server) corev1.Volume {
+	attrs := map[string]string{
+		WorldSyncAttrWorld: srv.Namespace + "/" + group.Name + "/" + srv.Spec.Key,
+		WorldSyncAttrKeep:  strings.Join(group.Spec.Storage.Keep, "\n"),
+	}
+	if len(group.Spec.Storage.Replace) > 0 {
+		attrs[WorldSyncAttrReplace] = strings.Join(group.Spec.Storage.Replace, "\n")
+	}
 	return corev1.Volume{
 		Name: DataVolumeName,
 		VolumeSource: corev1.VolumeSource{CSI: &corev1.CSIVolumeSource{
-			Driver: WorldSyncDriver,
-			VolumeAttributes: map[string]string{
-				WorldSyncAttrWorld: srv.Namespace + "/" + group.Name + "/" + srv.Spec.Key,
-				WorldSyncAttrKeep:  strings.Join(group.Spec.Storage.Keep, "\n"),
-			},
+			Driver:           WorldSyncDriver,
+			VolumeAttributes: attrs,
 		}},
 	}
 }

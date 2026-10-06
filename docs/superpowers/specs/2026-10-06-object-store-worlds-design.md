@@ -93,8 +93,14 @@ spec:
   `Persistent` would need a prefix per ordinal and is left for later.
 - `ObjectStore` requires `keep`. The keep entries are exactly what is
   synced: a world is the set of files under `/data` that a keep entry
-  matches. Everything else on the node directory is scratch that the next
-  start's prune deletes anyway.
+  matches. The rest is never synced. The node agent deletes it at the
+  release (§4.5), except a path that holds a world by the prune's rule and
+  that `replace` does not list: that path stays on the node, and snapshots
+  of a running member fail while it exists (§4.4). On Paper 26.3 all
+  dimensions of a world sit inside its level directory
+  (`dimensions/minecraft/the_nether`, `.../the_end`), so one entry per level
+  directory covers them; older versions write `world_nether` and
+  `world_the_end` beside it.
 - `backend` may change in both directions. Existing claims are left alone
   when a group moves to `ObjectStore`, and the store is left alone when it
   moves back. Moving data across is the import of §7.
@@ -116,11 +122,13 @@ volumes:
       volumeAttributes:
         world: <namespace>/<group>/<key>
         keep: "worlds/world\nplugins/Example/data"
+        replace: "..."    # only when spec.storage.replace is set
 ```
 
 CSI inline volumes are allowed under the `restricted` Pod Security level,
-which `hostPath` is not. The pod also gets `SPAWNERY_WORLD_SYNC=1`, which the
-agent reads. `SPAWNERY_WORLD_SYNC_INTERVAL` is added after the desired-state
+which `hostPath` is not. `replace` lets the node agent tell a world the
+sources own from one keep misses (§4.4). The pod also gets
+`SPAWNERY_WORLD_SYNC=1`, which the agent reads. `SPAWNERY_WORLD_SYNC_INTERVAL` is added after the desired-state
 hash is taken, like the AOT cache volume, so a new interval restarts nothing.
 
 The desired-state hash is taken over the rendered pod, so switching the
@@ -290,7 +298,12 @@ The agent asks, the node agent copies, and the upload runs from the copy:
    It checks size and mtime again after each copy. A file that changed
    during its copy is copied again, up to three times; after that the
    snapshot fails and the agent is told so. Unchanged large files are
-   carried over by reference.
+   carried over by reference. Before it copies anything, the node agent
+   looks for a world the prune would refuse to delete: a path that neither
+   keep nor replace holds and that is, or holds, a `level.dat*`, a `region`
+   directory or an `.mca` file. It answers `failed <seq> spec.storage.keep
+   does not keep <path>, which holds a world` then, since that world would
+   not travel to another node.
 3. The node agent writes `snapshot.done` with the sequence number. The agent
    turns autosave back on. The world was frozen for the flush and the local
    copy, not for the upload.
@@ -318,9 +331,11 @@ the directory is consistent.
    a file) and return. The kubelet waits for the local copy only, not for
    the upload. A final snapshot that fails is retried in the background.
 2. In the background: upload the queued snapshots and write the manifests,
-   with the retries of §4.4. Then delete the non-keep paths from the local
-   directory and release the lease, unless a pod has published the world
-   again on this node in the meantime.
+   with the retries of §4.4. Then delete the top-level paths keep does not
+   match from the local directory, except one that holds a world outside
+   replace, and release the lease, unless a pod has published the world
+   again on this node in the meantime. A final snapshot logs a world outside
+   keep and saves what keep holds.
 
 Because the upload runs from the snapshot, the same world may start again
 on this node while its last stop is still uploading (§4.3 step 1 waits only

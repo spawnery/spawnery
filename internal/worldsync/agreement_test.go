@@ -27,6 +27,7 @@ func TestThePodSpecNamesAgree(t *testing.T) {
 		{"driver", podspec.WorldSyncDriver, DriverName},
 		{"world attribute", podspec.WorldSyncAttrWorld, AttrWorld},
 		{"keep attribute", podspec.WorldSyncAttrKeep, AttrKeep},
+		{"replace attribute", podspec.WorldSyncAttrReplace, AttrReplace},
 	} {
 		if c.podspec != c.here {
 			t.Errorf("%s: podspec renders %q, the node agent expects %q", c.name, c.podspec, c.here)

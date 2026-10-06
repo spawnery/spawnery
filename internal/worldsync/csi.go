@@ -39,6 +39,7 @@ const (
 	ctxPodName      = "csi.storage.k8s.io/pod.name"
 	AttrWorld       = "world"
 	AttrKeep        = "keep"
+	AttrReplace     = "replace"
 )
 
 type CSIServer struct {
@@ -113,11 +114,18 @@ func (s *CSIServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishV
 	if _, err := prune.ParseKeep(keep); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
+	var replace []string
+	if vc[AttrReplace] != "" {
+		replace = strings.Split(vc[AttrReplace], "\n")
+		if _, err := prune.ParseReplace(replace); err != nil {
+			return nil, status.Error(codes.InvalidArgument, err.Error())
+		}
+	}
 	group, err := mountGroup(req.GetVolumeCapability().GetMount().GetVolumeMountGroup())
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	err = s.node.Publish(ctx, PublishRequest{World: world, Keep: keep, Target: req.GetTargetPath(), Pod: ns + "/" + vc[ctxPodName], Group: group})
+	err = s.node.Publish(ctx, PublishRequest{World: world, Keep: keep, Replace: replace, Target: req.GetTargetPath(), Pod: ns + "/" + vc[ctxPodName], Group: group})
 	switch {
 	case errors.Is(err, ErrUnavailable):
 		return nil, status.Error(codes.Unavailable, err.Error())

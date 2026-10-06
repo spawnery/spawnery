@@ -33,6 +33,15 @@ func ParseKeep(entries []string) (Keep, error) {
 	return Keep{pats: pats}, nil
 }
 
+// ParseReplace parses spec.storage.replace into the same matcher.
+func ParseReplace(entries []string) (Keep, error) {
+	pats, err := parseEntries("spec.storage.replace", entries)
+	if err != nil {
+		return Keep{}, err
+	}
+	return Keep{pats: pats}, nil
+}
+
 // Holds reports whether rel, slash-separated and relative to /data, is or
 // lies below a path an entry matches.
 func (k Keep) Holds(rel string) bool {

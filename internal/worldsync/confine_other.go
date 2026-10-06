@@ -41,3 +41,7 @@ func walkKept(string, prune.Keep, func(int, string, string, *unix.Stat_t) error)
 }
 
 func regroupKept(string, prune.Keep, int) error { return errors.ErrUnsupported }
+
+func worldOutside(string, prune.Keep, prune.Keep) (string, error) { return "", errors.ErrUnsupported }
+
+func entryHoldsWorld(string, string) (bool, error) { return false, errors.ErrUnsupported }

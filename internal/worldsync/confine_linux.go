@@ -314,3 +314,111 @@ func regroupKept(root string, keep prune.Keep, gid int) error {
 	}
 	return walkKeptIn(root, ctl, []string{prune.ControlDir}, all, file, enter)
 }
+
+// worldOutside returns the first path below root that the prune would delete
+// (neither keep nor replace holds it) and that holds a world by the prune's
+// rule, or "" when there is none. It never follows a symlink.
+func worldOutside(root string, keep, replace prune.Keep) (string, error) {
+	fd, err := openDir(root, nil, false, -1)
+	if err != nil {
+		return "", err
+	}
+	return worldOutsideIn(root, fd, nil, keep, replace)
+}
+
+func worldOutsideIn(root string, fd int, parts []string, keep, replace prune.Keep) (string, error) {
+	d := os.NewFile(uintptr(fd), root)
+	defer func() { _ = d.Close() }()
+	names, err := d.Readdirnames(-1)
+	if err != nil {
+		return "", err
+	}
+	for _, name := range names {
+		if len(parts) == 0 && name == prune.ControlDir {
+			continue
+		}
+		child := append(append([]string(nil), parts...), name)
+		rel := strings.Join(child, "/")
+		if keep.Holds(rel) || replace.Holds(rel) {
+			continue
+		}
+		var st unix.Stat_t
+		if err := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			if errors.Is(err, unix.ENOENT) {
+				continue
+			}
+			return "", pathErr("lstat", root, child, err)
+		}
+		dir := st.Mode&unix.S_IFMT == unix.S_IFDIR
+		if dir && (keep.Toward(rel) || replace.Toward(rel)) {
+			sub, err := unix.Openat(fd, name, dirFlags, 0)
+			if err != nil {
+				return "", pathErr("open", root, child, err)
+			}
+			if found, err := worldOutsideIn(root, sub, child, keep, replace); found != "" || err != nil {
+				return found, err
+			}
+			continue
+		}
+		world, err := holdsWorldAt(root, fd, child, dir)
+		if err != nil {
+			return "", err
+		}
+		if world {
+			return rel, nil
+		}
+	}
+	return "", nil
+}
+
+// holdsWorldAt reports whether the entry child names in dir is, or holds, an
+// entry prune.WorldEntry marks.
+func holdsWorldAt(root string, dir int, child []string, isDir bool) (bool, error) {
+	name := child[len(child)-1]
+	if prune.WorldEntry(name, isDir) {
+		return true, nil
+	}
+	if !isDir {
+		return false, nil
+	}
+	if len(strings.Join(child, "/")) > maxRel {
+		return false, fmt.Errorf("worldsync: %s holds a path longer than the %d bytes a world may hold", root, maxRel)
+	}
+	fd, err := unix.Openat(dir, name, dirFlags, 0)
+	if err != nil {
+		return false, pathErr("open", root, child, err)
+	}
+	d := os.NewFile(uintptr(fd), filepath.Join(root, filepath.Join(child...)))
+	defer func() { _ = d.Close() }()
+	names, err := d.Readdirnames(-1)
+	if err != nil {
+		return false, err
+	}
+	for _, n := range names {
+		var st unix.Stat_t
+		if err := unix.Fstatat(fd, n, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			if errors.Is(err, unix.ENOENT) {
+				continue
+			}
+			return false, pathErr("lstat", root, append(child, n), err)
+		}
+		world, err := holdsWorldAt(root, fd, append(append([]string(nil), child...), n), st.Mode&unix.S_IFMT == unix.S_IFDIR)
+		if world || err != nil {
+			return world, err
+		}
+	}
+	return false, nil
+}
+
+func entryHoldsWorld(root, name string) (bool, error) {
+	fd, err := openDir(root, nil, false, -1)
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = unix.Close(fd) }()
+	var st unix.Stat_t
+	if err := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+		return false, pathErr("lstat", root, []string{name}, err)
+	}
+	return holdsWorldAt(root, fd, []string{name}, st.Mode&unix.S_IFMT == unix.S_IFDIR)
+}

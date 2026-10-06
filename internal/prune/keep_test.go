@@ -16,7 +16,10 @@ limitations under the License.
 
 package prune
 
-import "testing"
+import (
+	"strings"
+	"testing"
+)
 
 func TestKeepHoldsWhatAnEntryMatchesAndBelow(t *testing.T) {
 	k, err := ParseKeep([]string{"worlds/world", "plugins/*/data"})
@@ -59,5 +62,35 @@ func TestKeepTowardIsTheWayDownToAnEntry(t *testing.T) {
 func TestParseKeepRefusesWhatPruneRefuses(t *testing.T) {
 	if _, err := ParseKeep([]string{"../escape"}); err == nil {
 		t.Fatal("a .. segment was accepted")
+	}
+}
+
+func TestParseReplaceNamesItsField(t *testing.T) {
+	r, err := ParseReplace([]string{"world/datapacks"})
+	if err != nil || !r.Holds("world/datapacks/x.zip") || !r.Toward("world") {
+		t.Fatalf("ParseReplace = %+v, %v", r, err)
+	}
+	if _, err := ParseReplace([]string{".."}); err == nil || !strings.Contains(err.Error(), "spec.storage.replace") {
+		t.Fatalf("err = %v, want one naming spec.storage.replace", err)
+	}
+}
+
+func TestWorldEntryIsThePrunesWorldRule(t *testing.T) {
+	for _, c := range []struct {
+		name string
+		dir  bool
+		want bool
+	}{
+		{"level.dat", false, true},
+		{"level.dat_old", false, true},
+		{"r.0.0.mca", false, true},
+		{"region", true, true},
+		{"region", false, false},
+		{"level.dat", true, false},
+		{"playerdata", true, false},
+	} {
+		if got := WorldEntry(c.name, c.dir); got != c.want {
+			t.Errorf("WorldEntry(%q, %v) = %v, want %v", c.name, c.dir, got, c.want)
+		}
 	}
 }
