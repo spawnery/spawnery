@@ -5,6 +5,7 @@
 , runtimeShell
 , writeTextDir
 , dockerTools
+, cacert
 }:
 
 rec {
@@ -34,6 +35,13 @@ rec {
   binIn = { package, name }: runCommand "${name}-image-path" { } ''
     mkdir -p $out/usr/local/bin
     cp ${package}/bin/${name} $out/usr/local/bin/${name}
+  '';
+
+  # The first file Go's crypto/x509 probes on Linux, for the Go images that
+  # talk HTTPS (the object store).
+  caBundle = runCommand "ca-bundle-image-path" { } ''
+    mkdir -p $out/etc/ssl/certs
+    cp ${cacert}/etc/ssl/certs/ca-bundle.crt $out/etc/ssl/certs/ca-certificates.crt
   '';
 
   # amd64 is only a label: buildLayeredImage does not cross-compile, and

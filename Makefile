@@ -5,6 +5,7 @@ VELOCITY_IMAGE ?= $(shell nix eval --raw .#velocity-image.imageName):$(shell nix
 PURPUR_IMAGE ?= $(shell nix eval --raw .#purpur-image.imageName):$(shell nix eval --raw .#purpur-image.imageTag)
 PURPUR_IMAGE_26_2 ?= $(shell nix eval --raw .#purpur-image-26-2.imageName):$(shell nix eval --raw .#purpur-image-26-2.imageTag)
 OPERATOR_IMAGE ?= $(shell nix eval --raw .#operator-image.imageName):$(shell nix eval --raw .#operator-image.imageTag)
+WORLDSYNC_IMAGE ?= $(shell nix eval --raw .#worldsync-image.imageName):$(shell nix eval --raw .#worldsync-image.imageTag)
 STUBOP ?= $(shell nix build .#spawnery-stubop --no-link --print-out-paths)/bin/spawnery-stubop
 
 .PHONY: all
@@ -207,6 +208,18 @@ operator-image-load: operator-image
 .PHONY: operator-image-test
 operator-image-test: operator-image-load
 	CONTAINER=$(CONTAINER) IMAGE=$(OPERATOR_IMAGE) hack/operator-image-test.sh
+
+.PHONY: worldsync-image
+worldsync-image:
+	nix build .#worldsync-image --out-link result-worldsync
+
+.PHONY: worldsync-image-load
+worldsync-image-load: worldsync-image
+	$(CONTAINER) load < result-worldsync
+
+.PHONY: worldsync-image-test
+worldsync-image-test: worldsync-image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(WORLDSYNC_IMAGE) hack/worldsync-image-test.sh
 
 # Not part of `test` or `all`: needs a container runtime and x86_64-linux.
 # Each build precedes its --rebuild because --rebuild refuses to run, rather
