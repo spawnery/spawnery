@@ -287,7 +287,7 @@ func main() {
 	flag.BoolVar(&worldSync, "world-sync", false,
 		"serve groups with spec.storage.backend ObjectStore; needs spawnery-worldsync on the nodes "+
 			"and WORLDSYNC_ENDPOINT, WORLDSYNC_REGION, WORLDSYNC_BUCKET, AWS_ACCESS_KEY_ID, "+
-			"AWS_SECRET_ACCESS_KEY in the environment")
+			"AWS_SECRET_ACCESS_KEY in the environment; WORLDSYNC_PREFIX, if set, is the key prefix in the bucket")
 	flag.DurationVar(&worldSyncInterval, "world-sync-snapshot-interval", 5*time.Minute,
 		"how often a member of an ObjectStore group asks for a snapshot; the most play a node loss costs")
 

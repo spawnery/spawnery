@@ -166,7 +166,8 @@ const (
 	StorageBackendObjectStore StorageBackend = "ObjectStore"
 )
 
-// StorageSpec describes the PVC of a persistent or on-demand group.
+// StorageSpec describes where a persistent or on-demand group keeps its
+// members' worlds: a PersistentVolumeClaim per member, or the object store.
 // +kubebuilder:validation:XValidation:rule="!has(self.replace) || has(self.keep)",message="spec.storage.replace needs spec.storage.keep"
 // +kubebuilder:validation:XValidation:rule="!has(self.replace) || !has(self.keep) || self.replace.all(r, !(r in self.keep))",message="a path cannot be in both spec.storage.keep and spec.storage.replace"
 type StorageSpec struct {
@@ -419,7 +420,8 @@ type ServerGroupSpec struct {
 	// +optional
 	Update *UpdateSpec `json:"update,omitempty"`
 
-	// Storage configures the PVC. Persistent and OnDemand only.
+	// Storage configures where members' worlds live: a claim per member, or
+	// the object store with backend ObjectStore. Persistent and OnDemand only.
 	// +optional
 	Storage *StorageSpec `json:"storage,omitempty"`
 

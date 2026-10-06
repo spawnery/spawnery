@@ -399,7 +399,11 @@ other user on the node reaches a world or its setgid directories.
   of the key tries again.
 - **The store is unreachable at stop.** The upload retries until it works.
   The world stays on that node and can start there again; a start on
-  another node waits for the lease.
+  another node waits for the lease. The lease renewals fail as well, so
+  after 10 minutes another node may take the lease and start from the last
+  manifest. When the store answers again, this node finds its lease taken
+  and moves its copy, with the stop's snapshot that never uploaded, to
+  `orphans/`.
 - **A node dies.** Its worlds lose the play since their last uploaded
   snapshot, at most the snapshot interval plus an upload in flight. After
   10 minutes another node may take the lease and starts from the last

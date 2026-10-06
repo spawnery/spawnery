@@ -185,6 +185,9 @@ running. After 10 minutes another node may take the lease and start the
 world from the bucket. When the dead node comes back, it finds its leases
 taken and moves its copies to `orphans/` under the node directory
 (`worldSync.hostPath`), where they stay for manual recovery and never upload.
+A bucket that stays unreachable for more than 10 minutes after a stop has the
+same effect: another node may take the lease and start from the last upload,
+and the stopped run's copy goes to `orphans/` once the bucket answers again.
 
 A stop always uploads, whether or not the agent ever asked for a snapshot.
 

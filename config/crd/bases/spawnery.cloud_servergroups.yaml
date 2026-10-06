@@ -1740,7 +1740,9 @@ spec:
                     type: array
                 type: object
               storage:
-                description: Storage configures the PVC. Persistent and OnDemand only.
+                description: |-
+                  Storage configures where members' worlds live: a claim per member, or
+                  the object store with backend ObjectStore. Persistent and OnDemand only.
                 properties:
                   accessModes:
                     default:
