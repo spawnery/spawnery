@@ -248,18 +248,21 @@ up at their next start.
 
 Default: `false`
 
-Serves groups whose `spec.storage.backend` is `ObjectStore`: their members
-keep the world in a bucket, synced by `spawnery-worldsync` on the nodes, and
-get no data claim. The operator reads the bucket from `WORLDSYNC_ENDPOINT`,
-`WORLDSYNC_REGION`, `WORLDSYNC_BUCKET`, `AWS_ACCESS_KEY_ID` and
-`AWS_SECRET_ACCESS_KEY` in its environment, marks a deleted world in it, and
-runs the sweeper that removes marked worlds once no node holds them. While the
-flag is off, a member of such a group gets no pod and its `Accepted` condition
-is `False` with reason `WorldSyncOff`, and deleting one is refused.
+Serves groups whose `spec.storage.backend` is `ObjectStore`. Their members get
+no data claim; `spawnery-worldsync` on the nodes keeps their worlds in a bucket
+(see [Worlds in an object store](../guides/object-store-worlds.md)). The
+operator reads the bucket from `WORLDSYNC_ENDPOINT`, `WORLDSYNC_REGION`,
+`WORLDSYNC_BUCKET`, the optional `WORLDSYNC_PREFIX`, `AWS_ACCESS_KEY_ID` and
+`AWS_SECRET_ACCESS_KEY` in its environment. It writes a deletion marker for
+each world `deleteServer` removes, and a sweeper deletes marked worlds once no
+node holds them. With the flag off, a member of such a group gets no pod, its
+`Accepted` condition is `False` with reason `WorldSyncOff`, and `deleteServer`
+refuses it.
 
 ### `--world-sync-snapshot-interval`
 
 Default: `5m`
 
-How often a member of an `ObjectStore` group asks for a snapshot of its world.
-It is the most play a node loss costs. Only read with `--world-sync`.
+How often a member of an `ObjectStore` group asks for a snapshot of its world,
+and so the most play a node loss costs. A member takes a new value at its next
+start. Only read with `--world-sync`.

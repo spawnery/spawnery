@@ -124,14 +124,14 @@
           # whenever anything under agent/, image/, internal/render or the JRE
           # derivations changes; a Paper or Purpur bump without it would collide
           # with a published tag. Gaps are releases that built no game image.
-          imageVersion = "0.23.0";
+          imageVersion = "0.24.0";
 
           # The operator's version, separate from imageVersion so a reconciler fix
           # does not claim a new agent and an agent release does not rename an
           # unchanged operator image. It moves, taking the release's number, when
           # the operator binary changes (a comment does not). Gaps are releases
           # that built no operator; hack/publish.sh refuses an existing tag.
-          operatorVersion = "0.23.0";
+          operatorVersion = "0.24.0";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";

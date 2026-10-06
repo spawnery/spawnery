@@ -76,6 +76,7 @@ nav:
       - Monitoring: guides/monitoring.md
       - Upgrading: guides/upgrading.md
       - Persistent worlds: guides/persistent-worlds.md
+      - Worlds in an object store: guides/object-store-worlds.md
       - Private servers: guides/on-demand-servers.md
       - Plugins from a volume: guides/plugins-from-a-volume.md
       - Mounts and files: guides/mounts-and-files.md
