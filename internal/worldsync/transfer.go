@@ -166,25 +166,46 @@ func UploadSnapshot(ctx context.Context, st Store, prefix, snapDir string, prev 
 	}
 	info, err := st.Put(ctx, prefix+ManifestName, bytes.NewReader(body), cond)
 	if errors.Is(err, ErrPrecondition) || errors.Is(err, ErrNotFound) {
-		return Manifest{}, "", fmt.Errorf("%w: %v", ErrConflict, err)
+		// The SDK's retryer re-sends a conditional put after a 5xx or a reset
+		// connection; when the first attempt had committed, the retry fails
+		// its own condition.
+		stored, storedInfo, rerr := readObject(ctx, st, prefix+ManifestName)
+		if rerr != nil || !bytes.Equal(stored, body) {
+			return Manifest{}, "", fmt.Errorf("%w: %v", ErrConflict, err)
+		}
+		info, err = storedInfo, nil
 	}
 	if err != nil {
 		return Manifest{}, "", err
 	}
+	dropUnnamed(ctx, st, prefix, prev, m)
+	return m, info.ETag, nil
+}
 
-	if prev != nil {
-		handled := map[string]bool{}
-		for _, e := range m.Files {
+func readObject(ctx context.Context, st Store, key string) ([]byte, ObjectInfo, error) {
+	rc, info, err := st.Get(ctx, key)
+	if err != nil {
+		return nil, ObjectInfo{}, err
+	}
+	defer func() { _ = rc.Close() }()
+	b, err := io.ReadAll(rc)
+	return b, info, err
+}
+
+func dropUnnamed(ctx context.Context, st Store, prefix string, prev *Manifest, m Manifest) {
+	if prev == nil {
+		return
+	}
+	handled := map[string]bool{}
+	for _, e := range m.Files {
+		handled[e.Object] = true
+	}
+	for _, e := range prev.Files {
+		if !handled[e.Object] {
 			handled[e.Object] = true
-		}
-		for _, e := range prev.Files {
-			if !handled[e.Object] {
-				handled[e.Object] = true
-				_ = st.Delete(ctx, prefix+e.Object)
-			}
+			_ = st.Delete(ctx, prefix+e.Object)
 		}
 	}
-	return m, info.ETag, nil
 }
 
 func localPath(dir, rel string) (string, error) {

@@ -91,9 +91,11 @@ type Node struct {
 	mu        sync.Mutex
 	worlds    map[string]*worldState
 	targets   map[string]string
-	locks     map[string]*sync.Mutex
+	locks     map[string]chan struct{}
 	workers   sync.WaitGroup
 	downloads atomic.Int64
+
+	callTimeout, uploadTimeout time.Duration
 }
 
 func strconvI(v int64) string { return strconv.FormatInt(v, 10) }
@@ -123,19 +125,52 @@ func NewNode(cfg Config) (*Node, error) {
 	if err := os.MkdirAll(filepath.Join(cfg.Root, "worlds"), 0o755); err != nil {
 		return nil, err
 	}
-	return &Node{cfg: cfg, worlds: map[string]*worldState{}, targets: map[string]string{}, locks: map[string]*sync.Mutex{}}, nil
+	return &Node{cfg: cfg, worlds: map[string]*worldState{}, targets: map[string]string{}, locks: map[string]chan struct{}{},
+		callTimeout: 30 * time.Second, uploadTimeout: 10 * time.Minute}, nil
+}
+
+// worldLock is a world's mutex as a channel of one, so that waiting for it
+// can end with a context.
+func (n *Node) worldLock(world string) chan struct{} {
+	n.mu.Lock()
+	defer n.mu.Unlock()
+	l, ok := n.locks[world]
+	if !ok {
+		l = make(chan struct{}, 1)
+		n.locks[world] = l
+	}
+	return l
 }
 
 func (n *Node) lock(world string) func() {
-	n.mu.Lock()
-	l, ok := n.locks[world]
-	if !ok {
-		l = &sync.Mutex{}
-		n.locks[world] = l
+	l := n.worldLock(world)
+	l <- struct{}{}
+	return func() { <-l }
+}
+
+func (n *Node) lockCtx(ctx context.Context, world string) (func(), error) {
+	l := n.worldLock(world)
+	select {
+	case l <- struct{}{}:
+		return func() { <-l }, nil
+	case <-ctx.Done():
+		return nil, ctx.Err()
 	}
-	n.mu.Unlock()
-	l.Lock()
-	return l.Unlock
+}
+
+func (n *Node) tryLock(world string) (func(), bool) {
+	l := n.worldLock(world)
+	select {
+	case l <- struct{}{}:
+		return func() { <-l }, true
+	default:
+		return nil, false
+	}
+}
+
+// call bounds one short store call; a hung one would hold its world's lock.
+func (n *Node) call(ctx context.Context) (context.Context, context.CancelFunc) {
+	return context.WithTimeout(ctx, n.callTimeout)
 }
 
 func (n *Node) lookup(world string) *worldState {
@@ -307,7 +342,10 @@ func (n *Node) discardLocal(s *worldState) error {
 // may already hold that upload's generation while the state does not yet.
 func (n *Node) lockIdle(ctx context.Context, world string) (*worldState, func(), error) {
 	for {
-		unlock := n.lock(world)
+		unlock, err := n.lockCtx(ctx, world)
+		if err != nil {
+			return nil, nil, fmt.Errorf("%w: the world is busy: %v", ErrUnavailable, err)
+		}
 		s := n.state(world)
 		if s.uploading == nil {
 			return s, unlock, nil
@@ -336,7 +374,7 @@ func (n *Node) Publish(ctx context.Context, req PublishRequest) error {
 	defer unlock()
 
 	if s.Target == req.Target {
-		return nil
+		return n.rebind(s)
 	}
 	if s.Target != "" {
 		// Review Focus 2: the old pod's teardown has not reached us yet.
@@ -346,16 +384,15 @@ func (n *Node) Publish(ctx context.Context, req PublishRequest) error {
 		s = n.state(req.World)
 	}
 
-	if pending, err := DeletionPending(ctx, n.cfg.Store, n.cfg.Base, req.World); err != nil {
+	if pending, err := n.deletionPending(ctx, req.World); err != nil {
 		return fmt.Errorf("%w: check for a pending deletion: %v", ErrUnavailable, err)
 	} else if pending {
 		return fmt.Errorf("%w: the world is being deleted", ErrUnavailable)
 	}
 
 	s.Keep, s.Pod = req.Keep, req.Pod
-	etag, err := TakeLease(ctx, n.cfg.Store, n.prefix(req.World), n.lease(s), n.cfg.StaleAfter)
-	var held *HeldError
-	if errors.As(err, &held) {
+	etag, err := n.takeLease(ctx, s)
+	if errors.Is(err, ErrLeaseLost) {
 		leaseConflicts.Inc()
 		return fmt.Errorf("%w: %v", ErrUnavailable, err)
 	}
@@ -380,10 +417,89 @@ func (n *Node) Publish(ctx context.Context, req PublishRequest) error {
 	return n.saveState(s)
 }
 
+// rebind binds the target again when it no longer shows the world's data,
+// as after a reboot of the node: Resume restores the target from the saved
+// state, but not the mount.
+func (n *Node) rebind(s *worldState) error {
+	data := n.dataOf(s)
+	want, err := os.Stat(data)
+	if err != nil {
+		return err
+	}
+	if got, err := os.Stat(s.Target); err == nil && os.SameFile(got, want) {
+		return nil
+	}
+	if err := os.MkdirAll(s.Target, 0o755); err != nil {
+		return err
+	}
+	return n.cfg.Mounter.Bind(data, s.Target)
+}
+
+func (n *Node) deletionPending(ctx context.Context, world string) (bool, error) {
+	ctx, cancel := n.call(ctx)
+	defer cancel()
+	return DeletionPending(ctx, n.cfg.Store, n.cfg.Base, world)
+}
+
+func (n *Node) readManifest(ctx context.Context, world string) (Manifest, string, error) {
+	ctx, cancel := n.call(ctx)
+	defer cancel()
+	return ReadManifest(ctx, n.cfg.Store, n.prefix(world))
+}
+
+// takeLease returns ErrLeaseLost when another node holds the lease.
+func (n *Node) takeLease(ctx context.Context, s *worldState) (string, error) {
+	c, cancel := n.call(ctx)
+	defer cancel()
+	etag, err := TakeLease(c, n.cfg.Store, n.prefix(s.World), n.lease(s), n.cfg.StaleAfter)
+	var held *HeldError
+	if errors.As(err, &held) {
+		if held.Node != n.cfg.NodeID {
+			return "", fmt.Errorf("%w: %v", ErrLeaseLost, err)
+		}
+		return n.ownLease(ctx, s.World)
+	}
+	return etag, err
+}
+
+func (n *Node) renewLease(ctx context.Context, s *worldState) error {
+	c, cancel := n.call(ctx)
+	defer cancel()
+	etag, err := RenewLease(c, n.cfg.Store, n.prefix(s.World), n.lease(s), s.LeaseETag)
+	if errors.Is(err, ErrLeaseLost) {
+		etag, err = n.ownLease(ctx, s.World)
+	}
+	if err != nil {
+		return err
+	}
+	s.LeaseETag = etag
+	n.save(s)
+	return nil
+}
+
+// ownLease reads the lease back after a 412. Only this node writes its own
+// name, so a lease that still names it is a write that committed and whose
+// retry failed the condition (see UploadSnapshot).
+func (n *Node) ownLease(ctx context.Context, world string) (string, error) {
+	ctx, cancel := n.call(ctx)
+	defer cancel()
+	l, info, err := ReadLease(ctx, n.cfg.Store, n.prefix(world))
+	if errors.Is(err, ErrNotFound) {
+		return "", ErrLeaseLost
+	}
+	if err != nil {
+		return "", err
+	}
+	if l.Node != n.cfg.NodeID {
+		return "", fmt.Errorf("%w: held by node %q", ErrLeaseLost, l.Node)
+	}
+	return info.ETag, nil
+}
+
 // settleContent brings the local copy in line with the manifest. It returns
 // the manifest to download when the copy is not current.
 func (n *Node) settleContent(ctx context.Context, s *worldState) (*Manifest, string, error) {
-	m, etag, err := ReadManifest(ctx, n.cfg.Store, n.prefix(s.World))
+	m, etag, err := n.readManifest(ctx, s.World)
 	switch {
 	case errors.Is(err, ErrNotFound):
 		// Review Focus 4: a copy of a world that no longer exists.
@@ -482,7 +598,10 @@ func (n *Node) Unpublish(ctx context.Context, target string) error {
 	world, ok := n.targets[target]
 	n.mu.Unlock()
 	if ok {
-		unlock := n.lock(world)
+		unlock, err := n.lockCtx(ctx, world)
+		if err != nil {
+			return fmt.Errorf("worldsync: the world is busy: %w", err)
+		}
 		defer unlock()
 		if s := n.lookup(world); s != nil && s.Target == target {
 			return n.unpublishLocked(s)
@@ -584,7 +703,13 @@ func (n *Node) Settle(ctx context.Context) {
 	n.evict()
 }
 
-func (n *Node) each(fn func(*worldState)) {
+func (n *Node) each(fn func(*worldState)) { n.walk(fn, false) }
+
+// eachFree skips a world whose lock is taken, so that one world's hung
+// store call holds up no other world's snapshot or upload.
+func (n *Node) eachFree(fn func(*worldState)) { n.walk(fn, true) }
+
+func (n *Node) walk(fn func(*worldState), skipBusy bool) {
 	n.mu.Lock()
 	worlds := make([]string, 0, len(n.worlds))
 	for w := range n.worlds {
@@ -592,7 +717,15 @@ func (n *Node) each(fn func(*worldState)) {
 	}
 	n.mu.Unlock()
 	for _, w := range worlds {
-		unlock := n.lock(w)
+		var unlock func()
+		if skipBusy {
+			var ok bool
+			if unlock, ok = n.tryLock(w); !ok {
+				continue
+			}
+		} else {
+			unlock = n.lock(w)
+		}
 		if s := n.lookup(w); s != nil {
 			fn(s)
 		}
@@ -601,7 +734,7 @@ func (n *Node) each(fn func(*worldState)) {
 }
 
 func (n *Node) pollRequests() {
-	n.each(func(s *worldState) {
+	n.eachFree(func(s *worldState) {
 		if s.Target == "" {
 			return
 		}
@@ -646,7 +779,7 @@ func (n *Node) hasWork(s *worldState) bool {
 // neither snapshot requests nor lease renewals.
 func (n *Node) kickUploads(ctx context.Context) {
 	pending := 0
-	n.each(func(s *worldState) {
+	n.eachFree(func(s *worldState) {
 		pending += len(s.Pending)
 		if s.working || !n.hasWork(s) || n.cfg.Clock().Before(s.retryAt) {
 			return
@@ -672,12 +805,14 @@ func (n *Node) work(ctx context.Context, s *worldState) {
 		s.uploading = running
 		unlock()
 
-		m, etag, err := UploadSnapshot(ctx, n.cfg.Store, n.prefix(s.World), job.dir, job.prev, job.prevETag, NewWorldID)
+		uctx, cancel := context.WithTimeout(ctx, n.uploadTimeout)
+		m, etag, err := UploadSnapshot(uctx, n.cfg.Store, n.prefix(s.World), job.dir, job.prev, job.prevETag, NewWorldID)
+		cancel()
 
 		unlock = n.lock(s.World)
 		s.uploading = nil
 		close(running)
-		more := n.finishUpload(s, job, m, etag, err)
+		more := n.finishUpload(ctx, s, job, m, etag, err)
 		if !more {
 			s.working = false
 		}
@@ -727,17 +862,10 @@ func (n *Node) nextUpload(ctx context.Context, s *worldState) *uploadJob {
 // cut off for longer than StaleAfter learns it lost the world before it
 // writes a manifest, not after.
 func (n *Node) confirmLease(ctx context.Context, s *worldState) error {
-	var etag string
-	var err error
-	if s.LeaseETag == "" {
-		etag, err = TakeLease(ctx, n.cfg.Store, n.prefix(s.World), n.lease(s), n.cfg.StaleAfter)
-		var held *HeldError
-		if errors.As(err, &held) {
-			return ErrLeaseLost
-		}
-	} else {
-		etag, err = RenewLease(ctx, n.cfg.Store, n.prefix(s.World), n.lease(s), s.LeaseETag)
+	if s.LeaseETag != "" {
+		return n.renewLease(ctx, s)
 	}
+	etag, err := n.takeLease(ctx, s)
 	if err != nil {
 		return err
 	}
@@ -767,13 +895,16 @@ func (n *Node) prepareUpload(s *worldState) (*uploadJob, error) {
 
 // finishUpload records the upload's outcome and reports whether the worker
 // should go on.
-func (n *Node) finishUpload(s *worldState, job *uploadJob, m Manifest, etag string, err error) bool {
+func (n *Node) finishUpload(ctx context.Context, s *worldState, job *uploadJob, m Manifest, etag string, err error) bool {
 	if n.lookup(s.World) != s || s.lost || len(s.Pending) == 0 || s.Pending[0] != job.seq {
 		return false
 	}
 	if errors.Is(err, ErrConflict) {
-		n.orphan(s, err.Error())
-		return false
+		m, etag, err = n.adoptCommitted(ctx, s, job)
+		if errors.Is(err, ErrLeaseLost) || errors.Is(err, ErrConflict) {
+			n.orphan(s, err.Error())
+			return false
+		}
 	}
 	if err != nil {
 		n.retryLater(s, "upload failed", err)
@@ -782,9 +913,71 @@ func (n *Node) finishUpload(s *worldState, job *uploadJob, m Manifest, etag stri
 	s.WorldID, s.Generation, s.ManifestETag, s.Files = m.WorldID, m.Generation, etag, m.Files
 	s.Pending = s.Pending[1:]
 	s.retryAt, s.retryDelay = time.Time{}, 0
-	_ = os.RemoveAll(job.dir)
 	n.save(s)
+	_ = os.RemoveAll(job.dir)
 	return true
+}
+
+// adoptCommitted decides a manifest conflict, as after a crash between the
+// manifest put and the state save. With the lease chain unbroken no other
+// node wrote since, so a manifest of exactly the snapshot's files is ours.
+func (n *Node) adoptCommitted(ctx context.Context, s *worldState, job *uploadJob) (Manifest, string, error) {
+	if err := n.renewLease(ctx, s); err != nil {
+		return Manifest{}, "", err
+	}
+	m, etag, err := n.readManifest(ctx, s.World)
+	if errors.Is(err, ErrNotFound) {
+		return Manifest{}, "", fmt.Errorf("%w: the manifest is gone", ErrConflict)
+	}
+	if err != nil {
+		return Manifest{}, "", err
+	}
+	snap, err := ReadSnap(job.dir)
+	if err != nil {
+		return Manifest{}, "", err
+	}
+	if !sameUpload(s, snap, m) {
+		return Manifest{}, "", fmt.Errorf("%w: generation %d of world %s is not this node's", ErrConflict, m.Generation, m.WorldID)
+	}
+	c, cancel := n.call(ctx)
+	defer cancel()
+	dropUnnamed(c, n.cfg.Store, n.prefix(s.World), job.prev, m)
+	n.dropStrayPacks(c, s.World, m)
+	n.cfg.Log.Info("adopted an upload that committed before its answer arrived", "world", s.World, "generation", m.Generation)
+	return m, etag, nil
+}
+
+// sameUpload: a state without a world ID had not seen its first upload
+// recorded, and the first upload names the world ID.
+func sameUpload(s *worldState, snap Snap, m Manifest) bool {
+	if s.WorldID != "" && m.WorldID != s.WorldID || m.Generation != s.Generation+1 || len(m.Files) != len(snap.Files) {
+		return false
+	}
+	for i, f := range snap.Files {
+		e := m.Files[i]
+		if e.Path != f.Path || e.Size != f.Size || e.MTime != f.MTime {
+			return false
+		}
+	}
+	return true
+}
+
+// dropStrayPacks deletes the packs m does not name: the conflicting retry
+// wrote one under a fresh name. The lease keeps other writers out.
+func (n *Node) dropStrayPacks(ctx context.Context, world string, m Manifest) {
+	named := map[string]bool{}
+	for _, e := range m.Files {
+		named[e.Object] = true
+	}
+	keys, err := n.cfg.Store.List(ctx, n.prefix(world)+PacksDir)
+	if err != nil {
+		return
+	}
+	for _, k := range keys {
+		if !named[strings.TrimPrefix(k, n.prefix(world))] {
+			_ = n.cfg.Store.Delete(ctx, k)
+		}
+	}
 }
 
 // fillReferences names the object of every entry a queued snapshot carried
@@ -813,7 +1006,9 @@ func (n *Node) retryLater(s *worldState, msg string, err error) {
 
 func (n *Node) release(ctx context.Context, s *worldState) {
 	n.dropScratch(s)
-	err := ReleaseLease(ctx, n.cfg.Store, n.prefix(s.World), s.LeaseETag)
+	c, cancel := n.call(ctx)
+	defer cancel()
+	err := ReleaseLease(c, n.cfg.Store, n.prefix(s.World), s.LeaseETag)
 	if err != nil && !errors.Is(err, ErrLeaseLost) {
 		n.retryLater(s, "lease release failed", err)
 		return
@@ -843,15 +1038,11 @@ func (n *Node) renewAll(ctx context.Context) {
 		if s.LeaseETag == "" || s.lost {
 			return
 		}
-		etag, err := RenewLease(ctx, n.cfg.Store, n.prefix(s.World), n.lease(s), s.LeaseETag)
-		switch {
+		switch err := n.renewLease(ctx, s); {
 		case errors.Is(err, ErrLeaseLost):
-			n.orphan(s, "another node took the lease")
+			n.orphan(s, err.Error())
 		case err != nil:
 			n.cfg.Log.Error(err, "lease renewal failed; retrying", "world", s.World)
-		default:
-			s.LeaseETag = etag
-			n.save(s)
 		}
 	})
 }

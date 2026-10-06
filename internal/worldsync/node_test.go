@@ -20,8 +20,10 @@ import (
 	"context"
 	"errors"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -88,6 +90,45 @@ func (g *gate) Put(ctx context.Context, key string, body io.ReadSeeker, cond Put
 		_ = g.hold(ctx, "put", key)
 	}
 	return info, err
+}
+
+// committedButRefused commits the conditional puts match picks and answers
+// 412, as the retry of a request whose first attempt went through does.
+type committedButRefused struct {
+	*MemStore
+	armed   atomic.Bool
+	match   func(key string) bool
+	refused atomic.Int64
+}
+
+func (c *committedButRefused) Put(ctx context.Context, key string, body io.ReadSeeker, cond PutCondition) (ObjectInfo, error) {
+	info, err := c.MemStore.Put(ctx, key, body, cond)
+	if err == nil && c.armed.Load() && (cond.IfNoneMatch || cond.IfMatch != "") && c.match(key) {
+		c.refused.Add(1)
+		return ObjectInfo{}, ErrPrecondition
+	}
+	return info, err
+}
+
+func copyTree(t *testing.T, src, dst string) {
+	t.Helper()
+	err := filepath.WalkDir(src, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(src, p)
+		if d.IsDir() {
+			return os.MkdirAll(filepath.Join(dst, rel), 0o755)
+		}
+		b, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		return os.WriteFile(filepath.Join(dst, rel), b, 0o644)
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
 }
 
 type harness struct {
@@ -638,5 +679,203 @@ func TestResumeFailsADownloadTheRestartCutShort(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(restarted.dataDir(w), FailedFile)); err != nil {
 		t.Fatalf("no failed file for an interrupted download: %v", err)
+	}
+}
+
+func TestARetriedPutThatCommittedOrphansNothing(t *testing.T) {
+	h := newHarness(t)
+	st := &committedButRefused{MemStore: h.st, match: func(key string) bool {
+		return strings.HasSuffix(key, LeaseName) || strings.HasSuffix(key, ManifestName)
+	}}
+	st.armed.Store(true)
+	h.store = st
+	a := h.node("a")
+	target, err := h.publish("a", w, "p1")
+	if err != nil {
+		t.Fatalf("publish when the lease put answered 412 after committing: %v", err)
+	}
+	for i, size := range []int{5, 6} {
+		writeFile(t, filepath.Join(target, "worlds/world/level.dat"), size, h.now.Add(time.Duration(i)*time.Second))
+		h.request(target, strconv.Itoa(i+1))
+		a.Settle(context.Background())
+		if got := h.orphans("a"); got != 0 {
+			t.Fatalf("orphans = %d after puts that had committed", got)
+		}
+	}
+	if st.refused.Load() == 0 {
+		t.Fatal("the store refused nothing")
+	}
+	m, _, err := ReadManifest(context.Background(), h.st, WorldPrefix("", w))
+	if err != nil || m.Generation != 2 {
+		t.Fatalf("manifest = %+v, %v; want generation 2", m, err)
+	}
+	if _, err := h.publish("b", w, "p2"); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("b took a world a still holds: err = %v", err)
+	}
+}
+
+func TestAnUploadCommittedBeforeACrashIsAdopted(t *testing.T) {
+	for _, first := range []bool{true, false} {
+		t.Run(map[bool]string{true: "first generation", false: "later generation"}[first], func(t *testing.T) {
+			h := newHarness(t)
+			ctx := context.Background()
+			a := h.node("a")
+			target, _ := h.publish("a", w, "p1")
+			writeFile(t, filepath.Join(target, "worlds/world/level.dat"), 5, h.now)
+			if !first {
+				h.request(target, "1")
+				a.Settle(ctx)
+			}
+			writeFile(t, filepath.Join(target, "worlds/world/level.dat"), 6, h.now.Add(time.Second))
+			h.request(target, "2")
+			a.pollRequests()
+			crashed := t.TempDir()
+			copyTree(t, a.worldDir(w), crashed)
+			a.Settle(ctx)
+			want, _, err := ReadManifest(ctx, h.st, WorldPrefix("", w))
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			// The node died after the manifest put and before it saved the state.
+			if err := os.RemoveAll(a.worldDir(w)); err != nil {
+				t.Fatal(err)
+			}
+			copyTree(t, crashed, a.worldDir(w))
+			restarted, _ := NewNode(a.cfg)
+			if err := restarted.Resume(ctx); err != nil {
+				t.Fatal(err)
+			}
+			restarted.Settle(ctx)
+			if got := h.orphans("a"); got != 0 {
+				t.Fatalf("orphans = %d; the node's own upload was taken for another writer's", got)
+			}
+			s := restarted.lookup(w)
+			if s == nil || s.WorldID != want.WorldID || s.Generation != want.Generation || len(s.Pending) != 0 {
+				t.Fatalf("state = %+v, want generation %d of %s adopted", s, want.Generation, want.WorldID)
+			}
+
+			writeFile(t, filepath.Join(target, "worlds/world/level.dat"), 7, h.now.Add(2*time.Second))
+			h.request(target, "3")
+			restarted.Settle(ctx)
+			m, _, err := ReadManifest(ctx, h.st, WorldPrefix("", w))
+			if err != nil || m.Generation != want.Generation+1 {
+				t.Fatalf("manifest = %+v, %v; the next upload failed", m, err)
+			}
+			if keys, _ := h.st.List(ctx, WorldPrefix("", w)+PacksDir); len(keys) != 1 {
+				t.Fatalf("packs = %v, want only the current one", keys)
+			}
+		})
+	}
+}
+
+func TestAHungStoreCallHoldsUpNoOtherWorld(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	const other = "ns/g/other"
+	g := h.gate(func(op, key string) bool { return op == "put" && key == WorldPrefix("", w)+LeaseName }, false)
+	a := h.node("a")
+	if _, err := h.publish("a", w, "p1"); err != nil {
+		t.Fatal(err)
+	}
+	otherTarget := filepath.Join(t.TempDir(), "mount")
+	if err := a.Publish(ctx, PublishRequest{World: other, Keep: []string{"worlds/world"}, Target: otherTarget, Pod: "p2"}); err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(otherTarget, "worlds/world/level.dat"), 5, h.now)
+
+	g.armed.Store(true)
+	renewed := make(chan struct{})
+	go func() { a.renewAll(ctx); close(renewed) }()
+	<-g.held // w's renewal hangs while it holds w's lock
+	defer func() { close(g.open); <-renewed; a.workers.Wait() }()
+
+	h.request(otherTarget, "1")
+	answered := make(chan struct{})
+	go func() { a.pollRequests(); a.kickUploads(ctx); close(answered) }()
+	select {
+	case <-answered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("another world's snapshot request waited for the hung call")
+	}
+	if b, _ := os.ReadFile(filepath.Join(otherTarget, DoneFile)); strings.TrimSpace(string(b)) != "1" {
+		t.Fatalf("done = %q, want 1", b)
+	}
+
+	short, cancel := context.WithTimeout(ctx, 50*time.Millisecond)
+	defer cancel()
+	published := make(chan error, 1)
+	go func() {
+		published <- a.Publish(short, PublishRequest{World: w, Keep: []string{"worlds/world"}, Target: filepath.Join(t.TempDir(), "mount"), Pod: "p3"})
+	}()
+	select {
+	case err := <-published:
+		if !errors.Is(err, ErrUnavailable) {
+			t.Fatalf("err = %v, want ErrUnavailable", err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("a publish waited for the world's lock past its context")
+	}
+}
+
+func TestAHungStoreCallTimesOut(t *testing.T) {
+	for name, match := range map[string]func(op, key string) bool{
+		"lease":  func(op, key string) bool { return op == "put" && strings.HasSuffix(key, LeaseName) },
+		"upload": func(op, key string) bool { return op == "put" && !strings.HasSuffix(key, LeaseName) },
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			g := h.gate(match, false)
+			a := h.node("a")
+			a.callTimeout, a.uploadTimeout = 20*time.Millisecond, 20*time.Millisecond
+			target, _ := h.publish("a", w, "p1")
+			writeFile(t, filepath.Join(target, "worlds/world/level.dat"), 5, h.now)
+			h.request(target, "1")
+			a.pollRequests()
+
+			g.armed.Store(true)
+			settled := make(chan struct{})
+			go func() { a.Settle(context.Background()); close(settled) }()
+			select {
+			case <-settled:
+			case <-time.After(5 * time.Second):
+				close(g.open)
+				<-settled
+				t.Fatal("a hung store call never timed out")
+			}
+			unlock := a.lock(w)
+			s := a.lookup(w)
+			stuck, pending, retry := s.uploading != nil, len(s.Pending), s.retryAt
+			unlock()
+			if stuck || pending != 1 || retry.IsZero() {
+				t.Fatalf("uploading = %v, pending = %d, retryAt = %v; want an idle world backing off", stuck, pending, retry)
+			}
+		})
+	}
+}
+
+func TestAPublishAfterARebootBindsTheSameTargetAgain(t *testing.T) {
+	h := newHarness(t)
+	a := h.node("a")
+	target, _ := h.publish("a", w, "p1")
+	writeFile(t, filepath.Join(target, "worlds/world/level.dat"), 5, h.now)
+	if err := h.mnt["a"].Unmount(target); err != nil { // the reboot dropped the bind mount
+		t.Fatal(err)
+	}
+	if err := os.MkdirAll(target, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	restarted, _ := NewNode(a.cfg)
+	if err := restarted.Resume(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if err := restarted.Publish(context.Background(), PublishRequest{World: w, Keep: []string{"worlds/world"}, Target: target, Pod: "p1"}); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{ReadyFile, "worlds/world/level.dat"} {
+		if _, err := os.Stat(filepath.Join(target, rel)); err != nil {
+			t.Fatalf("%s is not under the target after the republish: %v", rel, err)
+		}
 	}
 }

@@ -287,3 +287,27 @@ func TestAFailedDownloadLeavesNoPartFiles(t *testing.T) {
 		return nil
 	})
 }
+
+func TestAManifestPutThatCommittedButAnswered412IsTheUpload(t *testing.T) {
+	st := &committedButRefused{MemStore: NewMemStore(time.Now), match: func(key string) bool { return strings.HasSuffix(key, ManifestName) }}
+	st.armed.Store(true)
+	data := t.TempDir()
+	then := time.Unix(1_700_000_000, 0)
+	writeFile(t, filepath.Join(data, "worlds/world/level.dat"), 10, then)
+
+	m1, e1, err := UploadSnapshot(context.Background(), st, prefix, snapshotOf(t, data, nil, 1), nil, "", NewWorldID)
+	if err != nil {
+		t.Fatalf("first upload: %v", err)
+	}
+	writeFile(t, filepath.Join(data, "worlds/world/level.dat"), 11, then.Add(time.Second))
+	m2, _, err := UploadSnapshot(context.Background(), st, prefix, snapshotOf(t, data, m1.Files, 2), &m1, e1, NewWorldID)
+	if err != nil || m2.Generation != 2 {
+		t.Fatalf("second upload: %+v, %v", m2, err)
+	}
+	if st.refused.Load() != 2 {
+		t.Fatalf("refused = %d, want 2", st.refused.Load())
+	}
+	if keys, _ := st.List(context.Background(), prefix+PacksDir); len(keys) != 1 {
+		t.Fatalf("packs = %v; the first generation's pack was not collected", keys)
+	}
+}
