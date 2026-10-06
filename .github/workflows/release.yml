@@ -80,6 +80,7 @@ jobs:
           echo "  purpur    ${purpur_tag}"
           echo "  velocity  ${velocity_tag}"
           echo "  operator  ${operator_tag}"
+          echo "  worldsync $(nix eval --raw .#worldsync-image.imageTag)"
           echo "  chart     ${chart}"
           for pair in "purpur:${purpur_tag}" "velocity:${velocity_tag}"; do
             case "${pair#*:}" in
@@ -170,7 +171,7 @@ jobs:
           fi
           published=0
           operator_published=false
-          for image in purpur-image purpur-image-26-2 velocity-image operator-image; do
+          for image in purpur-image purpur-image-26-2 velocity-image worldsync-image operator-image; do
             status=0
             nix develop -c env DRY_RUN="$dry_run" WRITE_DIGEST=1 \
               ./hack/publish.sh "$image" || status=$?

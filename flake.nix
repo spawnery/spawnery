@@ -191,6 +191,17 @@
             ldflags = [ "-s" "-w" ];
           };
 
+          spawnery-worldsync = pkgs.buildGoModule {
+            pname = "spawnery-worldsync";
+            # Ships with the operator: the two agree on the bucket layout.
+            version = operatorVersion;
+            src = ./.;
+            vendorHash = "sha256-OmwQKY8ZdBx4c64WfuTbLapIIEnEWj/SdrWENk5O69g=";
+            subPackages = [ "cmd/spawnery-worldsync" ];
+            env.CGO_ENABLED = 0;
+            ldflags = [ "-s" "-w" ];
+          };
+
           mermaid-js = pkgs.callPackage ./nix/mermaid.nix { };
 
           docs-fonts = pkgs.callPackage ./nix/fonts.nix { };
@@ -208,7 +219,7 @@
           paper-jar = paper.paperJar;
           velocity-jar = velocity.jar;
 
-          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents spawnery-operator mermaid-js docs-fonts agent-api-javadoc docs-site;
+          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents spawnery-operator spawnery-worldsync mermaid-js docs-fonts agent-api-javadoc docs-site;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           # buildLayeredImage does not cross-compile but labels its output amd64,
           # so the images exist only where that label is true.
@@ -226,6 +237,10 @@
           # No spawnery-slp: a proxy's readiness is the agent's ready port.
           velocity-image = pkgs.callPackage ./nix/velocity-image.nix {
             inherit velocity spawnery-config agents imageVersion oci-common velocity-jre;
+          };
+
+          worldsync-image = pkgs.callPackage ./nix/worldsync-image.nix {
+            inherit spawnery-worldsync operatorVersion oci-common;
           };
 
           operator-image = pkgs.callPackage ./nix/operator-image.nix {
