@@ -57,7 +57,7 @@ func hashFile(path string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }()
 	h := sha256.New()
 	if _, err := io.Copy(h, f); err != nil {
 		return "", err
@@ -133,7 +133,7 @@ func UploadSnapshot(ctx context.Context, st Store, prefix, snapDir string, prev 
 				if err != nil {
 					return err
 				}
-				defer f.Close()
+				defer func() { _ = f.Close() }()
 				_, err = st.Put(gctx, key, f, PutCondition{})
 				return err
 			})
@@ -228,15 +228,15 @@ func place(path string, r io.Reader, mode uint32, mtime int64) error {
 	placed := false
 	defer func() {
 		if !placed {
-			os.Remove(tmp)
+			_ = os.Remove(tmp)
 		}
 	}()
 	if _, err := io.Copy(f, r); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err := f.Sync(); err != nil {
-		f.Close()
+		_ = f.Close()
 		return err
 	}
 	if err := f.Close(); err != nil {
@@ -282,7 +282,7 @@ func Download(ctx context.Context, st Store, prefix, dataDir string, m Manifest,
 			if err != nil {
 				return fmt.Errorf("get %s for %s: %w", e.Object, e.Path, err)
 			}
-			defer rc.Close()
+			defer func() { _ = rc.Close() }()
 			dst, _ := localPath(dataDir, e.Path)
 			return place(dst, rc, e.Mode, e.MTime)
 		})
@@ -295,7 +295,7 @@ func extractPack(ctx context.Context, st Store, key, dataDir string, want map[st
 	if err != nil {
 		return fmt.Errorf("get %s: %w", key, err)
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	gz, err := gzip.NewReader(rc)
 	if err != nil {
 		return err

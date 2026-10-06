@@ -25,15 +25,22 @@ import (
 	"github.com/go-logr/logr"
 )
 
+func mustPut(t *testing.T, st Store, key string) {
+	t.Helper()
+	if _, err := st.Put(context.Background(), key, bytes.NewReader(nil), PutCondition{}); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestTheSweeperDeletesAMarkedWorldWithoutALease(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	st := NewMemStore(func() time.Time { return now })
 	ctx := context.Background()
 	p := WorldPrefix("", "ns/g/k")
 	for _, k := range []string{ManifestName, "objects/a", "packs/1.tar.gz"} {
-		st.Put(ctx, p+k, bytes.NewReader(nil), PutCondition{})
+		mustPut(t, st, p+k)
 	}
-	st.Put(ctx, "ns/g/other/manifest.json", bytes.NewReader(nil), PutCondition{})
+	mustPut(t, st, "ns/g/other/manifest.json")
 	if err := MarkDeleted(ctx, st, "", "ns/g/k"); err != nil {
 		t.Fatal(err)
 	}
@@ -56,17 +63,25 @@ func TestTheSweeperWaitsForAFreshLease(t *testing.T) {
 	st := NewMemStore(func() time.Time { return now })
 	ctx := context.Background()
 	p := WorldPrefix("", "ns/g/k")
-	st.Put(ctx, p+ManifestName, bytes.NewReader(nil), PutCondition{})
-	TakeLease(ctx, st, p, Lease{Node: "a", RenewedAt: now}, StaleAfter)
-	MarkDeleted(ctx, st, "", "ns/g/k")
+	mustPut(t, st, p+ManifestName)
+	if _, err := TakeLease(ctx, st, p, Lease{Node: "a", RenewedAt: now}, StaleAfter); err != nil {
+		t.Fatal(err)
+	}
+	if err := MarkDeleted(ctx, st, "", "ns/g/k"); err != nil {
+		t.Fatal(err)
+	}
 
 	s := &Sweeper{Store: st, StaleAfter: StaleAfter, Log: logr.Discard()}
-	s.SweepOnce(ctx)
+	if err := s.SweepOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if exists, _ := WorldExists(ctx, st, "", "ns/g/k"); !exists {
 		t.Fatal("the sweep deleted a world whose lease is fresh: a node is still uploading it")
 	}
 	now = now.Add(StaleAfter + time.Second)
-	s.SweepOnce(ctx)
+	if err := s.SweepOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
 	if exists, _ := WorldExists(ctx, st, "", "ns/g/k"); exists {
 		t.Fatal("the sweep left a world whose lease went stale")
 	}
@@ -80,7 +95,7 @@ func TestTheSweeperDeletesAtOnceWhenTheLeaseWasReleased(t *testing.T) {
 	st := NewMemStore(func() time.Time { return now })
 	ctx := context.Background()
 	p := WorldPrefix("", "ns/g/k")
-	st.Put(ctx, p+ManifestName, bytes.NewReader(nil), PutCondition{})
+	mustPut(t, st, p+ManifestName)
 	etag, err := TakeLease(ctx, st, p, Lease{Node: "a", RenewedAt: now}, StaleAfter)
 	if err != nil {
 		t.Fatal(err)
@@ -88,7 +103,9 @@ func TestTheSweeperDeletesAtOnceWhenTheLeaseWasReleased(t *testing.T) {
 	if err := ReleaseLease(ctx, st, p, etag); err != nil {
 		t.Fatal(err)
 	}
-	MarkDeleted(ctx, st, "", "ns/g/k")
+	if err := MarkDeleted(ctx, st, "", "ns/g/k"); err != nil {
+		t.Fatal(err)
+	}
 
 	s := &Sweeper{Store: st, StaleAfter: StaleAfter, Log: logr.Discard()}
 	if err := s.SweepOnce(ctx); err != nil {

@@ -85,13 +85,13 @@ func TestS3PutCreateOnlySendsIfNoneMatchStar(t *testing.T) {
 
 func TestS3MapsStatusCodes(t *testing.T) {
 	s, _ := fakeS3(t, func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case r.Method == http.MethodPut:
+		switch r.Method {
+		case http.MethodPut:
 			w.WriteHeader(http.StatusPreconditionFailed)
-			io.WriteString(w, `<Error><Code>PreconditionFailed</Code></Error>`)
+			_, _ = io.WriteString(w, `<Error><Code>PreconditionFailed</Code></Error>`)
 		default:
 			w.WriteHeader(http.StatusNotFound)
-			io.WriteString(w, `<Error><Code>NoSuchKey</Code></Error>`)
+			_, _ = io.WriteString(w, `<Error><Code>NoSuchKey</Code></Error>`)
 		}
 	})
 	if _, err := s.Put(context.Background(), "k", bytes.NewReader(nil), PutCondition{IfMatch: "x"}); !errors.Is(err, ErrPrecondition) {

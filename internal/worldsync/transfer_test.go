@@ -79,7 +79,9 @@ func TestASecondGenerationUploadsOnlyWhatChangedAndCollectsTheRest(t *testing.T)
 		t.Fatal(err)
 	}
 
-	os.Remove(filepath.Join(data, "worlds/world/region/b.mca"))
+	if err := os.Remove(filepath.Join(data, "worlds/world/region/b.mca")); err != nil {
+		t.Fatal(err)
+	}
 	writeFile(t, filepath.Join(data, "worlds/world/region/a.mca"), PackBelow+2, then.Add(time.Minute))
 	m2, _, err := UploadSnapshot(context.Background(), st, prefix, snapshotOf(t, data, m1.Files, 2), &m1, e1, NewWorldID)
 	if err != nil {
@@ -280,7 +282,7 @@ func TestAFailedDownloadLeavesNoPartFiles(t *testing.T) {
 	if err := Download(context.Background(), failingGet{st}, prefix, out, m, 1); err == nil {
 		t.Fatal("a download with a failing body succeeded")
 	}
-	filepath.WalkDir(out, func(p string, d fs.DirEntry, _ error) error {
+	_ = filepath.WalkDir(out, func(p string, d fs.DirEntry, _ error) error {
 		if strings.HasSuffix(p, ".worldsync-part") {
 			t.Errorf("left behind: %s", p)
 		}

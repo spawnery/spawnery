@@ -41,7 +41,7 @@ func ReadManifest(ctx context.Context, st Store, prefix string) (Manifest, strin
 	if err != nil {
 		return Manifest{}, "", err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	var m Manifest
 	if err := json.NewDecoder(rc).Decode(&m); err != nil {
 		return Manifest{}, "", fmt.Errorf("decode %s%s: %w", prefix, ManifestName, err)

@@ -46,7 +46,7 @@ func ReadLease(ctx context.Context, st Store, prefix string) (Lease, ObjectInfo,
 	if err != nil {
 		return Lease{}, ObjectInfo{}, err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 	var l Lease
 	if err := json.NewDecoder(rc).Decode(&l); err != nil {
 		return Lease{}, ObjectInfo{}, fmt.Errorf("decode lease: %w", err)

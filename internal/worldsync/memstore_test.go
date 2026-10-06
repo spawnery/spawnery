@@ -78,7 +78,9 @@ func TestMemStoreMissingIsNotFoundAndDeleteIsIdempotent(t *testing.T) {
 func TestMemStoreListsByPrefixInOrder(t *testing.T) {
 	s := NewMemStore(time.Now)
 	for _, k := range []string{"w/b", "w/a", "x/a"} {
-		put(t, s, k, "", PutCondition{})
+		if _, err := put(t, s, k, "", PutCondition{}); err != nil {
+			t.Fatal(err)
+		}
 	}
 	got, _ := s.List(context.Background(), "w/")
 	if len(got) != 2 || got[0] != "w/a" || got[1] != "w/b" {
