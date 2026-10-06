@@ -175,9 +175,12 @@ type StorageSpec struct {
 	// keeps it in the object store configured for the operator (chart value
 	// worldSync) and gives /data from a directory on the node that runs the
 	// member; it needs type OnDemand and keep, and synchronises exactly what
-	// keep matches. Size, storageClassName, accessModes and annotations are
-	// ignored under ObjectStore and stay valid for switching back. The
-	// backend may change either way; nothing is moved across.
+	// keep matches. It also needs game images with spawnery's agent 0.24.0
+	// or later, whose bootstrapper holds the server until the world is on
+	// disk: an older or a custom image without it starts on a half-downloaded
+	// world and can corrupt it. Size, storageClassName, accessModes and
+	// annotations are ignored under ObjectStore and stay valid for switching
+	// back. The backend may change either way; nothing is moved across.
 	// +kubebuilder:validation:Enum=Claim;ObjectStore
 	// +optional
 	Backend StorageBackend `json:"backend,omitempty"`

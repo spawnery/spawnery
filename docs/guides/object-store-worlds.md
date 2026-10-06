@@ -133,6 +133,13 @@ snapshot of a running member fails with `spec.storage.keep does not keep
 the prune as it would be on a claim. The snapshot at a stop still saves what
 `keep` matches. Add the path to `keep`, or to `replace` if the sources ship it.
 
+The group's image needs spawnery's agent 0.24.0 or later, as in the
+`purpur:26.3-0.24.0` of the example. Its Paper bootstrapper is what holds the
+server back until the world is on disk. An older image, or a custom one
+without the agent, starts the server on a half-downloaded world, which the
+server can then corrupt. The operator cannot tell which agent an image
+carries.
+
 `size`, `storageClassName`, `accessModes` and `annotations` stay valid and are
 ignored, so a group can switch back to `Claim` without touching the immutable
 fields. Switching either way moves no data: claims stay where they are, and so

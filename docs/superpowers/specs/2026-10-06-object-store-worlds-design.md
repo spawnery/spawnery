@@ -408,9 +408,14 @@ other user on the node reaches a world or its setgid directories.
 - **A pod is deleted while a snapshot copy runs.** The unpublish waits for
   the copy, which holds the world's lock, and takes the final snapshot after
   it.
-- **The agent never asks for a snapshot** (an older agent, or a group whose
-  plugins crash it): the world is still uploaded at every stop. Only the
-  protection against node loss is missing.
+- **The agent never asks for a snapshot** (a group whose plugins crash it):
+  the world is still uploaded at every stop. Only the protection against
+  node loss is missing.
+- **The image carries an agent older than 0.24.0, or none.** Nothing holds
+  the server back while the world downloads, so Paper reads a partial world
+  and may write over it. `ObjectStore` needs game images with spawnery's
+  agent 0.24.0 or later; the operator cannot check what an image carries,
+  so the CRD field and the guide say so.
 - **The world is deleted** (§5.1).
 
 ### 5.1 Deleting a world
