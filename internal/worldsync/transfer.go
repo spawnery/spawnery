@@ -208,7 +208,7 @@ func dropUnnamed(ctx context.Context, st Store, prefix string, prev *Manifest, m
 	}
 }
 
-func Download(ctx context.Context, st Store, prefix, dataDir string, m Manifest, parallel int) error {
+func Download(ctx context.Context, st Store, prefix, dataDir string, m Manifest, parallel, gid int) error {
 	packs := map[string]map[string]FileEntry{}
 	for _, e := range m.Files {
 		if _, err := relParts(e.Path); err != nil {
@@ -224,7 +224,7 @@ func Download(ctx context.Context, st Store, prefix, dataDir string, m Manifest,
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(parallel)
 	for pack, want := range packs {
-		g.Go(func() error { return extractPack(gctx, st, prefix+pack, dataDir, want) })
+		g.Go(func() error { return extractPack(gctx, st, prefix+pack, dataDir, want, gid) })
 	}
 	for _, e := range m.Files {
 		if e.Size < PackBelow {
@@ -236,13 +236,13 @@ func Download(ctx context.Context, st Store, prefix, dataDir string, m Manifest,
 				return fmt.Errorf("get %s for %s: %w", e.Object, e.Path, err)
 			}
 			defer func() { _ = rc.Close() }()
-			return place(dataDir, e.Path, rc, e.Mode, e.MTime)
+			return place(dataDir, e.Path, rc, e.Mode, e.MTime, gid)
 		})
 	}
 	return g.Wait()
 }
 
-func extractPack(ctx context.Context, st Store, key, dataDir string, want map[string]FileEntry) error {
+func extractPack(ctx context.Context, st Store, key, dataDir string, want map[string]FileEntry, gid int) error {
 	rc, _, err := st.Get(ctx, key)
 	if err != nil {
 		return fmt.Errorf("get %s: %w", key, err)
@@ -269,7 +269,7 @@ func extractPack(ctx context.Context, st Store, key, dataDir string, want map[st
 		if !ok {
 			continue
 		}
-		if err := place(dataDir, h.Name, tr, e.Mode, e.MTime); err != nil {
+		if err := place(dataDir, h.Name, tr, e.Mode, e.MTime, gid); err != nil {
 			return err
 		}
 		placed++

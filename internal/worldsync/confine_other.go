@@ -28,14 +28,16 @@ import (
 	"github.com/spawnery/spawnery/internal/prune"
 )
 
-func openDir(string, []string, bool) (int, error) { return -1, errors.ErrUnsupported }
+func openDir(string, []string, bool, int) (int, error) { return -1, errors.ErrUnsupported }
 
 func openRegular(string, string) (*os.File, error) { return nil, errors.ErrUnsupported }
 
 func lstatAt(string, string) error { return errors.ErrUnsupported }
 
-func place(string, string, io.Reader, uint32, int64) error { return errors.ErrUnsupported }
+func place(string, string, io.Reader, uint32, int64, int) error { return errors.ErrUnsupported }
 
 func walkKept(string, prune.Keep, func(int, string, string, *unix.Stat_t) error) error {
 	return errors.ErrUnsupported
 }
+
+func regroupKept(string, prune.Keep, int) error { return errors.ErrUnsupported }

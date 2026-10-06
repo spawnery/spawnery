@@ -265,7 +265,7 @@ func TestADownloadDoesNotWriteThroughPlantedSymlinks(t *testing.T) {
 	symlink(t, away, filepath.Join(out, "worlds/world/region"))
 	symlink(t, file, filepath.Join(out, "worlds/world/level.dat.worldsync-part"))
 
-	_ = Download(context.Background(), st, prefix, out, m, 4)
+	_ = Download(context.Background(), st, prefix, out, m, 4, -1)
 	assertOnly(t, away, map[string][]byte{"victim": untouched})
 }
 
@@ -286,7 +286,7 @@ func TestADownloadReplacesASymlinkWhereAFileGoes(t *testing.T) {
 	symlink(t, file, filepath.Join(out, "worlds/world/level.dat"))
 	symlink(t, file, filepath.Join(out, "worlds/world/region/r.mca"))
 
-	if err := Download(context.Background(), st, prefix, out, m, 4); err != nil {
+	if err := Download(context.Background(), st, prefix, out, m, 4, -1); err != nil {
 		t.Fatal(err)
 	}
 	assertOnly(t, away, map[string][]byte{"victim": untouched})

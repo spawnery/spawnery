@@ -33,7 +33,8 @@ import (
 
 const dirFlags = unix.O_RDONLY | unix.O_DIRECTORY | unix.O_NOFOLLOW | unix.O_CLOEXEC
 
-func openDir(root string, parts []string, create bool) (int, error) {
+// openDir gives a directory it creates to gid; a negative gid leaves it root's.
+func openDir(root string, parts []string, create bool, gid int) (int, error) {
 	fd, err := unix.Open(root, unix.O_RDONLY|unix.O_DIRECTORY|unix.O_CLOEXEC, 0)
 	if err != nil {
 		return -1, pathErr("open", root, nil, err)
@@ -41,8 +42,16 @@ func openDir(root string, parts []string, create bool) (int, error) {
 	for i, p := range parts {
 		next, err := unix.Openat(fd, p, dirFlags, 0)
 		if errors.Is(err, unix.ENOENT) && create {
-			if err = unix.Mkdirat(fd, p, 0o755); err == nil || errors.Is(err, unix.EEXIST) {
+			made := unix.Mkdirat(fd, p, 0o755)
+			if made == nil || errors.Is(made, unix.EEXIST) {
 				next, err = unix.Openat(fd, p, dirFlags, 0)
+			} else {
+				err = made
+			}
+			if err == nil && made == nil && gid >= 0 {
+				if err = regroup(next, gid, groupDir); err != nil {
+					_ = unix.Close(next)
+				}
 			}
 		}
 		_ = unix.Close(fd)
@@ -54,13 +63,33 @@ func openDir(root string, parts []string, create bool) (int, error) {
 	return fd, nil
 }
 
-func parentOf(root, rel string, create bool) (int, string, error) {
+func parentOf(root, rel string, create bool, gid int) (int, string, error) {
 	parts, err := relParts(rel)
 	if err != nil {
 		return -1, "", err
 	}
-	fd, err := openDir(root, parts[:len(parts)-1], create)
+	fd, err := openDir(root, parts[:len(parts)-1], create, gid)
 	return fd, parts[len(parts)-1], err
+}
+
+// regroup gives fd, an open directory or an O_PATH descriptor of a regular
+// file, to gid and adds bits to its mode. A chown may clear setgid, so the
+// mode is set again after one.
+func regroup(fd, gid int, bits uint32) error {
+	var st unix.Stat_t
+	if err := unix.Fstat(fd, &st); err != nil {
+		return err
+	}
+	moved := int(st.Gid) != gid
+	if moved {
+		if err := unix.Fchownat(fd, "", -1, gid, unix.AT_EMPTY_PATH); err != nil {
+			return err
+		}
+	}
+	if !moved && st.Mode&bits == bits {
+		return nil
+	}
+	return unix.Chmod("/proc/self/fd/"+strconv.Itoa(fd), st.Mode&0o7777|bits)
 }
 
 // openRegular opens root/rel for reading only if it is a regular file. The
@@ -68,7 +97,7 @@ func parentOf(root, rel string, create bool) (int, string, error) {
 // FIFO or device swapped in is never opened. O_NONBLOCK makes a pod's write
 // lease fail the open instead of holding it for fs.lease-break-time.
 func openRegular(root, rel string) (*os.File, error) {
-	dir, name, err := parentOf(root, rel, false)
+	dir, name, err := parentOf(root, rel, false, -1)
 	if err != nil {
 		return nil, err
 	}
@@ -94,7 +123,7 @@ func openRegular(root, rel string) (*os.File, error) {
 }
 
 func lstatAt(root, rel string) error {
-	dir, name, err := parentOf(root, rel, false)
+	dir, name, err := parentOf(root, rel, false, -1)
 	if err != nil {
 		return err
 	}
@@ -105,8 +134,9 @@ func lstatAt(root, rel string) error {
 
 // place writes r to root/rel through a temporary file beside it and renames
 // that over rel, which replaces a symlink at rel instead of writing through it.
-func place(root, rel string, r io.Reader, mode uint32, mtime int64) error {
-	dir, name, err := parentOf(root, rel, true)
+// The file and the directories it creates go to gid unless gid is negative.
+func place(root, rel string, r io.Reader, mode uint32, mtime int64, gid int) error {
+	dir, name, err := parentOf(root, rel, true, gid)
 	if err != nil {
 		return err
 	}
@@ -131,10 +161,20 @@ func place(root, rel string, r io.Reader, mode uint32, mtime int64) error {
 		_ = f.Close()
 		return err
 	}
-	if mode != 0 {
-		if err := f.Chmod(os.FileMode(mode)); err != nil {
+	if gid >= 0 {
+		if err := unix.Fchown(fd, -1, gid); err != nil {
 			_ = f.Close()
-			return err
+			return &fs.PathError{Op: "chown", Path: path, Err: err}
+		}
+		if mode == 0 {
+			mode = 0o644
+		}
+		mode |= groupFile
+	}
+	if mode != 0 {
+		if err := unix.Fchmod(fd, mode); err != nil {
+			_ = f.Close()
+			return &fs.PathError{Op: "chmod", Path: path, Err: err}
 		}
 	}
 	if err := f.Sync(); err != nil {
@@ -159,15 +199,16 @@ func place(root, rel string, r io.Reader, mode uint32, mtime int64) error {
 // holds or leads toward, and descends into such directories only. dir is
 // the open directory that holds name.
 func walkKept(root string, keep prune.Keep, visit func(dir int, name, rel string, st *unix.Stat_t) error) error {
-	fd, err := openDir(root, nil, false)
+	fd, err := openDir(root, nil, false, -1)
 	if err != nil {
 		return err
 	}
-	return walkKeptIn(root, fd, nil, keep, visit)
+	return walkKeptIn(root, fd, nil, keep, visit, nil)
 }
 
-// walkKeptIn takes over fd.
-func walkKeptIn(root string, fd int, parts []string, keep prune.Keep, visit func(dir int, name, rel string, st *unix.Stat_t) error) error {
+// walkKeptIn takes over fd. enter, if set, sees each directory it descends
+// into, open.
+func walkKeptIn(root string, fd int, parts []string, keep prune.Keep, visit func(dir int, name, rel string, st *unix.Stat_t) error, enter func(fd int, rel string) error) error {
 	d := os.NewFile(uintptr(fd), root)
 	defer func() { _ = d.Close() }()
 	names, err := d.Readdirnames(-1)
@@ -200,9 +241,76 @@ func walkKeptIn(root string, fd int, parts []string, keep prune.Keep, visit func
 		if err != nil {
 			return pathErr("open", root, child, err)
 		}
-		if err := walkKeptIn(root, sub, child, keep, visit); err != nil {
+		if enter != nil {
+			if err := enter(sub, rel); err != nil {
+				_ = unix.Close(sub)
+				return err
+			}
+		}
+		if err := walkKeptIn(root, sub, child, keep, visit, enter); err != nil {
 			return err
 		}
 	}
 	return nil
+}
+
+// regroupKept gives gid root itself, the control directory with its files,
+// and every directory and regular file keep holds or leads toward. Symlinks,
+// FIFOs and devices a pod planted are left alone.
+func regroupKept(root string, keep prune.Keep, gid int) error {
+	fd, err := openDir(root, nil, false, -1)
+	if err != nil {
+		return err
+	}
+	if err := regroup(fd, gid, groupDir); err != nil {
+		_ = unix.Close(fd)
+		return pathErr("chown", root, nil, err)
+	}
+	enter := func(sub int, rel string) error {
+		if err := regroup(sub, gid, groupDir); err != nil {
+			return pathErr("chown", root, []string{rel}, err)
+		}
+		return nil
+	}
+	file := func(dir int, name, rel string, st *unix.Stat_t) error {
+		if st.Mode&unix.S_IFMT != unix.S_IFREG || int(st.Gid) == gid && st.Mode&groupFile == groupFile {
+			return nil
+		}
+		pfd, err := unix.Openat(dir, name, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if err != nil {
+			return pathErr("open", root, []string{rel}, err)
+		}
+		defer func() { _ = unix.Close(pfd) }()
+		var now unix.Stat_t
+		if err := unix.Fstat(pfd, &now); err != nil {
+			return pathErr("stat", root, []string{rel}, err)
+		}
+		if now.Mode&unix.S_IFMT != unix.S_IFREG {
+			return nil
+		}
+		if err := regroup(pfd, gid, groupFile); err != nil {
+			return pathErr("chown", root, []string{rel}, err)
+		}
+		return nil
+	}
+	if err := walkKeptIn(root, fd, nil, keep, file, enter); err != nil {
+		return err
+	}
+	ctl, err := openDir(root, []string{prune.ControlDir}, false, -1)
+	if errors.Is(err, unix.ENOENT) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := enter(ctl, prune.ControlDir); err != nil {
+		_ = unix.Close(ctl)
+		return err
+	}
+	all, err := prune.ParseKeep([]string{"*"})
+	if err != nil {
+		_ = unix.Close(ctl)
+		return err
+	}
+	return walkKeptIn(root, ctl, []string{prune.ControlDir}, all, file, enter)
 }

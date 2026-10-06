@@ -94,6 +94,20 @@ func TestPluginInfoNamesTheDriver(t *testing.T) {
 	}
 }
 
+func TestTheNodeAdvertisesTheMountGroup(t *testing.T) {
+	s, _ := csiFor(t)
+	caps, err := s.NodeGetCapabilities(context.Background(), &csi.NodeGetCapabilitiesRequest{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range caps.GetCapabilities() {
+		if c.GetRpc().GetType() == csi.NodeServiceCapability_RPC_VOLUME_MOUNT_GROUP {
+			return
+		}
+	}
+	t.Fatalf("capabilities %v lack VOLUME_MOUNT_GROUP; the kubelet passes no fsGroup without it", caps.GetCapabilities())
+}
+
 func TestImportRefusesAnExistingWorld(t *testing.T) {
 	st := NewMemStore(time.Now)
 	dir := t.TempDir()

@@ -19,8 +19,10 @@ package worldsync
 import (
 	"context"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
@@ -67,8 +69,26 @@ func (s *CSIServer) NodeGetInfo(context.Context, *csi.NodeGetInfoRequest) (*csi.
 	return &csi.NodeGetInfoResponse{NodeId: s.nodeID}, nil
 }
 
+// NodeGetCapabilities advertises VOLUME_MOUNT_GROUP: the kubelet then hands
+// the pod's fsGroup to NodePublishVolume and skips its own ownership pass,
+// which would run once after the publish while the download still writes.
 func (s *CSIServer) NodeGetCapabilities(context.Context, *csi.NodeGetCapabilitiesRequest) (*csi.NodeGetCapabilitiesResponse, error) {
-	return &csi.NodeGetCapabilitiesResponse{}, nil
+	return &csi.NodeGetCapabilitiesResponse{Capabilities: []*csi.NodeServiceCapability{{
+		Type: &csi.NodeServiceCapability_Rpc{Rpc: &csi.NodeServiceCapability_RPC{Type: csi.NodeServiceCapability_RPC_VOLUME_MOUNT_GROUP}},
+	}}}, nil
+}
+
+// mountGroup reads a gid in the range Kubernetes allows an fsGroup.
+func mountGroup(v string) (*int, error) {
+	if v == "" {
+		return nil, nil
+	}
+	g, err := strconv.ParseUint(v, 10, 31)
+	if err != nil {
+		return nil, fmt.Errorf("volume_mount_group %q is not a gid", v)
+	}
+	gid := int(g)
+	return &gid, nil
 }
 
 func (s *CSIServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishVolumeRequest) (*csi.NodePublishVolumeResponse, error) {
@@ -93,7 +113,11 @@ func (s *CSIServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishV
 	if _, err := prune.ParseKeep(keep); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	err := s.node.Publish(ctx, PublishRequest{World: world, Keep: keep, Target: req.GetTargetPath(), Pod: ns + "/" + vc[ctxPodName]})
+	group, err := mountGroup(req.GetVolumeCapability().GetMount().GetVolumeMountGroup())
+	if err != nil {
+		return nil, status.Error(codes.InvalidArgument, err.Error())
+	}
+	err = s.node.Publish(ctx, PublishRequest{World: world, Keep: keep, Target: req.GetTargetPath(), Pod: ns + "/" + vc[ctxPodName], Group: group})
 	switch {
 	case errors.Is(err, ErrUnavailable):
 		return nil, status.Error(codes.Unavailable, err.Error())

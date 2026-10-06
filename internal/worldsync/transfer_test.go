@@ -55,7 +55,7 @@ func TestARoundTripRestoresContentModeAndMTime(t *testing.T) {
 	}
 
 	out := t.TempDir()
-	if err := Download(context.Background(), st, prefix, out, m, 4); err != nil {
+	if err := Download(context.Background(), st, prefix, out, m, 4, -1); err != nil {
 		t.Fatal(err)
 	}
 	files, err := Scan(out, keepOf(t, "worlds/world"))
@@ -166,7 +166,7 @@ func TestAnOutageMidUploadLeavesTheOldManifestAndRetriesClean(t *testing.T) {
 func TestDownloadRefusesAPathOutsideTheDirectory(t *testing.T) {
 	st := NewMemStore(time.Now)
 	m := Manifest{WorldID: "w", Generation: 1, Files: []FileEntry{{Path: "../escape", Size: 1, Object: "objects/x"}}}
-	if err := Download(context.Background(), st, prefix, t.TempDir(), m, 1); err == nil {
+	if err := Download(context.Background(), st, prefix, t.TempDir(), m, 1, -1); err == nil {
 		t.Fatal("a manifest path with .. was accepted")
 	}
 }
@@ -191,7 +191,7 @@ func TestALosingWriterDoesNotOverwriteTheWinnersPack(t *testing.T) {
 		t.Fatalf("err = %v, want ErrConflict", err)
 	}
 	out := t.TempDir()
-	if err := Download(context.Background(), st, prefix, out, mw, 2); err != nil {
+	if err := Download(context.Background(), st, prefix, out, mw, 2, -1); err != nil {
 		t.Fatal(err)
 	}
 	files, err := Scan(out, keepOf(t, "worlds/world"))
@@ -212,7 +212,7 @@ func TestDownloadFailsWhenAPackLacksAnEntry(t *testing.T) {
 		t.Fatal(err)
 	}
 	m.Files = append(m.Files, FileEntry{Path: "worlds/world/extra.dat", Size: 2, Object: m.Files[0].Object})
-	if err := Download(context.Background(), st, prefix, t.TempDir(), m, 2); err == nil {
+	if err := Download(context.Background(), st, prefix, t.TempDir(), m, 2, -1); err == nil {
 		t.Fatal("a small entry missing from its pack went unnoticed")
 	}
 }
@@ -279,7 +279,7 @@ func TestAFailedDownloadLeavesNoPartFiles(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := t.TempDir()
-	if err := Download(context.Background(), failingGet{st}, prefix, out, m, 1); err == nil {
+	if err := Download(context.Background(), failingGet{st}, prefix, out, m, 1, -1); err == nil {
 		t.Fatal("a download with a failing body succeeded")
 	}
 	_ = filepath.WalkDir(out, func(p string, d fs.DirEntry, _ error) error {

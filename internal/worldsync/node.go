@@ -69,6 +69,8 @@ type PublishRequest struct {
 	Keep   []string
 	Target string
 	Pod    string
+	// Group is the pod's fsGroup; nil leaves what the node agent creates root's.
+	Group *int
 }
 
 type download struct {
@@ -284,7 +286,7 @@ func (n *Node) control(s *worldState, rel, content string) error {
 	if err := os.MkdirAll(data, 0o755); err != nil {
 		return err
 	}
-	return place(data, rel, strings.NewReader(content), 0, time.Now().UnixNano())
+	return place(data, rel, strings.NewReader(content), 0, time.Now().UnixNano(), s.gid())
 }
 
 func (n *Node) resetControl(s *worldState) error {
@@ -296,7 +298,7 @@ func (n *Node) resetControl(s *worldState) error {
 		return err
 	}
 	s.LastRequest = 0
-	fd, err := openDir(data, []string{prune.ControlDir}, true)
+	fd, err := openDir(data, []string{prune.ControlDir}, true, s.gid())
 	if err != nil {
 		return err
 	}
@@ -370,6 +372,9 @@ func (n *Node) Publish(ctx context.Context, req PublishRequest) error {
 	if _, err := prune.ParseKeep(req.Keep); err != nil {
 		return err
 	}
+	if req.Group == nil {
+		n.cfg.Log.Info("the pod names no fsGroup: what the node agent writes into its world stays root's, and the pod may not be able to write it", "world", req.World, "pod", req.Pod)
+	}
 	s, unlock, err := n.lockIdle(ctx, req.World)
 	if err != nil {
 		return err
@@ -377,6 +382,13 @@ func (n *Node) Publish(ctx context.Context, req PublishRequest) error {
 	defer unlock()
 
 	if s.Target == req.Target {
+		s.Group = req.Group
+		if !s.lost {
+			if err := n.shareWorld(s); err != nil {
+				return err
+			}
+			n.save(s)
+		}
 		return n.rebind(s)
 	}
 	if s.Target != "" {
@@ -393,7 +405,7 @@ func (n *Node) Publish(ctx context.Context, req PublishRequest) error {
 		return fmt.Errorf("%w: the world is being deleted", ErrUnavailable)
 	}
 
-	s.Keep, s.Pod = req.Keep, req.Pod
+	s.Keep, s.Pod, s.Group = req.Keep, req.Pod, req.Group
 	etag, err := n.takeLease(ctx, s)
 	if errors.Is(err, ErrLeaseLost) {
 		leaseConflicts.Inc()
@@ -405,6 +417,9 @@ func (n *Node) Publish(ctx context.Context, req PublishRequest) error {
 	s.LeaseETag = etag
 
 	fetch, metag, err := n.settleContent(ctx, s)
+	if err == nil {
+		err = n.shareWorld(s)
+	}
 	if err == nil {
 		err = n.bind(s, req.Target)
 	}
@@ -418,6 +433,26 @@ func (n *Node) Publish(ctx context.Context, req PublishRequest) error {
 		n.startDownload(s, *fetch, metag)
 	}
 	return n.saveState(s)
+}
+
+// shareWorld brings a cache from an earlier run, root's or another pod's
+// group, to the publishing pod's group.
+func (n *Node) shareWorld(s *worldState) error {
+	if s.Group == nil {
+		return nil
+	}
+	keep, err := prune.ParseKeep(s.Keep)
+	if err != nil {
+		return err
+	}
+	data := n.dataDir(s.World)
+	if err := os.MkdirAll(data, 0o755); err != nil {
+		return err
+	}
+	if err := regroupKept(data, keep, *s.Group); err != nil {
+		return fmt.Errorf("worldsync: give the world to the pod's group %d: %w", *s.Group, err)
+	}
+	return nil
 }
 
 // rebind binds the target again when it no longer shows the world's data,
@@ -555,10 +590,10 @@ func (n *Node) startDownload(s *worldState, m Manifest, etag string) {
 	d := &download{cancel: cancel, done: make(chan struct{})}
 	s.download = d
 	n.downloads.Add(1)
-	world, prefix, dir := s.World, n.prefix(s.World), n.dataDir(s.World)
+	world, prefix, dir, gid := s.World, n.prefix(s.World), n.dataDir(s.World), s.gid()
 	go func() {
 		started := time.Now()
-		err := Download(ctx, n.cfg.Store, prefix, dir, m, n.cfg.Parallel)
+		err := Download(ctx, n.cfg.Store, prefix, dir, m, n.cfg.Parallel, gid)
 		close(d.done)
 		unlock := n.lock(world)
 		defer unlock()
@@ -1066,7 +1101,7 @@ func (n *Node) orphan(s *worldState, why string) {
 		return
 	}
 	n.mu.Lock()
-	n.worlds[s.World] = &worldState{World: s.World, Target: s.Target, LastRequest: s.LastRequest, lost: true, lostDir: dst}
+	n.worlds[s.World] = &worldState{World: s.World, Target: s.Target, Group: s.Group, LastRequest: s.LastRequest, lost: true, lostDir: dst}
 	n.targets[s.Target] = s.World
 	n.mu.Unlock()
 }

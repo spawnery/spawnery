@@ -36,6 +36,11 @@ import (
 // and a pod builds a chain of directories far deeper in milliseconds.
 const maxRel = 4096
 
+// The bits the pod's group gets on what the node agent makes for it.
+// Directories are setgid, so that what the pod creates in them stays in
+// the group.
+const groupDir, groupFile = 0o2070, 0o060
+
 func relParts(rel string) ([]string, error) {
 	if len(rel) > maxRel {
 		return nil, fmt.Errorf("worldsync: a path of %d bytes is longer than the %d a world may hold", len(rel), maxRel)

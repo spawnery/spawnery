@@ -33,6 +33,7 @@ type worldState struct {
 	LeaseETag    string      `json:"leaseETag"`
 	Target       string      `json:"target"`
 	Pod          string      `json:"pod"`
+	Group        *int        `json:"group,omitempty"`
 	Pending      []int64     `json:"pending"`
 	NextSeq      int64       `json:"nextSeq"`
 	LastRequest  int64       `json:"lastRequest"`
@@ -51,6 +52,13 @@ type worldState struct {
 	working    bool
 	retryAt    time.Time
 	retryDelay time.Duration
+}
+
+func (s *worldState) gid() int {
+	if s.Group == nil {
+		return -1
+	}
+	return *s.Group
 }
 
 func (s *worldState) forgetContent() {
