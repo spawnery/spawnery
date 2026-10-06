@@ -422,9 +422,12 @@ halfway is finished by the next one, and nodes refuse the world until then.
 `DeleteServer` answers `NOT_FOUND` when there is neither a `Server`
 nor a manifest, and refuses while the operator runs without `--world-sync`.
 
-A start of the same key while its marker exists is refused by the node agent
-(`UNAVAILABLE`) until the deletion finished, then begins as a new world with
-a new `worldId`. The node checks the marker before it takes the lease. A
+A start of the same key while its marker exists is answered `UNAVAILABLE`
+by the operator's `StartServer`, which reads the marker before it creates
+the member, and refused by the node agent as well, for a member created
+before the marker. After the sweep the key begins as a new world with a new
+`worldId`. `StartServer` refuses an `ObjectStore` group outright while the
+operator runs without `--world-sync`. The node checks the marker before it takes the lease. A
 marker written between that check and the lease can let the sweep run under
 the starting member; its next manifest write then fails, and the node
 orphans its copy of a world that was being deleted anyway.

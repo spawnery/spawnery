@@ -64,6 +64,7 @@ var ErrWorldSyncOff = errors.New("the group keeps its worlds in an object store,
 type WorldDeleter interface {
 	Exists(ctx context.Context, world string) (bool, error)
 	MarkDeleted(ctx context.Context, world string) error
+	DeletionPending(ctx context.Context, world string) (bool, error)
 }
 
 var ErrTooManyInstances = errors.New("that group is at spec.maxInstances")
@@ -410,14 +411,29 @@ func (w KubeWriter) StartServer(
 	if !g.IsOnDemand() {
 		return StartedServer{}, ErrGroupNotOnDemand
 	}
-	// A pod created now would mount a claim on its way out.
-	var world corev1.PersistentVolumeClaim
-	err = w.claims().Get(ctx, client.ObjectKey{Namespace: namespace, Name: podspec.DataClaimName(name)}, &world)
-	switch {
-	case err == nil && !world.DeletionTimestamp.IsZero():
-		return StartedServer{}, ErrWorldDeleting
-	case err != nil && !apierrors.IsNotFound(err):
-		return StartedServer{}, err
+	if g.UsesObjectStore() {
+		// The node agent would refuse the volume until the sweep is done, and
+		// the pod would wait in ContainerCreating past its startup deadline.
+		if w.Worlds == nil {
+			return StartedServer{}, ErrWorldSyncOff
+		}
+		pending, err := w.Worlds.DeletionPending(ctx, namespace+"/"+group+"/"+key)
+		if err != nil {
+			return StartedServer{}, err
+		}
+		if pending {
+			return StartedServer{}, ErrWorldDeleting
+		}
+	} else {
+		// A pod created now would mount a claim on its way out.
+		var world corev1.PersistentVolumeClaim
+		err = w.claims().Get(ctx, client.ObjectKey{Namespace: namespace, Name: podspec.DataClaimName(name)}, &world)
+		switch {
+		case err == nil && !world.DeletionTimestamp.IsZero():
+			return StartedServer{}, ErrWorldDeleting
+		case err != nil && !apierrors.IsNotFound(err):
+			return StartedServer{}, err
+		}
 	}
 
 	var members spawneryv1alpha1.ServerList

@@ -61,6 +61,10 @@ func (b BucketWorlds) MarkDeleted(ctx context.Context, world string) error {
 	return MarkDeleted(ctx, b.Store, b.Base, world)
 }
 
+func (b BucketWorlds) DeletionPending(ctx context.Context, world string) (bool, error) {
+	return DeletionPending(ctx, b.Store, b.Base, world)
+}
+
 // Sweeper deletes worlds marked by MarkDeleted once no node holds them.
 type Sweeper struct {
 	Store      Store

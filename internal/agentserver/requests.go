@@ -644,6 +644,9 @@ func (s *Server) answerStartServer(
 	case errors.Is(err, ErrWorldDeleting):
 		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
 			"that member's world is still being deleted; the same request starts a fresh one once it is gone")
+	case errors.Is(err, ErrWorldSyncOff):
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"that group keeps its worlds in an object store, and this operator runs without --world-sync")
 	case err != nil:
 		logger.V(1).Info("could not start an on-demand server", "reason", err.Error())
 		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,

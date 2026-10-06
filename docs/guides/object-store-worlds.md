@@ -185,9 +185,10 @@ A stop always uploads, whether or not the agent ever asked for a snapshot.
 
 `deleteServer(group, key)` deletes the member's `Server` and writes a deletion
 marker into the bucket. The operator sweeps marked worlds once a minute, as
-soon as no node holds their lease. Until the sweep is done, a start of the
-same key waits in `ContainerCreating`; after it, the key starts an empty
-world.
+soon as no node holds their lease. Until the sweep is done, `startServer` for
+the same key answers `UNAVAILABLE`; after it, the key starts an empty world.
+Without `--world-sync`, `startServer` refuses every key of an `ObjectStore`
+group.
 
 ## Moving existing worlds in
 
