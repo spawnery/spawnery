@@ -136,7 +136,9 @@ func NewNode(cfg Config) (*Node, error) {
 		}
 	}
 	return &Node{cfg: cfg, worlds: map[string]*worldState{}, targets: map[string]string{}, locks: map[string]chan struct{}{},
-		callTimeout: 30 * time.Second, uploadTimeout: 10 * time.Minute}, nil
+		// An upload must end before the lease it confirmed can go stale, or
+		// its manifest could land after another node took the world over.
+		callTimeout: 30 * time.Second, uploadTimeout: cfg.StaleAfter}, nil
 }
 
 // worldLock is a world's mutex as a channel of one, so that waiting for it
@@ -403,7 +405,7 @@ func (n *Node) Publish(ctx context.Context, req PublishRequest) error {
 		return n.rebind(s)
 	}
 	if s.Target != "" {
-		// Review Focus 2: the old pod's teardown has not reached us yet.
+		// The old pod's teardown has not reached us yet.
 		if err := n.unpublishLocked(s); err != nil {
 			return err
 		}
@@ -551,7 +553,7 @@ func (n *Node) settleContent(ctx context.Context, s *worldState) (*Manifest, str
 	m, etag, err := n.readManifest(ctx, s.World)
 	switch {
 	case errors.Is(err, ErrNotFound):
-		// Review Focus 4: a copy of a world that no longer exists.
+		// A copy of a world that no longer exists.
 		if s.WorldID != "" || s.Incomplete {
 			if err := n.discardLocal(s); err != nil {
 				return nil, "", err

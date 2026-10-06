@@ -148,24 +148,41 @@ func TestStalenessIgnoresTheHoldersOwnClock(t *testing.T) {
 	}
 }
 
-type zeroDates struct{ Store }
+type zeroDates struct {
+	Store
+	date, modified bool
+}
 
 func (z zeroDates) Get(ctx context.Context, key string) (io.ReadCloser, ObjectInfo, error) {
 	rc, info, err := z.Store.Get(ctx, key)
-	info.Date, info.LastModified = time.Time{}, time.Time{}
+	if z.date {
+		info.Date = time.Time{}
+	}
+	if z.modified {
+		info.LastModified = time.Time{}
+	}
 	return rc, info, err
 }
 
 func TestTakeLeaseFailsWithoutStoreTimes(t *testing.T) {
-	now := time.Unix(1_700_000_000, 0)
-	mem := NewMemStore(func() time.Time { return now })
-	ctx := context.Background()
-	if _, err := TakeLease(ctx, mem, prefix, Lease{Node: "a", RenewedAt: now}, StaleAfter); err != nil {
-		t.Fatal(err)
-	}
-	_, err := TakeLease(ctx, zeroDates{mem}, prefix, Lease{Node: "b", RenewedAt: now}, StaleAfter)
-	var held *HeldError
-	if err == nil || errors.As(err, &held) {
-		t.Fatalf("err = %v, want a plain error", err)
+	for name, z := range map[string]zeroDates{
+		"both":          {date: true, modified: true},
+		"Date":          {date: true},
+		"Last-Modified": {modified: true},
+	} {
+		t.Run(name, func(t *testing.T) {
+			now := time.Unix(1_700_000_000, 0)
+			mem := NewMemStore(func() time.Time { return now })
+			ctx := context.Background()
+			if _, err := TakeLease(ctx, mem, prefix, Lease{Node: "a", RenewedAt: now}, StaleAfter); err != nil {
+				t.Fatal(err)
+			}
+			z.Store = mem
+			_, err := TakeLease(ctx, z, prefix, Lease{Node: "b", RenewedAt: now}, StaleAfter)
+			var held *HeldError
+			if err == nil || errors.As(err, &held) {
+				t.Fatalf("err = %v, want a plain error", err)
+			}
+		})
 	}
 }

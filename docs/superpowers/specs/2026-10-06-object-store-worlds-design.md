@@ -315,8 +315,10 @@ The agent asks, the node agent copies, and the upload runs from the copy:
 
 Uploads run outside the world's lock, so a slow upload holds up neither
 snapshot requests nor lease renewals. Every short store call has a deadline
-of 30 s and every upload attempt one of 10 minutes; a hung call would
-otherwise hold a world's lock. A failed attempt is retried from the same
+of 30 s; a hung call would otherwise hold a world's lock. An upload attempt
+has the lease's staleness bound, 10 minutes, so that it ends before the lease
+it confirmed can go stale and its manifest cannot land after another node
+took the world over. A failed attempt is retried from the same
 snapshot with back-off from 1 s, doubling, to at most 1 minute, without a
 limit on attempts.
 

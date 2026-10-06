@@ -112,7 +112,7 @@ func TestSnapshotCopiesChangedLargeFilesAndEverySmallOne(t *testing.T) {
 	}
 }
 
-// Review Focus 3: a file that changes during every copy attempt fails the
+// A file that changes during every copy attempt fails the
 // snapshot instead of uploading a torn file.
 func TestSnapshotRefusesAFileThatNeverSettles(t *testing.T) {
 	data, snap := t.TempDir(), t.TempDir()

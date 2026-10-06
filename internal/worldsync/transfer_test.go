@@ -136,7 +136,7 @@ func TestADeletedPreviousManifestIsAConflict(t *testing.T) {
 	}
 }
 
-// Review Focus 5: an outage during the objects must leave the old manifest in
+// An outage during the objects must leave the old manifest in
 // place, and the same snapshot must upload cleanly afterwards.
 func TestAnOutageMidUploadLeavesTheOldManifestAndRetriesClean(t *testing.T) {
 	st := NewMemStore(time.Now)

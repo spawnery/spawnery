@@ -324,7 +324,6 @@ func TestALostLeaseOrphansTheLocalCopy(t *testing.T) {
 	}
 }
 
-// Review Focus 2.
 func TestAPublishUnderANewTargetUnpublishesTheOldOneFirst(t *testing.T) {
 	h := newHarness(t)
 	old, _ := h.publish("a", w, "p1")
@@ -341,7 +340,6 @@ func TestAPublishUnderANewTargetUnpublishesTheOldOneFirst(t *testing.T) {
 	}
 }
 
-// Review Focus 4.
 func TestAReusedKeyDoesNotInheritADeletedWorld(t *testing.T) {
 	h := newHarness(t)
 	target, _ := h.publish("a", w, "p1")
