@@ -125,8 +125,15 @@ func NewNode(cfg Config) (*Node, error) {
 	if cfg.Clock == nil {
 		cfg.Clock = time.Now
 	}
-	if err := os.MkdirAll(filepath.Join(cfg.Root, "worlds"), 0o755); err != nil {
-		return nil, err
+	// The worlds hold what pods wrote, setgid directories among them; no
+	// other user on the node needs a way in.
+	for _, d := range []string{cfg.Root, filepath.Join(cfg.Root, "worlds"), filepath.Join(cfg.Root, "orphans")} {
+		if err := os.MkdirAll(d, 0o700); err != nil {
+			return nil, err
+		}
+		if err := os.Chmod(d, 0o700); err != nil {
+			return nil, err
+		}
 	}
 	return &Node{cfg: cfg, worlds: map[string]*worldState{}, targets: map[string]string{}, locks: map[string]chan struct{}{},
 		callTimeout: 30 * time.Second, uploadTimeout: 10 * time.Minute}, nil
@@ -1160,7 +1167,7 @@ func (n *Node) moveAside(world string) (string, error) {
 		return "", nil
 	}
 	base := filepath.Join(n.cfg.Root, "orphans", strings.ReplaceAll(world, "/", "_")+"_"+strconvI(n.cfg.Clock().Unix()))
-	if err := os.MkdirAll(filepath.Dir(base), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(base), 0o700); err != nil {
 		return "", err
 	}
 	dst := base

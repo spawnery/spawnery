@@ -161,6 +161,7 @@ func place(root, rel string, r io.Reader, mode uint32, mtime int64, gid int) err
 		_ = f.Close()
 		return err
 	}
+	mode &= 0o777
 	if gid >= 0 {
 		if err := unix.Fchown(fd, -1, gid); err != nil {
 			_ = f.Close()

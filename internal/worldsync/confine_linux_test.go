@@ -19,6 +19,7 @@ package worldsync
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -86,5 +87,38 @@ func TestAWriteLeaseDoesNotHoldUpARead(t *testing.T) {
 	}
 	if d := time.Since(start); d > time.Second {
 		t.Errorf("the open took %v", d)
+	}
+}
+
+func TestAPlacedFileNeverCarriesSetuidOrSetgid(t *testing.T) {
+	for _, gid := range []int{-1, os.Getegid()} {
+		data := t.TempDir()
+		if err := place(data, "plugins/x/run.sh", strings.NewReader("x"), 0o6755, 1, gid); err != nil {
+			t.Fatal(err)
+		}
+		st := statOf(t, filepath.Join(data, "plugins/x/run.sh"))
+		if st.Mode&0o7000 != 0 {
+			t.Errorf("gid %d: placed with mode %o; a manifest must not set setuid, setgid or sticky", gid, st.Mode&0o7777)
+		}
+	}
+}
+
+func TestNewNodeClosesItsDirectoriesToOtherUsers(t *testing.T) {
+	root := filepath.Join(t.TempDir(), "root")
+	for _, d := range []string{root, filepath.Join(root, "worlds"), filepath.Join(root, "orphans")} {
+		if err := os.MkdirAll(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.Chmod(d, 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := NewNode(Config{Root: root, NodeID: "a", Store: NewMemStore(time.Now), Mounter: &fakeMounter{binds: map[string]string{}}}); err != nil {
+		t.Fatal(err)
+	}
+	for _, d := range []string{root, filepath.Join(root, "worlds"), filepath.Join(root, "orphans")} {
+		if m := statOf(t, d).Mode & 0o777; m != 0o700 {
+			t.Errorf("%s: mode %o, want 700", d, m)
+		}
 	}
 }

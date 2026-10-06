@@ -380,7 +380,10 @@ after the publish while the download still writes. Everything the node
 agent creates or places below the data directory, now and later, goes to
 that group, group-writable, with setgid directories; a cache from an earlier
 run is regrouped at publish. Symlinks, FIFOs and devices a pod planted are
-left alone.
+left alone. A file mode from a manifest keeps only its permission bits, so a
+download never places a setuid or setgid file. The node directory and its
+`worlds/` and `orphans/` are mode 0700, also when they existed before, so no
+other user on the node reaches a world or its setgid directories.
 
 ## 5. Failure cases
 
