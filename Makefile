@@ -281,6 +281,11 @@ e2e-tutorial: manifests
 e2e-ondemand: manifests
 	hack/e2e-ondemand.sh
 
+# Three kind nodes, MinIO and a real game image; nightly.yml runs it.
+.PHONY: e2e-worldsync
+e2e-worldsync: manifests
+	hack/e2e-worldsync.sh
+
 # mkdocs --strict is the only link checker. Out of `test`; ci.yml runs it in
 # its own job.
 .PHONY: docs
