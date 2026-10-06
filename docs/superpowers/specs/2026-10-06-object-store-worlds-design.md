@@ -1,6 +1,6 @@
 # On-demand worlds in an object store
 
-**Status:** design
+**Status:** implemented (branch feat/object-store-worlds)
 **Date:** 2026-10-06
 
 ## 1. What goes wrong today
@@ -67,10 +67,11 @@ object store and writes back to it. The pieces:
    owns a directory per world on the node, the download, the upload, and a
    lease that keeps a world on one node at a time.
 2. **The operator** renders a CSI inline volume instead of a claim, never
-   creates a claim for such a group, and deletes the world in the store
-   when the agent channel asks to delete a member.
-3. **The Paper agent** holds the server before world load until the world
-   is on disk, and asks for a consistent snapshot every few minutes while
+   creates a claim for such a group, and marks the world for deletion in the
+   store when the agent channel asks to delete a member; a sweeper in the
+   operator deletes it (§5.1).
+3. **The Paper agent** holds the server in a bootstrapper, before Paper
+   reads the world, until the world is on disk, and asks for a consistent snapshot every few minutes while
    the server runs.
 
 `backend: Claim` stays the default and behaves as today.
@@ -118,12 +119,16 @@ volumes:
 ```
 
 CSI inline volumes are allowed under the `restricted` Pod Security level,
-which `hostPath` is not. The pod also gets `SPAWNERY_WORLD_SYNC=1`, which
-the agent and the prune read.
+which `hostPath` is not. The pod also gets `SPAWNERY_WORLD_SYNC=1`, which the
+agent reads. `SPAWNERY_WORLD_SYNC_INTERVAL` is added after the desired-state
+hash is taken, like the AOT cache volume, so a new interval restarts nothing.
 
 The desired-state hash is taken over the rendered pod, so switching the
-backend changes it. Groups on `Claim` render the same pod as before, and
-the hash goldens do not move.
+backend changes it. Groups on `Claim` render the same pod as before, and the
+hash goldens do not move. A member without `spec.key` would have a world
+without a name; the operator creates no pod for it (`Accepted` is `False`,
+reason `ServerKeyMissing`). Without `--world-sync` it creates no pod for any
+member of such a group (reason `WorldSyncOff`).
 
 ### 3.3 The control directory
 
@@ -137,23 +142,32 @@ The node agent and the game server talk through files in
 | `snapshot.request` | agent | a sequence number, asking for a snapshot |
 | `snapshot.done` | node agent | the sequence number of the finished copy, or `failed <seq> <reason>` |
 
-The prune never deletes this directory, whatever the backend. It is not
-synced.
+The node agent empties the directory at every publish. The prune never
+deletes it, whatever the backend, and it is not synced.
 
 ### 3.4 The agent
 
-- **Wait.** In `onLoad`, the Paper agent waits for `ready` or `failed`.
-  Paper loads the worlds after every plugin's `onLoad`, so the server does
-  not touch the world before it is complete. A plugin that reads the world
-  in its own `onLoad` must load after the agent (`SpawneryAgent`,
-  `load: BEFORE` in its dependencies). On `failed`, or when neither file
-  appears within 10 minutes, the agent logs the reason and shuts the
-  server down with exit code 1.
-- **Snapshot.** From `onEnable`, every `SPAWNERY_WORLD_SYNC_INTERVAL`
-  (default 5 minutes), the agent runs the steps of §4.4 on the main thread
-  for the flush and waits off the main thread for `snapshot.done`. While it
-  waits, autosave stays off; it turns autosave back on when the answer
-  arrives or after 60 s, whichever comes first.
+- **Wait.** Paper's `Main` reads `level.dat` and the datapacks before any
+  plugin's `onLoad` (checked with `javap` on the pinned Paper bundle on
+  2026-10-06), so waiting in `onLoad` would let Paper create fresh world data
+  over a world that is still downloading. The wait therefore runs in a Paper
+  bootstrapper of `SpawneryAgent` (`bootstrapper:` in its `paper-plugin.yml`),
+  which Paper runs before it touches the world. It waits for `ready` or
+  `failed`. On `failed`, or when neither file appears within 10 minutes, it
+  writes the reason to stderr and halts the JVM with exit code 1, so no
+  shutdown hook saves a half-downloaded world. A plugin that reads or stages
+  world files in its own bootstrapper declares
+  `dependencies.bootstrap.SpawneryAgent.load: BEFORE`; a plugin's `onLoad`
+  runs after every bootstrapper and needs nothing.
+- **Snapshot.** From `onEnable`, every `SPAWNERY_WORLD_SYNC_INTERVAL` (default
+  5 minutes), the agent runs step 1 of §4.4 on the main thread and waits off
+  the main thread for `snapshot.done`. While it waits, autosave stays off. It
+  restores each world's previous autosave setting when the answer arrives,
+  after 60 s, or when any step throws. An interval that comes while the last
+  snapshot is still waited for is skipped. The node agent answers only
+  sequence numbers above the last one it answered, so the agent starts above
+  any number already in `snapshot.request` or `snapshot.done`; a restarted
+  container would otherwise go unanswered.
 
 Both only run when `SPAWNERY_WORLD_SYNC=1`.
 
@@ -172,32 +186,56 @@ Under `<prefix>/<namespace>/<group>/<key>/`:
 - `objects/<sha256>`: one object per file of 64 KiB or more, by content.
   Region files are already compressed and are stored as they are. The store
   bills at least 64 kB per object, so smaller ones would cost more than they
-  hold.
-- `packs/<generation>.tar.gz`: every smaller file of that generation in one
-  object, written anew each generation. A pack is always fetched whole.
-- `lease.json`: `{node, pod, world, renewedAt}`.
+  hold. An object that already exists (`HEAD`) is not uploaded again.
+- `packs/<generation>-<16 hex>.tar.gz`: every smaller file of that
+  generation in one gzipped tar, under a fresh random name per upload
+  attempt. A writer that loses the manifest race thus never overwrites the
+  winner's pack. A pack is always fetched whole, and a download fails when a
+  pack lacks an entry the manifest names.
+- `lease.json`: `{node, pod, renewedAt}`.
 
-A manifest is written last, with `If-Match` on the previous manifest's
-ETag (or `If-None-Match: *` for the first). Objects a manifest no longer
-names are deleted after the new manifest is in place. The pack of the
-previous generation goes the same way.
+A manifest is written last, with `If-Match` on the previous manifest's ETag
+(or `If-None-Match: *` for the first). Objects and the pack the previous
+manifest named and the new one does not are deleted after the new manifest is
+in place. Objects and packs of an attempt that failed before its manifest
+stay until the world is deleted.
+
+The SDK retries a conditional `PutObject` after a 5xx or a reset connection.
+When the first attempt had committed, the retry fails its own condition with
+412, so a 412 on the manifest is read back: a stored manifest byte-equal to
+the one sent is this upload's. The node agent goes further after a conflict
+while its lease is unbroken: a stored manifest with the same `worldId`, the
+next generation and exactly the snapshot's paths, sizes and mtimes is
+adopted, and the packs it does not name are deleted. Any other conflict
+orphans the local copy (§4.2).
 
 ### 4.2 The lease
 
-- **Take:** create `lease.json` with `If-None-Match: *`.
-- **Hold:** rewrite it with `If-Match` every 30 s while the pod runs and
-  while an upload is pending.
-- **Take over:** allowed when `renewedAt` is more than 10 minutes old, with
-  `If-Match` on the stale ETag, so two nodes cannot both win. This covers a
-  node that died.
-- **Release:** delete it after the final upload succeeded.
-- **Lost:** a node that finds its lease taken over (412 on renewal, or a
-  foreign holder at restart) stops writing that world. It moves its local
-  copy to `orphans/` on the node and never uploads it. The copy is kept for
-  manual recovery and reported as a metric.
+- **Take:** create `lease.json` with `If-None-Match: *`. A lease with an
+  empty `node` is free and is taken with `If-Match` on its ETag.
+- **Hold:** rewrite it with `If-Match` every 30 s while the world is on the
+  node with a pod or a pending upload, and once more right before every
+  upload, so a node that was cut off learns that it lost the world before it
+  writes a manifest.
+- **Take over:** allowed when the lease is stale, with `If-Match` on the
+  stale ETag, so two nodes cannot both win. This covers a node that died.
+- **Release:** after the last upload, overwrite it with a tombstone (empty
+  `node`) under `If-Match`. A delete cannot be conditional on the ETag, and a
+  delete after a check could remove a successor's lease.
+- **Lost:** a node that finds its lease taken over stops writing that world.
+  `If-Match` on a key that no longer exists answers 404 on S3; that counts as
+  lost too. A 412 on renewal is read back first: a lease that still names this
+  node is a write that committed and whose SDK retry failed the condition,
+  and its ETag is adopted. Otherwise the node moves its local copy to
+  `orphans/` on the node and never uploads it. The copy is kept for manual
+  recovery and counted in a metric. A pod still running on it keeps running
+  on the moved copy; its snapshot requests are answered `failed`.
 
-The clock that matters for staleness is the store's: `renewedAt` is
-compared with the `Date` header of the response that read the lease.
+Staleness is judged by the store's clock alone: a lease is stale when the
+`Date` of the response that read it is more than 10 minutes after its
+`LastModified`. `renewedAt` is the holder's clock and only informational, so
+clock skew between nodes cannot shorten a lease. A response without either
+time fails the take instead of guessing.
 
 ### 4.3 NodePublishVolume
 
@@ -207,23 +245,36 @@ Called by the kubelet before the containers start.
    (`csi.storage.k8s.io/pod.namespace`), with `PERMISSION_DENIED`. Anyone
    who may create a pod can name the driver and any world in its
    attributes; without this check a pod could mount another namespace's
-   world.
-1. Take the lease, or confirm this node holds it. If another node holds a
+   world. A malformed `world` (not three non-empty segments, or `.` or `..`
+   among them), an empty or malformed `keep`, a volume that is not inline
+   ephemeral, and an empty volume ID or target path are `INVALID_ARGUMENT`.
+1. Wait for an upload of this world that is in flight, for as long as the
+   kubelet's call lasts (`UNAVAILABLE` after). A publish for the same target
+   again, as after a node reboot, binds it again if the mount is gone. A
+   publish for another target while the world is still published elsewhere
+   on this node is the old pod's teardown arriving late: it is treated as
+   that target's unpublish first.
+2. Refuse the world with `UNAVAILABLE` while its deletion marker (§5.1)
+   exists.
+3. Take the lease, or confirm this node holds it. If another node holds a
    fresh lease, return `UNAVAILABLE`; the kubelet retries with back-off and
    the pod stays in `ContainerCreating`. This is the case of a world
    started elsewhere while the old node still uploads.
-2. Read `manifest.json`.
-   - No manifest: a new world. Mark it ready at once.
-   - A manifest whose `worldId` and `generation` match the local state, or
-     a local state of this node that is ahead of the manifest by snapshots
-     still uploading: the cache is current. Mark it ready at once.
-   - Otherwise: delete the keep paths in the local directory and start the
-     download in the background, 32 requests at a time. Write `ready` when
-     every file is on disk and fsynced, or `failed` with the reason.
-3. Bind-mount the world directory onto the target path and return.
+4. Read `manifest.json`.
+   - No manifest: a new world. A local copy of an earlier world under that
+     key is wiped. Mark it ready at once.
+   - A manifest whose `worldId` and `generation` match the local state: the
+     cache is current, also when snapshots of this node still wait to upload
+     on top of it. Mark it ready at once.
+   - Otherwise: when the local state holds snapshots it has not uploaded,
+     move it to `orphans/`; else delete the keep paths. Start the download
+     in the background, 32 requests at a time. Write `ready` when every file
+     is on disk and fsynced, or `failed` with the reason.
+5. Give the world to the pod's `fsGroup` (§4.7) and bind-mount it onto the
+   target path.
 
-The call returns after the lease and one manifest read, about 0.1 to 0.3 s
-by §2, so the container starts while the download runs.
+The call returns after the deletion check, the lease and one manifest read,
+about 0.1 to 0.3 s by §2, so the container starts while the download runs.
 
 ### 4.4 Snapshots while the server runs
 
@@ -232,52 +283,89 @@ The agent asks, the node agent copies, and the upload runs from the copy:
 1. The agent turns autosave off on every world, runs `save-all flush`, and
    writes `<control>/snapshot.request` with a sequence number.
 2. The node agent sees the request (it polls every 500 ms; inotify does not
-   cross the bind mount reliably enough to depend on). For every file a keep
-   entry matches it compares size and mtime with the last uploaded state,
-   copies the changed ones to `snapshots/<seq>/` on the same filesystem,
-   and checks size and mtime again after the copy. A file that changed
+   cross the bind mount reliably enough to depend on). It copies every file
+   below 64 KiB that a keep entry matches, and every larger one whose size
+   or mtime differs from the newest queued snapshot, or from the uploaded
+   state when none is queued, to `snapshots/<seq>/` on the same filesystem.
+   It checks size and mtime again after each copy. A file that changed
    during its copy is copied again, up to three times; after that the
-   snapshot fails and the agent is told so.
+   snapshot fails and the agent is told so. Unchanged large files are
+   carried over by reference.
 3. The node agent writes `snapshot.done` with the sequence number. The agent
    turns autosave back on. The world was frozen for the flush and the local
    copy, not for the upload.
 4. The upload of `snapshots/<seq>/` and the new manifest run in the
-   background. A snapshot request that arrives while an upload runs waits
-   for it.
+   background, one snapshot after another per world. A snapshot taken while
+   an upload runs is queued behind it.
+
+Uploads run outside the world's lock, so a slow upload holds up neither
+snapshot requests nor lease renewals. Every short store call has a deadline
+of 30 s and every upload attempt one of 10 minutes; a hung call would
+otherwise hold a world's lock. A failed attempt is retried from the same
+snapshot with back-off from 1 s, doubling, to at most 1 minute, without a
+limit on attempts.
 
 The agent asks every 5 minutes by default. The interval is the most play
-that is lost when a node dies (§5).
+that is lost when a node dies (§5), plus an upload that was still running.
 
 ### 4.5 NodeUnpublishVolume
 
 Called after the pod's containers ended. The server saved on shutdown, so
 the directory is consistent.
 
-1. Unmount the bind mount, take a final snapshot (the copy of §4.4 step 2,
-   with nothing running that could change a file) and return. The kubelet
-   waits for the local copy only, not for the upload.
-2. In the background: upload the snapshot and write the manifest, retrying
-   with back-off up to one minute between attempts and no limit on the
-   attempts. Then delete the non-keep paths from the local directory and
-   release the lease, unless a pod has published the world again on this
-   node in the meantime.
+1. Unmount the bind mount, stop a download that still runs, take a final
+   snapshot (the copy of §4.4 step 2, with nothing running that could change
+   a file) and return. The kubelet waits for the local copy only, not for
+   the upload. A final snapshot that fails is retried in the background.
+2. In the background: upload the queued snapshots and write the manifests,
+   with the retries of §4.4. Then delete the non-keep paths from the local
+   directory and release the lease, unless a pod has published the world
+   again on this node in the meantime.
 
 Because the upload runs from the snapshot, the same world may start again
-on this node at once (§4.3) while its last stop is still uploading.
+on this node while its last stop is still uploading (§4.3 step 1 waits only
+for the attempt in flight).
 
 The local keep paths stay as a cache. A cache that is clean and has no pod
 is evicted after 24 hours, or earlier, oldest first, when the directory's
-filesystem has less than 15 % free.
+filesystem has less than 15 % free. Eviction runs once a minute.
 
 ### 4.6 Restarts of the node agent
 
-Per world, `state.json` on the node records the `worldId`, the uploaded
-generation, the lease ETag, the published target path if any, and a pending
-upload. On start the node agent rereads every state file, resumes lease
-renewal and pending uploads, and resumes watching published volumes for
-snapshot requests. The bind mounts of running pods are kernel mounts in the
-kubelet's directory and survive the node agent's restart; the DaemonSet
-mounts its root with `Bidirectional` propagation for that reason.
+Per world, `worlds/<namespace>/<group>/<key>/state.json` on the node records
+the `worldId`, the uploaded generation and its files, the manifest and lease
+ETags, the keep list, the pod and its `fsGroup`, the published target path
+if any, the queued snapshots, the last answered request, and whether a
+download or a final snapshot was left unfinished. On start the node agent
+rereads every state file, resumes lease renewal and pending uploads, and
+resumes watching published volumes for snapshot requests. A world whose
+download the restart cut off gets `failed`, and its server ends. The bind
+mounts of running pods are kernel mounts in the kubelet's directory and
+survive the node agent's restart; the DaemonSet mounts the kubelet's pod
+directory and its own root with `Bidirectional` propagation for that reason.
+
+### 4.7 What the node agent trusts
+
+The data directory is writable by the pod, and the node agent runs as root.
+A pod may swap any entry below it for a symlink, a FIFO or a device node at
+any moment. So every access below a data directory is confined: no symlink
+is ever followed. Paths are walked one component at a time from an open
+directory with `O_NOFOLLOW`, and the last component is handled with `*at`
+calls. A file is opened as `O_PATH`, checked to be regular, and only then
+reopened, with `O_NONBLOCK` so that a file lease the pod holds fails the open
+instead of stalling it. A file is placed through a temporary file and a
+rename, which replaces a symlink rather than writing through it. Relative
+paths over 4096 bytes are refused, which also bounds a walk a pod could make
+arbitrarily deep. Other systems than Linux get no such walk and refuse.
+
+Server pods run as a non-root user. The `CSIDriver` sets `fsGroupPolicy:
+File` and the plugin advertises `VOLUME_MOUNT_GROUP`, so the kubelet hands it
+the pod's `fsGroup` and skips its own ownership pass, which would run once
+after the publish while the download still writes. Everything the node
+agent creates or places below the data directory, now and later, goes to
+that group, group-writable, with setgid directories; a cache from an earlier
+run is regrouped at publish. Symlinks, FIFOs and devices a pod planted are
+left alone.
 
 ## 5. Failure cases
 
@@ -285,16 +373,19 @@ mounts its root with `Bidirectional` propagation for that reason.
   start waits, also when the cache on this node is current. Without the
   lease there is no proof that no other node writes the world.
 - **The download fails.** The node agent writes `failed`. The agent stops
-  the server with an error and the operator's usual retry starts it again.
+  the server with an error, and the member ends as `Failed`; the next start
+  of the key tries again.
 - **The store is unreachable at stop.** The upload retries until it works.
   The world stays on that node and can start there again; a start on
   another node waits for the lease.
-- **A node dies.** Its worlds lose the play since their last snapshot, at
-  most the snapshot interval. After 10 minutes another node may take the
-  lease and starts from the last manifest. When the dead node returns it
-  finds its leases taken and moves those worlds to `orphans/`.
-- **A pod is deleted while a snapshot copy runs.** The copy is discarded and
-  the final upload of §4.5 runs over the directory instead.
+- **A node dies.** Its worlds lose the play since their last uploaded
+  snapshot, at most the snapshot interval plus an upload in flight. After
+  10 minutes another node may take the lease and starts from the last
+  manifest. When the dead node returns it finds its leases taken and moves
+  those worlds to `orphans/`.
+- **A pod is deleted while a snapshot copy runs.** The unpublish waits for
+  the copy, which holds the world's lock, and takes the final snapshot after
+  it.
 - **The agent never asks for a snapshot** (an older agent, or a group whose
   plugins crash it): the world is still uploaded at every stop. Only the
   protection against node loss is missing.
@@ -305,55 +396,83 @@ mounts its root with `Bidirectional` propagation for that reason.
 `DeleteServer(group, key)` deletes the `Server`, as today, and then writes a
 marker `<prefix>/.deletions/<namespace>/<group>/<key>`. The markers live
 under one prefix of their own so that finding them is one listing, not a
-walk over every world. A runnable in the operator lists them once a minute.
-For each world whose lease is absent or stale it deletes every object and
-pack, then the manifest, then the marker.
+walk over every world. A runnable in the operator, under leader election,
+lists them once a minute. For each world whose lease is absent, released or
+stale it deletes every key under the world's prefix except the manifest,
+then the manifest, then the marker. The marker goes last, so a sweep cut off
+halfway is finished by the next one, and nodes refuse the world until then.
+`DeleteServer` answers `NOT_FOUND` when there is neither a `Server`
+nor a manifest, and refuses while the operator runs without `--world-sync`.
 
 A start of the same key while its marker exists is refused by the node agent
 (`UNAVAILABLE`) until the deletion finished, then begins as a new world with
-a new `worldId`.
+a new `worldId`. The node checks the marker before it takes the lease. A
+marker written between that check and the lease can let the sweep run under
+the starting member; its next manifest write then fails, and the node
+orphans its copy of a world that was being deleted anyway.
 
 ## 6. The chart
 
 ```yaml
 worldSync:
   enabled: false
+  namespace: ""                  # the release namespace when empty
+  image:
+    repository: ghcr.io/spawnery/spawnery-worldsync
+    tag: ""                      # the chart's appVersion when empty
+    digest: ""
+  registrarImage: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.18.0
   objectStore:
-    endpoint: https://fsn1.your-objectstorage.com
-    region: fsn1
-    bucket: worlds
+    endpoint: ""
+    region: ""
+    bucket: ""
     prefix: ""
-    credentialsSecret: worldsync-s3   # keys AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
-  namespace: spawnery-worldsync
+    credentialsSecret: ""        # keys AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY
   hostPath: /var/lib/spawnery/worldsync
   snapshotInterval: 5m
   nodeSelector: {}
-  tolerations: []
+  tolerations:
+    - operator: Exists
+  priorityClassName: system-node-critical
+  resources: {requests: {cpu: 50m, memory: 64Mi}, limits: {memory: 512Mi}}
 ```
 
-The values above are an example, not defaults. With `enabled: true` the
-chart renders:
+With `enabled: true` the chart renders:
 
 - the `CSIDriver` object (`attachRequired: false`, `podInfoOnMount: true`,
-  `volumeLifecycleModes: [Ephemeral]`),
+  `fsGroupPolicy: File`, `volumeLifecycleModes: [Ephemeral]`). The namespace
+  check of §4.3 depends on `podInfoOnMount`: the kubelet sets the
+  `csi.storage.k8s.io/*` attributes itself, whatever the pod wrote.
 - the DaemonSet with the node agent and `node-driver-registrar`, privileged,
-  in `worldSync.namespace` (the release namespace when empty). That
-  namespace must admit privileged pods; an operator namespace held to
-  `restricted` does not, which is why the two are separate. The chart does
-  not create the namespace.
-- the operator's read of the same secret, for deletions. The secret has to
-  exist in both namespaces.
+  with a ServiceAccount that mounts no token, in `worldSync.namespace` (the
+  release namespace when empty). That namespace must admit privileged pods;
+  an operator namespace held to `restricted` does not, which is why the two
+  are separate. The chart does not create the namespace. The DaemonSet
+  tolerates every taint and runs at `system-node-critical` by default,
+  because a game pod on a node without the node agent never gets its volume
+  and an evicted node agent strands the worlds it holds. Its objects carry
+  labels of their own (`app.kubernetes.io/component: worldsync`) without the
+  operator's selector pair, so nothing that selects the operator matches
+  them. The node agent serves metrics on port 8090; the chart does not
+  scrape them.
+- `--world-sync` and `--world-sync-snapshot-interval` on the operator, and the
+  same `WORLDSYNC_*` environment as the node agent from one helper, so both
+  name the same bucket and prefix. The operator reads the secret for
+  deletions, so the secret has to exist in both namespaces.
 
 The game namespaces never see the credentials. The snapshot interval
 reaches the agent as `SPAWNERY_WORLD_SYNC_INTERVAL` through the operator.
 
 ## 7. Import
 
-`spawnery-worldsync import --world <namespace>/<group>/<key> --dir <path>`
-uploads the keep paths of a directory as generation 1, and refuses when the
-world already has a manifest. Run as a Job that mounts a stopped member's
-claim read-only, it moves an existing world into the store. There is no
-export in this version.
+`spawnery-worldsync import --world <namespace>/<group>/<key> --dir <path>
+--keep <entries>` uploads the keep paths of a directory as generation 1, and
+refuses when the world already has a manifest: the manifest is written with
+`If-None-Match: *`, after the objects. It copies the world into a temporary
+directory first, and the image has no `/tmp`, so the Job mounts an
+`emptyDir` there. Run as a Job that mounts a stopped member's claim
+read-only, it moves an existing world into the store. There is no export in
+this version.
 
 ## 8. Limits of this version
 
@@ -362,18 +481,35 @@ export in this version.
 - Only `OnDemand` groups.
 - The cache is per node. A start on another node downloads the world even
   if a third node holds a current copy.
-- Metrics: download duration and bytes per start, upload lag per world,
-  worlds with a pending upload, lease conflicts and takeovers, orphans.
+- Objects and packs of upload attempts that failed before their manifest
+  stay in the bucket until the world is deleted.
+- Downloads have no deadline, and the content of an object is not checked
+  against its hash on download.
+- Metrics: `spawnery_worldsync_download_seconds` (duration of a download at
+  publish), `spawnery_worldsync_pending_snapshots` (snapshots on the node not
+  yet in the bucket), `spawnery_worldsync_lease_conflicts_total` (publishes
+  refused because another node held the world) and
+  `spawnery_worldsync_orphans_total`. Bytes per start, upload lag per world
+  and takeovers are not measured.
 
 ## 9. Testing
 
-- Unit tests for the manifest diff, the pack format, the lease rules and the
-  snapshot copy, against an in-memory S3 fake that implements `If-Match`
-  with bare ETags and `If-None-Match`.
-- The CSI node service against csi-sanity's node tests for ephemeral
-  volumes.
-- e2e in kind with an S3 server in the cluster: a member starts, writes,
-  stops, starts on another node, and finds its data; a member whose node
-  agent is killed during a run uploads after the restart; a delete leaves
-  nothing under the prefix.
-- The agent's wait and snapshot steps in the Paper image test.
+- Unit tests for the manifest diff, the pack format, the lease rules, the
+  snapshot copy, the node agent's publish, snapshot, upload, release and
+  restart paths, and the deletion sweep, against an in-memory store that
+  implements `If-Match` with bare ETags, `If-None-Match`, 404 for `If-Match`
+  on a missing key, and the `Date` and `LastModified` times. The S3 client
+  is tested against an HTTP fake for a bare `If-Match`, `If-None-Match: *`
+  and the mapping of status codes.
+- Confinement tests that plant symlinks, FIFOs and deep directory chains
+  under a data directory, and group tests for what the node agent creates
+  under a pod's `fsGroup`.
+- The CSI node service against its own tests for the namespace check,
+  malformed attributes, `UNAVAILABLE` for a held world and the mount group
+  capability. csi-sanity is not used.
+- The Paper agent's control-file handling in JUnit, and a Go test that reads
+  the Kotlin constants for the file and environment names.
+- e2e in kind with MinIO in the cluster (`make e2e-worldsync`): a member
+  starts, writes, stops, starts on another node, finds its data, and a
+  delete leaves nothing under its prefix. As of 2026-10-06 that run has not
+  happened yet. A node agent killed during a run has no e2e test.
