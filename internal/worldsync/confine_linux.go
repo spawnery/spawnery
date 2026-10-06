@@ -207,6 +207,10 @@ func walkKept(root string, keep prune.Keep, visit func(dir int, name, rel string
 	return walkKeptIn(root, fd, nil, keep, visit, nil)
 }
 
+// walkHook runs before each entry's stat; tests use it to remove an entry
+// the walk has already listed.
+var walkHook func(rel string)
+
 // walkKeptIn takes over fd. enter, if set, sees each directory it descends
 // into, open.
 func walkKeptIn(root string, fd int, parts []string, keep prune.Keep, visit func(dir int, name, rel string, st *unix.Stat_t) error, enter func(fd int, rel string) error) error {
@@ -228,8 +232,14 @@ func walkKeptIn(root string, fd int, parts []string, keep prune.Keep, visit func
 		if !keep.Holds(rel) && !keep.Toward(rel) {
 			continue
 		}
+		if walkHook != nil {
+			walkHook(rel)
+		}
 		var st unix.Stat_t
 		if err := unix.Fstatat(fd, name, &st, unix.AT_SYMLINK_NOFOLLOW); err != nil {
+			if errors.Is(err, unix.ENOENT) {
+				continue
+			}
 			return pathErr("lstat", root, child, err)
 		}
 		if st.Mode&unix.S_IFMT != unix.S_IFDIR {
@@ -239,6 +249,9 @@ func walkKeptIn(root string, fd int, parts []string, keep prune.Keep, visit func
 			continue
 		}
 		sub, err := unix.Openat(fd, name, dirFlags, 0)
+		if errors.Is(err, unix.ENOENT) {
+			continue
+		}
 		if err != nil {
 			return pathErr("open", root, child, err)
 		}
@@ -278,6 +291,9 @@ func regroupKept(root string, keep prune.Keep, gid int) error {
 			return nil
 		}
 		pfd, err := unix.Openat(dir, name, unix.O_PATH|unix.O_NOFOLLOW|unix.O_CLOEXEC, 0)
+		if errors.Is(err, unix.ENOENT) {
+			return nil
+		}
 		if err != nil {
 			return pathErr("open", root, []string{rel}, err)
 		}

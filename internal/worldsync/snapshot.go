@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"sort"
@@ -143,6 +144,9 @@ func TakeSnapshot(dataDir, snapDir string, keep prune.Keep, base []FileEntry, se
 			continue
 		}
 		size, mtime, err := copyStable(dataDir, f.Path, filepath.Join(snapDir, filepath.FromSlash(f.Path)))
+		if errors.Is(err, fs.ErrNotExist) {
+			continue
+		}
 		if err != nil {
 			return Snap{}, err
 		}

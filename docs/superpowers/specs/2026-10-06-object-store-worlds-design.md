@@ -297,8 +297,10 @@ The agent asks, the node agent copies, and the upload runs from the copy:
    state when none is queued, to `snapshots/<seq>/` on the same filesystem.
    It checks size and mtime again after each copy. A file that changed
    during its copy is copied again, up to three times; after that the
-   snapshot fails and the agent is told so. Unchanged large files are
-   carried over by reference. Before it copies anything, the node agent
+   snapshot fails and the agent is told so. A file removed between the
+   scan and its copy is left out of the snapshot, as it would be from the
+   next one; a file swapped for anything but a regular file still fails it.
+   Unchanged large files are carried over by reference. Before it copies anything, the node agent
    looks for a world the prune would refuse to delete: a path that neither
    keep nor replace holds and that is, or holds, a `level.dat*`, a `region`
    directory or an `.mca` file. It answers `failed <seq> spec.storage.keep

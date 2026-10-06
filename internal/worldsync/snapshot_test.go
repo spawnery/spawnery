@@ -24,6 +24,8 @@ import (
 	"testing"
 	"time"
 
+	"golang.org/x/sys/unix"
+
 	"github.com/spawnery/spawnery/internal/prune"
 )
 
@@ -127,5 +129,44 @@ func TestSnapshotRefusesAFileThatNeverSettles(t *testing.T) {
 
 	if _, err := TakeSnapshot(data, snap, keepOf(t, "worlds/world"), nil, 1); !errors.Is(err, ErrUnsettled) {
 		t.Fatalf("err = %v, want ErrUnsettled", err)
+	}
+}
+
+func TestAFileDeletedBeforeItsCopyIsLeftOut(t *testing.T) {
+	data, snap := t.TempDir(), t.TempDir()
+	first, second := filepath.Join(data, "worlds/world/a.dat"), filepath.Join(data, "worlds/world/b.dat")
+	writeFile(t, first, 5, time.Unix(1, 0))
+	writeFile(t, second, 5, time.Unix(1, 0))
+	copyHook = func(p string) {
+		if p == first {
+			_ = os.Remove(second)
+		}
+	}
+	t.Cleanup(func() { copyHook = nil })
+
+	s, err := TakeSnapshot(data, snap, keepOf(t, "worlds/world"), nil, 1)
+	if err != nil {
+		t.Fatalf("a deleted file failed the snapshot: %v", err)
+	}
+	if len(s.Files) != 1 || s.Files[0].Path != "worlds/world/a.dat" {
+		t.Fatalf("files = %+v, want only a.dat", s.Files)
+	}
+}
+
+func TestAFileSwappedForAFIFOStillFailsTheSnapshot(t *testing.T) {
+	data, snap := t.TempDir(), t.TempDir()
+	first, second := filepath.Join(data, "worlds/world/a.dat"), filepath.Join(data, "worlds/world/b.dat")
+	writeFile(t, first, 5, time.Unix(1, 0))
+	writeFile(t, second, 5, time.Unix(1, 0))
+	copyHook = func(p string) {
+		if p == first {
+			_ = os.Remove(second)
+			_ = unix.Mkfifo(second, 0o644)
+		}
+	}
+	t.Cleanup(func() { copyHook = nil })
+
+	if _, err := TakeSnapshot(data, snap, keepOf(t, "worlds/world"), nil, 1); err == nil {
+		t.Fatal("a FIFO in place of a file passed the snapshot")
 	}
 }

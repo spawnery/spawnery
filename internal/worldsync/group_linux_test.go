@@ -238,3 +238,40 @@ func TestAMountGroupThatIsNoGidIsInvalidArgument(t *testing.T) {
 		})
 	}
 }
+
+func TestARepublishSkipsAnEntryThePodRemovesDuringTheRegroup(t *testing.T) {
+	h := newHarness(t)
+	gid := podGroup(t)
+	target := filepath.Join(t.TempDir(), "mount")
+	req := PublishRequest{World: w, Keep: []string{"worlds/world"}, Target: target, Pod: "p1"}
+	if err := h.node("a").Publish(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	for _, f := range []string{"a.dat", "b.dat"} {
+		writeFile(t, filepath.Join(target, "worlds/world", f), 5, h.now)
+	}
+	if err := os.MkdirAll(filepath.Join(target, "worlds/world/gone"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	removed := false
+	walkHook = func(rel string) {
+		if removed || !strings.HasPrefix(rel, "worlds/world/") {
+			return
+		}
+		removed = true
+		for _, f := range []string{"a.dat", "b.dat", "gone"} {
+			if p := "worlds/world/" + f; p != rel {
+				_ = os.RemoveAll(filepath.Join(target, p))
+			}
+		}
+	}
+	t.Cleanup(func() { walkHook = nil })
+
+	req.Group = &gid
+	if err := h.node("a").Publish(context.Background(), req); err != nil {
+		t.Fatalf("a file renamed away during the regroup failed the publish: %v", err)
+	}
+	if !removed {
+		t.Fatal("the walk never reached the world, so this test asserts nothing")
+	}
+}
