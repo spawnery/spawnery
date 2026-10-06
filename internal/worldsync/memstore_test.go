@@ -49,6 +49,9 @@ func TestMemStoreIfMatchComparesBareETags(t *testing.T) {
 	if _, err := put(t, s, "a", "2", PutCondition{IfMatch: "deadbeef"}); !errors.Is(err, ErrPrecondition) {
 		t.Fatalf("stale If-Match: err = %v, want ErrPrecondition", err)
 	}
+	if _, err := put(t, s, "missing", "2", PutCondition{IfMatch: first.ETag}); !errors.Is(err, ErrNotFound) {
+		t.Fatalf("If-Match on a missing key: err = %v, want ErrNotFound", err)
+	}
 	if _, err := put(t, s, "a", "2", PutCondition{IfMatch: first.ETag}); err != nil {
 		t.Fatalf("current If-Match: %v", err)
 	}

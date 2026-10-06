@@ -113,7 +113,7 @@ func (s *S3Store) Get(ctx context.Context, key string) (io.ReadCloser, ObjectInf
 	if err != nil {
 		return nil, ObjectInfo{}, mapErr(err)
 	}
-	return out.Body, ObjectInfo{ETag: bare(out.ETag), Size: aws.ToInt64(out.ContentLength), Date: dateOf(out.ResultMetadata)}, nil
+	return out.Body, ObjectInfo{ETag: bare(out.ETag), Size: aws.ToInt64(out.ContentLength), Date: dateOf(out.ResultMetadata), LastModified: aws.ToTime(out.LastModified)}, nil
 }
 
 func (s *S3Store) Head(ctx context.Context, key string) (ObjectInfo, error) {
@@ -121,7 +121,7 @@ func (s *S3Store) Head(ctx context.Context, key string) (ObjectInfo, error) {
 	if err != nil {
 		return ObjectInfo{}, mapErr(err)
 	}
-	return ObjectInfo{ETag: bare(out.ETag), Size: aws.ToInt64(out.ContentLength), Date: dateOf(out.ResultMetadata)}, nil
+	return ObjectInfo{ETag: bare(out.ETag), Size: aws.ToInt64(out.ContentLength), Date: dateOf(out.ResultMetadata), LastModified: aws.ToTime(out.LastModified)}, nil
 }
 
 func (s *S3Store) Put(ctx context.Context, key string, body io.ReadSeeker, cond PutCondition) (ObjectInfo, error) {

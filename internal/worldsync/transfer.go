@@ -165,7 +165,7 @@ func UploadSnapshot(ctx context.Context, st Store, prefix, snapDir string, prev 
 		cond.IfMatch = ""
 	}
 	info, err := st.Put(ctx, prefix+ManifestName, bytes.NewReader(body), cond)
-	if errors.Is(err, ErrPrecondition) {
+	if errors.Is(err, ErrPrecondition) || errors.Is(err, ErrNotFound) {
 		return Manifest{}, "", fmt.Errorf("%w: %v", ErrConflict, err)
 	}
 	if err != nil {

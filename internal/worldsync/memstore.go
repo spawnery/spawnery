@@ -34,11 +34,12 @@ type MemStore struct {
 	mu      sync.Mutex
 	clock   func() time.Time
 	objects map[string][]byte
+	written map[string]time.Time
 	outage  error
 }
 
 func NewMemStore(clock func() time.Time) *MemStore {
-	return &MemStore{clock: clock, objects: map[string][]byte{}}
+	return &MemStore{clock: clock, objects: map[string][]byte{}, written: map[string]time.Time{}}
 }
 
 func (m *MemStore) SetOutage(err error) {
@@ -63,8 +64,8 @@ func etagOf(b []byte) string {
 	return hex.EncodeToString(sum[:])
 }
 
-func (m *MemStore) info(b []byte) ObjectInfo {
-	return ObjectInfo{ETag: etagOf(b), Size: int64(len(b)), Date: m.clock()}
+func (m *MemStore) info(key string, b []byte) ObjectInfo {
+	return ObjectInfo{ETag: etagOf(b), Size: int64(len(b)), Date: m.clock(), LastModified: m.written[key]}
 }
 
 func (m *MemStore) Get(_ context.Context, key string) (io.ReadCloser, ObjectInfo, error) {
@@ -77,7 +78,7 @@ func (m *MemStore) Get(_ context.Context, key string) (io.ReadCloser, ObjectInfo
 	if !ok {
 		return nil, ObjectInfo{}, ErrNotFound
 	}
-	return io.NopCloser(bytes.NewReader(b)), m.info(b), nil
+	return io.NopCloser(bytes.NewReader(b)), m.info(key, b), nil
 }
 
 func (m *MemStore) Head(_ context.Context, key string) (ObjectInfo, error) {
@@ -90,7 +91,7 @@ func (m *MemStore) Head(_ context.Context, key string) (ObjectInfo, error) {
 	if !ok {
 		return ObjectInfo{}, ErrNotFound
 	}
-	return m.info(b), nil
+	return m.info(key, b), nil
 }
 
 func (m *MemStore) Put(_ context.Context, key string, body io.ReadSeeker, cond PutCondition) (ObjectInfo, error) {
@@ -107,11 +108,15 @@ func (m *MemStore) Put(_ context.Context, key string, body io.ReadSeeker, cond P
 	if cond.IfNoneMatch && exists {
 		return ObjectInfo{}, ErrPrecondition
 	}
-	if cond.IfMatch != "" && (!exists || etagOf(old) != cond.IfMatch) {
+	if cond.IfMatch != "" && !exists {
+		return ObjectInfo{}, ErrNotFound
+	}
+	if cond.IfMatch != "" && etagOf(old) != cond.IfMatch {
 		return ObjectInfo{}, ErrPrecondition
 	}
 	m.objects[key] = b
-	return m.info(b), nil
+	m.written[key] = m.clock()
+	return m.info(key, b), nil
 }
 
 func (m *MemStore) Delete(_ context.Context, key string) error {
@@ -121,6 +126,7 @@ func (m *MemStore) Delete(_ context.Context, key string) error {
 		return m.outage
 	}
 	delete(m.objects, key)
+	delete(m.written, key)
 	return nil
 }
 

@@ -19,6 +19,7 @@ package worldsync
 import (
 	"context"
 	"errors"
+	"io"
 	"testing"
 	"time"
 )
@@ -88,7 +89,7 @@ func TestAFreshLeaseIsNotTakenOverJustBeforeItGoesStale(t *testing.T) {
 	}
 }
 
-func TestReleaseDeletesOnlyTheHoldersLease(t *testing.T) {
+func TestReleaseTombstonesOnlyTheHoldersLeaseAndAnotherNodeTakesItAtOnce(t *testing.T) {
 	now := time.Unix(1_700_000_000, 0)
 	st := NewMemStore(func() time.Time { return now })
 	ctx := context.Background()
@@ -102,7 +103,69 @@ func TestReleaseDeletesOnlyTheHoldersLease(t *testing.T) {
 	if err := ReleaseLease(ctx, st, prefix, etag); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := ReadLease(ctx, st, prefix); !errors.Is(err, ErrNotFound) {
-		t.Fatalf("lease after release: %v", err)
+	if l, _, err := ReadLease(ctx, st, prefix); err != nil || l.Node != "" {
+		t.Fatalf("lease after release = %+v, %v; want a tombstone", l, err)
+	}
+	if _, err := TakeLease(ctx, st, prefix, Lease{Node: "b", RenewedAt: now}, StaleAfter); err != nil {
+		t.Fatalf("take after release: %v", err)
+	}
+}
+
+func TestReleaseOfAMissingLeaseIsLost(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	st := NewMemStore(func() time.Time { return now })
+	if err := ReleaseLease(context.Background(), st, prefix, "x"); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("err = %v", err)
+	}
+}
+
+func TestRenewAfterTheLeaseObjectWasDeletedIsLost(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	st := NewMemStore(func() time.Time { return now })
+	ctx := context.Background()
+	etag, err := TakeLease(ctx, st, prefix, Lease{Node: "a", RenewedAt: now}, StaleAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Delete(ctx, prefix+LeaseName); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := RenewLease(ctx, st, prefix, Lease{Node: "a", RenewedAt: now}, etag); !errors.Is(err, ErrLeaseLost) {
+		t.Fatalf("err = %v, want ErrLeaseLost", err)
+	}
+}
+
+func TestStalenessIgnoresTheHoldersOwnClock(t *testing.T) {
+	storeNow := time.Unix(1_700_000_000, 0)
+	st := NewMemStore(func() time.Time { return storeNow })
+	ctx := context.Background()
+	if _, err := TakeLease(ctx, st, prefix, Lease{Node: "a", RenewedAt: storeNow.Add(24 * time.Hour)}, StaleAfter); err != nil {
+		t.Fatal(err)
+	}
+	storeNow = storeNow.Add(StaleAfter + time.Second)
+	if _, err := TakeLease(ctx, st, prefix, Lease{Node: "b", RenewedAt: storeNow}, StaleAfter); err != nil {
+		t.Fatalf("takeover of a lease stale by the store's clock: %v", err)
+	}
+}
+
+type zeroDates struct{ Store }
+
+func (z zeroDates) Get(ctx context.Context, key string) (io.ReadCloser, ObjectInfo, error) {
+	rc, info, err := z.Store.Get(ctx, key)
+	info.Date, info.LastModified = time.Time{}, time.Time{}
+	return rc, info, err
+}
+
+func TestTakeLeaseFailsWithoutStoreTimes(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	mem := NewMemStore(func() time.Time { return now })
+	ctx := context.Background()
+	if _, err := TakeLease(ctx, mem, prefix, Lease{Node: "a", RenewedAt: now}, StaleAfter); err != nil {
+		t.Fatal(err)
+	}
+	_, err := TakeLease(ctx, zeroDates{mem}, prefix, Lease{Node: "b", RenewedAt: now}, StaleAfter)
+	var held *HeldError
+	if err == nil || errors.As(err, &held) {
+		t.Fatalf("err = %v, want a plain error", err)
 	}
 }

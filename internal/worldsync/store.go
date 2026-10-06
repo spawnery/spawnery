@@ -32,12 +32,14 @@ var (
 )
 
 // ObjectInfo describes an object as one response saw it. ETag carries no
-// quotes. Date is the store's clock at that response, the only clock all
-// nodes share.
+// quotes. Date is the store's clock at that response and LastModified the
+// store's clock when the object was written; both are the store's, the only
+// clock all nodes share.
 type ObjectInfo struct {
-	ETag string
-	Size int64
-	Date time.Time
+	ETag         string
+	Size         int64
+	Date         time.Time
+	LastModified time.Time
 }
 
 // PutCondition: IfNoneMatch creates only; a non-empty IfMatch replaces only

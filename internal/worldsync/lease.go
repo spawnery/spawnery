@@ -66,8 +66,11 @@ func putLease(ctx context.Context, st Store, prefix string, l Lease, cond PutCon
 	return info.ETag, nil
 }
 
-// TakeLease creates the lease, or rewrites it when this node holds it or
-// when it is older than staleAfter by the store's own clock.
+// TakeLease creates the lease, or rewrites it when it is released (empty
+// Node), when this node holds it, or when the store's clock says it was last
+// written more than staleAfter ago (Date minus LastModified). RenewedAt is
+// information only: it is the holder's clock and takes no part in the
+// decision.
 func TakeLease(ctx context.Context, st Store, prefix string, me Lease, staleAfter time.Duration) (string, error) {
 	for range takeAttempts {
 		etag, err := putLease(ctx, st, prefix, me, PutCondition{IfNoneMatch: true})
@@ -76,44 +79,46 @@ func TakeLease(ctx context.Context, st Store, prefix string, me Lease, staleAfte
 		}
 		cur, info, err := ReadLease(ctx, st, prefix)
 		if errors.Is(err, ErrNotFound) {
-			continue // released in between
+			continue
 		}
 		if err != nil {
 			return "", err
 		}
-		if cur.Node != me.Node && info.Date.Sub(cur.RenewedAt) <= staleAfter {
-			return "", &HeldError{Node: cur.Node}
+		if cur.Node != "" && cur.Node != me.Node {
+			if info.Date.IsZero() || info.LastModified.IsZero() {
+				return "", errors.New("worldsync: the store reported no times for the lease")
+			}
+			if info.Date.Sub(info.LastModified) <= staleAfter {
+				return "", &HeldError{Node: cur.Node}
+			}
 		}
 		etag, err = putLease(ctx, st, prefix, me, PutCondition{IfMatch: info.ETag})
+		if errors.Is(err, ErrNotFound) {
+			continue
+		}
 		if errors.Is(err, ErrPrecondition) {
 			return "", &HeldError{Node: cur.Node}
 		}
 		return etag, err
 	}
-	return "", fmt.Errorf("worldsync: the lease kept changing while taking it")
+	return "", errors.New("worldsync: the lease kept changing while taking it")
 }
 
 func RenewLease(ctx context.Context, st Store, prefix string, me Lease, etag string) (string, error) {
 	next, err := putLease(ctx, st, prefix, me, PutCondition{IfMatch: etag})
-	if errors.Is(err, ErrPrecondition) {
+	if errors.Is(err, ErrPrecondition) || errors.Is(err, ErrNotFound) {
 		return "", ErrLeaseLost
 	}
 	return next, err
 }
 
-// ReleaseLease deletes the lease if it is still the one with etag. The check
-// and the delete are two requests; a takeover needs ten minutes without a
-// renewal, which a holder that is releasing has just renewed.
+// ReleaseLease overwrites the lease with an empty one if it is still the one
+// with etag. A delete cannot be conditional on the ETag, and one after a
+// check could remove a successor's lease.
 func ReleaseLease(ctx context.Context, st Store, prefix, etag string) error {
-	info, err := st.Head(ctx, prefix+LeaseName)
-	if errors.Is(err, ErrNotFound) {
-		return nil
-	}
-	if err != nil {
-		return err
-	}
-	if info.ETag != etag {
+	_, err := putLease(ctx, st, prefix, Lease{}, PutCondition{IfMatch: etag})
+	if errors.Is(err, ErrPrecondition) || errors.Is(err, ErrNotFound) {
 		return ErrLeaseLost
 	}
-	return st.Delete(ctx, prefix+LeaseName)
+	return err
 }

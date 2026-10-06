@@ -118,6 +118,22 @@ func TestAStaleManifestETagIsAConflict(t *testing.T) {
 	}
 }
 
+func TestADeletedPreviousManifestIsAConflict(t *testing.T) {
+	st := NewMemStore(time.Now)
+	data := t.TempDir()
+	writeFile(t, filepath.Join(data, "worlds/world/level.dat"), 3, time.Unix(1, 0))
+	m1, etag, err := UploadSnapshot(context.Background(), st, prefix, snapshotOf(t, data, nil, 1), nil, "", NewWorldID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := st.Delete(context.Background(), prefix+ManifestName); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := UploadSnapshot(context.Background(), st, prefix, snapshotOf(t, data, m1.Files, 2), &m1, etag, NewWorldID); !errors.Is(err, ErrConflict) {
+		t.Fatalf("err = %v, want ErrConflict", err)
+	}
+}
+
 // Review Focus 5: an outage during the objects must leave the old manifest in
 // place, and the same snapshot must upload cleanly afterwards.
 func TestAnOutageMidUploadLeavesTheOldManifestAndRetriesClean(t *testing.T) {
