@@ -95,6 +95,10 @@ func (s *Sweeper) SweepOnce(ctx context.Context) error {
 	var errs []error
 	for _, marker := range markers {
 		world := strings.TrimPrefix(marker, DeletionPrefix(s.Base))
+		if err := checkWorld(world); err != nil {
+			s.Log.Info("skipping a deletion marker that names no world", "marker", marker)
+			continue
+		}
 		if err := s.sweep(ctx, world, marker); err != nil {
 			errs = append(errs, err)
 		}

@@ -19,10 +19,12 @@ package worldsync
 import (
 	"bytes"
 	"context"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 )
 
 func mustPut(t *testing.T, st Store, key string) {
@@ -113,5 +115,34 @@ func TestTheSweeperDeletesAtOnceWhenTheLeaseWasReleased(t *testing.T) {
 	}
 	if exists, _ := WorldExists(ctx, st, "", "ns/g/k"); exists {
 		t.Fatal("the sweep kept a world whose lease was released")
+	}
+}
+
+func TestTheSweeperSkipsAMarkerThatNamesNoWorld(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	st := NewMemStore(func() time.Time { return now })
+	ctx := context.Background()
+	held, free := WorldPrefix("", "ns/group/held"), WorldPrefix("", "ns/group/free")
+	mustPut(t, st, held+ManifestName)
+	mustPut(t, st, free+ManifestName)
+	if _, err := TakeLease(ctx, st, held, Lease{Node: "a", RenewedAt: now}, StaleAfter); err != nil {
+		t.Fatal(err)
+	}
+	for _, m := range []string{"ns", "ns/group", "ns/group/", "ns/./free", "ns/group/free/extra"} {
+		mustPut(t, st, DeletionPrefix("")+m)
+	}
+	var said []string
+	log := funcr.New(func(_, args string) { said = append(said, args) }, funcr.Options{})
+
+	if err := (&Sweeper{Store: st, StaleAfter: StaleAfter, Log: log}).SweepOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	for _, world := range []string{"ns/group/held", "ns/group/free"} {
+		if exists, _ := WorldExists(ctx, st, "", world); !exists {
+			t.Errorf("a stray marker deleted %s", world)
+		}
+	}
+	if len(said) != 5 || !strings.Contains(said[0], "names no world") {
+		t.Fatalf("logged %q, want one line per stray marker", said)
 	}
 }
