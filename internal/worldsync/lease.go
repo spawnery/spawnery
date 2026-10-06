@@ -84,11 +84,12 @@ func TakeLease(ctx context.Context, st Store, prefix string, me Lease, staleAfte
 		if err != nil {
 			return "", err
 		}
-		if cur.Node != "" && cur.Node != me.Node {
-			if info.Date.IsZero() || info.LastModified.IsZero() {
-				return "", errors.New("worldsync: the store reported no times for the lease")
+		if cur.Node != me.Node {
+			held, err := leaseHeld(cur, info, staleAfter)
+			if err != nil {
+				return "", err
 			}
-			if info.Date.Sub(info.LastModified) <= staleAfter {
+			if held {
 				return "", &HeldError{Node: cur.Node}
 			}
 		}
@@ -102,6 +103,16 @@ func TakeLease(ctx context.Context, st Store, prefix string, me Lease, staleAfte
 		return etag, err
 	}
 	return "", errors.New("worldsync: the lease kept changing while taking it")
+}
+
+func leaseHeld(l Lease, info ObjectInfo, staleAfter time.Duration) (bool, error) {
+	if l.Node == "" {
+		return false, nil
+	}
+	if info.Date.IsZero() || info.LastModified.IsZero() {
+		return false, errors.New("worldsync: the store reported no times for the lease")
+	}
+	return info.Date.Sub(info.LastModified) <= staleAfter, nil
 }
 
 func RenewLease(ctx context.Context, st Store, prefix string, me Lease, etag string) (string, error) {
