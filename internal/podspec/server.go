@@ -280,12 +280,12 @@ func BuildServerPod(
 		}},
 		// The group's own variables come last; ReservedEnvPrefix and the CEL rule on
 		// spec.env, not order, protect the operator's four.
-		Env: append(append(append(append([]corev1.EnvVar{
+		Env: append(append(append(append(append([]corev1.EnvVar{
 			{Name: "SPAWNERY_NETWORK", Value: net.Name},
 			{Name: "SPAWNERY_GROUP", Value: group.Name},
 			{Name: "SPAWNERY_SERVER", Value: srv.Name},
 			{Name: EnvOperatorEndpoint, Value: agentEndpoint},
-		}, substitutionEnv(group.Spec.Substitution)...), keepEnv(group.Spec.Storage)...), replaceEnv(group.Spec.Storage)...), group.Spec.Env...),
+		}, substitutionEnv(group.Spec.Substitution)...), keepEnv(group.Spec.Storage)...), replaceEnv(group.Spec.Storage)...), worldSyncEnv(group)...), group.Spec.Env...),
 		VolumeMounts: mounts,
 		// Readiness only: a liveness restart would kick every player, whereas the
 		// state machine deregisters on a red readiness probe.
@@ -386,6 +386,9 @@ func keepsWorld(group *spawneryv1alpha1.ServerGroup) bool {
 }
 
 func dataVolume(group *spawneryv1alpha1.ServerGroup, srv *spawneryv1alpha1.Server) corev1.Volume {
+	if group.UsesObjectStore() {
+		return worldSyncVolume(group, srv)
+	}
 	if keepsWorld(group) {
 		return corev1.Volume{
 			Name: DataVolumeName,
