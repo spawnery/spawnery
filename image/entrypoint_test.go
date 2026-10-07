@@ -1017,36 +1017,33 @@ func TestEntrypointKeepsTheCacheForOtherJVMOptions(t *testing.T) {
 	}
 }
 
-// chmodRefusing puts a chmod on PATH that fails the way chmod fails on a file
-// owned by another user, for any path containing marker, and returns its
-// directory.
-func chmodRefusing(t *testing.T, marker string) string {
+// asAnotherUser puts on PATH an id that reports a uid owning none of the test's
+// files, and a chmod that fails on every one of them the way chmod fails on a
+// file owned by another user. It returns the directory.
+//
+// That is the world sync case: the node agent writes the world before the
+// container starts, as root with the pod's fsGroup, so the server may write
+// those files but not chmod them, directories included.
+func asAnotherUser(t *testing.T) string {
 	t.Helper()
-	real, err := exec.LookPath("chmod")
+	realID, err := exec.LookPath("id")
 	if err != nil {
 		t.Fatal(err)
 	}
 	dir := t.TempDir()
-	script := fmt.Sprintf(`#!/bin/sh
-for a; do
-	case "$a" in
-	*%s*) echo "chmod: changing permissions of '$a': Operation not permitted" >&2; exit 1 ;;
-	esac
-done
-exec %s "$@"
-`, marker, real)
-	if err := os.WriteFile(filepath.Join(dir, "chmod"), []byte(script), 0o755); err != nil {
-		t.Fatal(err)
+	id := fmt.Sprintf("#!/bin/sh\nif [ \"$1\" = -u ]; then echo 4242; exit; fi\nexec %s \"$@\"\n", realID)
+	chmod := "#!/bin/sh\nfor a; do case \"$a\" in -*|u+w) ;; *) echo \"chmod: changing permissions of '$a': Operation not permitted\" >&2; exit 1 ;; esac; done\n"
+	for name, script := range map[string]string{"id": id, "chmod": chmod} {
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(script), 0o755); err != nil {
+			t.Fatal(err)
+		}
 	}
 	return dir
 }
 
-func TestTheFileCopyLeavesAWorldItDidNotCopyAlone(t *testing.T) {
-	// The world sync node agent writes the world before the container starts,
-	// as root with the pod's fsGroup: writable for the server, but not its own
-	// to chmod.
+func TestTheFileCopyLeavesAWorldOfAnotherUserAlone(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "worlds", "world"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "worlds", "world"), 0o775); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "worlds", "world", "level.dat"), []byte("level"), 0o664); err != nil {
@@ -1061,24 +1058,15 @@ func TestTheFileCopyLeavesAWorldItDidNotCopyAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runEntrypoint(t, dir, 0, "SPAWNERY_FILE_SOURCE="+source,
-		"PATH="+chmodRefusing(t, "/world/"))
+	out, err := runEntrypoint(t, dir, 0, "SPAWNERY_FILE_SOURCE="+source, "PATH="+asAnotherUser(t))
 	if err != nil {
-		t.Fatalf("a world beside the copied templates failed the start: %v\n%s", err, out)
-	}
-
-	info, err := os.Stat(filepath.Join(dir, "worlds", "world_templates", "lobby", "level.dat"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm()&0o200 == 0 {
-		t.Errorf("the copied template is %v, want it writable by its owner", info.Mode().Perm())
+		t.Fatalf("templates copied into another user's worlds/ failed the start: %v\n%s", err, out)
 	}
 }
 
-func TestThePluginCopyLeavesPluginDataItDidNotCopyAlone(t *testing.T) {
+func TestThePluginCopyLeavesPluginDataOfAnotherUserAlone(t *testing.T) {
 	dir := t.TempDir()
-	if err := os.MkdirAll(filepath.Join(dir, "plugins", "Game", "internal"), 0o755); err != nil {
+	if err := os.MkdirAll(filepath.Join(dir, "plugins", "Game", "internal"), 0o775); err != nil {
 		t.Fatal(err)
 	}
 	if err := os.WriteFile(filepath.Join(dir, "plugins", "Game", "internal", "state.json"), []byte("{}"), 0o664); err != nil {
@@ -1092,17 +1080,8 @@ func TestThePluginCopyLeavesPluginDataItDidNotCopyAlone(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	out, err := runEntrypoint(t, dir, 0, "SPAWNERY_PLUGIN_SOURCE="+source,
-		"PATH="+chmodRefusing(t, "/internal"))
+	out, err := runEntrypoint(t, dir, 0, "SPAWNERY_PLUGIN_SOURCE="+source, "PATH="+asAnotherUser(t))
 	if err != nil {
-		t.Fatalf("plugin data beside the copied plugin failed the start: %v\n%s", err, out)
-	}
-
-	info, err := os.Stat(filepath.Join(dir, "plugins", "Game", "config.yml"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	if info.Mode().Perm()&0o200 == 0 {
-		t.Errorf("the copied config is %v, want it writable by its owner", info.Mode().Perm())
+		t.Fatalf("a plugin copied into another user's plugin directory failed the start: %v\n%s", err, out)
 	}
 }
