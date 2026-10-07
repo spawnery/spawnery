@@ -48,7 +48,7 @@ kind create cluster --name spawnery-tutorial --config kind-config.yaml
 
 ```bash
 helm install spawnery oci://ghcr.io/spawnery/charts/spawnery \
-  --version 0.24.5 \
+  --version 0.24.6 \
   --namespace spawnery-system --create-namespace
 ```
 

@@ -282,6 +282,30 @@ func TestAFailedServersLatePodStaysWhileItsGroupHasNoReadyServer(t *testing.T) {
 	}
 }
 
+func TestAFailedMembersWaitingPodIsStopped(t *testing.T) {
+	f := newFixture(t)
+	srv := f.createServer("lobby-c0ffee")
+	srv.Spec.Key = "c0ffee"
+	if err := f.c.Update(f.ctx, srv); err != nil {
+		t.Fatalf("update Server: %v", err)
+	}
+	f.reconcile("lobby-c0ffee")
+	f.clock.Advance(6 * time.Minute) // the fixture's deadline is 5 minutes
+	f.reconcile("lobby-c0ffee")
+	if got := f.server("lobby-c0ffee").Status.Phase; got != string(phase.Failed) {
+		t.Fatalf("phase = %q past the startup deadline, want Failed", got)
+	}
+
+	f.reconcile("lobby-c0ffee")
+
+	if pod, ok := f.pod("lobby-c0ffee"); ok && pod.DeletionTimestamp.IsZero() {
+		t.Error("a failed member keeps the pod that still waits for its world")
+	}
+	if got := f.server("lobby-c0ffee").Status.Phase; got != string(phase.Failed) {
+		t.Errorf("phase = %q, want Failed: the object stays for diagnosis", got)
+	}
+}
+
 // The flap counter never sees a permanently red probe, so only the re-armed deadline fails it.
 func TestServerThatCannotRecoverIsFailedAndDrained(t *testing.T) {
 	f := newFixture(t)

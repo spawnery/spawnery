@@ -127,6 +127,9 @@ type Inputs struct {
 	// PodTerminal also covers CrashLoopBackOff past the operator's tolerance.
 	PodTerminal         bool
 	GroupHasReadyServer bool
+	// HoldsWorld: a member of an OnDemand group, whose pod holds its world (the
+	// claim, or the lease in the object store) for as long as it exists.
+	HoldsWorld bool
 
 	// StartupDeadlineReached bounds the current attempt to become playable, not
 	// the pod's age: the clock is re-armed on every entry into Starting.
@@ -261,6 +264,15 @@ func Decide(current Phase, in Inputs) Decision {
 			return Decision{
 				Next: Terminating, DeletePod: true,
 				Reason: ReasonRetentionElapsed, Message: "failed retention elapsed",
+			}
+		}
+		// A failed member never becomes playable again, and its pod would hold the
+		// world the next start of its key needs; if the store came back it would
+		// even start the server, unregistered, for the whole retention.
+		if in.HoldsWorld && in.PodExists && !in.PodTerminal && (!in.WasRegistered || !in.Occupied()) {
+			return Decision{
+				Next: Failed, DeletePod: true,
+				Reason: ReasonStoppingFailedPod, Message: "stopping the pod of a failed member, which holds its world; the object stays for diagnosis",
 			}
 		}
 		// Stop a pod that came up after its server was failed, so it does not run
