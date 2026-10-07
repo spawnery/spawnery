@@ -149,7 +149,7 @@ component with the same wording.
 
 **`ServerInfo` is a record, so this breaks its canonical constructor.** Every
 call site is a test and every one is in-house: `ValueTypesTest` in this
-repository, and five sites across four test classes in cyperia. They get the
+repository, and five sites across four test classes in the consumer's plugins. They get the
 extra argument. A second constructor keeping the old arity would live
 forever to save a one-line edit that happens once.
 
@@ -206,8 +206,8 @@ READMEs; `imageVersion` because the agent's Java API changes, which is also the
 version `cloud.spawnery:spawnery-api` is published to Maven Central under.
 
 The order is forced by that last one: release spawnery, wait for the API to
-appear on Central, bump `spawneryApiVersion` in cyperia, then the group images
-in configs, then the attribute on `hub.yaml`. The attribute is inert until the
+appear on Central, bump `spawneryApiVersion` in the consumer's plugins, then the group images
+in the consumer's configuration repository, then the attribute on `hub.yaml`. The attribute is inert until the
 plugins that read it are deployed, so it may travel with the images or after
 them.
 

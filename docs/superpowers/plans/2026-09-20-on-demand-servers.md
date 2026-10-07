@@ -1849,7 +1849,7 @@ git commit -m "test(e2e): a world survives the stop of its server"
 
 Named here so that nobody reaches the end and wonders.
 
-- **The consumer side**, `orchestrator:spawnery` in `cyperia/private-server`,
+- **The consumer side**, `orchestrator:spawnery` in the consumer's private-server plugin,
   and the reset and deletion paths described in §4 of the spec. Its own plan,
   in its own repository.
 - **A `/cloud` subcommand** for starting and stopping instances by hand. The

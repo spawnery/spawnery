@@ -4,9 +4,9 @@
 
 **Goal:** Give every server a short number within its group, carry it to the agents, and use it in the two places a player reads a server name.
 
-**Architecture:** The `ServerGroup` reconciler assigns the number once, when it creates the server, and stores it in a new `Server.spec.number`. `internal/netstate` publishes it as `ServerState.number`, the agent's `NetworkMirror` puts it on `ServerInfo`, and two plugins in cyperia render `displayName + "-" + number`. Server names keep their random suffix; nothing about pod naming changes.
+**Architecture:** The `ServerGroup` reconciler assigns the number once, when it creates the server, and stores it in a new `Server.spec.number`. `internal/netstate` publishes it as `ServerState.number`, the agent's `NetworkMirror` puts it on `ServerInfo`, and two plugins in the consumer's codebase render `displayName + "-" + number`. Server names keep their random suffix; nothing about pod naming changes.
 
-**Tech Stack:** Go 1.x with controller-runtime and envtest, protobuf/gRPC, Kotlin and Java 17 records built through Nix and Gradle, Helm, and two cyperia Gradle projects built through cadev.
+**Tech Stack:** Go 1.x with controller-runtime and envtest, protobuf/gRPC, Kotlin and Java 17 records built through Nix and Gradle, Helm, and two consumer Gradle projects.
 
 **Spec:** `docs/superpowers/specs/2026-09-06-server-numbers-design.md`
 
@@ -55,7 +55,7 @@
 | `agent/api/.../ServerInfo.java` | the record component a plugin reads |
 | `agent/common/.../NetworkMirror.kt` | wire to record |
 
-**cyperia — the two readers**
+**The consumer — the two readers**
 
 | File | Responsibility |
 |---|---|
@@ -64,7 +64,7 @@
 | `lobby/common/.../selector/data/SpawnerySelectorDataSource.java` | fills it |
 | `lobby/common/.../selector/menu/ServerSelectorMenu.java` | renders it |
 
-**cyperia/configs**
+**The consumer's configuration repository**
 
 | File | Responsibility |
 |---|---|
@@ -1152,430 +1152,25 @@ git push origin v0.2.27
 gh run watch --workflow=release.yml
 ```
 
-Expected: the images and `spawnery-api:0.2.27` publish; the operator image and chart publish at their own numbers. Confirm `spawnery-api` reached Central before starting Task 7 — the cyperia builds resolve it from there.
+Expected: the images and `spawnery-api:0.2.27` publish; the operator image and chart publish at their own numbers. Confirm `spawnery-api` reached Central before starting Task 7 — the consumer's builds resolve it from there.
 
 ---
 
 ### Task 7: The tab list numbers a group that asks for it
 
-**Files:**
-- Modify: `~/git/cyperia/essentials/gradle.properties:9` (`spawneryApiVersion`)
-- Modify: `~/git/cyperia/essentials/velocity/src/main/java/net/codingarea/essentials/velocity/tablist/ServerDisplayNames.java`
-- Test: `~/git/cyperia/essentials/velocity/src/test/java/net/codingarea/essentials/velocity/tablist/ServerDisplayNamesTest.java`
-
-**Interfaces:**
-- Consumes: `ServerInfo.number()` and `Group.attributes()` from `spawnery-api:0.2.27`.
-- Produces: nothing other tasks read.
-
-**The attribute is `tablist: numbered`.** A key that names the surface it governs, so nobody reads it as switching numbering off everywhere — the selector in Task 8 numbers regardless.
-
-- [ ] **Step 1: Bump the API and fix the existing test helper**
-
-```bash
-sed -i 's/^spawneryApiVersion=.*/spawneryApiVersion=0.2.27/' ~/git/cyperia/essentials/gradle.properties
-```
-
-In `ServerDisplayNamesTest.java`, the `server` helper gains the number:
-
-```java
-  private static ServerInfo server(String name, String group) {
-    return server(name, group, 0);
-  }
-
-  private static ServerInfo server(String name, String group, int number) {
-    return new ServerInfo(name, group, ServerPhase.READY, 0, 20, true, "", Map.of(), "1", number);
-  }
-```
-
-and the `group` helper gains attributes:
-
-```java
-  private static Group group(String name, String displayName) {
-    return new Group(name, Group.Kind.EPHEMERAL, 1, 1, 0, 20, Map.of(), displayName);
-  }
-
-  private static Group numberedGroup(String name, String displayName) {
-    return new Group(name, Group.Kind.EPHEMERAL, 1, 1, 0, 20, Map.of("tablist", "numbered"), displayName);
-  }
-```
-
-- [ ] **Step 2: Write the failing tests**
-
-Append to `ServerDisplayNamesTest.java`:
-
-```java
-  @Test
-  void aGroupThatAsksToBeNumberedReadsItsNumber() {
-    assertEquals("Hub-2",
-      of(List.of(server("hub-dvjk", "hub", 2)), List.of(numberedGroup("hub", "Hub"))).of("hub-dvjk"));
-  }
-
-  @Test
-  void twoServersOfANumberedGroupReadDifferently() {
-    ServerDisplayNames names = of(
-      List.of(server("hub-dvjk", "hub", 1), server("hub-pgqg", "hub", 2)),
-      List.of(numberedGroup("hub", "Hub")));
-    assertEquals("Hub-1", names.of("hub-dvjk"));
-    assertEquals("Hub-2", names.of("hub-pgqg"));
-  }
-
-  @Test
-  void aGroupThatDidNotAskKeepsReadingTheSameForEveryServer() {
-    // The game modes are this case: a player there is in the round, not on a
-    // server, and a number in the tab list would be noise.
-    ServerDisplayNames names = of(
-      List.of(server("oneblockrace-solo-vz3g", "oneblockrace-solo", 1)),
-      List.of(group("oneblockrace-solo", "OneBlockRace-Solo")));
-    assertEquals("OneBlockRace-Solo", names.of("oneblockrace-solo-vz3g"));
-  }
-
-  @Test
-  void aServerNobodyNumberedReadsTheGroupsName() {
-    // Every server that was running when the field arrived. Nothing backfills
-    // them, and "Hub-0" would be worse than "Hub".
-    assertEquals("Hub",
-      of(List.of(server("hub-dvjk", "hub", 0)), List.of(numberedGroup("hub", "Hub"))).of("hub-dvjk"));
-  }
-```
-
-- [ ] **Step 3: Run them and watch them fail**
-
-Run: `cd ~/git/cyperia/essentials && cadev test` (mirror the flags cadev uses for this project; never invoke `./gradlew` bare).
-
-Expected: FAIL — `Hub` where `Hub-2` was wanted.
-
-- [ ] **Step 4: Implement**
-
-In `ServerDisplayNames.java`, replace the `of` method and add one constant and one helper:
-
-```java
-  /**
-   * The group attribute that asks for numbers. It names the surface it governs
-   * on purpose: the server selector numbers whatever it lists, because telling
-   * siblings apart is the entire job of an entry there.
-   */
-  static final String TABLIST_ATTRIBUTE = "tablist";
-  static final String NUMBERED = "numbered";
-
-  public String of(String registeredName) {
-    if (registeredName == null || registeredName.isBlank()) {
-      return registeredName;
-    }
-    try {
-      Optional<ServerInfo> server = first(network.servers(), s -> registeredName.equals(s.name()));
-      Optional<Group> group = server.flatMap(s -> first(network.groups(), g -> g.name().equals(s.group())));
-      return group
-        .map(Group::displayName)
-        .filter(name -> !name.isBlank())
-        .map(name -> numbered(name, group.get(), server.get()))
-        .orElse(registeredName);
-    } catch (Exception | LinkageError absent) {
-      // No agent on this proxy: the registered name is the best there is.
-      return registeredName;
-    }
-  }
-
-  private static String numbered(String displayName, Group group, ServerInfo server) {
-    if (server.number() <= 0 || !NUMBERED.equals(group.attributes().get(TABLIST_ATTRIBUTE))) {
-      return displayName;
-    }
-    return displayName + "-" + server.number();
-  }
-```
-
-Delete the now-unused private `group(String)` method.
-
-- [ ] **Step 5: Run them and watch them pass**
-
-Run: `cd ~/git/cyperia/essentials && cadev test`
-
-Expected: PASS, including the five tests that were there before.
-
-- [ ] **Step 6: Commit on a new branch**
-
-OneDev refuses updates to existing branches (it reports it as a non-fast-forward, which it is not), so push a new branch and target `staging`.
-
-```bash
-cd ~/git/cyperia/essentials
-git checkout -b feat/tablist-server-numbers
-git add gradle.properties velocity/src
-git commit -m "$(cat <<'EOF'
-feat(tablist): a numbered group reads its server's number
-
-Every server of a group read the same name in the tab list, so a player
-on a hub could not say which hub they were on. A group carrying the
-attribute tablist=numbered now reads "Hub-2" instead.
-
-Only a group that asks. A player on a game mode is there for the round
-and not for the server, and a number there would be noise. A server the
-operator never numbered keeps reading the group's name, because "Hub-0"
-is worse than "Hub".
-
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01FbwDaFeEUAXku6iLfgp8fZ
-EOF
-)"
-```
+Bump the consumer's `spawneryApiVersion` to 0.2.27 and make its tab list render `displayName + "-" + number` for a group whose attribute is `tablist: numbered`. That work lives in the consumer's own repositories.
 
 ---
 
 ### Task 8: The selector shows the number instead of the pod name
 
-**Files:**
-- Modify: `~/git/cyperia/lobby/gradle.properties:6` (`spawneryApiVersion`)
-- Modify: `~/git/cyperia/lobby/common/src/main/java/net/codingarea/lobby/common/selector/data/SelectableServerData.java`
-- Modify: `~/git/cyperia/lobby/common/src/main/java/net/codingarea/lobby/common/selector/data/SpawnerySelectorDataSource.java:78-87`
-- Modify: `~/git/cyperia/lobby/common/src/main/java/net/codingarea/lobby/common/selector/menu/ServerSelectorMenu.java:99`
-- Modify: `~/git/cyperia/lobby/common/src/main/java/net/codingarea/lobby/common/selector/data/CloudNetSelectorDataSource.java:47`
-- Test: `~/git/cyperia/lobby/common/src/test/java/net/codingarea/lobby/common/selector/data/SpawnerySelectorDataSourceTest.java`
-- Test: `~/git/cyperia/lobby/common/src/test/java/net/codingarea/lobby/common/selector/data/SelectorRankingTest.java:14,20`
-
-**Interfaces:**
-- Consumes: `ServerInfo.number()` from `spawnery-api:0.2.27`.
-- Produces: `SelectableServerData.displayName()`.
-
-**Two fields, not one.** `serverName()` is the route — `sendToServer`, `SelectorRanking.isJoinable` and `QuickJoinCommand` all compare it — and `displayName()` is the label. Nothing that routes may read the label.
-
-- [ ] **Step 1: Bump the API and fix the existing test helper**
-
-```bash
-sed -i 's/^spawneryApiVersion=.*/spawneryApiVersion=0.2.27/' ~/git/cyperia/lobby/gradle.properties
-```
-
-In `SpawnerySelectorDataSourceTest.java`:
-
-```java
-  private static ServerInfo server(String name, String group, ServerPhase phase, int players, int slots,
-                                   String state, Map<String, String> attributes) {
-    return server(name, group, phase, players, slots, state, attributes, 0);
-  }
-
-  private static ServerInfo server(String name, String group, ServerPhase phase, int players, int slots,
-                                   String state, Map<String, String> attributes, int number) {
-    return new ServerInfo(name, group, phase, players, slots, true, state, attributes, "pod", number);
-  }
-```
-
-and give the two bingo-team servers numbers, so the display test has siblings to tell apart:
-
-```java
-    server("bingo-team-c3d4", "bingo-team", ServerPhase.READY, 8, 16, ServiceStates.IN_GAME, Map.of(), 1),
-    server("bingo-team-e5f6", "bingo-team", ServerPhase.STARTING, 0, 16, "", Map.of(), 2),
-```
-
-and give the solo one a number too:
-
-```java
-    server("bingo-solo-a1b2", "bingo-solo", ServerPhase.READY, 3, 16, ServiceStates.LOBBY, ARCADIA, 1),
-```
-
-- [ ] **Step 2: Write the failing tests**
-
-Append to `SpawnerySelectorDataSourceTest.java`:
-
-```java
-  @Test
-  void anEntryIsLabelledByTheGroupAndTheNumber() {
-    SelectableServerData data = entry("Bingo", "bingo-solo-a1b2").orElseThrow();
-
-    assertEquals("Bingo-Solo-1", data.displayName());
-  }
-
-  @Test
-  void theRouteStaysThePodName() {
-    // Two fields and not one: sendToServer, SelectorRanking and
-    // QuickJoinCommand all compare serverName, and none of them may meet a
-    // label.
-    SelectableServerData data = entry("Bingo", "bingo-solo-a1b2").orElseThrow();
-
-    assertEquals("bingo-solo-a1b2", data.serverName());
-  }
-
-  @Test
-  void anUnnumberedServerIsLabelledByItsPodName() {
-    // Nothing backfills a server that was running when the field arrived, and
-    // "Bingo-Solo-0" would name a server that does not exist.
-    SpawnerySelectorDataSource source = new SpawnerySelectorDataSource(
-      new SpawnerySelectorDataSource.Network() {
-        @Override
-        public List<Group> groups() { return List.of(group("bingo-solo", "Bingo-Solo", Map.of("game", "Bingo"))); }
-
-        @Override
-        public List<ServerInfo> servers() {
-          return List.of(server("bingo-solo-old1", "bingo-solo", ServerPhase.READY, 0, 16, "", Map.of()));
-        }
-      });
-
-    assertEquals("bingo-solo-old1", source.getSelectorEntries("Bingo")[0].displayName());
-  }
-```
-
-- [ ] **Step 3: Run them and watch them fail**
-
-Run: `cd ~/git/cyperia/lobby && cadev test`
-
-Expected: FAIL to compile — `cannot find symbol: method displayName()`.
-
-- [ ] **Step 4: Implement**
-
-In `SelectableServerData.java`, add the component after `serverName` and document it:
-
-```java
-/**
- * @param displayName what a player reads on the entry: the group's name and the server's number,
- *     "Bingo-Solo-1". Never the route -- {@link #serverName()} is that, and everything which
- *     connects, ranks or quick-joins compares it.
- * @param task {@code Bingo-Solo} for every solo bingo server -- what
- *     {@link QuickJoinMode#matchesTask} compares against.
- */
-public record SelectableServerData(String serverName, String displayName, String task, int playerLimit,
-    int playerCount, int maxOnlineUsers, Optional<Integer> minPlayers, String permission, boolean ingame,
-    Optional<Boolean> starting, Optional<Boolean> allowSpectators, Optional<Integer> teamSize,
-    Optional<Integer> amountOfTeams) {
-```
-
-In `SpawnerySelectorDataSource.describe`, replace the return with:
-
-```java
-    return new SelectableServerData(server.name(), label(server, group), group.displayName(), playerLimit,
-      server.players(), server.slots(), minPlayers, permission, ingame, starting, allowSpectators, teamSize,
-      amountOfTeams);
-  }
-
-  // The selector lists the servers of one group side by side, so it numbers
-  // whatever it lists and reads no group attribute: a switch that turned this
-  // off would only ever be wrong here.
-  private static String label(ServerInfo server, Group group) {
-    if (server.number() <= 0 || group.displayName().isBlank()) {
-      return server.name();
-    }
-    return group.displayName() + "-" + server.number();
-  }
-```
-
-In `ServerSelectorMenu.java:99`:
-
-```java
-      .name(data.displayName());
-```
-
-Two other places construct this record and both take the argument:
-
-`CloudNetSelectorDataSource.java:47` — under CloudNET the service name already was what a player read, which is the whole reason `ServerDisplayNames` exists on the Spawnery side. So the label is the name:
-
-```java
-        return new SelectableServerData(serverName, serverName, task, playerLimit, playerCount, maxOnlineUsers, minPlayers, permission, ingame, starting, allowSpectators, teamSize, amountOfTeams);
-```
-
-`SelectorRankingTest.java:14` and `:20` — the ranking never reads the label, so the two helpers repeat the name they already pass:
-
-```java
-    return new SelectableServerData("Bingo-Solo-1", "Bingo-Solo-1", "Bingo-Solo", playerLimit, playerCount, playerLimit,
-        Optional.empty(), null, ingame, starting, allowSpectators, Optional.empty(), Optional.empty());
-```
-
-```java
-    return new SelectableServerData("Bingo-Team-1", "Bingo-Team-1", "Bingo-Team", playerLimit, playerCount, playerLimit,
-        Optional.empty(), null, false, Optional.empty(), Optional.empty(), Optional.of(teamSize),
-        Optional.of(amountOfTeams));
-```
-
-- [ ] **Step 5: Run them and watch them pass**
-
-Run: `cd ~/git/cyperia/lobby && cadev test`
-
-Expected: PASS, including every test that was there before — `serverName()` did not move, so the existing assertions hold unchanged.
-
-- [ ] **Step 6: Commit on a new branch**
-
-```bash
-cd ~/git/cyperia/lobby
-git checkout -b feat/selector-server-numbers
-git add gradle.properties common/src
-git commit -m "$(cat <<'EOF'
-feat(selector): an entry is labelled by the group and the number
-
-The selector named each entry by the pod, "oneblockrace-solo-vz3g",
-which nobody can say out loud. It now reads "Bingo-Solo-1".
-
-Two fields and not one: serverName stays the route, which sendToServer,
-SelectorRanking and QuickJoinCommand all compare, and displayName is the
-label. The selector reads no group attribute -- it lists the servers of
-one group side by side, so telling them apart is the entire job of an
-entry, and a switch for that would only ever be wrong.
-
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01FbwDaFeEUAXku6iLfgp8fZ
-EOF
-)"
-```
+Bump the consumer's `spawneryApiVersion` and make its server selector carry and render the display name with the number instead of the pod name, regardless of the attribute. That work lives in the consumer's own repositories.
 
 ---
 
 ### Task 9: The hub asks for numbers, and the images move
 
-**Files:**
-- Modify: `~/git/cyperia/configs/spawnery/base/groups/hub.yaml:14-16` (the `attributes` block)
-- Modify: `~/git/cyperia/configs/spawnery/base/groups/*.yaml` (the `image:` line of all fourteen groups)
-
-**Interfaces:**
-- Consumes: the attribute key `tablist: numbered` read by Task 7; the images published by Task 6.
-- Produces: nothing.
-
-**Order.** The attribute is inert until the plugins that read it are deployed, so it may travel with the images or after them. The images must not move before Task 6's release finished publishing them.
-
-- [ ] **Step 1: Ask for numbers on the hub, and nowhere else**
-
-In `spawnery/base/groups/hub.yaml`, extend the `attributes` block:
-
-```yaml
-  attributes:
-    game: Hub
-    # Die Tablist haengt an dieses Gruppen-Anzeigenamen die Servernummer an,
-    # damit ein Spieler sagen kann, auf welchem Hub er ist. Die Spielmodi
-    # tragen es nicht: dort ist man in der Runde und nicht auf dem Server.
-    tablist: numbered
-```
-
-The surrounding comments in this file are German and stay German; a new comment in a wholly German file is written German to match.
-
-- [ ] **Step 2: Move the fourteen images**
-
-```bash
-cd ~/git/cyperia/configs
-sed -i 's/:26\.2-0\.2\.26$/:26.2-0.2.27/; s/:3\.5\.1-0\.2\.26$/:3.5.1-0.2.27/' spawnery/base/groups/*.yaml
-grep -rn "image:" spawnery/base/groups/*.yaml
-```
-
-Expected: thirteen `purpur:26.2-0.2.27` and one `velocity:3.5.1-0.2.27`.
-
-- [ ] **Step 3: Commit on a new branch and open the PR against `staging`**
-
-```bash
-git checkout -b chore/images-0-2-27
-git add spawnery/base/groups
-git commit -m "$(cat <<'EOF'
-chore: 0.2.27, and the hub asks for numbered servers in the tab list
-
-The agent now carries each server's number, so a group can ask the tab
-list to append it. The hub asks; the game modes do not, because a player
-there is in the round and not on a server.
-
-Co-Authored-By: Claude Opus 5 (1M context) <noreply@anthropic.com>
-Claude-Session: https://claude.ai/code/session_01FbwDaFeEUAXku6iLfgp8fZ
-EOF
-)"
-```
-
-OneDev's suggested PR URL defaults to `target=…:production`; the right target is `staging`.
-
-- [ ] **Step 4: Watch the roll**
-
-Once the PR is merged and the assembly has run, the group manifests change, `spawnery-sync` stamps the changed groups, and the operator rolls them one at a time. Confirm on the cluster:
-
-```bash
-kubectl -n minecraft get servers -o custom-columns=NAME:.metadata.name,NUMBER:.spec.number,PHASE:.status.phase
-```
+In the consumer's configuration repository, set `tablist: numbered` on the hub group and move every group's image to 0.2.27. The attribute is inert until the plugins that read it are deployed, so it may travel with the images or after them; the images must not move before Task 6's release finished publishing them. That work lives in the consumer's own repository.
 
 Expected: every server created after the roll carries a number; the hub's are 1, 2, 3 with no repeats.
 

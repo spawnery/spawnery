@@ -1024,10 +1024,10 @@ They are what makes the fix visible to a player, so neither is optional.
 
 ## Verification in a real network
 
-- The **round end** can be checked in cadev: end a round, watch a new pod
+- The **round end** can be checked in the consumer's local environment: end a round, watch a new pod
   arrive with a fresh world. `maxReplicas: 1` does not get in the way.
-- The **scale-up** cannot. cadev renders every group with `maxReplicas: 1`,
+- The **scale-up** cannot. that environment renders every group with `maxReplicas: 1`,
   because every server of a group mounts the same files claim and a Minecraft
   level can be opened by exactly one server. Checking it needs paulwtf, or
-  cadev needs an answer of its own for a group holding more than one server.
-  That question is open and belongs to whoever picks up cadev next.
+  the environment needs an answer of its own for a group holding more than one server.
+  That question is open and belongs to whoever picks up that environment next.

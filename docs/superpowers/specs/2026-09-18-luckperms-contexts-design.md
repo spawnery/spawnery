@@ -20,7 +20,7 @@ without a calculator stays `global` on every pod in the cluster.
 CloudNet solved this years ago, and a network moving off CloudNet loses it:
 `cloudnet-luckperms.jar` is one of the plugins the cloud injects into every
 service, and `devtool` deletes it on the way to Spawnery
-(`pruneCloudNetPlugins`, cyperia's `devtool/layout.go:239`) because it would
+(`pruneCloudNetPlugins` in the consumer's tooling) because it would
 contact a CloudNet wrapper that is not there.
 
 ## 2. What CloudNet actually does

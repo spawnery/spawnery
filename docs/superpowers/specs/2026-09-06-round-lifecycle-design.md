@@ -181,12 +181,12 @@ Deregistration and the round-end-to-replacement path need envtest.
 
 In the real network the two halves differ:
 
-- The **round end** can be verified in cadev. End a round, watch a new pod
+- The **round end** can be verified in the consumer's local environment. End a round, watch a new pod
   arrive with a fresh world. `maxReplicas: 1` does not get in the way.
-- The **scale-up** cannot. cadev renders every group with `maxReplicas: 1`,
+- The **scale-up** cannot. that environment renders every group with `maxReplicas: 1`,
   because every server of a group mounts the same files claim and a Minecraft
   level can be opened by exactly one server. Verifying it needs paulwtf, or
-  cadev needs an answer of its own for a group that may hold more than one
+  the environment needs an answer of its own for a group that may hold more than one
   server. That question is open and belongs to the plan, not here.
 
 ## Not part of this

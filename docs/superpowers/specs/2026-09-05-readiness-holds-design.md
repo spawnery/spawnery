@@ -165,7 +165,7 @@ before other plugins' `MONITOR` handlers.
 ## What the network does with it
 
 Not part of this repository, and named so the design is not read as complete
-without it: the cyperia `core` plugin takes a hold — or closes the door, under
+without it: the consumer's core plugin takes a hold — or closes the door, under
 A alone — and releases it when ViaVersion reports its mapping load finished.
 
 Spawnery must not learn about ViaVersion. The operator has no way to know

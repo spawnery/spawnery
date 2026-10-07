@@ -6,8 +6,8 @@
 ## 1. What this operator cannot do today
 
 A private server is one player's world, started when they ask for it and
-stopped when they are done, keeping what they built between the two. Cyperia
-runs them on CloudNet today (`cyperia/private-server`, branch `develop`) behind
+stopped when they are done, keeping what they built between the two. A consumer
+runs them on CloudNet today (in its private-server plugin) behind
 an `Orchestator` interface with one implementation, and spawnery is to replace
 that platform.
 
@@ -38,7 +38,7 @@ It creates no server, it deletes none as surplus, and it rolls none.
 
 **Its members are named, not counted.** A member is an ordinary `Server`
 called `<group>-<key>`, where the key is whatever the caller uses to identify
-the world: for Cyperia that is the instance UUID their database already keys
+the world: for a consumer that may be the instance UUID its database already keys
 on. Its world is the claim `<group>-<key>-data`, and because this operator
 never deletes a claim (`docs/guides/persistent-worlds.md`), the same key later
 finds the same world.
@@ -344,7 +344,7 @@ appear anywhere is a new `!IsEphemeral()` standing in for "persistent".
 ## 4. The consumer side
 
 Out of scope for this repository and recorded here because the design was cut
-against it. In `cyperia/private-server`:
+against it. In the consumer's private-server plugin:
 
 - **`orchestrator:spawnery`**, a module beside `orchestrator:cloudnet`,
   implementing the same `Orchestator` interface against
