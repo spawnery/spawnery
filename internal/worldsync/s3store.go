@@ -18,6 +18,7 @@ package worldsync
 
 import (
 	"context"
+	"crypto/tls"
 	"errors"
 	"fmt"
 	"io"
@@ -64,6 +65,11 @@ type S3Store struct {
 }
 
 func NewS3Store(cfg S3Config) (*S3Store, error) {
+	return newS3Store(cfg, nil)
+}
+
+// newS3Store takes a TLS configuration for the tests; nil keeps the system's.
+func newS3Store(cfg S3Config, tlsConfig *tls.Config) (*S3Store, error) {
 	client := s3.New(s3.Options{
 		Region:       cfg.Region,
 		BaseEndpoint: aws.String(cfg.Endpoint),
@@ -72,6 +78,16 @@ func NewS3Store(cfg S3Config) (*S3Store, error) {
 		// Stores outside AWS reject or ignore the CRC headers newer SDKs add.
 		RequestChecksumCalculation: aws.RequestChecksumCalculationWhenRequired,
 		ResponseChecksumValidation: aws.ResponseChecksumValidationWhenRequired,
+		// HTTP/1.1: a request that gives up closes its connection. Over HTTP/2
+		// every request shares one, and the transport keeps using it after the
+		// network dropped it, until TCP gives up minutes later.
+		HTTPClient: awshttp.NewBuildableClient().WithTransportOptions(func(tr *http.Transport) {
+			tr.ForceAttemptHTTP2 = false
+			tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
+			if tlsConfig != nil {
+				tr.TLSClientConfig = tlsConfig
+			}
+		}),
 	})
 	return &S3Store{client: client, bucket: cfg.Bucket}, nil
 }
