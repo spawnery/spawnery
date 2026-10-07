@@ -124,7 +124,7 @@
           # whenever anything under agent/, image/, internal/render or the JRE
           # derivations changes; a Paper or Purpur bump without it would collide
           # with a published tag. Gaps are releases that built no game image.
-          imageVersion = "0.24.1";
+          imageVersion = "0.24.2";
 
           # The operator's version, separate from imageVersion so a reconciler fix
           # does not claim a new agent and an agent release does not rename an

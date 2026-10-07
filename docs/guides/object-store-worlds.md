@@ -14,7 +14,7 @@ spec:
   networkRef:
     name: production
   type: OnDemand
-  image: ghcr.io/spawnery/purpur:26.3-0.24.1
+  image: ghcr.io/spawnery/purpur:26.3-0.24.2
   maxPlayers: 10
   maxInstances: 200
   storage:
@@ -134,7 +134,7 @@ the prune as it would be on a claim. The snapshot at a stop still saves what
 `keep` matches. Add the path to `keep`, or to `replace` if the sources ship it.
 
 The group's image needs spawnery's agent 0.24.0 or later, as in the
-`purpur:26.3-0.24.1` of the example. Its Paper bootstrapper is what holds the
+`purpur:26.3-0.24.2` of the example. Its Paper bootstrapper is what holds the
 server back until the world is on disk. An older image, or a custom one
 without the agent, starts the server on a half-downloaded world, which the
 server can then corrupt. The operator cannot tell which agent an image
