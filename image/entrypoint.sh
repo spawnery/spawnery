@@ -187,6 +187,7 @@ done
 # drops a cache that does not fit (another JDK, class path or GC flag) with a
 # warning and starts without it.
 AOT=""
+NOADAPTERS=""
 if [ -n "${SPAWNERY_AOT_OUTPUT:-}" ]; then
 	AOT="-XX:AOTCacheOutput=$SPAWNERY_AOT_OUTPUT"
 	# The JVM writes the cache from a child that inherits these flags while
@@ -200,6 +201,11 @@ elif [ -f "$AOT_CACHE" ]; then
 		;;
 	*)
 		AOT="-XX:AOTCache=$AOT_CACHE"
+		# Cached adapters are code for the training machine's CPU, and the JVM
+		# runs them without checking: on a node lacking one of its instructions
+		# it dies with SIGILL (measured 2026-10-07, 0.24.0 cache, QEMU CPU
+		# model). The classes, where the startup time goes, are still loaded.
+		NOADAPTERS="-XX:-AOTAdapterCaching"
 		;;
 	esac
 fi
@@ -223,5 +229,6 @@ exec java \
 	-XX:G1RSetUpdatingPauseTimePercent=5 \
 	-XX:InitiatingHeapOccupancyPercent=15 \
 	${AOT:+"$AOT"} \
+	${NOADAPTERS:+-XX:+UnlockDiagnosticVMOptions "$NOADAPTERS"} \
 	-cp "$(cat "$PAPER_HOME/launch.classpath")" \
 	"$(cat "$PAPER_HOME/launch.main")" --nogui

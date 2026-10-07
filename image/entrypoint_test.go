@@ -899,6 +899,36 @@ func TestEntrypointUsesAMountedAOTCache(t *testing.T) {
 	}
 }
 
+// Adapters in the cache are machine code for the CPU the cache was trained
+// on; on a node whose CPU lacks one of its instructions the JVM dies with
+// SIGILL instead of dropping them.
+func TestEntrypointLoadsNoAdaptersFromTheAOTCache(t *testing.T) {
+	cache := filepath.Join(t.TempDir(), "server.aot")
+	if err := os.WriteFile(cache, []byte("cache"), 0o444); err != nil {
+		t.Fatal(err)
+	}
+
+	out, err := runEntrypoint(t, t.TempDir(), 0, "SPAWNERY_AOT_CACHE="+cache)
+	if err != nil {
+		t.Fatalf("entrypoint: %v\n%s", err, out)
+	}
+	argv := javaArgv(t, out)
+	unlock, off := strings.Index(argv, "-XX:+UnlockDiagnosticVMOptions"), strings.Index(argv, "-XX:-AOTAdapterCaching")
+	cp := strings.Index(argv, " -cp ")
+	if unlock < 0 || off < 0 || unlock > off || off > cp {
+		t.Errorf("want -XX:+UnlockDiagnosticVMOptions -XX:-AOTAdapterCaching before -cp next to the cache; got: %s", argv)
+	}
+
+	out, err = runEntrypoint(t, t.TempDir(), 0,
+		"SPAWNERY_AOT_CACHE="+filepath.Join(t.TempDir(), "server.aot"))
+	if err != nil {
+		t.Fatalf("entrypoint: %v\n%s", err, out)
+	}
+	if argv := javaArgv(t, out); strings.Contains(argv, "AOTAdapterCaching") {
+		t.Errorf("an adapter flag without a cache file; got: %s", argv)
+	}
+}
+
 func TestEntrypointStartsWithoutACacheWhenNoneIsMounted(t *testing.T) {
 	out, err := runEntrypoint(t, t.TempDir(), 0,
 		"SPAWNERY_AOT_CACHE="+filepath.Join(t.TempDir(), "server.aot"))
