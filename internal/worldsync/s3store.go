@@ -19,6 +19,7 @@ package worldsync
 import (
 	"context"
 	"crypto/tls"
+	"crypto/x509"
 	"errors"
 	"fmt"
 	"io"
@@ -68,8 +69,8 @@ func NewS3Store(cfg S3Config) (*S3Store, error) {
 	return newS3Store(cfg, nil)
 }
 
-// newS3Store takes a TLS configuration for the tests; nil keeps the system's.
-func newS3Store(cfg S3Config, tlsConfig *tls.Config) (*S3Store, error) {
+// newS3Store takes extra root CAs for the tests; nil keeps the system's.
+func newS3Store(cfg S3Config, roots *x509.CertPool) (*S3Store, error) {
 	client := s3.New(s3.Options{
 		Region:       cfg.Region,
 		BaseEndpoint: aws.String(cfg.Endpoint),
@@ -84,8 +85,12 @@ func newS3Store(cfg S3Config, tlsConfig *tls.Config) (*S3Store, error) {
 		HTTPClient: awshttp.NewBuildableClient().WithTransportOptions(func(tr *http.Transport) {
 			tr.ForceAttemptHTTP2 = false
 			tr.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
-			if tlsConfig != nil {
-				tr.TLSClientConfig = tlsConfig
+			// The SDK clones its transport before these options run, and the
+			// clone already offers h2 in ALPN: a store that picks it gets
+			// HTTP/1.1 bytes on an HTTP/2 connection.
+			tr.TLSClientConfig.NextProtos = []string{"http/1.1"}
+			if roots != nil {
+				tr.TLSClientConfig.RootCAs = roots
 			}
 		}),
 	})

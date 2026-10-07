@@ -18,7 +18,6 @@ package worldsync
 
 import (
 	"context"
-	"crypto/tls"
 	"crypto/x509"
 	"io"
 	"net"
@@ -144,7 +143,7 @@ func TestS3RecoversFromAConnectionThatWentSilent(t *testing.T) {
 	s, err := newS3Store(S3Config{
 		Endpoint: "https://" + proxy.ln.Addr().String(), Region: "fsn1", Bucket: "worlds",
 		AccessKey: "a", SecretKey: "b",
-	}, &tls.Config{RootCAs: roots, MinVersion: tls.VersionTLS12})
+	}, roots)
 	if err != nil {
 		t.Fatal(err)
 	}
