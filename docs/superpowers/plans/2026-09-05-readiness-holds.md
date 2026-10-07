@@ -911,7 +911,7 @@ repository can: only the plugin knows when its initialisation is done, the
 operator has no way to learn which plugins a server runs, and the agent has no
 business special-casing one of them.
 
-For the `paulwtf` network that is cyperia's `core`, holding from its own
+For the `paulwtf` network that is the consumer's core plugin, holding from its own
 `ServerLoadEvent` handler and releasing when ViaVersion reports its mapping
 load finished. Until that lands, this release changes no behaviour on that
 network beyond Task 1 — which changes nothing either, because nothing there

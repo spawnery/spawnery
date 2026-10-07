@@ -13,7 +13,7 @@
 ## Global Constraints
 
 - **Conventional Commits.** `feat(<scope>): what changed`, `fix(...)`, `docs(...)`, `chore(...)`. Scope is the part of the project touched (`api`, `podspec`, `image`, `controller`, `chart`, `docs`). Body says why, wrapped at 72 columns, with the `Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>` trailer.
-- **Never mention the coding-area network** in this repository — not in code, comments, docs or commit messages. Sponge is a public project and may be named; the network's tasks and tooling may not.
+- **Never mention the consumer network** in this repository — not in code, comments, docs or commit messages. Sponge is a public project and may be named; the network's tasks and tooling may not.
 - **Branch:** `feat/files-from-a-volume`, already created, with the spec committed on it.
 - **`make test` must pass at the end of every task.** It runs `manifests generate fmt vet chart-lint toolchain-lint` first, so a task that changes the API must have run `make manifests generate` before committing.
 - **The mount path is `/var/run/spawnery/files`** and the env var that overrides it in tests is `SPAWNERY_FILE_SOURCE`, mirroring `SPAWNERY_PLUGIN_SOURCE`.

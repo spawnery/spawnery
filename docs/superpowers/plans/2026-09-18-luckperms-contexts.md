@@ -78,7 +78,7 @@ import kotlin.test.assertFalse
 private fun backend(
     pod: String = "lobby-7f3a",
     inGroup: String = "lobby",
-    inNetwork: String = "cyperia",
+    inNetwork: String = "example",
 ) = object : ServerSelf {
     override fun name(): String = pod
     override fun group(): String = inGroup
@@ -89,7 +89,7 @@ private fun backend(
 private fun proxy(
     pod: String = "edge-2c11",
     inGroup: String = "edge",
-    inNetwork: String = "cyperia",
+    inNetwork: String = "example",
 ) = object : ProxySelf {
     override fun name(): String = pod
     override fun group(): String = inGroup
@@ -103,7 +103,7 @@ class LuckPermsContextsTest {
             mapOf(
                 "server" to "lobby-7f3a",
                 "group" to "lobby",
-                "network" to "cyperia",
+                "network" to "example",
                 "environment" to "paper",
             ),
             LuckPermsContexts.of(backend(), LuckPermsContexts.UNCONFIGURED),
@@ -116,7 +116,7 @@ class LuckPermsContextsTest {
             mapOf(
                 "server" to "edge-2c11",
                 "group" to "edge",
-                "network" to "cyperia",
+                "network" to "example",
                 "environment" to "velocity",
             ),
             LuckPermsContexts.of(proxy(), LuckPermsContexts.UNCONFIGURED),
@@ -129,7 +129,7 @@ class LuckPermsContextsTest {
 
         assertFalse("server" in contexts, "it overwrote a configured name: $contexts")
         assertEquals(
-            mapOf("group" to "lobby", "network" to "cyperia", "environment" to "paper"),
+            mapOf("group" to "lobby", "network" to "example", "environment" to "paper"),
             contexts,
         )
     }
