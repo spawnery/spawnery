@@ -32,9 +32,12 @@ spec:
     # so a server with no memory limit takes three quarters of whatever machine
     # it lands on -- 70 GiB on the workstation this was written on, and more
     # than a GitHub runner has on the runner nightly.yml gives it.
+    # The CPU request is below the tutorial's: every kind node reports all of
+    # the host's CPUs, and on a 2-CPU host a worker that also runs MinIO and
+    # the node agent has no full CPU left for the second start.
     resources:
       requests:
-        cpu: "1"
+        cpu: 250m
         memory: 2Gi
       limits:
         memory: 2Gi
