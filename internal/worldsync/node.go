@@ -547,6 +547,24 @@ func (n *Node) ownLease(ctx context.Context, world string) (string, error) {
 	return info.ETag, nil
 }
 
+// copyIntact reports whether the files the state lists are still on disk.
+// Snapshots not yet uploaded have changed the copy since that list, so only
+// the data directory counts then.
+func (n *Node) copyIntact(s *worldState) bool {
+	data := n.dataDir(s.World)
+	if len(s.Pending) > 0 || s.FinalPending {
+		_, err := os.Lstat(data)
+		return err == nil
+	}
+	for _, f := range s.Files {
+		st, err := os.Lstat(filepath.Join(data, filepath.FromSlash(f.Path)))
+		if err != nil || !st.Mode().IsRegular() || st.Size() != f.Size {
+			return false
+		}
+	}
+	return true
+}
+
 // settleContent brings the local copy in line with the manifest. It returns
 // the manifest to download when the copy is not current.
 func (n *Node) settleContent(ctx context.Context, s *worldState) (*Manifest, string, error) {
@@ -563,8 +581,13 @@ func (n *Node) settleContent(ctx context.Context, s *worldState) (*Manifest, str
 	case err != nil:
 		return nil, "", fmt.Errorf("%w: read the manifest: %v", ErrUnavailable, err)
 	case !s.Incomplete && m.WorldID == s.WorldID && m.Generation == s.Generation:
-		s.ManifestETag = etag
-		return nil, "", n.markReady(s)
+		if n.copyIntact(s) {
+			s.ManifestETag = etag
+			return nil, "", n.markReady(s)
+		}
+		// Ready on a copy that is gone would start the server on a fresh world,
+		// and its first snapshot would replace this one in the bucket.
+		n.cfg.Log.Info("downloading the world again", "world", s.World, "reason", "files the state lists are missing from the local copy")
 	}
 	if len(s.Pending) > 0 || s.FinalPending {
 		dst, err := n.moveAside(s.World)

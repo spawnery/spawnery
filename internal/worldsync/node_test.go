@@ -277,6 +277,47 @@ func TestACurrentCacheNeedsNoDownload(t *testing.T) {
 	}
 }
 
+func TestACacheRemovedBehindTheAgentsBackIsDownloadedAgain(t *testing.T) {
+	h := newHarness(t)
+	target, _ := h.publish("a", w, "p1")
+	writeFile(t, filepath.Join(target, "worlds/world/level.dat"), 5, h.now)
+	h.unpublish("a", target)
+	h.node("a").Settle(context.Background())
+
+	if err := os.RemoveAll(h.node("a").worldDir(w)); err != nil {
+		t.Fatal(err)
+	}
+	target2, err := h.publish("a", w, "p2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.waitFile(target2, ReadyFile)
+	if _, err := os.Stat(filepath.Join(target2, "worlds/world/level.dat")); err != nil {
+		t.Fatalf("ready without the world: the state in memory vouched for a copy that is gone: %v", err)
+	}
+}
+
+func TestACacheMissingAFileIsDownloadedAgain(t *testing.T) {
+	h := newHarness(t)
+	target, _ := h.publish("a", w, "p1")
+	writeFile(t, filepath.Join(target, "worlds/world/level.dat"), 5, h.now)
+	writeFile(t, filepath.Join(target, "worlds/world/region/r.0.0.mca"), 7, h.now)
+	h.unpublish("a", target)
+	h.node("a").Settle(context.Background())
+
+	if err := os.Remove(filepath.Join(h.node("a").dataDir(w), "worlds/world/region/r.0.0.mca")); err != nil {
+		t.Fatal(err)
+	}
+	target2, err := h.publish("a", w, "p2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.waitFile(target2, ReadyFile)
+	if _, err := os.Stat(filepath.Join(target2, "worlds/world/region/r.0.0.mca")); err != nil {
+		t.Fatalf("ready with a file of the world missing: %v", err)
+	}
+}
+
 func TestASnapshotRequestIsAnsweredAndUploaded(t *testing.T) {
 	h := newHarness(t)
 	target, _ := h.publish("a", w, "p1")
