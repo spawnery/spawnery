@@ -95,7 +95,7 @@ for ns in spawnery-system spawnery-worldsync; do
     --from-literal=AWS_ACCESS_KEY_ID="$KEY_ID" \
     --from-literal=AWS_SECRET_ACCESS_KEY="$SECRET"
 done
-helm upgrade spawnery oci://ghcr.io/spawnery/charts/spawnery --version 0.24.0 \
+helm upgrade spawnery oci://ghcr.io/spawnery/charts/spawnery --version 0.24.4 \
   --namespace spawnery-system --reuse-values -f worldsync-values.yaml
 ```
 
@@ -133,11 +133,13 @@ snapshot of a running member fails with `spec.storage.keep does not keep
 the prune as it would be on a claim. The snapshot at a stop still saves what
 `keep` matches. Add the path to `keep`, or to `replace` if the sources ship it.
 
-The group's image needs spawnery's agent 0.24.0 or later, as in the
-`purpur:26.3-0.24.3` of the example. Its Paper bootstrapper is what holds the
-server back until the world is on disk. An older image, or a custom one
-without the agent, starts the server on a half-downloaded world, which the
-server can then corrupt. The operator cannot tell which agent an image
+The group's image needs to be one of spawnery's game images, 0.24.3 or later,
+as in the `purpur:26.3-0.24.3` of the example. Its Paper bootstrapper is what
+holds the server back until the world is on disk. An older image, or a custom
+one without the agent, starts the server on a half-downloaded world, which the
+server can then corrupt. Before 0.24.3 the entrypoint also ran chmod over the
+downloaded world, which belongs to the node agent, so a resumed world did not
+start. The operator cannot tell which agent an image
 carries.
 
 `size`, `storageClassName`, `accessModes` and `annotations` stay valid and are
@@ -227,7 +229,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: import
-          image: ghcr.io/spawnery/spawnery-worldsync:0.24.0
+          image: ghcr.io/spawnery/spawnery-worldsync:0.24.4
           args:
             - import
             - --world=minecraft/private-servers/0b5c1c82-4c7f-4a6e-9d1b-2c1f2b9d5e10

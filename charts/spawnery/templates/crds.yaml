@@ -5129,10 +5129,11 @@ spec:
                       keeps it in the object store configured for the operator (chart value
                       worldSync) and gives /data from a directory on the node that runs the
                       member; it needs type OnDemand and keep, and synchronises exactly what
-                      keep matches. It also needs game images with spawnery's agent 0.24.0
-                      or later, whose bootstrapper holds the server until the world is on
-                      disk: an older or a custom image without it starts on a half-downloaded
-                      world and can corrupt it. Size, storageClassName, accessModes and
+                      keep matches. It also needs spawnery's game images 0.24.3 or later,
+                      whose bootstrapper holds the server until the world is on disk and
+                      whose entrypoint leaves the node agent's files alone: an older or a
+                      custom image starts on a half-downloaded world and can corrupt it, or
+                      fails to resume a world at all. Size, storageClassName, accessModes and
                       annotations are ignored under ObjectStore and stay valid for switching
                       back. The backend may change either way; nothing is moved across.
                     enum:
