@@ -94,13 +94,12 @@ printf 'eula=true\n' >eula.txt
 spawnery-config --flavor paper
 
 # The source mounts are read-only, so the copies arrive read-only, and servers
-# rewrite these files. writable_copy NAME SOURCE DEST makes DEST's copy of
-# SOURCE/NAME writable and nothing beside it: a world from the world sync node
-# agent is root's, and chmod on it fails. Not `chmod -R u+w .` either: a
-# read-only claim mount elsewhere under /data would kill the start under
-# `set -eu`.
-writable_copy() {
-	(cd "$2" && find "./$1" -xdev -exec sh -c 'cd "$0" && exec chmod u+w "$@"' "$3" {} +)
+# rewrite these files. writable DIR makes what this user owns under DIR
+# writable. A world from the world sync node agent is root's, directories
+# included, and chmod on it fails. Not `chmod -R u+w .` either: a read-only
+# claim mount elsewhere under /data would kill the start under `set -eu`.
+writable() {
+	find "$1" -xdev -user "$(id -u)" -exec chmod u+w {} +
 }
 
 # lost+found: see the plugin copy below.
@@ -112,7 +111,7 @@ if [ -d "$FILE_SOURCE" ]; then
 		lost+found) continue ;;
 		esac
 		cp -R "$entry" ./
-		writable_copy "$name" "$FILE_SOURCE" "$(pwd -P)"
+		writable "./$name"
 	done
 fi
 
@@ -130,8 +129,8 @@ if [ -d "$PLUGIN_SOURCE" ]; then
 		lost+found) continue ;;
 		esac
 		cp -R "$entry" plugins/
-		writable_copy "${entry##*/}" "$PLUGIN_SOURCE" "$(pwd -P)/plugins"
 	done
+	writable plugins
 fi
 
 # Copied rather than loaded where it ships: Paper writes its plugins' data
