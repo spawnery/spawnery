@@ -167,20 +167,22 @@ done
 if [ "$WRITE_DIGEST" = "1" ] && [ -n "$operator_digest" ]; then
 	manifest="charts/spawnery/values.yaml"
 	# The spawnery.image helper prefers image.digest over image.tag, so only
-	# this key changes. `sed -i` exits 0 whether or not anything matched.
+	# this key changes; worldSync.image has a digest key of its own, hence the
+	# range. `sed -i` exits 0 whether or not anything matched.
 	pattern='(^[[:space:]]*digest:[[:space:]]*)".*"[[:space:]]*$'
-	if ! grep -qE "$pattern" "$manifest"; then
-		echo "no digest: line in ${manifest}; the chart's shape has moved and this" >&2
-		echo "substitution would have reported success over an unchanged file. Fix" >&2
-		echo "the pattern here, or set the digest by hand:" >&2
+	block='/^image:/,/^[^[:space:]#]/'
+	if ! sed -n -E "${block}p" "$manifest" | grep -qE "$pattern"; then
+		echo "no digest: line under image: in ${manifest}; the chart's shape has moved" >&2
+		echo "and this substitution would have reported success over an unchanged file." >&2
+		echo "Fix the pattern here, or set the digest by hand:" >&2
 		echo "  ${operator_digest}" >&2
 		exit 1
 	fi
-	sed -i -E "s|${pattern}|\1\"${operator_digest}\"|" "$manifest"
-	if ! grep -qF "digest: \"${operator_digest}\"" "$manifest"; then
-		echo "sed reported success but ${manifest} does not carry" >&2
+	sed -i -E "${block}s|${pattern}|\1\"${operator_digest}\"|" "$manifest"
+	if [ "$(grep -cF "digest: \"${operator_digest}\"" "$manifest")" != 1 ]; then
+		echo "after the substitution ${manifest} does not carry" >&2
 		echo "  digest: \"${operator_digest}\"" >&2
-		echo "after the substitution; refusing to claim the write succeeded." >&2
+		echo "exactly once; refusing to claim the write succeeded." >&2
 		exit 1
 	fi
 	echo "wrote digest ${operator_digest} into ${manifest}"
