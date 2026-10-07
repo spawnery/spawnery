@@ -148,7 +148,7 @@ spec:
   networkRef:
     name: tutorial
   type: Ephemeral
-  image: ghcr.io/spawnery/purpur:26.3-0.24.2
+  image: ghcr.io/spawnery/purpur:26.3-0.24.3
   maxPlayers: 20
   scaling:
     minReplicas: 1
@@ -164,7 +164,7 @@ spec:
   networkRef:
     name: tutorial
   replicas: 1
-  image: ghcr.io/spawnery/velocity:4.2.0-0.24.2
+  image: ghcr.io/spawnery/velocity:4.2.0-0.24.3
   # Velocity does not need a backend's heap; overriding the Network's
   # defaults keeps the proxy off the 2Gi a Paper server needs.
   resources:
