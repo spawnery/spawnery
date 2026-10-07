@@ -71,6 +71,14 @@ const ReasonServerPodRejected = "ServerPodRejected"
 // refused.
 const ReasonServerClaimRejected = "ServerClaimRejected"
 
+// ReasonWorldSyncOff marks a member of an ObjectStore group while the operator
+// runs without --world-sync.
+const ReasonWorldSyncOff = "WorldSyncOff"
+
+// ReasonServerKeyMissing marks a member of an ObjectStore group with an empty
+// spec.key, which would leave its world without a name.
+const ReasonServerKeyMissing = "ServerKeyMissing"
+
 // These mirror the kubebuilder defaults on ServerGroupSpec, for a Server whose
 // group is gone. TestTheFallbackGroupCarriesEveryCrdDefault keeps them in step.
 const (
@@ -105,6 +113,9 @@ type ServerReconciler struct {
 	// "spawnery-operator.spawnery-system.svc:9443".
 	AgentEndpoint string
 	AOTCache      bool
+	WorldSync     bool
+	// WorldSyncInterval is how often a member of an ObjectStore group asks for a snapshot.
+	WorldSyncInterval time.Duration
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servers,verbs=get;list;watch;create;update;patch;delete
@@ -224,7 +235,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Every pass: a persistent server's pod usually already exists when its
 	// claim needs to grow.
 	claimExists := false
-	if !group.IsEphemeral() {
+	if group.UsesClaim() {
 		var err error
 		if claimExists, err = r.growClaim(ctx, group, srv); err != nil {
 			return ctrl.Result{}, err
@@ -261,10 +272,25 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
+	if createPod && group.UsesObjectStore() {
+		switch {
+		case !r.WorldSync:
+			setAccepted(srv, false, ReasonWorldSyncOff,
+				"the group keeps its worlds in an object store (spec.storage.backend ObjectStore), "+
+					"and this operator runs without --world-sync; no pod is created until it does")
+			createPod = false
+		case srv.Spec.Key == "":
+			setAccepted(srv, false, ReasonServerKeyMissing,
+				"a member of a group that keeps its worlds in an object store needs spec.key, "+
+					"which names the world; no pod is created without it")
+			createPod = false
+		}
+	}
+
 	// Not waiting for Bound: under WaitForFirstConsumer a volume binds only once
 	// a pod demands it. An existing claim is never created again; growClaim grows
 	// it.
-	if createPod && !group.IsEphemeral() && !claimExists {
+	if createPod && group.UsesClaim() && !claimExists {
 		claim := podspec.BuildDataClaim(group, srv)
 		err := r.Create(ctx, claim)
 		switch {
@@ -293,6 +319,9 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		// flag on must not restart every world.
 		if r.AOTCache {
 			podspec.WithAOTCache(built)
+		}
+		if r.WorldSync && group.UsesObjectStore() {
+			podspec.WithWorldSyncInterval(built, r.WorldSyncInterval)
 		}
 		err = r.Create(ctx, built)
 		switch {

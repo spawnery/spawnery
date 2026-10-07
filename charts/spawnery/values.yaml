@@ -3,7 +3,7 @@ image:
   # A tag, not a digest: hack/publish.sh only learns the digest after the tag
   # is pushed, so a digest written here would always describe the previous
   # release. Pin by digest in the deployment instead.
-  tag: "0.23.0"
+  tag: "0.24.0"
   # Set, this wins over tag. Left empty deliberately; see above.
   digest: ""
   pullPolicy: IfNotPresent
@@ -80,3 +80,46 @@ operator:
 #       secrets:
 #         - velocity-forwarding-secret
 networkNamespaces: []
+
+# Worlds of groups with spec.storage.backend ObjectStore
+# (docs/guides/object-store-worlds.md). Off by default.
+worldSync:
+  enabled: false
+  # Where the node agent DaemonSet runs. It needs privileged pods, so it
+  # cannot share a namespace held to the restricted Pod Security level. The
+  # chart does not create it. Empty: the release namespace.
+  namespace: ""
+  image:
+    repository: ghcr.io/spawnery/spawnery-worldsync
+    # Empty: the chart's appVersion.
+    tag: ""
+    digest: ""
+  registrarImage: registry.k8s.io/sig-storage/csi-node-driver-registrar:v2.18.0
+  objectStore:
+    endpoint: ""
+    region: ""
+    bucket: ""
+    # A prefix inside the bucket; empty for none.
+    prefix: ""
+    # A Secret with AWS_ACCESS_KEY_ID and AWS_SECRET_ACCESS_KEY, in both the
+    # release namespace (for deletions) and worldSync.namespace.
+    credentialsSecret: ""
+  # The node directory for worlds and their snapshots.
+  hostPath: /var/lib/spawnery/worldsync
+  # How often a running member asks for a snapshot: the most play a node
+  # loss costs.
+  snapshotInterval: 5m
+  nodeSelector: {}
+  # Every taint: a game pod scheduled onto a tainted node needs the driver
+  # there, or its world volume never mounts.
+  tolerations:
+    - operator: Exists
+  # Keeps the node agent from being evicted ahead of the game pods whose
+  # worlds it holds. Empty: none.
+  priorityClassName: system-node-critical
+  resources:
+    requests:
+      cpu: 50m
+      memory: 64Mi
+    limits:
+      memory: 512Mi

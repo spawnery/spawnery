@@ -124,20 +124,20 @@
           # whenever anything under agent/, image/, internal/render or the JRE
           # derivations changes; a Paper or Purpur bump without it would collide
           # with a published tag. Gaps are releases that built no game image.
-          imageVersion = "0.23.0";
+          imageVersion = "0.24.0";
 
           # The operator's version, separate from imageVersion so a reconciler fix
           # does not claim a new agent and an agent release does not rename an
           # unchanged operator image. It moves, taking the release's number, when
           # the operator binary changes (a comment does not). Gaps are releases
           # that built no operator; hack/publish.sh refuses an existing tag.
-          operatorVersion = "0.23.0";
+          operatorVersion = "0.24.0";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
             version = "0.1.0";
             src = ./.;
-            vendorHash = "sha256-q42rGVK1Mq2SGy2ZBMW8lHxXtpIrvjoRpetetK/wCs8=";
+            vendorHash = "sha256-OmwQKY8ZdBx4c64WfuTbLapIIEnEWj/SdrWENk5O69g=";
             subPackages = [ "cmd/spawnery-slp" ];
             # Static, because the image carries no libc of its own for it.
             env.CGO_ENABLED = 0;
@@ -149,7 +149,7 @@
             pname = "spawnery-stubop";
             version = "0.2.0";
             src = ./.;
-            vendorHash = "sha256-q42rGVK1Mq2SGy2ZBMW8lHxXtpIrvjoRpetetK/wCs8=";
+            vendorHash = "sha256-OmwQKY8ZdBx4c64WfuTbLapIIEnEWj/SdrWENk5O69g=";
             subPackages = [ "cmd/spawnery-stubop" ];
             env.CGO_ENABLED = 0;
           };
@@ -160,7 +160,7 @@
             pname = "spawnery-join";
             version = "0.2.0";
             src = ./.;
-            vendorHash = "sha256-q42rGVK1Mq2SGy2ZBMW8lHxXtpIrvjoRpetetK/wCs8=";
+            vendorHash = "sha256-OmwQKY8ZdBx4c64WfuTbLapIIEnEWj/SdrWENk5O69g=";
             subPackages = [ "cmd/spawnery-join" ];
             env.CGO_ENABLED = 0;
           };
@@ -169,7 +169,7 @@
             pname = "spawnery-config";
             version = "0.1.0";
             src = ./.;
-            vendorHash = "sha256-q42rGVK1Mq2SGy2ZBMW8lHxXtpIrvjoRpetetK/wCs8=";
+            vendorHash = "sha256-OmwQKY8ZdBx4c64WfuTbLapIIEnEWj/SdrWENk5O69g=";
             subPackages = [ "cmd/spawnery-config" ];
             # Static, because neither image carries a libc of its own for it.
             env.CGO_ENABLED = 0;
@@ -184,9 +184,20 @@
             pname = "spawnery-operator";
             version = operatorVersion;
             src = ./.;
-            vendorHash = "sha256-q42rGVK1Mq2SGy2ZBMW8lHxXtpIrvjoRpetetK/wCs8=";
+            vendorHash = "sha256-OmwQKY8ZdBx4c64WfuTbLapIIEnEWj/SdrWENk5O69g=";
             subPackages = [ "cmd/spawnery-operator" ];
             # Static, because the image carries no libc of its own for it.
+            env.CGO_ENABLED = 0;
+            ldflags = [ "-s" "-w" ];
+          };
+
+          spawnery-worldsync = pkgs.buildGoModule {
+            pname = "spawnery-worldsync";
+            # Ships with the operator: the two agree on the bucket layout.
+            version = operatorVersion;
+            src = ./.;
+            vendorHash = "sha256-OmwQKY8ZdBx4c64WfuTbLapIIEnEWj/SdrWENk5O69g=";
+            subPackages = [ "cmd/spawnery-worldsync" ];
             env.CGO_ENABLED = 0;
             ldflags = [ "-s" "-w" ];
           };
@@ -208,7 +219,7 @@
           paper-jar = paper.paperJar;
           velocity-jar = velocity.jar;
 
-          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents spawnery-operator mermaid-js docs-fonts agent-api-javadoc docs-site;
+          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents spawnery-operator spawnery-worldsync mermaid-js docs-fonts agent-api-javadoc docs-site;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           # buildLayeredImage does not cross-compile but labels its output amd64,
           # so the images exist only where that label is true.
@@ -226,6 +237,10 @@
           # No spawnery-slp: a proxy's readiness is the agent's ready port.
           velocity-image = pkgs.callPackage ./nix/velocity-image.nix {
             inherit velocity spawnery-config agents imageVersion oci-common velocity-jre;
+          };
+
+          worldsync-image = pkgs.callPackage ./nix/worldsync-image.nix {
+            inherit spawnery-worldsync operatorVersion oci-common;
           };
 
           operator-image = pkgs.callPackage ./nix/operator-image.nix {

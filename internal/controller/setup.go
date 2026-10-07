@@ -40,8 +40,12 @@ type Options struct {
 	AllowFileVolumes bool
 	// AllowMountVolumes lets a group name a PersistentVolumeClaim in
 	// spec.mounts; an operational switch like AllowPluginVolumes.
-	AllowMountVolumes    bool
-	AOTCache             bool
+	AllowMountVolumes bool
+	AOTCache          bool
+	// WorldSync: spawnery-worldsync runs on the nodes and the operator holds
+	// the bucket; groups with storage.backend ObjectStore get pods only then.
+	WorldSync            bool
+	WorldSyncInterval    time.Duration
 	Clock                func() time.Time
 	StartupDeadline      time.Duration
 	PlayerStatusInterval time.Duration
@@ -102,6 +106,8 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 		Bootstrap:            opts.Bootstrapper,
 		AgentEndpoint:        opts.AgentEndpoint,
 		AOTCache:             opts.AOTCache,
+		WorldSync:            opts.WorldSync,
+		WorldSyncInterval:    opts.WorldSyncInterval,
 	}).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup server controller: %w", err)
 	}

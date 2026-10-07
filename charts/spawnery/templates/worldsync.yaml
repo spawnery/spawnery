@@ -1,0 +1,115 @@
+{{- if .Values.worldSync.enabled }}
+{{- $ns := .Values.worldSync.namespace | default .Release.Namespace }}
+apiVersion: storage.k8s.io/v1
+kind: CSIDriver
+metadata:
+  name: worldsync.spawnery.cloud
+  labels:
+    {{- include "spawnery.worldSyncLabels" . | nindent 4 }}
+spec:
+  attachRequired: false
+  podInfoOnMount: true
+  # With the node capability VOLUME_MOUNT_GROUP the kubelet hands the pod's
+  # fsGroup to the node agent instead of changing ownership itself.
+  fsGroupPolicy: File
+  volumeLifecycleModes:
+    - Ephemeral
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: spawnery-worldsync
+  namespace: {{ $ns }}
+  labels:
+    {{- include "spawnery.worldSyncLabels" . | nindent 4 }}
+automountServiceAccountToken: false
+---
+apiVersion: apps/v1
+kind: DaemonSet
+metadata:
+  name: spawnery-worldsync
+  namespace: {{ $ns }}
+  labels:
+    {{- include "spawnery.worldSyncLabels" . | nindent 4 }}
+spec:
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: spawnery-worldsync
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: spawnery-worldsync
+    spec:
+      serviceAccountName: spawnery-worldsync
+      {{- with .Values.worldSync.priorityClassName }}
+      priorityClassName: {{ . }}
+      {{- end }}
+      # Uploads after a pod's stop continue across a restart from state.json;
+      # the grace only lets an upload in flight finish its object.
+      terminationGracePeriodSeconds: 30
+      containers:
+        - name: registrar
+          image: {{ .Values.worldSync.registrarImage }}
+          args:
+            - --csi-address=/csi/csi.sock
+            - --kubelet-registration-path=/var/lib/kubelet/plugins/worldsync.spawnery.cloud/csi.sock
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: registration-dir
+              mountPath: /registration
+        - name: worldsync
+          image: {{ include "spawnery.worldSyncImage" . }}
+          args:
+            - node
+            - --endpoint=unix:///csi/csi.sock
+            - --root=/worldsync
+          env:
+            - name: NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+            {{- include "spawnery.worldSyncEnv" . | nindent 12 }}
+          ports:
+            - name: metrics
+              containerPort: 8090
+          securityContext:
+            # Bind mounts into the kubelet's pod directories.
+            privileged: true
+          resources:
+            {{- toYaml .Values.worldSync.resources | nindent 12 }}
+          volumeMounts:
+            - name: plugin-dir
+              mountPath: /csi
+            - name: pods-dir
+              mountPath: /var/lib/kubelet/pods
+              mountPropagation: Bidirectional
+            - name: root
+              mountPath: /worldsync
+              mountPropagation: Bidirectional
+      volumes:
+        - name: plugin-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins/worldsync.spawnery.cloud
+            type: DirectoryOrCreate
+        - name: registration-dir
+          hostPath:
+            path: /var/lib/kubelet/plugins_registry
+            type: Directory
+        - name: pods-dir
+          hostPath:
+            path: /var/lib/kubelet/pods
+            type: Directory
+        - name: root
+          hostPath:
+            path: {{ .Values.worldSync.hostPath }}
+            type: DirectoryOrCreate
+      {{- with .Values.worldSync.nodeSelector }}
+      nodeSelector:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+      {{- with .Values.worldSync.tolerations }}
+      tolerations:
+        {{- toYaml . | nindent 8 }}
+      {{- end }}
+{{- end }}

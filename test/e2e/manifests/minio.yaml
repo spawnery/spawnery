@@ -1,0 +1,100 @@
+# The object store of the world-sync run. The Bitnami legacy images are pinned
+# because MinIO stopped publishing images under minio/minio on quay.io and
+# Docker Hub; 2025.7.23 supports If-Match and If-None-Match on PutObject,
+# which the node agent's leases and manifests rely on. The minio image carries
+# mc, which the test execs into to list the bucket.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: worldsync-e2e
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: worldsync-s3
+  namespace: worldsync-e2e
+stringData:
+  AWS_ACCESS_KEY_ID: e2e-access
+  AWS_SECRET_ACCESS_KEY: e2e-secret-key
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: worldsync-s3
+  namespace: platform-system
+stringData:
+  AWS_ACCESS_KEY_ID: e2e-access
+  AWS_SECRET_ACCESS_KEY: e2e-secret-key
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: minio
+  namespace: worldsync-e2e
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: minio
+  template:
+    metadata:
+      labels:
+        app: minio
+    spec:
+      containers:
+        - name: minio
+          image: docker.io/bitnamilegacy/minio:2025.7.23-debian-12-r5
+          command: ["minio", "server", "/data", "--address", ":9000"]
+          env:
+            - name: MINIO_ROOT_USER
+              value: e2e-access
+            - name: MINIO_ROOT_PASSWORD
+              value: e2e-secret-key
+            - name: MC_HOST_local
+              value: http://e2e-access:e2e-secret-key@localhost:9000
+            - name: MC_CONFIG_DIR
+              value: /tmp/mc
+          ports:
+            - containerPort: 9000
+          readinessProbe:
+            httpGet:
+              path: /minio/health/ready
+              port: 9000
+          volumeMounts:
+            - name: data
+              mountPath: /data
+      volumes:
+        - name: data
+          emptyDir: {}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: minio
+  namespace: worldsync-e2e
+spec:
+  selector:
+    app: minio
+  ports:
+    - port: 9000
+      targetPort: 9000
+---
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: minio-bucket
+  namespace: worldsync-e2e
+spec:
+  backoffLimit: 20
+  template:
+    spec:
+      restartPolicy: OnFailure
+      containers:
+        - name: mc
+          image: docker.io/bitnamilegacy/minio-client:2025.7.21-debian-12-r3
+          command: ["mc", "mb", "--ignore-existing", "local/worlds"]
+          env:
+            - name: MC_HOST_local
+              value: http://e2e-access:e2e-secret-key@minio.worldsync-e2e.svc:9000
+            - name: MC_CONFIG_DIR
+              value: /tmp/mc

@@ -283,3 +283,89 @@ jobs:
           gh issue close "${existing}" --repo "${GITHUB_REPOSITORY}" \
             --comment "Closed by the nightly run that passed: ${RUN_URL}"
           echo "::notice::closed ${GITHUB_REPOSITORY}#${existing}"
+
+  # The object-store world path: MinIO on a three-node kind cluster and the real
+  # game image. Its label gates no release either.
+  worldsync-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      NIGHTLY_LABEL: nightly-worldsync-red
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: make e2e-worldsync
+        run: nix develop -c make e2e-worldsync
+
+      - name: Report the failure where somebody will meet it
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          gh label create "${NIGHTLY_LABEL}" \
+            --color b60205 \
+            --description "The object-store world end-to-end path (hack/e2e-worldsync.sh) is failing. Closing this is how you say the cause is fixed." \
+            2>/dev/null || true
+
+          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+            --label "${NIGHTLY_LABEL}" --state open --json number --limit 1 \
+            --jq '.[0].number // empty')"
+
+          cat >/tmp/nightly-worldsync-body.md <<EOF
+          \`make e2e-worldsync\` failed on the nightly run.
+
+          | | |
+          |---|---|
+          | latest failing run | ${RUN_URL} |
+          | commit | \`${GITHUB_SHA}\` |
+          | last updated | $(date -u '+%Y-%m-%dT%H:%M:%SZ') |
+
+          This job builds and loads the real Purpur image and the node agent,
+          starts MinIO, and drives \`test/e2e/worldsync_test.go\`'s
+          \`TestAnObjectStoreWorldTravelsBetweenNodes\`: start a private
+          server whose world lives in the object store, write a marker into
+          it, stop it, cordon its node, start it again on the other node and
+          find the marker, then delete the member and wait for its prefix to
+          empty. Nothing else in this repository runs the node agent against a
+          store, so a regression here is invisible to every other suite.
+
+          Opened automatically by \`.github/workflows/nightly.yml\`.
+          EOF
+
+          if [ -n "${existing}" ]; then
+            gh issue edit "${existing}" --repo "${GITHUB_REPOSITORY}" \
+              --body-file /tmp/nightly-worldsync-body.md
+            echo "::notice::updated ${GITHUB_REPOSITORY}#${existing}, which was already open"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" \
+              --title "Nightly: an object-store world did not travel" \
+              --label "${NIGHTLY_LABEL}" \
+              --body-file /tmp/nightly-worldsync-body.md
+          fi
+
+      - name: Close the report if there is one
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+            --label "${NIGHTLY_LABEL}" --state open --json number --limit 1 \
+            --jq '.[0].number // empty' 2>/dev/null || true)"
+
+          if [ -z "${existing}" ]; then
+            exit 0
+          fi
+
+          gh issue close "${existing}" --repo "${GITHUB_REPOSITORY}" \
+            --comment "Closed by the nightly run that passed: ${RUN_URL}"
+          echo "::notice::closed ${GITHUB_REPOSITORY}#${existing}"

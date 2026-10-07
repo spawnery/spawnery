@@ -1,0 +1,7 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+# Two workers: the test resumes a world on the node it did not run on.
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker

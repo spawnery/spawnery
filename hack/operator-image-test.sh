@@ -26,7 +26,20 @@ if grep -qE '^(\./)?data/?$' <<<"$entries"; then
 	"$CONTAINER" rm "$cid" >/dev/null
 	fail "the image has a /data directory; it should carry no writable directory of its own"
 fi
+# The store client verifies TLS against the roots Go reads from this file.
+root="$(mktemp -d)"
+trap 'chmod -R u+w "$root"; rm -rf "$root"' EXIT
+"$CONTAINER" export "$cid" | tar -x -C "$root"
 "$CONTAINER" rm "$cid" >/dev/null
+ca="$root/etc/ssl/certs/ca-certificates.crt"
+while [ -L "$ca" ]; do
+	link="$(readlink "$ca")"
+	case "$link" in
+	/*) ca="$root$link" ;;
+	*) ca="$(dirname "$ca")/$link" ;;
+	esac
+done
+grep -q 'BEGIN CERTIFICATE' "$ca" 2>/dev/null || fail "the image has no CA bundle at /etc/ssl/certs/ca-certificates.crt"
 
 # Go's flag package prints usage for -h; only the output is matched, not the exit code.
 out="$("$CONTAINER" run --rm --read-only --network none "$IMAGE" -h 2>&1 || true)"

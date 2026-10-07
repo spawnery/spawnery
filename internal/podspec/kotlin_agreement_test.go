@@ -18,11 +18,14 @@ package podspec
 
 import (
 	"os"
+	"path"
 	"regexp"
 	"strconv"
 	"testing"
 
+	"github.com/spawnery/spawnery/internal/prune"
 	"github.com/spawnery/spawnery/internal/testenv"
+	"github.com/spawnery/spawnery/internal/worldsync"
 )
 
 // A divergence makes the readiness probe dial a port nothing listens on, so
@@ -78,6 +81,47 @@ func TestTheTransferEnvNamesAgreeWithTheVelocityAgent(t *testing.T) {
 		if got := string(m[1]); got != want {
 			t.Errorf("%s declares %s = %q, podspec sets %q: the agent would never see the "+
 				"variable and the group would drain without transferring", source, constant, got, want)
+		}
+	}
+}
+
+func TestTheWorldSyncNamesAgreeWithThePaperAgent(t *testing.T) {
+	const dir = "agent/paper/src/main/kotlin/cloud/spawnery/agent/paper/"
+	read := func(name string) []byte {
+		t.Helper()
+		raw, err := os.ReadFile(testenv.RepoPath(t, dir+name))
+		if err != nil {
+			t.Fatalf("read the Paper agent's source: %v", err)
+		}
+		return raw
+	}
+	worldSync := read("WorldSync.kt")
+	plugin := read("AgentPlugin.kt")
+
+	for constant, want := range map[string]string{
+		"ENV_ENABLED":  EnvWorldSync,
+		"ENV_INTERVAL": EnvWorldSyncInterval,
+		"CONTROL_DIR":  prune.ControlDir,
+		"READY_FILE":   path.Base(worldsync.ReadyFile),
+		"FAILED_FILE":  path.Base(worldsync.FailedFile),
+		"REQUEST_FILE": path.Base(worldsync.RequestFile),
+		"DONE_FILE":    path.Base(worldsync.DoneFile),
+	} {
+		re := regexp.MustCompile(`(?m)^\s*const val ` + constant + `\s*=\s*"([^"]*)"\s*$`)
+		m := re.FindSubmatch(worldSync)
+		if m == nil {
+			t.Errorf("no `const val %s = \"...\"` in WorldSync.kt", constant)
+			continue
+		}
+		if got := string(m[1]); got != want {
+			t.Errorf("WorldSync.kt declares %s = %q, the Go side says %q: the agent would wait "+
+				"on, or snapshot into, something the node agent never writes or reads",
+				constant, got, want)
+		}
+	}
+	for _, use := range []string{"WorldSync.ENV_ENABLED", "WorldSync.ENV_INTERVAL", "WorldSync.CONTROL_DIR"} {
+		if !regexp.MustCompile(regexp.QuoteMeta(use)).Match(plugin) {
+			t.Errorf("AgentPlugin.kt no longer reads %s, so the constant this test checks is unused", use)
 		}
 	}
 }

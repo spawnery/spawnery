@@ -5,6 +5,7 @@ VELOCITY_IMAGE ?= $(shell nix eval --raw .#velocity-image.imageName):$(shell nix
 PURPUR_IMAGE ?= $(shell nix eval --raw .#purpur-image.imageName):$(shell nix eval --raw .#purpur-image.imageTag)
 PURPUR_IMAGE_26_2 ?= $(shell nix eval --raw .#purpur-image-26-2.imageName):$(shell nix eval --raw .#purpur-image-26-2.imageTag)
 OPERATOR_IMAGE ?= $(shell nix eval --raw .#operator-image.imageName):$(shell nix eval --raw .#operator-image.imageTag)
+WORLDSYNC_IMAGE ?= $(shell nix eval --raw .#worldsync-image.imageName):$(shell nix eval --raw .#worldsync-image.imageTag)
 STUBOP ?= $(shell nix build .#spawnery-stubop --no-link --print-out-paths)/bin/spawnery-stubop
 
 .PHONY: all
@@ -53,7 +54,7 @@ vet:
 .PHONY: test
 # -race unconditionally: a separate test-race target would go unrun. envtest
 # startup dominates the suite, so it costs about 20% rather than 2-10x.
-test: manifests generate fmt vet chart-lint toolchain-lint image-tag-lint docs-length-lint crd-docs-test chart-values-docs-test metrics-docs-test
+test: manifests generate fmt vet chart-lint toolchain-lint image-tag-lint docs-length-lint crd-docs-test chart-values-docs-test chart-worldsync-test metrics-docs-test
 	go test -race ./... -coverprofile cover.out
 
 # protoc and protoc-gen-grpc-java against the Gradle pins; see flake.nix.
@@ -93,6 +94,10 @@ crd-docs-test:
 .PHONY: chart-values-docs-test
 chart-values-docs-test:
 	hack/chart-values-docs-test.sh
+
+.PHONY: chart-worldsync-test
+chart-worldsync-test:
+	hack/chart-worldsync-test.sh
 
 .PHONY: metrics-docs-test
 metrics-docs-test:
@@ -204,6 +209,18 @@ operator-image-load: operator-image
 operator-image-test: operator-image-load
 	CONTAINER=$(CONTAINER) IMAGE=$(OPERATOR_IMAGE) hack/operator-image-test.sh
 
+.PHONY: worldsync-image
+worldsync-image:
+	nix build .#worldsync-image --out-link result-worldsync
+
+.PHONY: worldsync-image-load
+worldsync-image-load: worldsync-image
+	$(CONTAINER) load < result-worldsync
+
+.PHONY: worldsync-image-test
+worldsync-image-test: worldsync-image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(WORLDSYNC_IMAGE) hack/worldsync-image-test.sh
+
 # Not part of `test` or `all`: needs a container runtime and x86_64-linux.
 # Each build precedes its --rebuild because --rebuild refuses to run, rather
 # than fails, when the output is not in the store yet -- and any edit to the
@@ -276,6 +293,11 @@ e2e-tutorial: manifests
 .PHONY: e2e-ondemand
 e2e-ondemand: manifests
 	hack/e2e-ondemand.sh
+
+# Three kind nodes, MinIO and a real game image; nightly.yml runs it.
+.PHONY: e2e-worldsync
+e2e-worldsync: manifests
+	hack/e2e-worldsync.sh
 
 # mkdocs --strict is the only link checker. Out of `test`; ci.yml runs it in
 # its own job.

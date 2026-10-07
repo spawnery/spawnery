@@ -739,3 +739,47 @@ func TestServerGroupStorageReplaceRefusals(t *testing.T) {
 		})
 	}
 }
+
+func TestObjectStoreBackendNeedsOnDemandAndKeep(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	const msg = "storage.backend ObjectStore needs type OnDemand and storage.keep"
+
+	p := persistentGroup(ns, "object-store-persistent")
+	p.Spec.Storage.Backend = spawneryv1alpha1.StorageBackendObjectStore
+	p.Spec.Storage.Keep = []string{"world"}
+	if err := c.Create(ctx, p); err == nil || !strings.Contains(err.Error(), msg) {
+		t.Fatalf("persistent group with ObjectStore: err = %v, want %q", err, msg)
+	}
+
+	o := onDemandGroup(ns, "object-store-no-keep")
+	o.Spec.Storage.Backend = spawneryv1alpha1.StorageBackendObjectStore
+	if err := c.Create(ctx, o); err == nil || !strings.Contains(err.Error(), msg) {
+		t.Fatalf("on-demand group without keep: err = %v, want %q", err, msg)
+	}
+
+	o.Spec.Storage.Keep = []string{"world"}
+	if err := c.Create(ctx, o); err != nil {
+		t.Fatalf("on-demand group with keep: %v", err)
+	}
+}
+
+func TestTheBackendMayChangeBothWays(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	o := onDemandGroup(ns, "switches-backend")
+	o.Spec.Storage.Keep = []string{"world"}
+	if err := c.Create(ctx, o); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	for _, b := range []spawneryv1alpha1.StorageBackend{
+		spawneryv1alpha1.StorageBackendObjectStore,
+		spawneryv1alpha1.StorageBackendClaim,
+	} {
+		o.Spec.Storage.Backend = b
+		if err := c.Update(ctx, o); err != nil {
+			t.Fatalf("switching to %s: %v", b, err)
+		}
+	}
+}

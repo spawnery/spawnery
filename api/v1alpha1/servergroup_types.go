@@ -159,10 +159,33 @@ type DrainSpec struct {
 	TimeoutSeconds int32 `json:"timeoutSeconds"`
 }
 
-// StorageSpec describes the PVC of a persistent or on-demand group.
+type StorageBackend string
+
+const (
+	StorageBackendClaim       StorageBackend = "Claim"
+	StorageBackendObjectStore StorageBackend = "ObjectStore"
+)
+
+// StorageSpec describes where a persistent or on-demand group keeps its
+// members' worlds: a PersistentVolumeClaim per member, or the object store.
 // +kubebuilder:validation:XValidation:rule="!has(self.replace) || has(self.keep)",message="spec.storage.replace needs spec.storage.keep"
 // +kubebuilder:validation:XValidation:rule="!has(self.replace) || !has(self.keep) || self.replace.all(r, !(r in self.keep))",message="a path cannot be in both spec.storage.keep and spec.storage.replace"
 type StorageSpec struct {
+	// Backend is where a member's world lives between runs. Claim, the
+	// default, keeps it on a PersistentVolumeClaim per member. ObjectStore
+	// keeps it in the object store configured for the operator (chart value
+	// worldSync) and gives /data from a directory on the node that runs the
+	// member; it needs type OnDemand and keep, and synchronises exactly what
+	// keep matches. It also needs game images with spawnery's agent 0.24.0
+	// or later, whose bootstrapper holds the server until the world is on
+	// disk: an older or a custom image without it starts on a half-downloaded
+	// world and can corrupt it. Size, storageClassName, accessModes and
+	// annotations are ignored under ObjectStore and stay valid for switching
+	// back. The backend may change either way; nothing is moved across.
+	// +kubebuilder:validation:Enum=Claim;ObjectStore
+	// +optional
+	Backend StorageBackend `json:"backend,omitempty"`
+
 	// Size of each new claim. Raising it grows existing claims up to the new
 	// size (needs allowVolumeExpansion on the StorageClass); lowering it
 	// changes only claims created afterwards and never shrinks one. A claim
@@ -239,6 +262,7 @@ type StorageSpec struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.update) || !has(self.update.minAvailable) || !has(self.scaling) || self.update.minAvailable < self.scaling.maxReplicas",message="spec.update.minAvailable must be less than spec.scaling.maxReplicas: keeping the floor needs room for one extra server"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || (has(self.storage.storageClassName) == has(oldSelf.storage.storageClassName) && (!has(self.storage.storageClassName) || self.storage.storageClassName == oldSelf.storage.storageClassName))",message="storage.storageClassName is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || self.storage.accessModes == oldSelf.storage.accessModes",message="storage.accessModes is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(self.storage.backend) || self.storage.backend != 'ObjectStore' || (self.type == 'OnDemand' && has(self.storage.keep))",message="storage.backend ObjectStore needs type OnDemand and storage.keep"
 // +kubebuilder:validation:XValidation:rule="!has(self.playableSlots) || (self.playableSlots >= 1 && self.playableSlots <= self.maxPlayers)",message="spec.playableSlots must be between 1 and spec.maxPlayers"
 type ServerGroupSpec struct {
 	// NetworkRef names the Network this group belongs to.
@@ -396,7 +420,8 @@ type ServerGroupSpec struct {
 	// +optional
 	Update *UpdateSpec `json:"update,omitempty"`
 
-	// Storage configures the PVC. Persistent and OnDemand only.
+	// Storage configures where members' worlds live: a claim per member, or
+	// the object store with backend ObjectStore. Persistent and OnDemand only.
 	// +optional
 	Storage *StorageSpec `json:"storage,omitempty"`
 
@@ -544,6 +569,15 @@ func (g *ServerGroup) IsEphemeral() bool {
 // IsOnDemand reports whether this group's members are asked for by name.
 func (g *ServerGroup) IsOnDemand() bool {
 	return g.Spec.Type == ServerGroupOnDemand
+}
+
+func (g *ServerGroup) UsesObjectStore() bool {
+	return g.Spec.Storage != nil && g.Spec.Storage.Backend == StorageBackendObjectStore
+}
+
+// UsesClaim reports whether members get a data claim of their own.
+func (g *ServerGroup) UsesClaim() bool {
+	return !g.IsEphemeral() && !g.UsesObjectStore()
 }
 
 // DesiredReplicas is the number of servers the group must have at minimum. For

@@ -49,6 +49,7 @@ if [ "${#manifests[@]}" -eq 0 ]; then
     "$root/docs/guides/expose-strategies.md"
     "$root/docs/guides/on-demand-servers.md"
     "$root/docs/guides/persistent-worlds.md"
+    "$root/docs/guides/object-store-worlds.md"
     "$root/docs/guides/scaling-and-boosts.md"
     "$root/docs/guides/scheduling.md"
     "$root/docs/plugin-api/index.md"

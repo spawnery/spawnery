@@ -23,8 +23,8 @@ import (
 	"github.com/spawnery/spawnery/internal/phase"
 )
 
-// sweepOnDemand removes Finished members only: the world is on its claim and
-// the name is free for a restart. Failed members stay for inspection
+// sweepOnDemand removes Finished members only: the world is on its claim, or
+// in the object store, and the name is free for a restart. Failed members stay for inspection
 // (pruneFailed bounds them), and a start request replaces a terminal member of
 // its key.
 func (r *ServerGroupReconciler) sweepOnDemand(
@@ -33,12 +33,15 @@ func (r *ServerGroupReconciler) sweepOnDemand(
 	views []ServerView,
 	servers map[string]*spawneryv1alpha1.Server,
 ) error {
+	message := "removing finished on-demand member %s, its world is on its claim"
+	if group.UsesObjectStore() {
+		message = "removing finished on-demand member %s, its world is kept in the object store"
+	}
 	for _, v := range views {
 		if v.Phase != phase.Finished || v.leaving() {
 			continue
 		}
-		if err := r.deleteServer(ctx, group, servers, v.Name, "InstanceFinished",
-			"removing finished on-demand member %s, its world is on its claim"); err != nil {
+		if err := r.deleteServer(ctx, group, servers, v.Name, "InstanceFinished", message); err != nil {
 			return err
 		}
 	}

@@ -17,6 +17,7 @@ dockerTools.buildLayeredImage {
   contents = [
     oci-common.passwd
     oci-common.group
+    oci-common.caBundle
     (oci-common.binIn { package = spawnery-operator; name = "spawnery-operator"; })
   ];
 

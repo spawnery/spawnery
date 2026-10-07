@@ -159,6 +159,9 @@ func plan(root string, rel []string, pats, ways, mounts [][]string, doomed *[]st
 		if name == "lost+found" && len(rel) == 0 {
 			continue
 		}
+		if name == ControlDir && len(rel) == 0 {
+			continue
+		}
 		r := append(append([]string{}, rel...), name)
 		switch {
 		case kept(pats, r) || isOneOf(mounts, r):
@@ -220,17 +223,22 @@ func splitWorld(root string, rel []string, pats, mounts [][]string) (bool, error
 	return false, nil
 }
 
-// holdsWorld reports whether p is, or holds, a level.dat or one of its
-// rename leftovers (level.dat_old, level.dat_new), a region directory or an
-// .mca file. It fails on any path it cannot read.
+// WorldEntry reports whether an entry of that name and kind marks a world: a
+// level.dat or one of its rename leftovers (level.dat_old, level.dat_new), a
+// region directory or an .mca file.
+func WorldEntry(name string, dir bool) bool {
+	return dir && name == "region" || !dir && (strings.HasPrefix(name, "level.dat") || strings.HasSuffix(name, ".mca"))
+}
+
+// holdsWorld reports whether p is, or holds, an entry WorldEntry marks. It
+// fails on any path it cannot read.
 func holdsWorld(p string) (bool, error) {
 	found := false
 	err := filepath.WalkDir(p, func(q string, d fs.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		n := d.Name()
-		if d.IsDir() && n == "region" || !d.IsDir() && (strings.HasPrefix(n, "level.dat") || strings.HasSuffix(n, ".mca")) {
+		if WorldEntry(d.Name(), d.IsDir()) {
 			found = true
 			return fs.SkipAll
 		}

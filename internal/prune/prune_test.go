@@ -593,3 +593,13 @@ func TestTheWorldRefusalPointsToReplace(t *testing.T) {
 		t.Fatalf("err = %v, want the refusal to name spec.storage.replace as the remedy", err)
 	}
 }
+
+func TestPruneLeavesTheWorldSyncControlDirectory(t *testing.T) {
+	dir := claim(t, ControlDir+"/ready", "logs/latest.log")
+	if err := run(dir, []string{"worlds/world"}, noMounts(t)); err != nil {
+		t.Fatal(err)
+	}
+	if got := left(t, dir); fmt.Sprint(got) != "["+ControlDir+"/ready]" {
+		t.Errorf("left %v", got)
+	}
+}
