@@ -74,15 +74,15 @@ func (p *silencingProxy) serve() {
 		}
 		server, err := net.Dial("tcp", p.target)
 		if err != nil {
-			client.Close()
+			_ = client.Close()
 			continue
 		}
 		c := &proxied{client: client, server: server}
 		p.mu.Lock()
 		if p.closed {
 			p.mu.Unlock()
-			client.Close()
-			server.Close()
+			_ = client.Close()
+			_ = server.Close()
 			return
 		}
 		p.open = append(p.open, c)
@@ -121,10 +121,10 @@ func (p *silencingProxy) close() {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	p.closed = true
-	p.ln.Close()
+	_ = p.ln.Close()
 	for _, c := range p.open {
-		c.client.Close()
-		c.server.Close()
+		_ = c.client.Close()
+		_ = c.server.Close()
 	}
 }
 
