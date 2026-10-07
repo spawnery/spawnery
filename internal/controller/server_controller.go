@@ -359,6 +359,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	in := r.collectInputs(srv, group, pod, podFound, nameStillHeld || nameConflict)
+	in.HoldsWorld = srv.Spec.Key != ""
 	current := phase.Phase(srv.Status.Phase)
 	if current == "" {
 		current = phase.Pending

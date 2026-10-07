@@ -103,6 +103,11 @@ does, because it still exists. `0` is legal and closes the group: new starts
 are refused and every world stays where it is, which is the state an incident
 wants and a deletion would not give.
 
+A `Failed` member keeps its Server object, but not its pod, unless players are
+still on it: the pod holds the world, through its claim or its lease in the
+object store, and the next start of the key needs it. A pod that ended on its
+own stays with its logs.
+
 It is not a quota. *Who* may have a private server, and how many, is a question
 about a player, a purchase and a ban, and the system that holds those is the one
 that answers it. An operator that enforced it would need all three.

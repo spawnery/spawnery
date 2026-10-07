@@ -486,6 +486,31 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Failed, DeletePod: true, Reason: ReasonStoppingFailedPod},
 		},
 		{
+			name:    "a failed on-demand member's pod still being created is stopped",
+			current: Failed,
+			in:      Inputs{PodExists: true, HoldsWorld: true},
+			want:    Decision{Next: Failed, DeletePod: true, Reason: ReasonStoppingFailedPod},
+		},
+		{
+			name:    "a failed on-demand member's running pod is stopped without a ready server in the group",
+			current: Failed,
+			in:      Inputs{PodExists: true, PodRunning: true, HoldsWorld: true},
+			want:    Decision{Next: Failed, DeletePod: true, Reason: ReasonStoppingFailedPod},
+		},
+		{
+			name:    "a failed on-demand member's pod with players on it is not stopped early",
+			current: Failed,
+			in: Inputs{PodExists: true, PodRunning: true, HoldsWorld: true,
+				WasRegistered: true, PlayersOnline: 1},
+			want: Decision{Next: Failed, Reason: ReasonPodTerminal},
+		},
+		{
+			name:    "a failed on-demand member's terminal pod is kept for diagnosis",
+			current: Failed,
+			in:      Inputs{PodExists: true, PodTerminal: true, HoldsWorld: true},
+			want:    Decision{Next: Failed, Reason: ReasonPodTerminal},
+		},
+		{
 			name:    "a failed server's running pod stays while the group has no ready server",
 			current: Failed,
 			in:      Inputs{PodExists: true, PodRunning: true},
