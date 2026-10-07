@@ -131,7 +131,7 @@
           # unchanged operator image. It moves, taking the release's number, when
           # the operator binary changes (a comment does not). Gaps are releases
           # that built no operator; hack/publish.sh refuses an existing tag.
-          operatorVersion = "0.24.0";
+          operatorVersion = "0.24.4";
 
           spawnery-slp = pkgs.buildGoModule {
             pname = "spawnery-slp";
