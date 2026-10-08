@@ -99,6 +99,10 @@ type Node struct {
 	downloads atomic.Int64
 
 	callTimeout, uploadTimeout time.Duration
+
+	// owed is each world's snapshot count from the last pass that could lock
+	// it: a hung store call holds the lock just when snapshots pile up.
+	owed map[string]int
 }
 
 func strconvI(v int64) string { return strconv.FormatInt(v, 10) }
@@ -857,9 +861,9 @@ func (n *Node) hasWork(s *worldState) bool {
 // release; a world's upload runs outside its lock so that it holds up
 // neither snapshot requests nor lease renewals.
 func (n *Node) kickUploads(ctx context.Context) {
-	pending := 0
+	counted := map[string]int{}
 	n.eachFree(func(s *worldState) {
-		pending += len(s.Pending)
+		counted[s.World] = len(s.Pending)
 		if s.working || !n.hasWork(s) || n.cfg.Clock().Before(s.retryAt) {
 			return
 		}
@@ -867,6 +871,18 @@ func (n *Node) kickUploads(ctx context.Context) {
 		n.workers.Add(1)
 		go n.work(ctx, s)
 	})
+	n.mu.Lock()
+	owed, pending := make(map[string]int, len(n.worlds)), 0
+	for w := range n.worlds {
+		c, ok := counted[w]
+		if !ok {
+			c = n.owed[w]
+		}
+		owed[w] = c
+		pending += c
+	}
+	n.owed = owed
+	n.mu.Unlock()
 	pendingUploads.Set(float64(pending))
 }
 
