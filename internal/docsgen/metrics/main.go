@@ -50,7 +50,16 @@ import (
 	_ "github.com/spawnery/spawnery/internal/proxyreg"
 	_ "github.com/spawnery/spawnery/internal/rbacaudit"
 	_ "github.com/spawnery/spawnery/internal/serverreg"
+	"github.com/spawnery/spawnery/internal/worldsync"
 )
+
+// agentRegistry holds the node agent's metrics: its binary registers them on
+// a registry of its own, not on controller-runtime's.
+var agentRegistry = func() *prometheus.Registry {
+	r := prometheus.NewRegistry()
+	r.MustRegister(worldsync.Collectors()...)
+	return r
+}()
 
 // metricNamePrefix restricts the page to the operator's own metrics.
 // Nothing else is registered by the six packages this program imports today,
@@ -113,8 +122,8 @@ type descInfo struct {
 	labels []string
 }
 
-// describeAll asks metrics.Registry for the Desc of every collector it holds,
-// keyed by metric name.
+// describeAll asks metrics.Registry and agentRegistry for the Desc of every
+// collector they hold, keyed by metric name.
 //
 // This is the fix for the trap Gather() has: a GaugeVec or CounterVec with no
 // labelled child yet -- true today of, among others, spawnery_ca_rotation_phase
@@ -130,7 +139,7 @@ type descInfo struct {
 // *prometheus.Registry underneath, which is why this asserts to
 // prometheus.Collector rather than calling them directly.
 func describeAll() (map[string]descInfo, error) {
-	collector, ok := metrics.Registry.(prometheus.Collector)
+	operator, ok := metrics.Registry.(prometheus.Collector)
 	if !ok {
 		return nil, fmt.Errorf("controller-runtime's metrics.Registry (%T) is not a prometheus.Collector", metrics.Registry)
 	}
@@ -158,7 +167,8 @@ func describeAll() (map[string]descInfo, error) {
 		}
 		done <- nil
 	}()
-	collector.Describe(ch)
+	operator.Describe(ch)
+	agentRegistry.Describe(ch)
 	close(ch)
 	if err := <-done; err != nil {
 		return nil, err
@@ -253,7 +263,7 @@ func quotedField(s string) (value, rest string, err error) {
 // check on the naming convention this repository's own spawnery_ metrics
 // follow and has nothing to say about a foreign collector's choices.
 func gatherTypes() (map[string]string, error) {
-	mfs, err := metrics.Registry.Gather()
+	mfs, err := prometheus.Gatherers{metrics.Registry, agentRegistry}.Gather()
 	if err != nil {
 		return nil, err
 	}
@@ -270,10 +280,11 @@ func gatherTypes() (map[string]string, error) {
 // Gather() actually has a sample for, both of which inferType depends on to
 // name the type of a metric that has *no* sample:
 //
-//  1. Its type is "counter" or "gauge". inferType has no third case, so a
-//     Histogram or Summary that ever picks up a sample before generation
-//     runs must fail here rather than fall through inferType's two-way
-//     naming-convention check and print as one of them.
+//  1. Its type is "counter" or "gauge", or "histogram" for a plain Histogram,
+//     which always has a sample and so never reaches inferType's guess. A
+//     Summary that ever picks up a sample before generation runs must fail
+//     here rather than fall through inferType's two-way naming-convention
+//     check and print as one of them.
 //  2. "counter" and "the name ends in _total" agree -- the Prometheus
 //     naming convention this codebase's own metrics.go files follow without
 //     exception today.
@@ -284,6 +295,9 @@ func gatherTypes() (map[string]string, error) {
 // printed on the page.
 func verifyObservedTypesFitInferType(observed map[string]string) error {
 	for name, typ := range observed {
+		if typ == "histogram" && !strings.HasSuffix(name, "_total") {
+			continue
+		}
 		if typ != "counter" && typ != "gauge" {
 			return fmt.Errorf(
 				"%s is type %s, which inferType has no case for -- it can only tell a metric with no sample apart as counter or gauge, by whether its name ends in _total",
@@ -303,12 +317,12 @@ func verifyObservedTypesFitInferType(observed map[string]string) error {
 }
 
 // inferType names a metric's type from a sample if Gather() has one, and
-// from the _total naming convention (verified above) otherwise. Every metric
-// in this registry today is a Gauge or a Counter -- nothing here uses a
-// Histogram or a Summary -- so "does not end in _total" defaults to "gauge"
-// rather than needing a third case.
+// from the _total naming convention (verified above) otherwise. A plain
+// Histogram always has a sample, and nothing here uses a HistogramVec or a
+// Summary, so "does not end in _total" defaults to "gauge" rather than
+// needing a third case.
 //
-// The residual this cannot close: a Histogram or Summary added with no
+// The residual this cannot close: a HistogramVec or Summary added with no
 // sample yet at generation time is invisible to Gather() and so invisible
 // to verifyObservedTypesFitInferType too, and would still be printed here as
 // "gauge" -- Desc carries no type at all, so a metric with no sample

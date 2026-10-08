@@ -100,9 +100,14 @@ type Node struct {
 
 	callTimeout, uploadTimeout time.Duration
 
-	// owed is each world's snapshot count from the last pass that could lock
-	// it: a hung store call holds the lock just when snapshots pile up.
-	owed map[string]int
+	// counted is each world's figures from the last pass that could lock it:
+	// a hung store call holds the lock just when snapshots pile up.
+	counted map[string]worldCount
+}
+
+type worldCount struct {
+	pending int
+	mounted bool
 }
 
 func strconvI(v int64) string { return strconv.FormatInt(v, 10) }
@@ -643,6 +648,7 @@ func (n *Node) startDownload(s *worldState, m Manifest, etag string) {
 		s.download = nil
 		cancel()
 		if err != nil {
+			downloadFailures.Inc()
 			n.cfg.Log.Error(err, "download failed", "world", world)
 			if err := n.control(s, FailedFile, err.Error()); err != nil {
 				n.cfg.Log.Error(err, "could not report the failed download", "world", world)
@@ -861,9 +867,9 @@ func (n *Node) hasWork(s *worldState) bool {
 // release; a world's upload runs outside its lock so that it holds up
 // neither snapshot requests nor lease renewals.
 func (n *Node) kickUploads(ctx context.Context) {
-	counted := map[string]int{}
+	counted := map[string]worldCount{}
 	n.eachFree(func(s *worldState) {
-		counted[s.World] = len(s.Pending)
+		counted[s.World] = worldCount{pending: len(s.Pending), mounted: s.Target != ""}
 		if s.working || !n.hasWork(s) || n.cfg.Clock().Before(s.retryAt) {
 			return
 		}
@@ -872,18 +878,28 @@ func (n *Node) kickUploads(ctx context.Context) {
 		go n.work(ctx, s)
 	})
 	n.mu.Lock()
-	owed, pending := make(map[string]int, len(n.worlds)), 0
+	pending, mounted := 0, 0
 	for w := range n.worlds {
 		c, ok := counted[w]
 		if !ok {
-			c = n.owed[w]
+			c = n.counted[w]
+			counted[w] = c
 		}
-		owed[w] = c
-		pending += c
+		pending += c.pending
+		if c.mounted {
+			mounted++
+		}
 	}
-	n.owed = owed
+	for w := range counted {
+		if _, ok := n.worlds[w]; !ok {
+			delete(counted, w)
+		}
+	}
+	n.counted = counted
 	n.mu.Unlock()
 	pendingUploads.Set(float64(pending))
+	worlds.WithLabelValues("mounted").Set(float64(mounted))
+	worlds.WithLabelValues("cached").Set(float64(len(counted) - mounted))
 }
 
 func (n *Node) work(ctx context.Context, s *worldState) {
@@ -901,8 +917,12 @@ func (n *Node) work(ctx context.Context, s *worldState) {
 		unlock()
 
 		uctx, cancel := context.WithTimeout(ctx, n.uploadTimeout)
+		started := time.Now()
 		m, etag, err := UploadSnapshot(uctx, n.cfg.Store, n.prefix(s.World), job.dir, job.prev, job.prevETag, NewWorldID)
 		cancel()
+		if err == nil {
+			uploadSeconds.Observe(time.Since(started).Seconds())
+		}
 
 		unlock = n.lock(s.World)
 		s.uploading = nil
@@ -1096,6 +1116,7 @@ func fillReferences(snap *Snap, uploaded []FileEntry) {
 func (n *Node) retryLater(s *worldState, msg string, err error) {
 	s.retryDelay = min(max(2*s.retryDelay, time.Second), time.Minute)
 	s.retryAt = n.cfg.Clock().Add(s.retryDelay)
+	retries.Inc()
 	n.cfg.Log.Error(err, msg+"; retrying", "world", s.World, "in", s.retryDelay)
 }
 

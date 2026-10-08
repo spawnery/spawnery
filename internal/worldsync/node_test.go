@@ -873,6 +873,7 @@ func TestAHungStoreCallTimesOut(t *testing.T) {
 			h.request(target, "1")
 			a.pollRequests()
 
+			retried := testutil.ToFloat64(retries)
 			g.armed.Store(true)
 			settled := make(chan struct{})
 			go func() { a.Settle(context.Background()); close(settled) }()
@@ -889,6 +890,9 @@ func TestAHungStoreCallTimesOut(t *testing.T) {
 			unlock()
 			if stuck || pending != 1 || retry.IsZero() {
 				t.Fatalf("uploading = %v, pending = %d, retryAt = %v; want an idle world backing off", stuck, pending, retry)
+			}
+			if got := testutil.ToFloat64(retries); got != retried+1 {
+				t.Fatalf("retries = %v, want %v", got, retried+1)
 			}
 		})
 	}
@@ -915,6 +919,7 @@ func TestPendingSnapshotsStayCountedWhileTheStoreHangs(t *testing.T) {
 	if got := testutil.ToFloat64(pendingUploads); got != 1 {
 		t.Fatalf("pending snapshots = %v while the store hangs, want 1", got)
 	}
+	wantWorlds(t, 0, 1)
 }
 
 func TestAPublishAfterARebootBindsTheSameTargetAgain(t *testing.T) {

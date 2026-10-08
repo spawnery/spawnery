@@ -14,9 +14,15 @@ trap 'rm -f "$tmp_metrics" "$tmp_rules"' EXIT
 go run ./internal/docsgen/metrics >"$tmp_metrics"
 
 # --namespace is arbitrary; a namespaced resource needs one to render.
+# World sync on, so its rules render; it needs an object store to render at all.
 helm template spawnery charts/spawnery \
 	--namespace spawnery-system \
 	--set metrics.prometheusRule.enabled=true \
+	--set worldSync.enabled=true \
+	--set worldSync.objectStore.endpoint=https://s3.example \
+	--set worldSync.objectStore.region=r \
+	--set worldSync.objectStore.bucket=b \
+	--set worldSync.objectStore.credentialsSecret=creds \
 	>"$tmp_rules"
 
 python3 - "$tmp_metrics" "$tmp_rules" "$out" <<'PY'
@@ -121,10 +127,10 @@ def render_alert(a):
 out = [HEADER, "", "# Metrics and alerts", ""]
 out.append(
     "Generated from two sources that only agree with each other because "
-    "this page checks it: the Prometheus metrics the operator actually "
-    "registers, read from `sigs.k8s.io/controller-runtime`'s metrics "
-    "registry rather than from source, so this table can't drift from what "
-    "is really exported; and the alerting rules in "
+    "this page checks it: the Prometheus metrics the operator and the world "
+    "sync node agent actually register, read from their registries rather "
+    "than from source, so this table can't drift from what is really "
+    "exported; and the alerting rules in "
     "`charts/spawnery/templates/prometheusrule.yaml`, rendered through "
     "`helm template` because that file is a Helm chart template, not YAML, "
     "until Helm has expanded it."
@@ -132,14 +138,21 @@ out.append(
 out.append("")
 out.append("## Metrics")
 out.append("")
+out.append(
+    "The `spawnery_worldsync_` metrics come from the world sync node agents "
+    "on port 8090, the rest from the operator on port 8080."
+)
+out.append("")
 out.append(metrics_table)
 out.append("")
 out.append("## Alerts")
 out.append("")
 out.append(
     "Off by default (`metrics.prometheusRule.enabled: false`, see "
-    "[chart values](chart-values.md)); rendered here with that value turned "
-    "on and every other value left at the chart's own default. "
+    "[chart values](chart-values.md)); rendered here with that value and "
+    "`worldSync.enabled` turned on and every other value left at the "
+    "chart's own default. The `spawnery-worldsync` group renders only with "
+    "world sync on. "
     "`SpawneryCAExpiringSoon`'s summary interpolates "
     "`metrics.prometheusRule.caExpiryWarningDays` -- the number in it below "
     "is that value's chart *default*, not a fixed part of the alert; an "

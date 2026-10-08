@@ -3,9 +3,11 @@
 
 # Metrics and alerts
 
-Generated from two sources that only agree with each other because this page checks it: the Prometheus metrics the operator actually registers, read from `sigs.k8s.io/controller-runtime`'s metrics registry rather than from source, so this table can't drift from what is really exported; and the alerting rules in `charts/spawnery/templates/prometheusrule.yaml`, rendered through `helm template` because that file is a Helm chart template, not YAML, until Helm has expanded it.
+Generated from two sources that only agree with each other because this page checks it: the Prometheus metrics the operator and the world sync node agent actually register, read from their registries rather than from source, so this table can't drift from what is really exported; and the alerting rules in `charts/spawnery/templates/prometheusrule.yaml`, rendered through `helm template` because that file is a Helm chart template, not YAML, until Helm has expanded it.
 
 ## Metrics
+
+The `spawnery_worldsync_` metrics come from the world sync node agents on port 8090, the rest from the operator on port 8080.
 
 <div style="overflow-x: auto;"><table>
 <thead><tr><th>Name</th><th>Type</th><th>Labels</th><th>Help</th></tr></thead>
@@ -45,11 +47,19 @@ Generated from two sources that only agree with each other because this page che
 <tr><td><code>spawnery_server_slots</code></td><td>gauge</td><td><code>namespace</code>, <code>network</code>, <code>group</code>, <code>server</code>, <code>node</code></td><td>The server&#39;s slots, as its agent last reported.</td></tr>
 <tr><td><code>spawnery_server_tps</code></td><td>gauge</td><td><code>namespace</code>, <code>network</code>, <code>group</code>, <code>server</code>, <code>node</code></td><td>The server&#39;s one-minute ticks per second.</td></tr>
 <tr><td><code>spawnery_serving_cert_expiry_timestamp_seconds</code></td><td>gauge</td><td><em>none</em></td><td>NotAfter of the operator&#39;s serving certificate, in Unix seconds.</td></tr>
+<tr><td><code>spawnery_worldsync_download_failures_total</code></td><td>counter</td><td><em>none</em></td><td>World downloads that failed; the pod waiting for one fails its start.</td></tr>
+<tr><td><code>spawnery_worldsync_download_seconds</code></td><td>histogram</td><td><em>none</em></td><td>Time to download a world at publish.</td></tr>
+<tr><td><code>spawnery_worldsync_lease_conflicts_total</code></td><td>counter</td><td><em>none</em></td><td>Publishes refused because another node held the world.</td></tr>
+<tr><td><code>spawnery_worldsync_orphans_total</code></td><td>counter</td><td><em>none</em></td><td>Local copies moved aside after the lease was lost.</td></tr>
+<tr><td><code>spawnery_worldsync_pending_snapshots</code></td><td>gauge</td><td><em>none</em></td><td>Snapshots on this node not yet in the bucket.</td></tr>
+<tr><td><code>spawnery_worldsync_retries_total</code></td><td>counter</td><td><em>none</em></td><td>Uploads, final snapshots and lease releases that failed and wait for a retry.</td></tr>
+<tr><td><code>spawnery_worldsync_upload_seconds</code></td><td>histogram</td><td><em>none</em></td><td>Time to upload one snapshot.</td></tr>
+<tr><td><code>spawnery_worldsync_worlds</code></td><td>gauge</td><td><code>state</code></td><td>Worlds on this node: mounted by a pod, or cached with no pod.</td></tr>
 </tbody></table></div>
 
 ## Alerts
 
-Off by default (`metrics.prometheusRule.enabled: false`, see [chart values](chart-values.md)); rendered here with that value turned on and every other value left at the chart's own default. `SpawneryCAExpiringSoon`'s summary interpolates `metrics.prometheusRule.caExpiryWarningDays` -- the number in it below is that value's chart *default*, not a fixed part of the alert; an install that overrides it gets a different number in that one message.
+Off by default (`metrics.prometheusRule.enabled: false`, see [chart values](chart-values.md)); rendered here with that value and `worldSync.enabled` turned on and every other value left at the chart's own default. The `spawnery-worldsync` group renders only with world sync on. `SpawneryCAExpiringSoon`'s summary interpolates `metrics.prometheusRule.caExpiryWarningDays` -- the number in it below is that value's chart *default*, not a fixed part of the alert; an install that overrides it gets a different number in that one message.
 
 ### SpawneryAgentConnectionsRefused
 
@@ -135,3 +145,51 @@ The spawnery operator&#x27;s serving certificate expires within a day.
 ```
 
 This certificate renews on its own once a third of its life is left, so reaching one day means the renewal path has stopped. Every agent handshake fails when it expires.
+
+### SpawneryWorldDownloadFailed
+
+**Group:** <code>spawnery-worldsync</code> &nbsp;&nbsp; **Severity:** <code>warning</code> &nbsp;&nbsp; **For:** <code></code>
+
+A world download on node {{ $labels.node }} failed.
+
+```
+increase(spawnery_worldsync_download_failures_total[15m]) > 0
+```
+
+The pod that waited for it failed its start. The agent&#x27;s log has the error (&quot;download failed&quot;); an object the manifest names but the bucket lacks means the world in the bucket is damaged.
+
+### SpawneryWorldLeaseConflicts
+
+**Group:** <code>spawnery-worldsync</code> &nbsp;&nbsp; **Severity:** <code>warning</code> &nbsp;&nbsp; **For:** <code>15m</code>
+
+Node {{ $labels.node }} has refused a world for 15 minutes because another node holds its lease.
+
+```
+increase(spawnery_worldsync_lease_conflicts_total[5m]) > 0
+```
+
+A pod waits in ContainerCreating with an Unavailable event naming the node that holds the world. That node&#x27;s agent still renews the lease: either a pod there still mounts the world, or its final upload cannot finish.
+
+### SpawneryWorldOrphaned
+
+**Group:** <code>spawnery-worldsync</code> &nbsp;&nbsp; **Severity:** <code>warning</code> &nbsp;&nbsp; **For:** <code></code>
+
+Node {{ $labels.node }} moved a world&#x27;s local copy to orphans/.
+
+```
+increase(spawnery_worldsync_orphans_total[30m]) > 0
+```
+
+The node lost the world&#x27;s lease while it still held changes the bucket does not have. The copy lies under orphans/ in the node directory (worldSync.hostPath) and never uploads; the agent&#x27;s log names the world. Compare it with what the bucket holds before restoring anything by hand.
+
+### SpawneryWorldSnapshotsPending
+
+**Group:** <code>spawnery-worldsync</code> &nbsp;&nbsp; **Severity:** <code>warning</code> &nbsp;&nbsp; **For:** <code>10m</code>
+
+Snapshots on node {{ $labels.node }} have not reached the bucket for 10 minutes.
+
+```
+max by (node, pod) (spawnery_worldsync_pending_snapshots) > 0
+```
+
+The node agent keeps retrying, and its log says why (&quot;retrying&quot;). Usually the object store is unreachable or refuses the credentials. Play since the last upload exists only on this node until then; if a stopped world&#x27;s lease goes stale meanwhile, another node may start it from the last upload and this copy moves to orphans/.

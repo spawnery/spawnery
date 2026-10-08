@@ -23,6 +23,19 @@ var (
 		Name: "spawnery_worldsync_download_seconds", Help: "Time to download a world at publish.",
 		Buckets: []float64{0.5, 1, 2, 5, 10, 20, 40, 80},
 	})
+	downloadFailures = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "spawnery_worldsync_download_failures_total", Help: "World downloads that failed; the pod waiting for one fails its start.",
+	})
+	uploadSeconds = prometheus.NewHistogram(prometheus.HistogramOpts{
+		Name: "spawnery_worldsync_upload_seconds", Help: "Time to upload one snapshot.",
+		Buckets: []float64{0.5, 1, 2, 5, 10, 20, 40, 80},
+	})
+	retries = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "spawnery_worldsync_retries_total", Help: "Uploads, final snapshots and lease releases that failed and wait for a retry.",
+	})
+	worlds = prometheus.NewGaugeVec(prometheus.GaugeOpts{
+		Name: "spawnery_worldsync_worlds", Help: "Worlds on this node: mounted by a pod, or cached with no pod.",
+	}, []string{"state"})
 	pendingUploads = prometheus.NewGauge(prometheus.GaugeOpts{
 		Name: "spawnery_worldsync_pending_snapshots", Help: "Snapshots on this node not yet in the bucket.",
 	})
@@ -36,5 +49,5 @@ var (
 
 // Collectors are registered by the binary, not here, so tests need no registry.
 func Collectors() []prometheus.Collector {
-	return []prometheus.Collector{downloadSeconds, pendingUploads, leaseConflicts, orphans}
+	return []prometheus.Collector{downloadSeconds, downloadFailures, uploadSeconds, retries, worlds, pendingUploads, leaseConflicts, orphans}
 }
