@@ -30,6 +30,7 @@ import (
 	"time"
 
 	"github.com/go-logr/logr"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 type fakeMounter struct{ binds map[string]string }
@@ -872,6 +873,7 @@ func TestAHungStoreCallTimesOut(t *testing.T) {
 			h.request(target, "1")
 			a.pollRequests()
 
+			retried := testutil.ToFloat64(retries)
 			g.armed.Store(true)
 			settled := make(chan struct{})
 			go func() { a.Settle(context.Background()); close(settled) }()
@@ -889,8 +891,35 @@ func TestAHungStoreCallTimesOut(t *testing.T) {
 			if stuck || pending != 1 || retry.IsZero() {
 				t.Fatalf("uploading = %v, pending = %d, retryAt = %v; want an idle world backing off", stuck, pending, retry)
 			}
+			if got := testutil.ToFloat64(retries); got != retried+1 {
+				t.Fatalf("retries = %v, want %v", got, retried+1)
+			}
 		})
 	}
+}
+
+func TestPendingSnapshotsStayCountedWhileTheStoreHangs(t *testing.T) {
+	h := newHarness(t)
+	g := h.gate(func(op, key string) bool { return op == "put" && key == WorldPrefix("", w)+LeaseName }, false)
+	a := h.node("a")
+	target, err := h.publish("a", w, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	writeFile(t, filepath.Join(target, "worlds/world/level.dat"), 5, h.now)
+	h.unpublish("a", target)
+
+	ctx := context.Background()
+	g.armed.Store(true)
+	a.kickUploads(ctx)
+	<-g.held // the lease check before the upload hangs while it holds the world's lock
+	defer func() { close(g.open); a.workers.Wait() }()
+
+	a.kickUploads(ctx)
+	if got := testutil.ToFloat64(pendingUploads); got != 1 {
+		t.Fatalf("pending snapshots = %v while the store hangs, want 1", got)
+	}
+	wantWorlds(t, 0, 1)
 }
 
 func TestAPublishAfterARebootBindsTheSameTargetAgain(t *testing.T) {

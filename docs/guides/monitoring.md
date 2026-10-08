@@ -64,3 +64,10 @@ selector:
   slots, TPS, MSPT, heap used and max, container memory and CPU, node.
 - **Health over time:** lowest TPS and highest MSPT per group, heap and
   container memory per server, proxy players and heap.
+
+## World sync
+
+With `worldSync.enabled`, the same switches also cover the node agents: a
+PodMonitor, the `spawnery-worldsync` alerts and the `Spawnery world sync`
+dashboard. See
+[worlds in an object store](object-store-worlds.md#watching-it).

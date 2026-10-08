@@ -69,6 +69,11 @@ rendered = subprocess.run(
         "helm", "template", "spawnery", chart_dir,
         "--namespace", "spawnery-system",
         "--set", "metrics.prometheusRule.enabled=true",
+        "--set", "worldSync.enabled=true",
+        "--set", "worldSync.objectStore.endpoint=https://s3.example",
+        "--set", "worldSync.objectStore.region=r",
+        "--set", "worldSync.objectStore.bucket=b",
+        "--set", "worldSync.objectStore.credentialsSecret=creds",
     ],
     check=True, capture_output=True, text=True,
 ).stdout
@@ -116,6 +121,11 @@ rendered = subprocess.run(
         "helm", "template", "spawnery", chart_dir,
         "--namespace", "spawnery-system",
         "--set", "metrics.prometheusRule.enabled=true",
+        "--set", "worldSync.enabled=true",
+        "--set", "worldSync.objectStore.endpoint=https://s3.example",
+        "--set", "worldSync.objectStore.region=r",
+        "--set", "worldSync.objectStore.bucket=b",
+        "--set", "worldSync.objectStore.credentialsSecret=creds",
     ],
     check=True, capture_output=True, text=True,
 ).stdout

@@ -145,4 +145,63 @@ spec:
               the ClusterRole and Role in the release against
               config/rbac/role.yaml, and check that the bindings still name the
               operator's ServiceAccount.
+    {{- if .Values.worldSync.enabled }}
+
+    # The node agents' series, scraped by the PodMonitor beside the
+    # ServiceMonitor.
+    - name: spawnery-worldsync
+      rules:
+        # Snapshots normally leave the node within seconds. Ten minutes is
+        # also when another node may take a stopped world's lease.
+        - alert: SpawneryWorldSnapshotsPending
+          expr: max by (node, pod) (spawnery_worldsync_pending_snapshots) > 0
+          for: 10m
+          labels:
+            severity: warning
+          annotations:
+            summary: Snapshots on node {{ "{{ $labels.node }}" }} have not reached the bucket for 10 minutes.
+            description: >-
+              The node agent keeps retrying, and its log says why ("retrying").
+              Usually the object store is unreachable or refuses the
+              credentials. Play since the last upload exists only on this node
+              until then; if a stopped world's lease goes stale meanwhile,
+              another node may start it from the last upload and this copy
+              moves to orphans/.
+        - alert: SpawneryWorldOrphaned
+          expr: increase(spawnery_worldsync_orphans_total[30m]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: Node {{ "{{ $labels.node }}" }} moved a world's local copy to orphans/.
+            description: >-
+              The node lost the world's lease while it still held changes the
+              bucket does not have. The copy lies under orphans/ in the node
+              directory (worldSync.hostPath) and never uploads; the agent's log
+              names the world. Compare it with what the bucket holds before
+              restoring anything by hand.
+        # A node that died holds its leases for up to ten minutes; past that,
+        # nothing should keep refusing a world.
+        - alert: SpawneryWorldLeaseConflicts
+          expr: increase(spawnery_worldsync_lease_conflicts_total[5m]) > 0
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: Node {{ "{{ $labels.node }}" }} has refused a world for 15 minutes because another node holds its lease.
+            description: >-
+              A pod waits in ContainerCreating with an Unavailable event naming
+              the node that holds the world. That node's agent still renews
+              the lease: either a pod there still mounts the world, or its
+              final upload cannot finish.
+        - alert: SpawneryWorldDownloadFailed
+          expr: increase(spawnery_worldsync_download_failures_total[15m]) > 0
+          labels:
+            severity: warning
+          annotations:
+            summary: A world download on node {{ "{{ $labels.node }}" }} failed.
+            description: >-
+              The pod that waited for it failed its start. The agent's log has
+              the error ("download failed"); an object the manifest names but
+              the bucket lacks means the world in the bucket is damaged.
+    {{- end }}
 {{- end }}

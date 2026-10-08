@@ -95,7 +95,7 @@ for ns in spawnery-system spawnery-worldsync; do
     --from-literal=AWS_ACCESS_KEY_ID="$KEY_ID" \
     --from-literal=AWS_SECRET_ACCESS_KEY="$SECRET"
 done
-helm upgrade spawnery oci://ghcr.io/spawnery/charts/spawnery --version 0.24.7 \
+helm upgrade spawnery oci://ghcr.io/spawnery/charts/spawnery --version 0.24.8 \
   --namespace spawnery-system --reuse-values -f worldsync-values.yaml
 ```
 
@@ -229,7 +229,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: import
-          image: ghcr.io/spawnery/spawnery-worldsync:0.24.7
+          image: ghcr.io/spawnery/spawnery-worldsync:0.24.8
           args:
             - import
             - --world=minecraft/private-servers/0b5c1c82-4c7f-4a6e-9d1b-2c1f2b9d5e10
@@ -283,6 +283,20 @@ stopped. A member that starts under `ObjectStore` before its import begins an
 empty world, and once that world has uploaded, the import refuses the key.
 There is no export in this version.
 
+## Watching it
+
+The node agents serve metrics on port 8090. With world sync on, the chart's
+`metrics` switches cover them too: `serviceMonitor` adds a PodMonitor for the
+agents, `prometheusRule` the `spawnery-worldsync` alerts, and `dashboard` a
+second dashboard, `Spawnery world sync`, beside the network one. The metrics
+and alerts are listed in
+[metrics and alerts](../reference/metrics-and-alerts.md).
+
+The dashboard shows per node the worlds mounted and cached, snapshots not yet
+in the bucket, download and upload times and counts, retries, lease
+conflicts, orphans and failed downloads, and the agents' network traffic,
+CPU and memory from the kubelet's cAdvisor series.
+
 ## Limits
 
 - `storage.size` is not enforced on the node directory. A world can use as
@@ -294,10 +308,6 @@ There is no export in this version.
   less than 15 % free.
 - Objects and packs written by an upload attempt that failed stay in the
   bucket until the world is deleted.
-- The node agent serves metrics on port 8090, which the chart does not scrape:
-  `spawnery_worldsync_download_seconds`, `spawnery_worldsync_pending_snapshots`,
-  `spawnery_worldsync_lease_conflicts_total` and
-  `spawnery_worldsync_orphans_total`.
 
 The design and its measurements are in
 `docs/superpowers/specs/2026-10-06-object-store-worlds-design.md`.

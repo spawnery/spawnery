@@ -18,4 +18,7 @@ metadata:
   {{- end }}
 data:
   network.json: {{ .Files.Get "dashboards/network.json" | quote }}
+  {{- if .Values.worldSync.enabled }}
+  worldsync.json: {{ .Files.Get "dashboards/worldsync.json" | quote }}
+  {{- end }}
 {{- end }}
