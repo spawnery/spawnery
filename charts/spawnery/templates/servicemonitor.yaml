@@ -27,3 +27,32 @@ spec:
       # without this the Prometheus Operator rewrites it to exported_namespace.
       honorLabels: true
 {{- end }}
+{{- if and .Values.metrics.serviceMonitor.enabled .Values.worldSync.enabled }}
+---
+# The node agents serve their own metrics; a PodMonitor because a DaemonSet
+# needs no Service.
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  name: spawnery-worldsync
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "spawnery.worldSyncLabels" . | nindent 4 }}
+    {{- with .Values.metrics.serviceMonitor.additionalLabels }}
+    {{- toYaml . | nindent 4 }}
+    {{- end }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - {{ .Values.worldSync.namespace | default .Release.Namespace }}
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: spawnery-worldsync
+  podMetricsEndpoints:
+    - port: metrics
+      path: /metrics
+      interval: {{ .Values.metrics.serviceMonitor.interval }}
+      relabelings:
+        - sourceLabels: [__meta_kubernetes_pod_node_name]
+          targetLabel: node
+{{- end }}

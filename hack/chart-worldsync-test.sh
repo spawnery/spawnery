@@ -84,6 +84,26 @@ if grep -q 'priorityClassName' <<<"$custom"; then
 fi
 grep -qF -- 'key: dedicated' <<<"$custom" || fail "worldSync.tolerations did not replace the default"
 
+metrics=(--set metrics.serviceMonitor.enabled=true --set metrics.prometheusRule.enabled=true --set metrics.dashboard.enabled=true)
+plain="$(helm template t charts/spawnery "${metrics[@]}")"
+for unwanted in 'kind: PodMonitor' 'worldsync.json' 'spawnery-worldsync'; do
+	if grep -qF -- "$unwanted" <<<"$plain"; then
+		fail "world sync off, metrics on: the render holds '$unwanted'"
+	fi
+done
+watched="$(helm template t charts/spawnery --namespace ops "${metrics[@]}" \
+	--set worldSync.enabled=true \
+	--set worldSync.namespace=ws \
+	--set worldSync.objectStore.endpoint=https://s3.example \
+	--set worldSync.objectStore.region=r \
+	--set worldSync.objectStore.bucket=b \
+	--set worldSync.objectStore.credentialsSecret=creds)"
+for want in 'kind: PodMonitor' '      - ws' 'targetLabel: node' 'worldsync.json:' 'name: spawnery-worldsync' \
+	'alert: SpawneryWorldSnapshotsPending' 'alert: SpawneryWorldOrphaned' \
+	'alert: SpawneryWorldLeaseConflicts' 'alert: SpawneryWorldDownloadFailed'; do
+	grep -qF -- "$want" <<<"$watched" || fail "world sync and metrics on: the render lacks '$want'"
+done
+
 if helm template t charts/spawnery --set worldSync.enabled=true >/dev/null 2>&1; then
 	fail "world sync on without a bucket rendered; it must fail"
 fi
