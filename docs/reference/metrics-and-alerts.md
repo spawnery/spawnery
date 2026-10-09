@@ -52,6 +52,7 @@ The `spawnery_worldsync_` metrics come from the world sync node agents on port 8
 <tr><td><code>spawnery_worldsync_lease_conflicts_total</code></td><td>counter</td><td><em>none</em></td><td>Publishes refused because another node held the world.</td></tr>
 <tr><td><code>spawnery_worldsync_orphans_total</code></td><td>counter</td><td><em>none</em></td><td>Local copies moved aside after the lease was lost.</td></tr>
 <tr><td><code>spawnery_worldsync_pending_snapshots</code></td><td>gauge</td><td><em>none</em></td><td>Snapshots on this node not yet in the bucket.</td></tr>
+<tr><td><code>spawnery_worldsync_pruned_objects_total</code></td><td>counter</td><td><em>none</em></td><td>Objects and packs that prunes deleted.</td></tr>
 <tr><td><code>spawnery_worldsync_retries_total</code></td><td>counter</td><td><em>none</em></td><td>Uploads, final snapshots and lease releases that failed and wait for a retry.</td></tr>
 <tr><td><code>spawnery_worldsync_upload_seconds</code></td><td>histogram</td><td><em>none</em></td><td>Time to upload one snapshot.</td></tr>
 <tr><td><code>spawnery_worldsync_worlds</code></td><td>gauge</td><td><code>state</code></td><td>Worlds on this node: mounted by a pod, or cached with no pod.</td></tr>

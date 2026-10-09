@@ -31,6 +31,8 @@ type worldState struct {
 	Generation   int64       `json:"generation"`
 	ManifestETag string      `json:"manifestETag"`
 	Files        []FileEntry `json:"files"`
+	Taken        int64       `json:"taken,omitempty"`
+	RestoredFrom int64       `json:"restoredFrom,omitempty"`
 	LeaseETag    string      `json:"leaseETag"`
 	Target       string      `json:"target"`
 	Pod          string      `json:"pod"`
@@ -53,6 +55,13 @@ type worldState struct {
 	working    bool
 	retryAt    time.Time
 	retryDelay time.Duration
+	// policy is the group's retention as last read; until policyRead, no
+	// read has succeeded and nothing may be pruned.
+	policy     Retention
+	policyETag string
+	policyRead bool
+	kept       ObjectCache
+	prunes     int
 }
 
 func (s *worldState) gid() int {
@@ -64,7 +73,12 @@ func (s *worldState) gid() int {
 
 func (s *worldState) forgetContent() {
 	s.WorldID, s.Generation, s.ManifestETag, s.Files = "", 0, "", nil
+	s.Taken, s.RestoredFrom, s.kept = 0, 0, nil
 	s.Pending, s.FinalPending, s.Incomplete = nil, false, false
+}
+
+func (s *worldState) manifest() Manifest {
+	return Manifest{WorldID: s.WorldID, Generation: s.Generation, Taken: s.Taken, RestoredFrom: s.RestoredFrom, Files: s.Files}
 }
 
 func (n *Node) worldDir(world string) string {
