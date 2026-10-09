@@ -4,7 +4,7 @@ import cloud.spawnery.agent.api.CloudPlayer
 import cloud.spawnery.agent.api.Group
 import cloud.spawnery.agent.api.BoostResult
 import cloud.spawnery.agent.api.ConnectResult
-import cloud.spawnery.agent.api.RestorePoint
+import cloud.spawnery.agent.api.RestorePoints
 import cloud.spawnery.agent.api.RestoredWorld
 import cloud.spawnery.agent.api.ScaleResult
 import cloud.spawnery.agent.api.ReadinessHold
@@ -92,8 +92,8 @@ class MirrorApi(
     override fun deleteServer(group: String, key: String): CompletionStage<Void> =
         connector.deleteServer(group, key)
 
-    override fun listRestorePoints(group: String, key: String): CompletionStage<List<RestorePoint>> =
-        connector.listRestorePoints(group, key)
+    override fun restorePoints(group: String, key: String): CompletionStage<RestorePoints> =
+        connector.restorePoints(group, key)
 
     override fun restoreWorld(group: String, key: String, generation: Long): CompletionStage<RestoredWorld> =
         connector.restoreWorld(group, key, generation)

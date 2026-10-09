@@ -6,6 +6,7 @@ import cloud.spawnery.agent.api.StartedServer
 import cloud.spawnery.agent.api.Target
 import cloud.spawnery.agent.api.NetworkStatus
 import cloud.spawnery.agent.api.RestorePoint
+import cloud.spawnery.agent.api.RestorePoints
 import cloud.spawnery.agent.api.RestoredWorld
 import cloud.spawnery.agent.api.ScaleResult
 import cloud.spawnery.agent.pb.AcceptJoinsRequest
@@ -177,8 +178,8 @@ class CloudConnector(
             )
         }
 
-    fun listRestorePoints(group: String, key: String): CompletionStage<List<RestorePoint>> =
-        requests.start<List<RestorePoint>>(RESTORE_TIMEOUT_MILLIS) { id ->
+    fun restorePoints(group: String, key: String): CompletionStage<RestorePoints> =
+        requests.start<RestorePoints>(RESTORE_TIMEOUT_MILLIS) { id ->
             sendRequest(
                 CloudRequest.newBuilder()
                     .setId(id)
@@ -295,9 +296,12 @@ class CloudConnector(
             response.hasDeleteServer() -> requests.complete(response.id, null)
             response.hasListRestorePoints() -> requests.complete(
                 response.id,
-                response.listRestorePoints.pointsList.map {
-                    RestorePoint(it.generation, Instant.ofEpochMilli(it.takenUnixMillis), it.current)
-                },
+                RestorePoints(
+                    response.listRestorePoints.pointsList.map {
+                        RestorePoint(it.generation, Instant.ofEpochMilli(it.takenUnixMillis), it.current)
+                    },
+                    response.listRestorePoints.settling,
+                ),
             )
             response.hasRestoreWorld() -> requests.complete(
                 response.id,

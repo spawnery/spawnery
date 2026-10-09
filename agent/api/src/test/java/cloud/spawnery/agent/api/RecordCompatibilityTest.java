@@ -18,8 +18,13 @@ package cloud.spawnery.agent.api;
 import static org.junit.jupiter.api.Assertions.assertEquals;
 
 import java.time.Duration;
+import java.time.Instant;
+import java.util.List;
 import java.util.Map;
 import java.util.OptionalDouble;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.CompletionStage;
+import java.util.concurrent.TimeUnit;
 import org.junit.jupiter.api.Test;
 
 class RecordCompatibilityTest {
@@ -63,5 +68,17 @@ class RecordCompatibilityTest {
         assertEquals(false, group.pinned());
         assertEquals(0, group.pinnedReplicas());
         assertEquals(null, group.pinnedUntil());
+    }
+
+    @Test
+    void theZeroTwentyFiveListingStillAnswersWithThePointsAlone() throws Exception {
+        List<RestorePoint> points = List.of(new RestorePoint(9, Instant.ofEpochMilli(1_791_460_800_000L), true));
+        SpawneryApi api = new FakeApi() {
+            @Override
+            public CompletionStage<RestorePoints> restorePoints(String group, String key) {
+                return CompletableFuture.completedFuture(new RestorePoints(points, true));
+            }
+        };
+        assertEquals(points, api.listRestorePoints("worlds", "c0ffee").toCompletableFuture().get(1, TimeUnit.SECONDS));
     }
 }

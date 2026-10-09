@@ -325,6 +325,14 @@ public interface SpawneryApi {
      * {@link #restoreWorld} can go back to, newest first. The first is the
      * world as it stands and says {@link RestorePoint#current()}.
      *
+     * <p>{@link RestorePoints#settling()} says whether the world may still
+     * change. It is true while the member runs, while it is being stopped, and
+     * after a stop until its node has uploaded the final state of the world,
+     * which can take some seconds more; also while a restore is being
+     * written. Until it turns false, the list can miss the newest state and a
+     * {@link #restoreWorld} fails with {@code UNAVAILABLE} or
+     * {@code REFUSED}.
+     *
      * <p>Only for a group whose worlds live in the object store
      * ({@code storage.backend: ObjectStore}). Which older generations stay is
      * the group's {@code storage.retention}; without one the list holds the
@@ -346,7 +354,15 @@ public interface SpawneryApi {
      * out after 75 seconds rather than ten. Asking again after a timeout is
      * safe.
      */
-    CompletionStage<List<RestorePoint>> listRestorePoints(String group, String key);
+    CompletionStage<RestorePoints> restorePoints(String group, String key);
+
+    /**
+     * The points of {@link #restorePoints}, without whether the world is
+     * settling.
+     */
+    default CompletionStage<List<RestorePoint>> listRestorePoints(String group, String key) {
+        return restorePoints(group, key).thenApply(RestorePoints::points);
+    }
 
     /**
      * Makes an older generation of a private server's world its current

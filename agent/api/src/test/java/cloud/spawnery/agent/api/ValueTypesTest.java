@@ -101,4 +101,14 @@ class ValueTypesTest {
         assertEquals(new RestorePoint(3, taken, false), new RestorePoint(3, taken, false));
         assertEquals(new RestoredWorld(10, 3), new RestoredWorld(10, 3));
     }
+
+    @Test
+    void theRestorePointsOfAListingCannotBeChangedFromOutside() {
+        var taken = java.time.Instant.ofEpochMilli(1_791_460_800_000L);
+        var points = new java.util.ArrayList<>(List.of(new RestorePoint(3, taken, true)));
+        var listed = new RestorePoints(points, true);
+        points.clear();
+        assertEquals(List.of(new RestorePoint(3, taken, true)), listed.points());
+        assertThrows(UnsupportedOperationException.class, () -> listed.points().clear());
+    }
 }
