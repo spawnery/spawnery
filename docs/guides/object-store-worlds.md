@@ -242,8 +242,12 @@ file in place, so its worlds keep their history. The API refuses `retention`
 without `backend: ObjectStore`, so a group goes back to `Claim` only after
 dropping it.
 
-A plugin lists a member's generations with `listRestorePoints(group, key)`,
+A plugin lists a member's generations with `restorePoints(group, key)`,
 whether the member runs or not, and also while its world is being deleted.
+The listing's `settling()` is true while the world may still change: while the
+member runs or is being stopped, and after a stop until the node's upload of
+the final snapshot releases the world's lease, which can take tens of seconds.
+Until then the list can miss that snapshot and a restore is turned away.
 `restoreWorld(group, key, generation)` makes one of them current while the
 member is stopped. See
 [what a plugin can do](../plugin-api/what-a-plugin-can-do.md). The restore
