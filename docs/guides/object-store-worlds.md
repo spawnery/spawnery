@@ -237,7 +237,8 @@ played changed one file of 0.7 MB.
 The operator writes the policy to `.retention/<namespace>/<group>.json` in
 the bucket, and the node agent reads it before each upload. A change reaches
 each world at its next upload and restarts no member. Removing `retention`
-drops a world's history at its next upload. The API refuses `retention`
+drops a world's history at its next upload. Deleting the group leaves the
+file in place, so its worlds keep their history. The API refuses `retention`
 without `backend: ObjectStore`, so a group goes back to `Claim` only after
 dropping it.
 

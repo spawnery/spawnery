@@ -177,7 +177,8 @@ manifest's as already covered and deletes it.
 
 The operator's ServerGroup reconciler writes `.retention/<ns>/<group>.json`
 for every `ObjectStore` group when its content differs, and deletes it when
-the group drops `retention`. The node agent reads it at publish and before
+the group drops `retention`. Deleting the group leaves the file in place, so
+the group's worlds keep their history. The node agent reads it at publish and before
 each upload: a `HEAD`, and a new read only when the ETag changed. A missing
 file means "current only". A file it cannot read or parse leaves the last
 good policy in force; before the first good read the node writes history
@@ -271,8 +272,9 @@ entry names, so prune has not deleted it.
 ### 4.6 Deletion
 
 The deletion sweep deletes everything under the world's prefix, `history/`
-included, and needs no change. `.retention/<ns>/<group>.json` goes when its
-group goes.
+included, and needs no change. `.retention/<ns>/<group>.json` stays when
+its group is deleted: members still running prune by it at their final
+upload, and a recreated group overwrites it.
 
 ## 5. Metrics and events
 
@@ -303,8 +305,6 @@ operator dashboard gets restores.
 - The retention counts have no upper bound. Every prune and restore reads
   each kept entry once per cold cache, so very large counts make restores
   slow; the plugin request times out after 10 s.
-- A group deleted while the operator is down keeps its `.retention` file;
-  ServerGroups have no finalizer.
 
 ## 7. Testing
 

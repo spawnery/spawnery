@@ -99,12 +99,45 @@ func TestTheGroupsRetentionIsPublishedAndWithdrawn(t *testing.T) {
 	if got, ok := published.get(key); !ok || got != (worldsync.Retention{Last: 3}) {
 		t.Fatalf("published %+v (%v), want last 3", got, ok)
 	}
+}
+
+func TestADeletedGroupLeavesItsRetentionInPlace(t *testing.T) {
+	f := newFixture(t)
+	published := &recordingRetention{}
+	r := groupReconciler(f)
+	r.Retention = published
+	key := f.ns + "/worlds"
+
+	g := f.createObjectStoreGroup(t, "worlds")
+	g.Spec.Storage.Retention = &spawneryv1alpha1.RetentionSpec{Last: 3}
+	g.Finalizers = append(g.Finalizers, "test.spawnery.cloud/hold")
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	reconcileGroupNamed(t, f, r, g.Name)
+	want := worldsync.Retention{Last: 3}
+	if got, ok := published.get(key); !ok || got != want {
+		t.Fatalf("published %+v (%v), want last 3", got, ok)
+	}
+
 	if err := f.c.Delete(f.ctx, g); err != nil {
 		t.Fatal(err)
 	}
 	reconcileGroupNamed(t, f, r, g.Name)
-	if got, ok := published.get(key); !ok || got != (worldsync.Retention{}) {
-		t.Fatalf("published %+v (%v) after the group was deleted, want the zero policy", got, ok)
+	if got, _ := published.get(key); got != want {
+		t.Fatalf("published %+v while the group was being deleted, want last 3 left in place", got)
+	}
+
+	if err := f.c.Get(f.ctx, types.NamespacedName{Namespace: f.ns, Name: g.Name}, g); err != nil {
+		t.Fatal(err)
+	}
+	g.Finalizers = nil
+	if err := f.c.Update(f.ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	reconcileGroupNamed(t, f, r, g.Name)
+	if got, _ := published.get(key); got != want {
+		t.Fatalf("published %+v after the group was gone, want last 3 left in place", got)
 	}
 }
 

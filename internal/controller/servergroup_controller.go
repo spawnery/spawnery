@@ -125,16 +125,16 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			// No ServerGroup finalizer exists, so most deletions are only seen as
 			// NotFound, and observe never runs again to expire the reservations.
 			r.Expectations.forget(req.Namespace + "/" + req.Name)
-			r.publishRetention(ctx, req.Namespace, req.Name, worldsync.Retention{})
 		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	if !group.DeletionTimestamp.IsZero() {
 		// Owned Servers cascade and drain through their own finalizers.
 		r.Expectations.forget(group.Namespace + "/" + group.Name)
-		r.publishRetention(ctx, group.Namespace, group.Name, worldsync.Retention{})
 		return ctrl.Result{}, nil
 	}
+	// Never withdrawn on deletion: the members' final uploads still prune by
+	// it, and the zero policy would drop their history.
 	r.publishRetention(ctx, group.Namespace, group.Name, worldsync.Retention(group.WorldRetention()))
 
 	network := &spawneryv1alpha1.Network{}
