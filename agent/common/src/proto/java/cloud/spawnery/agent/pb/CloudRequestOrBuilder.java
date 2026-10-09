@@ -226,5 +226,35 @@ public interface CloudRequestOrBuilder extends
    */
   cloud.spawnery.agent.pb.ExecuteRequestOrBuilder getExecuteOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.ListRestorePointsRequest list_restore_points = 16;</code>
+   * @return Whether the listRestorePoints field is set.
+   */
+  boolean hasListRestorePoints();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ListRestorePointsRequest list_restore_points = 16;</code>
+   * @return The listRestorePoints.
+   */
+  cloud.spawnery.agent.pb.ListRestorePointsRequest getListRestorePoints();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ListRestorePointsRequest list_restore_points = 16;</code>
+   */
+  cloud.spawnery.agent.pb.ListRestorePointsRequestOrBuilder getListRestorePointsOrBuilder();
+
+  /**
+   * <code>.spawnery.agent.v1alpha1.RestoreWorldRequest restore_world = 17;</code>
+   * @return Whether the restoreWorld field is set.
+   */
+  boolean hasRestoreWorld();
+  /**
+   * <code>.spawnery.agent.v1alpha1.RestoreWorldRequest restore_world = 17;</code>
+   * @return The restoreWorld.
+   */
+  cloud.spawnery.agent.pb.RestoreWorldRequest getRestoreWorld();
+  /**
+   * <code>.spawnery.agent.v1alpha1.RestoreWorldRequest restore_world = 17;</code>
+   */
+  cloud.spawnery.agent.pb.RestoreWorldRequestOrBuilder getRestoreWorldOrBuilder();
+
   cloud.spawnery.agent.pb.CloudRequest.RequestCase getRequestCase();
 }

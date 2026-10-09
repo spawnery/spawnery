@@ -109,6 +109,8 @@ message CloudRequest {
     ScaleRequest scale = 13;
     ForceStopRequest force_stop = 14;
     ExecuteRequest execute = 15;
+    ListRestorePointsRequest list_restore_points = 16;
+    RestoreWorldRequest restore_world = 17;
   }
 }
 
@@ -133,6 +135,8 @@ message CloudResponse {
     ScaleResult scale = 14;
     ForceStopResult force_stop = 15;
     ExecuteResult execute = 16;
+    ListRestorePointsResult list_restore_points = 17;
+    RestoreWorldResult restore_world = 18;
   }
 }
 
@@ -461,6 +465,44 @@ message DeleteServerResult {
   string server = 1;
   // True when a world claim was deleted; false when there was only a server.
   bool world = 2;
+}
+
+// ListRestorePointsRequest asks for the generations of an on-demand member's
+// world that a RestoreWorldRequest can go back to. Only for a group whose
+// worlds live in the object store.
+message ListRestorePointsRequest {
+  string group = 1;
+  string key = 2;
+}
+
+// RestorePoint is one kept generation of a world.
+message RestorePoint {
+  int64 generation = 1;
+  // When the node took the snapshot, not when it reached the object store.
+  int64 taken_unix_millis = 2;
+  // The world as it stands; a restore cannot pick it.
+  bool current = 3;
+}
+
+// ListRestorePointsResult: the current generation first, then the older
+// ones, newest first.
+message ListRestorePointsResult {
+  repeated RestorePoint points = 1;
+}
+
+// RestoreWorldRequest makes an older generation the member's current world,
+// as a new generation, while the member is stopped.
+message RestoreWorldRequest {
+  string group = 1;
+  string key = 2;
+  int64 generation = 3;
+}
+
+// RestoreWorldResult names the new current generation and the one whose
+// content it holds.
+message RestoreWorldResult {
+  int64 generation = 1;
+  int64 restored_from = 2;
 }
 
 // CloudEvent is something that happened, on its way to somebody's chat.

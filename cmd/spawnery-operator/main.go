@@ -391,6 +391,7 @@ func main() {
 	}
 
 	var worlds agentserver.WorldDeleter
+	var history agentserver.WorldHistory
 	// An interface left nil, not a nil *Policies, when world sync is off.
 	var retention controller.RetentionPublisher
 	if worldSync {
@@ -404,7 +405,8 @@ func main() {
 			setupLog.Error(err, "world sync store")
 			os.Exit(1)
 		}
-		worlds = worldsync.BucketWorlds{Store: st, Base: base}
+		bucket := worldsync.BucketWorlds{Store: st, Base: base}
+		worlds, history = bucket, bucket
 		retention = &worldsync.Policies{Store: st, Base: base}
 		if err := mgr.Add(&worldsync.Sweeper{Store: st, Base: base, Interval: time.Minute,
 			StaleAfter: worldsync.StaleAfter, Log: ctrl.Log.WithName("worldsync")}); err != nil {
@@ -427,7 +429,7 @@ func main() {
 		Proxies: proxies,
 		Servers: servers,
 		State:   state,
-		Writer:  agentserver.KubeWriter{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Clock: time.Now, Worlds: worlds},
+		Writer:  agentserver.KubeWriter{Client: mgr.GetClient(), Reader: mgr.GetAPIReader(), Clock: time.Now, Worlds: worlds, History: history},
 		Status: netstatus.Source{
 			Reader:  mgr.GetClient(),
 			Agents:  registry,

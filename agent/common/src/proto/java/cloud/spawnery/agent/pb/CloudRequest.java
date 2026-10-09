@@ -77,6 +77,8 @@ private static final long serialVersionUID = 0L;
     SCALE(13),
     FORCE_STOP(14),
     EXECUTE(15),
+    LIST_RESTORE_POINTS(16),
+    RESTORE_WORLD(17),
     REQUEST_NOT_SET(0);
     private final int value;
     private RequestCase(int value) {
@@ -108,6 +110,8 @@ private static final long serialVersionUID = 0L;
         case 13: return SCALE;
         case 14: return FORCE_STOP;
         case 15: return EXECUTE;
+        case 16: return LIST_RESTORE_POINTS;
+        case 17: return RESTORE_WORLD;
         case 0: return REQUEST_NOT_SET;
         default: return null;
       }
@@ -568,6 +572,68 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.ExecuteRequest.getDefaultInstance();
   }
 
+  public static final int LIST_RESTORE_POINTS_FIELD_NUMBER = 16;
+  /**
+   * <code>.spawnery.agent.v1alpha1.ListRestorePointsRequest list_restore_points = 16;</code>
+   * @return Whether the listRestorePoints field is set.
+   */
+  @java.lang.Override
+  public boolean hasListRestorePoints() {
+    return requestCase_ == 16;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.ListRestorePointsRequest list_restore_points = 16;</code>
+   * @return The listRestorePoints.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.ListRestorePointsRequest getListRestorePoints() {
+    if (requestCase_ == 16) {
+       return (cloud.spawnery.agent.pb.ListRestorePointsRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.ListRestorePointsRequest.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.ListRestorePointsRequest list_restore_points = 16;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.ListRestorePointsRequestOrBuilder getListRestorePointsOrBuilder() {
+    if (requestCase_ == 16) {
+       return (cloud.spawnery.agent.pb.ListRestorePointsRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.ListRestorePointsRequest.getDefaultInstance();
+  }
+
+  public static final int RESTORE_WORLD_FIELD_NUMBER = 17;
+  /**
+   * <code>.spawnery.agent.v1alpha1.RestoreWorldRequest restore_world = 17;</code>
+   * @return Whether the restoreWorld field is set.
+   */
+  @java.lang.Override
+  public boolean hasRestoreWorld() {
+    return requestCase_ == 17;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.RestoreWorldRequest restore_world = 17;</code>
+   * @return The restoreWorld.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.RestoreWorldRequest getRestoreWorld() {
+    if (requestCase_ == 17) {
+       return (cloud.spawnery.agent.pb.RestoreWorldRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.RestoreWorldRequest.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.RestoreWorldRequest restore_world = 17;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.RestoreWorldRequestOrBuilder getRestoreWorldOrBuilder() {
+    if (requestCase_ == 17) {
+       return (cloud.spawnery.agent.pb.RestoreWorldRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.RestoreWorldRequest.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -626,6 +692,12 @@ private static final long serialVersionUID = 0L;
     }
     if (requestCase_ == 15) {
       output.writeMessage(15, (cloud.spawnery.agent.pb.ExecuteRequest) request_);
+    }
+    if (requestCase_ == 16) {
+      output.writeMessage(16, (cloud.spawnery.agent.pb.ListRestorePointsRequest) request_);
+    }
+    if (requestCase_ == 17) {
+      output.writeMessage(17, (cloud.spawnery.agent.pb.RestoreWorldRequest) request_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -690,6 +762,14 @@ private static final long serialVersionUID = 0L;
     if (requestCase_ == 15) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(15, (cloud.spawnery.agent.pb.ExecuteRequest) request_);
+    }
+    if (requestCase_ == 16) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(16, (cloud.spawnery.agent.pb.ListRestorePointsRequest) request_);
+    }
+    if (requestCase_ == 17) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(17, (cloud.spawnery.agent.pb.RestoreWorldRequest) request_);
     }
     return size;
   }
@@ -775,6 +855,14 @@ private static final long serialVersionUID = 0L;
         if (!getExecute()
             .equals(other.getExecute())) return false;
         break;
+      case 16:
+        if (!getListRestorePoints()
+            .equals(other.getListRestorePoints())) return false;
+        break;
+      case 17:
+        if (!getRestoreWorld()
+            .equals(other.getRestoreWorld())) return false;
+        break;
       case 0:
       default:
     }
@@ -848,6 +936,14 @@ private static final long serialVersionUID = 0L;
       case 15:
         hash = (37 * hash) + EXECUTE_FIELD_NUMBER;
         hash = (53 * hash) + getExecute().hashCode();
+        break;
+      case 16:
+        hash = (37 * hash) + LIST_RESTORE_POINTS_FIELD_NUMBER;
+        hash = (53 * hash) + getListRestorePoints().hashCode();
+        break;
+      case 17:
+        hash = (37 * hash) + RESTORE_WORLD_FIELD_NUMBER;
+        hash = (53 * hash) + getRestoreWorld().hashCode();
         break;
       case 0:
       default:
@@ -1035,6 +1131,12 @@ private static final long serialVersionUID = 0L;
       if (executeBuilder_ != null) {
         executeBuilder_.clear();
       }
+      if (listRestorePointsBuilder_ != null) {
+        listRestorePointsBuilder_.clear();
+      }
+      if (restoreWorldBuilder_ != null) {
+        restoreWorldBuilder_.clear();
+      }
       requestCase_ = 0;
       request_ = null;
       return this;
@@ -1135,6 +1237,14 @@ private static final long serialVersionUID = 0L;
           executeBuilder_ != null) {
         result.request_ = executeBuilder_.build();
       }
+      if (requestCase_ == 16 &&
+          listRestorePointsBuilder_ != null) {
+        result.request_ = listRestorePointsBuilder_.build();
+      }
+      if (requestCase_ == 17 &&
+          restoreWorldBuilder_ != null) {
+        result.request_ = restoreWorldBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -1207,6 +1317,14 @@ private static final long serialVersionUID = 0L;
         }
         case EXECUTE: {
           mergeExecute(other.getExecute());
+          break;
+        }
+        case LIST_RESTORE_POINTS: {
+          mergeListRestorePoints(other.getListRestorePoints());
+          break;
+        }
+        case RESTORE_WORLD: {
+          mergeRestoreWorld(other.getRestoreWorld());
           break;
         }
         case REQUEST_NOT_SET: {
@@ -1342,6 +1460,20 @@ private static final long serialVersionUID = 0L;
               requestCase_ = 15;
               break;
             } // case 122
+            case 130: {
+              input.readMessage(
+                  internalGetListRestorePointsFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              requestCase_ = 16;
+              break;
+            } // case 130
+            case 138: {
+              input.readMessage(
+                  internalGetRestoreWorldFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              requestCase_ = 17;
+              break;
+            } // case 138
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -3392,6 +3524,290 @@ private static final long serialVersionUID = 0L;
       requestCase_ = 15;
       onChanged();
       return executeBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.ListRestorePointsRequest, cloud.spawnery.agent.pb.ListRestorePointsRequest.Builder, cloud.spawnery.agent.pb.ListRestorePointsRequestOrBuilder> listRestorePointsBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.ListRestorePointsRequest list_restore_points = 16;</code>
+     * @return Whether the listRestorePoints field is set.
+     */
+    @java.lang.Override
+    public boolean hasListRestorePoints() {
+      return requestCase_ == 16;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ListRestorePointsRequest list_restore_points = 16;</code>
+     * @return The listRestorePoints.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.ListRestorePointsRequest getListRestorePoints() {
+      if (listRestorePointsBuilder_ == null) {
+        if (requestCase_ == 16) {
+          return (cloud.spawnery.agent.pb.ListRestorePointsRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.ListRestorePointsRequest.getDefaultInstance();
+      } else {
+        if (requestCase_ == 16) {
+          return listRestorePointsBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.ListRestorePointsRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ListRestorePointsRequest list_restore_points = 16;</code>
+     */
+    public Builder setListRestorePoints(cloud.spawnery.agent.pb.ListRestorePointsRequest value) {
+      if (listRestorePointsBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        request_ = value;
+        onChanged();
+      } else {
+        listRestorePointsBuilder_.setMessage(value);
+      }
+      requestCase_ = 16;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ListRestorePointsRequest list_restore_points = 16;</code>
+     */
+    public Builder setListRestorePoints(
+        cloud.spawnery.agent.pb.ListRestorePointsRequest.Builder builderForValue) {
+      if (listRestorePointsBuilder_ == null) {
+        request_ = builderForValue.build();
+        onChanged();
+      } else {
+        listRestorePointsBuilder_.setMessage(builderForValue.build());
+      }
+      requestCase_ = 16;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ListRestorePointsRequest list_restore_points = 16;</code>
+     */
+    public Builder mergeListRestorePoints(cloud.spawnery.agent.pb.ListRestorePointsRequest value) {
+      if (listRestorePointsBuilder_ == null) {
+        if (requestCase_ == 16 &&
+            request_ != cloud.spawnery.agent.pb.ListRestorePointsRequest.getDefaultInstance()) {
+          request_ = cloud.spawnery.agent.pb.ListRestorePointsRequest.newBuilder((cloud.spawnery.agent.pb.ListRestorePointsRequest) request_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          request_ = value;
+        }
+        onChanged();
+      } else {
+        if (requestCase_ == 16) {
+          listRestorePointsBuilder_.mergeFrom(value);
+        } else {
+          listRestorePointsBuilder_.setMessage(value);
+        }
+      }
+      requestCase_ = 16;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ListRestorePointsRequest list_restore_points = 16;</code>
+     */
+    public Builder clearListRestorePoints() {
+      if (listRestorePointsBuilder_ == null) {
+        if (requestCase_ == 16) {
+          requestCase_ = 0;
+          request_ = null;
+          onChanged();
+        }
+      } else {
+        if (requestCase_ == 16) {
+          requestCase_ = 0;
+          request_ = null;
+        }
+        listRestorePointsBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ListRestorePointsRequest list_restore_points = 16;</code>
+     */
+    public cloud.spawnery.agent.pb.ListRestorePointsRequest.Builder getListRestorePointsBuilder() {
+      return internalGetListRestorePointsFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ListRestorePointsRequest list_restore_points = 16;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.ListRestorePointsRequestOrBuilder getListRestorePointsOrBuilder() {
+      if ((requestCase_ == 16) && (listRestorePointsBuilder_ != null)) {
+        return listRestorePointsBuilder_.getMessageOrBuilder();
+      } else {
+        if (requestCase_ == 16) {
+          return (cloud.spawnery.agent.pb.ListRestorePointsRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.ListRestorePointsRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.ListRestorePointsRequest list_restore_points = 16;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.ListRestorePointsRequest, cloud.spawnery.agent.pb.ListRestorePointsRequest.Builder, cloud.spawnery.agent.pb.ListRestorePointsRequestOrBuilder> 
+        internalGetListRestorePointsFieldBuilder() {
+      if (listRestorePointsBuilder_ == null) {
+        if (!(requestCase_ == 16)) {
+          request_ = cloud.spawnery.agent.pb.ListRestorePointsRequest.getDefaultInstance();
+        }
+        listRestorePointsBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.ListRestorePointsRequest, cloud.spawnery.agent.pb.ListRestorePointsRequest.Builder, cloud.spawnery.agent.pb.ListRestorePointsRequestOrBuilder>(
+                (cloud.spawnery.agent.pb.ListRestorePointsRequest) request_,
+                getParentForChildren(),
+                isClean());
+        request_ = null;
+      }
+      requestCase_ = 16;
+      onChanged();
+      return listRestorePointsBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.RestoreWorldRequest, cloud.spawnery.agent.pb.RestoreWorldRequest.Builder, cloud.spawnery.agent.pb.RestoreWorldRequestOrBuilder> restoreWorldBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.RestoreWorldRequest restore_world = 17;</code>
+     * @return Whether the restoreWorld field is set.
+     */
+    @java.lang.Override
+    public boolean hasRestoreWorld() {
+      return requestCase_ == 17;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.RestoreWorldRequest restore_world = 17;</code>
+     * @return The restoreWorld.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.RestoreWorldRequest getRestoreWorld() {
+      if (restoreWorldBuilder_ == null) {
+        if (requestCase_ == 17) {
+          return (cloud.spawnery.agent.pb.RestoreWorldRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.RestoreWorldRequest.getDefaultInstance();
+      } else {
+        if (requestCase_ == 17) {
+          return restoreWorldBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.RestoreWorldRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.RestoreWorldRequest restore_world = 17;</code>
+     */
+    public Builder setRestoreWorld(cloud.spawnery.agent.pb.RestoreWorldRequest value) {
+      if (restoreWorldBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        request_ = value;
+        onChanged();
+      } else {
+        restoreWorldBuilder_.setMessage(value);
+      }
+      requestCase_ = 17;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.RestoreWorldRequest restore_world = 17;</code>
+     */
+    public Builder setRestoreWorld(
+        cloud.spawnery.agent.pb.RestoreWorldRequest.Builder builderForValue) {
+      if (restoreWorldBuilder_ == null) {
+        request_ = builderForValue.build();
+        onChanged();
+      } else {
+        restoreWorldBuilder_.setMessage(builderForValue.build());
+      }
+      requestCase_ = 17;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.RestoreWorldRequest restore_world = 17;</code>
+     */
+    public Builder mergeRestoreWorld(cloud.spawnery.agent.pb.RestoreWorldRequest value) {
+      if (restoreWorldBuilder_ == null) {
+        if (requestCase_ == 17 &&
+            request_ != cloud.spawnery.agent.pb.RestoreWorldRequest.getDefaultInstance()) {
+          request_ = cloud.spawnery.agent.pb.RestoreWorldRequest.newBuilder((cloud.spawnery.agent.pb.RestoreWorldRequest) request_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          request_ = value;
+        }
+        onChanged();
+      } else {
+        if (requestCase_ == 17) {
+          restoreWorldBuilder_.mergeFrom(value);
+        } else {
+          restoreWorldBuilder_.setMessage(value);
+        }
+      }
+      requestCase_ = 17;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.RestoreWorldRequest restore_world = 17;</code>
+     */
+    public Builder clearRestoreWorld() {
+      if (restoreWorldBuilder_ == null) {
+        if (requestCase_ == 17) {
+          requestCase_ = 0;
+          request_ = null;
+          onChanged();
+        }
+      } else {
+        if (requestCase_ == 17) {
+          requestCase_ = 0;
+          request_ = null;
+        }
+        restoreWorldBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.RestoreWorldRequest restore_world = 17;</code>
+     */
+    public cloud.spawnery.agent.pb.RestoreWorldRequest.Builder getRestoreWorldBuilder() {
+      return internalGetRestoreWorldFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.RestoreWorldRequest restore_world = 17;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.RestoreWorldRequestOrBuilder getRestoreWorldOrBuilder() {
+      if ((requestCase_ == 17) && (restoreWorldBuilder_ != null)) {
+        return restoreWorldBuilder_.getMessageOrBuilder();
+      } else {
+        if (requestCase_ == 17) {
+          return (cloud.spawnery.agent.pb.RestoreWorldRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.RestoreWorldRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.RestoreWorldRequest restore_world = 17;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.RestoreWorldRequest, cloud.spawnery.agent.pb.RestoreWorldRequest.Builder, cloud.spawnery.agent.pb.RestoreWorldRequestOrBuilder> 
+        internalGetRestoreWorldFieldBuilder() {
+      if (restoreWorldBuilder_ == null) {
+        if (!(requestCase_ == 17)) {
+          request_ = cloud.spawnery.agent.pb.RestoreWorldRequest.getDefaultInstance();
+        }
+        restoreWorldBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.RestoreWorldRequest, cloud.spawnery.agent.pb.RestoreWorldRequest.Builder, cloud.spawnery.agent.pb.RestoreWorldRequestOrBuilder>(
+                (cloud.spawnery.agent.pb.RestoreWorldRequest) request_,
+                getParentForChildren(),
+                isClean());
+        request_ = null;
+      }
+      requestCase_ = 17;
+      onChanged();
+      return restoreWorldBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.CloudRequest)

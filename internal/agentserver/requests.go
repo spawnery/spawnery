@@ -168,6 +168,10 @@ func (s *Server) answerCloudRequest(
 		return s.answerForceStop(ctx, logger, id, req.GetId(), req.GetForceStop())
 	case req.GetExecute() != nil:
 		return s.answerExecute(ctx, logger, id, req.GetId(), req.GetExecute())
+	case req.GetListRestorePoints() != nil:
+		return s.answerListRestorePoints(ctx, logger, id, req.GetId(), req.GetListRestorePoints())
+	case req.GetRestoreWorld() != nil:
+		return s.answerRestoreWorld(ctx, logger, id, req.GetId(), req.GetRestoreWorld())
 	default:
 		return refuse(req.GetId(), agentpb.RequestError_REASON_UNSPECIFIED,
 			"this operator does not know that request")

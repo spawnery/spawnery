@@ -73,6 +73,14 @@ var ConnectionsRefused = prometheus.NewCounterVec(
 	[]string{"bound"},
 )
 
+var WorldRestores = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "spawnery_world_restores_total",
+		Help: "World restores plugins asked for, by result: restored, refused, unavailable or failed.",
+	},
+	[]string{"result"},
+)
+
 const (
 	BoundPeer  = "peer"
 	BoundFleet = "fleet"
@@ -82,9 +90,13 @@ func init() {
 	metrics.Registry.MustRegister(
 		RequestsRefused,
 		OpenStreams, RejectedReports, OpenConnections, ExpectedAgents, ConnectionsRefused,
+		WorldRestores,
 	)
 	// A labelled counter does not exist until incremented, and increase() over
 	// a series born mid-window has nothing to subtract from.
 	ConnectionsRefused.WithLabelValues(BoundPeer)
 	ConnectionsRefused.WithLabelValues(BoundFleet)
+	for _, r := range []string{"restored", "refused", "unavailable", "failed"} {
+		WorldRestores.WithLabelValues(r)
+	}
 }

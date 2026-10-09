@@ -32,6 +32,7 @@ import (
 	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
+	"github.com/spawnery/spawnery/internal/worldsync"
 )
 
 // ErrNoSuchServer is a sentinel rather than the API machinery's not-found so
@@ -141,6 +142,15 @@ type ClusterWriter interface {
 	// ErrGroupNotOnDemand, instance.ErrBadKey, ErrForeignClaim, ErrUnkeyedWorld, and
 	// ErrNoSuchServer when neither a server nor a world is there.
 	DeleteServer(ctx context.Context, namespace, group, key string) (DeletedServer, error)
+	// ListRestorePoints lists the kept generations of a member's world,
+	// newest first. It returns ErrNoSuchGroup, ErrGroupNotOnDemand,
+	// ErrNotObjectStore, instance.ErrBadKey, ErrWorldSyncOff and ErrNoWorld.
+	ListRestorePoints(ctx context.Context, namespace, group, key string) ([]worldsync.RestorePoint, error)
+	// RestoreWorld makes generation the member's current world as a new
+	// generation. Beside ListRestorePoints' errors it returns
+	// ErrMemberRunning, ErrInstanceStopping, ErrWorldDeleting,
+	// ErrNoGeneration, ErrCurrentGeneration and ErrWorldBusy.
+	RestoreWorld(ctx context.Context, namespace, group, key string, generation int64) (worldsync.Restored, error)
 	// Unretire takes a retirement back and holds the server.
 	Unretire(ctx context.Context, namespace, name string) error
 }
@@ -187,6 +197,8 @@ type KubeWriter struct {
 	Clock func() time.Time
 	// Nil when the operator runs without --world-sync.
 	Worlds WorldDeleter
+	// Nil when the operator runs without --world-sync.
+	History WorldHistory
 }
 
 func (w KubeWriter) claims() client.Reader {
