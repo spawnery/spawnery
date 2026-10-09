@@ -49,6 +49,8 @@ type fakeHistory struct {
 	policy   worldsync.Retention
 	ctxErr   error
 	deadline bool
+	gate     chan struct{}
+	entered  chan struct{}
 }
 
 func (f *fakeHistory) RestorePoints(context.Context, string) ([]worldsync.RestorePoint, error) {
@@ -56,6 +58,12 @@ func (f *fakeHistory) RestorePoints(context.Context, string) ([]worldsync.Restor
 }
 
 func (f *fakeHistory) Restore(ctx context.Context, _ string, generation int64, policy worldsync.Retention) (worldsync.Restored, error) {
+	if f.entered != nil {
+		f.entered <- struct{}{}
+	}
+	if f.gate != nil {
+		<-f.gate
+	}
 	f.ctxErr = ctx.Err()
 	_, f.deadline = ctx.Deadline()
 	f.asked = append(f.asked, generation)
@@ -232,5 +240,123 @@ func TestARestoreOutlivesThePluginsRequest(t *testing.T) {
 	}
 	if history.ctxErr != nil || !history.deadline {
 		t.Fatalf("restore ran on ctx err %v, deadline %v; want a live context with its own timeout", history.ctxErr, history.deadline)
+	}
+}
+
+func TestABadKeyIsRefusedByBothVerbs(t *testing.T) {
+	s, _ := historyServer(t, &fakeWorlds{}, &fakeHistory{}, objectStoreGroup())
+	for name, req := range map[string]*agentpb.CloudRequest{
+		"restore": {Id: 1, Request: &agentpb.CloudRequest_RestoreWorld{RestoreWorld: &agentpb.RestoreWorldRequest{Group: "private-servers", Key: "Not A Key", Generation: 3}}},
+		"list":    {Id: 2, Request: &agentpb.CloudRequest_ListRestorePoints{ListRestorePoints: &agentpb.ListRestorePointsRequest{Group: "private-servers", Key: "Not A Key"}}},
+	} {
+		if got := s.answerCloudRequest(context.Background(), logr.Discard(), historyCaller, req).GetError().GetReason(); got != agentpb.RequestError_REFUSED {
+			t.Errorf("%s: reason = %v, want REFUSED", name, got)
+		}
+	}
+}
+
+func TestAWorldMarkedForDeletionStillListsItsPoints(t *testing.T) {
+	history := &fakeHistory{points: []worldsync.RestorePoint{{Generation: 9, Current: true}}}
+	s, _ := historyServer(t, &fakeWorlds{pending: true}, history, objectStoreGroup())
+	if got := askRestorePoints(s).GetListRestorePoints().GetPoints(); len(got) != 1 {
+		t.Fatalf("points = %v, want the one generation", got)
+	}
+}
+
+func slowRestoreFixture(t *testing.T) (*Server, *fakeHistory) {
+	t.Helper()
+	history := &fakeHistory{
+		restored: worldsync.Restored{Generation: 9, RestoredFrom: 3},
+		gate:     make(chan struct{}),
+		entered:  make(chan struct{}, 1),
+	}
+	s, _ := historyServer(t, &fakeWorlds{}, history, objectStoreGroup())
+	return s, history
+}
+
+func waitEntered(t *testing.T, history *fakeHistory) {
+	t.Helper()
+	select {
+	case <-history.entered:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the restore never started")
+	}
+}
+
+func TestAProxyAnswersOtherRequestsWhileARestoreRuns(t *testing.T) {
+	s, history := slowRestoreFixture(t)
+	late := make(chan *agentpb.OperatorToProxy, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	msg := func(req *agentpb.CloudRequest) *agentpb.ProxyMessage {
+		return &agentpb.ProxyMessage{Message: &agentpb.ProxyMessage_CloudRequest{CloudRequest: req}}
+	}
+	done := make(chan *agentpb.OperatorToProxy, 1)
+	go func() {
+		done <- s.handleProxy(ctx, logr.Discard(), historyCaller, msg(&agentpb.CloudRequest{
+			Id: 7, Request: &agentpb.CloudRequest_RestoreWorld{RestoreWorld: &agentpb.RestoreWorldRequest{Group: "private-servers", Key: "c0ffee", Generation: 3}},
+		}), late)
+	}()
+	select {
+	case answer := <-done:
+		if answer != nil {
+			t.Fatalf("the restore was answered inline: %v", answer)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("handleProxy is held by the restore")
+	}
+	waitEntered(t, history)
+	other := s.handleProxy(ctx, logr.Discard(), historyCaller, msg(&agentpb.CloudRequest{Id: 8}), late)
+	if other.GetCloudResponse().GetId() != 8 {
+		t.Fatalf("another request was not answered meanwhile: %v", other)
+	}
+	close(history.gate)
+	select {
+	case answer := <-late:
+		if got := answer.GetCloudResponse(); got.GetId() != 7 || got.GetRestoreWorld().GetGeneration() != 9 {
+			t.Fatalf("late answer = %v", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the restore's answer never arrived")
+	}
+}
+
+func TestAServerAnswersOtherRequestsWhileARestoreRuns(t *testing.T) {
+	s, history := slowRestoreFixture(t)
+	late := make(chan *agentpb.OperatorToServer, 1)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	msg := func(req *agentpb.CloudRequest) *agentpb.ServerMessage {
+		return &agentpb.ServerMessage{Message: &agentpb.ServerMessage_CloudRequest{CloudRequest: req}}
+	}
+	id := historyCaller
+	id.Role = agent.RoleServer
+	done := make(chan *agentpb.OperatorToServer, 1)
+	go func() {
+		done <- s.handle(ctx, logr.Discard(), id, msg(&agentpb.CloudRequest{
+			Id: 7, Request: &agentpb.CloudRequest_RestoreWorld{RestoreWorld: &agentpb.RestoreWorldRequest{Group: "private-servers", Key: "c0ffee", Generation: 3}},
+		}), late)
+	}()
+	select {
+	case answer := <-done:
+		if answer != nil {
+			t.Fatalf("the restore was answered inline: %v", answer)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("handle is held by the restore")
+	}
+	waitEntered(t, history)
+	other := s.handle(ctx, logr.Discard(), id, msg(&agentpb.CloudRequest{Id: 8}), late)
+	if other.GetCloudResponse().GetId() != 8 {
+		t.Fatalf("another request was not answered meanwhile: %v", other)
+	}
+	close(history.gate)
+	select {
+	case answer := <-late:
+		if got := answer.GetCloudResponse(); got.GetId() != 7 || got.GetRestoreWorld().GetGeneration() != 9 {
+			t.Fatalf("late answer = %v", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the restore's answer never arrived")
 	}
 }

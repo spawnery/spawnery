@@ -51,6 +51,12 @@ type WorldHistory interface {
 	Restore(ctx context.Context, world string, generation int64, policy worldsync.Retention) (worldsync.Restored, error)
 }
 
+// answersOffTheLoop is true for the requests that wait on the object store,
+// which would hold a session's loop for as long.
+func answersOffTheLoop(req *agentpb.CloudRequest) bool {
+	return req.GetListRestorePoints() != nil || req.GetRestoreWorld() != nil
+}
+
 // restoreTimeout ends a restore long before the lease it holds goes stale. The
 // restore runs detached from the plugin's request: once the manifest is
 // committed, a dropped plugin must not turn it into a failure.
@@ -176,7 +182,7 @@ func (s *Server) answerListRestorePoints(
 		if reason, message, known := historyRefusal(err); known {
 			return refuse(reqID, reason, message)
 		}
-		logger.V(1).Info("could not list restore points", "reason", err.Error())
+		logger.V(1).Info("could not list restore points", "group", req.GetGroup(), "key", req.GetKey(), "reason", err.Error())
 		return refuse(reqID, agentpb.RequestError_UNAVAILABLE, "the operator could not read that world's history just now")
 	}
 	out := make([]*agentpb.RestorePoint, 0, len(points))
