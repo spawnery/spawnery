@@ -312,3 +312,18 @@ func TestARestoreKeepsTheGenerationItReplacedWhateverThePolicy(t *testing.T) {
 		t.Fatalf("undo = %+v, %v; want generation 7 from 5", undo, err)
 	}
 }
+
+func TestARestoreRefusesAnEntryOfAnotherWorld(t *testing.T) {
+	st := NewMemStore(time.Now)
+	ctx := context.Background()
+	fiveGenerations(t, st)
+	foreign := manifestOf(3, ObjectsDir+"g3")
+	foreign.WorldID = "an-earlier-world"
+	putJSON(t, st, entryKey(foreign), foreign)
+	if _, err := RestoreWorld(ctx, st, prefix, 3, Retention{Last: 10}, time.Now()); !errors.Is(err, ErrNoGeneration) {
+		t.Fatalf("restore of another world's entry: err = %v, want ErrNoGeneration", err)
+	}
+	if m, _, err := ReadManifest(ctx, st, prefix); err != nil || m.Generation != 5 {
+		t.Fatalf("manifest = %+v, %v; a refused restore changed it", m, err)
+	}
+}

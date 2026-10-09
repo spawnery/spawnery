@@ -117,6 +117,9 @@ func RestoreWorld(ctx context.Context, st Store, prefix string, generation int64
 	if err != nil {
 		return Restored{}, err
 	}
+	if old.WorldID != cur.WorldID {
+		return Restored{}, ErrNoGeneration
+	}
 
 	_, err = st.Put(ctx, prefix+HistoryKey(cur.Generation, cur.TakenAt(info.LastModified)), bytes.NewReader(raw), PutCondition{IfNoneMatch: true})
 	if err != nil && !errors.Is(err, ErrPrecondition) {
