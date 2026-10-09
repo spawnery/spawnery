@@ -102,7 +102,13 @@ func TestARestoreMakesAnOldGenerationCurrentUnderANewNumber(t *testing.T) {
 	h.upload("a", target, 5, 1)
 	h.upload("a", target, 6, 2)
 	h.unpublish("a", target)
+	if held, err := (BucketWorlds{Store: h.st}).Held(ctx, w); err != nil || !held {
+		t.Fatalf("held = %v, %v before the final upload; want held", held, err)
+	}
 	h.node("a").Settle(ctx) // generation 3, the final snapshot, and the release
+	if held, err := (BucketWorlds{Store: h.st}).Held(ctx, w); err != nil || held {
+		t.Fatalf("held = %v, %v after the release; want free", held, err)
+	}
 	before, _, err := ReadManifest(ctx, h.st, prefix)
 	if err != nil || before.Generation != 3 {
 		t.Fatalf("manifest = %+v, %v; want generation 3", before, err)

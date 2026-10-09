@@ -26,7 +26,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CompletionStage;
 
 /** An implementation that answers nothing, for tests about the holder. */
-final class FakeApi implements SpawneryApi {
+class FakeApi implements SpawneryApi {
     @Override
     public Self self() {
         return new ProxySelf() {
@@ -93,7 +93,7 @@ final class FakeApi implements SpawneryApi {
     }
 
     @Override
-    public CompletionStage<List<RestorePoint>> listRestorePoints(String group, String key) {
+    public CompletionStage<RestorePoints> restorePoints(String group, String key) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
     }
 

@@ -2,6 +2,7 @@ package cloud.spawnery.agent
 
 import cloud.spawnery.agent.api.Group
 import cloud.spawnery.agent.api.RestorePoint
+import cloud.spawnery.agent.api.RestorePoints
 import cloud.spawnery.agent.api.RestoredWorld
 import cloud.spawnery.agent.pb.CloudRequest
 import cloud.spawnery.agent.pb.CloudResponse
@@ -457,7 +458,7 @@ class CloudConnectorTest {
     @Test
     fun `restore points are asked for by group and key and read back newest first`() {
         val connector = connector()
-        val stage = connector.listRestorePoints("private-servers", "c0ffee")
+        val stage = connector.restorePoints("private-servers", "c0ffee")
 
         val sent = requested.single().listRestorePoints
         assertEquals("private-servers", sent.group)
@@ -471,12 +472,30 @@ class CloudConnectorTest {
         }
 
         assertEquals(
-            listOf(
-                RestorePoint(9, Instant.ofEpochMilli(1_791_460_800_000), true),
-                RestorePoint(7, Instant.ofEpochMilli(1_791_457_200_000), false),
+            RestorePoints(
+                listOf(
+                    RestorePoint(9, Instant.ofEpochMilli(1_791_460_800_000), true),
+                    RestorePoint(7, Instant.ofEpochMilli(1_791_457_200_000), false),
+                ),
+                false,
             ),
             stage.toCompletableFuture().get(1, TimeUnit.SECONDS),
         )
+    }
+
+    @Test
+    fun `a listing says whether the world is still settling`() {
+        val connector = connector()
+        val stage = connector.restorePoints("worlds", "c0ffee")
+        answer(connector) {
+            setListRestorePoints(
+                ListRestorePointsResult.newBuilder()
+                    .addPoints(PbRestorePoint.newBuilder().setGeneration(9).setTakenUnixMillis(1_791_460_800_000).setCurrent(true))
+                    .setSettling(true),
+            )
+        }
+
+        assertTrue(stage.toCompletableFuture().get(1, TimeUnit.SECONDS).settling())
     }
 
     @Test
@@ -516,7 +535,7 @@ class CloudConnectorTest {
         val connector = CloudConnector(Requests(timeoutMillis = CloudConnector.TIMEOUT_MILLIS, clock = { now })) { }
         val status = connector.status("lobby").toCompletableFuture()
         val restore = connector.restoreWorld("private-servers", "c0ffee", 7).toCompletableFuture()
-        val points = connector.listRestorePoints("private-servers", "c0ffee").toCompletableFuture()
+        val points = connector.restorePoints("private-servers", "c0ffee").toCompletableFuture()
 
         now = 60_001
         connector.expire()

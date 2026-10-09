@@ -8,7 +8,7 @@ agent, and the calls themselves.
 
 ```kotlin title="build.gradle.kts"
 dependencies {
-    compileOnly("cloud.spawnery:spawnery-api:0.25.1")
+    compileOnly("cloud.spawnery:spawnery-api:0.26.0")
 }
 ```
 

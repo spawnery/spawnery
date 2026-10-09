@@ -14,7 +14,7 @@ spec:
   networkRef:
     name: production
   type: OnDemand
-  image: ghcr.io/spawnery/purpur:26.3-0.25.1
+  image: ghcr.io/spawnery/purpur:26.3-0.26.0
   maxPlayers: 10
   maxInstances: 200
   storage:
@@ -95,7 +95,7 @@ for ns in spawnery-system spawnery-worldsync; do
     --from-literal=AWS_ACCESS_KEY_ID="$KEY_ID" \
     --from-literal=AWS_SECRET_ACCESS_KEY="$SECRET"
 done
-helm upgrade spawnery oci://ghcr.io/spawnery/charts/spawnery --version 0.25.1 \
+helm upgrade spawnery oci://ghcr.io/spawnery/charts/spawnery --version 0.26.0 \
   --namespace spawnery-system --reuse-values -f worldsync-values.yaml
 ```
 
@@ -134,7 +134,7 @@ the prune as it would be on a claim. The snapshot at a stop still saves what
 `keep` matches. Add the path to `keep`, or to `replace` if the sources ship it.
 
 The group's image needs to be one of spawnery's game images, 0.24.3 or later,
-as in the `purpur:26.3-0.25.1` of the example. Its Paper bootstrapper is what
+as in the `purpur:26.3-0.26.0` of the example. Its Paper bootstrapper is what
 holds the server back until the world is on disk. An older image, or a custom
 one without the agent, starts the server on a half-downloaded world, which the
 server can then corrupt. Before 0.24.3 the entrypoint also ran chmod over the
@@ -242,8 +242,12 @@ file in place, so its worlds keep their history. The API refuses `retention`
 without `backend: ObjectStore`, so a group goes back to `Claim` only after
 dropping it.
 
-A plugin lists a member's generations with `listRestorePoints(group, key)`,
+A plugin lists a member's generations with `restorePoints(group, key)`,
 whether the member runs or not, and also while its world is being deleted.
+The listing's `settling()` is true while the world may still change: while the
+member runs or is being stopped, and after a stop until the node's upload of
+the final snapshot releases the world's lease, which can take tens of seconds.
+Until then the list can miss that snapshot and a restore is turned away.
 `restoreWorld(group, key, generation)` makes one of them current while the
 member is stopped. See
 [what a plugin can do](../plugin-api/what-a-plugin-can-do.md). The restore
@@ -288,7 +292,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: import
-          image: ghcr.io/spawnery/spawnery-worldsync:0.25.1
+          image: ghcr.io/spawnery/spawnery-worldsync:0.26.0
           args:
             - import
             - --world=minecraft/private-servers/0b5c1c82-4c7f-4a6e-9d1b-2c1f2b9d5e10

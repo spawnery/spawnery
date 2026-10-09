@@ -488,6 +488,10 @@ message RestorePoint {
 // ones, newest first.
 message ListRestorePointsResult {
   repeated RestorePoint points = 1;
+  // True while the world may still change: its member runs or is stopping,
+  // or the upload after a stop (or a restore) still holds the world. The
+  // points may then miss its newest state, and a restore is turned away.
+  bool settling = 2;
 }
 
 // RestoreWorldRequest makes an older generation the member's current world,

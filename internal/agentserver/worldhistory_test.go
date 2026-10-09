@@ -53,11 +53,20 @@ type fakeHistory struct {
 	entered  chan struct{}
 
 	listDeadline time.Time
+	held         bool
+	heldErr      error
+	reads        []string
 }
 
 func (f *fakeHistory) RestorePoints(ctx context.Context, _ string) ([]worldsync.RestorePoint, error) {
 	f.listDeadline, _ = ctx.Deadline()
+	f.reads = append(f.reads, "points")
 	return f.points, f.err
+}
+
+func (f *fakeHistory) Held(context.Context, string) (bool, error) {
+	f.reads = append(f.reads, "lease")
+	return f.held, f.heldErr
 }
 
 func (f *fakeHistory) Restore(ctx context.Context, _ string, generation int64, policy worldsync.Retention) (worldsync.Restored, error) {
@@ -218,6 +227,51 @@ func TestRestorePointsAreAnsweredNewestFirstWithTheirTimes(t *testing.T) {
 		points[0].GetGeneration() != 9 || !points[0].GetCurrent() || points[0].GetTakenUnixMillis() != taken.UnixMilli() ||
 		points[1].GetGeneration() != 7 || points[1].GetCurrent() || points[1].GetTakenUnixMillis() != taken.Add(-time.Hour).UnixMilli() {
 		t.Fatalf("points = %v; a running member's restore points are listed too", points)
+	}
+}
+
+func TestAListingSaysWhetherTheWorldIsSettling(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		member *spawneryv1alpha1.Server
+		held   bool
+		want   bool
+	}{
+		{"no member, the lease released or absent", nil, false, false},
+		{"no member, the upload after a stop holds the lease", nil, true, true},
+		{"the member is being stopped", historyMember(phase.Ready, true), false, true},
+		{"the member runs on a node holding the lease", historyMember(phase.Ready, false), true, true},
+		{"a failed member and no lease", historyMember(phase.Failed, false), false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			objs := []client.Object{objectStoreGroup()}
+			if tc.member != nil {
+				objs = append(objs, tc.member)
+			}
+			history := &fakeHistory{points: []worldsync.RestorePoint{{Generation: 9, Current: true}}, held: tc.held}
+			s, _ := historyServer(t, &fakeWorlds{}, history, objs...)
+			got := askRestorePoints(s).GetListRestorePoints()
+			if len(got.GetPoints()) != 1 || got.GetSettling() != tc.want {
+				t.Fatalf("result = %v, want one point and settling %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestAListingReadsTheLeaseBeforeThePoints(t *testing.T) {
+	history := &fakeHistory{points: []worldsync.RestorePoint{{Generation: 9, Current: true}}}
+	s, _ := historyServer(t, &fakeWorlds{}, history, objectStoreGroup())
+	askRestorePoints(s)
+	if strings.Join(history.reads, ",") != "lease,points" {
+		t.Fatalf("reads = %v; points read before a release could be the ones the release's upload replaced", history.reads)
+	}
+}
+
+func TestAListingFailsWhenTheLeaseCannotBeRead(t *testing.T) {
+	history := &fakeHistory{points: []worldsync.RestorePoint{{Generation: 9, Current: true}}, heldErr: errors.New("store down")}
+	s, _ := historyServer(t, &fakeWorlds{}, history, objectStoreGroup())
+	if got := askRestorePoints(s).GetError().GetReason(); got != agentpb.RequestError_UNAVAILABLE {
+		t.Fatalf("reason = %v, want UNAVAILABLE", got)
 	}
 }
 

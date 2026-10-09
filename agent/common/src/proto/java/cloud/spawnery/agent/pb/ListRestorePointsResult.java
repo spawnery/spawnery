@@ -95,6 +95,23 @@ private static final long serialVersionUID = 0L;
     return points_.get(index);
   }
 
+  public static final int SETTLING_FIELD_NUMBER = 2;
+  private boolean settling_ = false;
+  /**
+   * <pre>
+   * True while the world may still change: its member runs or is stopping,
+   * or the upload after a stop (or a restore) still holds the world. The
+   * points may then miss its newest state, and a restore is turned away.
+   * </pre>
+   *
+   * <code>bool settling = 2;</code>
+   * @return The settling.
+   */
+  @java.lang.Override
+  public boolean getSettling() {
+    return settling_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -112,6 +129,9 @@ private static final long serialVersionUID = 0L;
     for (int i = 0; i < points_.size(); i++) {
       output.writeMessage(1, points_.get(i));
     }
+    if (settling_ != false) {
+      output.writeBool(2, settling_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -125,6 +145,10 @@ private static final long serialVersionUID = 0L;
           }
           size += 1 * count;
         }
+    if (settling_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(2, settling_);
+    }
     return size;
   }
   @java.lang.Override
@@ -151,6 +175,8 @@ private static final long serialVersionUID = 0L;
 
     if (!getPointsList()
         .equals(other.getPointsList())) return false;
+    if (getSettling()
+        != other.getSettling()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -166,6 +192,9 @@ private static final long serialVersionUID = 0L;
       hash = (37 * hash) + POINTS_FIELD_NUMBER;
       hash = (53 * hash) + getPointsList().hashCode();
     }
+    hash = (37 * hash) + SETTLING_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getSettling());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -309,6 +338,7 @@ private static final long serialVersionUID = 0L;
         pointsBuilder_.clear();
       }
       bitField0_ = (bitField0_ & ~0x00000001);
+      settling_ = false;
       return this;
     }
 
@@ -355,6 +385,9 @@ private static final long serialVersionUID = 0L;
 
     private void buildPartial0(cloud.spawnery.agent.pb.ListRestorePointsResult result) {
       int from_bitField0_ = bitField0_;
+      if (((from_bitField0_ & 0x00000002) != 0)) {
+        result.settling_ = settling_;
+      }
     }
 
     @java.lang.Override
@@ -395,6 +428,9 @@ private static final long serialVersionUID = 0L;
           }
         }
       }
+      if (other.getSettling() != false) {
+        setSettling(other.getSettling());
+      }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
       return this;
@@ -434,6 +470,11 @@ private static final long serialVersionUID = 0L;
               }
               break;
             } // case 10
+            case 16: {
+              settling_ = input.readBool();
+              bitField0_ |= 0x00000002;
+              break;
+            } // case 16
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -689,6 +730,56 @@ private static final long serialVersionUID = 0L;
         points_ = null;
       }
       return pointsBuilder_;
+    }
+
+    private boolean settling_ ;
+    /**
+     * <pre>
+     * True while the world may still change: its member runs or is stopping,
+     * or the upload after a stop (or a restore) still holds the world. The
+     * points may then miss its newest state, and a restore is turned away.
+     * </pre>
+     *
+     * <code>bool settling = 2;</code>
+     * @return The settling.
+     */
+    @java.lang.Override
+    public boolean getSettling() {
+      return settling_;
+    }
+    /**
+     * <pre>
+     * True while the world may still change: its member runs or is stopping,
+     * or the upload after a stop (or a restore) still holds the world. The
+     * points may then miss its newest state, and a restore is turned away.
+     * </pre>
+     *
+     * <code>bool settling = 2;</code>
+     * @param value The settling to set.
+     * @return This builder for chaining.
+     */
+    public Builder setSettling(boolean value) {
+
+      settling_ = value;
+      bitField0_ |= 0x00000002;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * True while the world may still change: its member runs or is stopping,
+     * or the upload after a stop (or a restore) still holds the world. The
+     * points may then miss its newest state, and a restore is turned away.
+     * </pre>
+     *
+     * <code>bool settling = 2;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearSettling() {
+      bitField0_ = (bitField0_ & ~0x00000002);
+      settling_ = false;
+      onChanged();
+      return this;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.ListRestorePointsResult)

@@ -3255,8 +3255,12 @@ func (x *RestorePoint) GetCurrent() bool {
 // ListRestorePointsResult: the current generation first, then the older
 // ones, newest first.
 type ListRestorePointsResult struct {
-	state         protoimpl.MessageState `protogen:"open.v1"`
-	Points        []*RestorePoint        `protobuf:"bytes,1,rep,name=points,proto3" json:"points,omitempty"`
+	state  protoimpl.MessageState `protogen:"open.v1"`
+	Points []*RestorePoint        `protobuf:"bytes,1,rep,name=points,proto3" json:"points,omitempty"`
+	// True while the world may still change: its member runs or is stopping,
+	// or the upload after a stop (or a restore) still holds the world. The
+	// points may then miss its newest state, and a restore is turned away.
+	Settling      bool `protobuf:"varint,2,opt,name=settling,proto3" json:"settling,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -3296,6 +3300,13 @@ func (x *ListRestorePointsResult) GetPoints() []*RestorePoint {
 		return x.Points
 	}
 	return nil
+}
+
+func (x *ListRestorePointsResult) GetSettling() bool {
+	if x != nil {
+		return x.Settling
+	}
+	return false
 }
 
 // RestoreWorldRequest makes an older generation the member's current world,
@@ -5752,9 +5763,10 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"generation\x18\x01 \x01(\x03R\n" +
 	"generation\x12*\n" +
 	"\x11taken_unix_millis\x18\x02 \x01(\x03R\x0ftakenUnixMillis\x12\x18\n" +
-	"\acurrent\x18\x03 \x01(\bR\acurrent\"X\n" +
+	"\acurrent\x18\x03 \x01(\bR\acurrent\"t\n" +
 	"\x17ListRestorePointsResult\x12=\n" +
-	"\x06points\x18\x01 \x03(\v2%.spawnery.agent.v1alpha1.RestorePointR\x06points\"]\n" +
+	"\x06points\x18\x01 \x03(\v2%.spawnery.agent.v1alpha1.RestorePointR\x06points\x12\x1a\n" +
+	"\bsettling\x18\x02 \x01(\bR\bsettling\"]\n" +
 	"\x13RestoreWorldRequest\x12\x14\n" +
 	"\x05group\x18\x01 \x01(\tR\x05group\x12\x10\n" +
 	"\x03key\x18\x02 \x01(\tR\x03key\x12\x1e\n" +

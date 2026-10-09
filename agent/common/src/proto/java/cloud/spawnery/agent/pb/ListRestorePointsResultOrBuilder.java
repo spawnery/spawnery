@@ -33,4 +33,16 @@ public interface ListRestorePointsResultOrBuilder extends
    */
   cloud.spawnery.agent.pb.RestorePointOrBuilder getPointsOrBuilder(
       int index);
+
+  /**
+   * <pre>
+   * True while the world may still change: its member runs or is stopping,
+   * or the upload after a stop (or a restore) still holds the world. The
+   * points may then miss its newest state, and a restore is turned away.
+   * </pre>
+   *
+   * <code>bool settling = 2;</code>
+   * @return The settling.
+   */
+  boolean getSettling();
 }
