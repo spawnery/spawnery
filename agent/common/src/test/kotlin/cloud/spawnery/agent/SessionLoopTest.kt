@@ -162,6 +162,8 @@ class SessionLoopTest {
                 loop.start()
                 ticks.poll(5, TimeUnit.SECONDS) ?: error("requests were never expired")
                 loop.stop()
+                // The scheduler has one thread, so this waits out a tick that was already running.
+                scheduler.submit {}.get(5, TimeUnit.SECONDS)
                 ticks.clear()
 
                 Thread.sleep(2 * SessionLoop.EXPIRY_PERIOD_MILLIS)
