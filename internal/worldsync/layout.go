@@ -23,6 +23,7 @@ const (
 	LeaseName    = "lease.json"
 	ObjectsDir   = "objects/"
 	PacksDir     = "packs/"
+	HistoryDir   = "history/"
 	// PackBelow: smaller files travel in the generation's pack. The store
 	// bills at least 64 kB per object.
 	PackBelow = 64 << 10
@@ -42,3 +43,7 @@ func WorldPrefix(base, world string) string { return join(base, world) + "/" }
 func DeletionPrefix(base string) string { return join(base, ".deletions/") }
 
 func DeletionKey(base, world string) string { return join(base, ".deletions/"+world) }
+
+func RetentionKey(base, namespace, group string) string {
+	return join(base, ".retention/"+namespace+"/"+group+".json")
+}
