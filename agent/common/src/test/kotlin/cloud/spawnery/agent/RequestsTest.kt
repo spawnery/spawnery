@@ -117,4 +117,19 @@ class RequestsTest {
 
         assertEquals(0, requests.outstanding(), "a failed send left an entry behind")
     }
+
+    @Test
+    fun `a request given its own deadline keeps it instead of the default`() {
+        val r = requests(timeoutMillis = 1_000)
+        val long: CompletableFuture<String> = r.start(timeoutMillis = 5_000) { id -> sent += id }
+
+        now += 1_001
+        r.expire()
+        assertFalse(long.isDone)
+
+        now = 5_001
+        r.expire()
+        val failure = assertFailsWith<java.util.concurrent.ExecutionException> { long.get() }
+        assertEquals("the operator did not answer request ${sent.single()} in 5000ms", failure.cause?.message)
+    }
 }

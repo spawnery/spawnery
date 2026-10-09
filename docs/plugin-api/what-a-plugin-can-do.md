@@ -116,7 +116,11 @@ decision; the operator asks nobody. Right after a stop the world's final
 upload may still run, and the restore answers `UNAVAILABLE` until it is
 done, so ask again a few seconds later. It answers the same while another
 restore of that world runs, or while a restore whose operator died still holds
-the world, which lasts until its lease goes stale after 10 minutes.
+the world, which lasts until its lease goes stale after 10 minutes. Both
+calls can take up to a minute to answer, so they time out after 75 seconds
+instead of the usual ten. After a timeout you cannot tell whether the restore
+happened. Asking again is safe, because a repeated restore answers with the
+generation the first one made.
 
 Each fails with a reason. `startServer` says `REFUSED`, `NOT_FOUND`, or
 `UNAVAILABLE` for a request that succeeds once a server that is stopping has

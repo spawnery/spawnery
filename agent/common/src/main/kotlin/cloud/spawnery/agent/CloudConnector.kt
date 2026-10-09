@@ -178,7 +178,7 @@ class CloudConnector(
         }
 
     fun listRestorePoints(group: String, key: String): CompletionStage<List<RestorePoint>> =
-        requests.start<List<RestorePoint>> { id ->
+        requests.start<List<RestorePoint>>(RESTORE_TIMEOUT_MILLIS) { id ->
             sendRequest(
                 CloudRequest.newBuilder()
                     .setId(id)
@@ -188,7 +188,7 @@ class CloudConnector(
         }
 
     fun restoreWorld(group: String, key: String, generation: Long): CompletionStage<RestoredWorld> =
-        requests.start<RestoredWorld> { id ->
+        requests.start<RestoredWorld>(RESTORE_TIMEOUT_MILLIS) { id ->
             sendRequest(
                 CloudRequest.newBuilder()
                     .setId(id)
@@ -338,6 +338,9 @@ class CloudConnector(
 
     companion object {
         const val TIMEOUT_MILLIS: Long = 10_000
+
+        // The operator's one-minute restoreTimeout plus a margin for the way there and back.
+        const val RESTORE_TIMEOUT_MILLIS: Long = 75_000
     }
 }
 

@@ -87,6 +87,7 @@ What comes back, by reason:
 | `listRestorePoints`, `restoreWorld` | `UNAVAILABLE` | the operator could not read the bucket just now. Ask again. |
 | `restoreWorld` | `REFUSED` | also: the member is running, its world is being deleted, or the generation is the current one. |
 | `restoreWorld` | `UNAVAILABLE` | the member is still stopping, or its final upload or another restore still writes the world. A restore whose operator died holds the world until its lease goes stale after 10 minutes. Ask again. |
+| `listRestorePoints`, `restoreWorld` | `TimeoutException` | no answer within 75 seconds. The operator can take up to a minute on these two, so they wait longer than the ten seconds other calls get. A restore that timed out may or may not have happened. Ask again: a repeated restore answers with the generation the first one made. |
 
 Every failure reaches Java as an `IllegalStateException` whose message is
 `<REASON>: <the operator's sentence>`; the Javadoc says when it arrives wrapped.

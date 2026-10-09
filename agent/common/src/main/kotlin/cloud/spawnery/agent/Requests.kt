@@ -11,22 +11,23 @@ import java.util.concurrent.atomic.AtomicLong
  *
  * Ids are never reused, so a late answer cannot complete a later request.
  *
- * @param timeoutMillis bounds a lost message rather than a slow one; the
- *   operator answers from memory.
+ * @param timeoutMillis the deadline of a request that names none. It bounds a
+ *   lost message rather than a slow one, for the operator answers most requests
+ *   from memory; a request it works on for longer names its own deadline.
  */
 class Requests(
     private val timeoutMillis: Long,
     private val clock: () -> Long,
 ) {
-    private class Pending(val future: CompletableFuture<Any?>, val deadline: Long)
+    private class Pending(val future: CompletableFuture<Any?>, val timeoutMillis: Long, val deadline: Long)
 
     private val counter = AtomicLong(0)
     private val pending = ConcurrentHashMap<Long, Pending>()
 
     @Suppress("UNCHECKED_CAST")
-    fun <T> start(send: (Long) -> Unit): CompletableFuture<T> {
+    fun <T> start(timeoutMillis: Long = this.timeoutMillis, send: (Long) -> Unit): CompletableFuture<T> {
         val id = counter.incrementAndGet()
-        val entry = Pending(CompletableFuture(), clock() + timeoutMillis)
+        val entry = Pending(CompletableFuture(), timeoutMillis, clock() + timeoutMillis)
         // Before the send, so an answer that overtakes send's return finds an entry.
         pending[id] = entry
         try {
@@ -61,7 +62,7 @@ class Requests(
         for ((id, entry) in pending) {
             if (entry.deadline <= now) {
                 pending.remove(id)?.future?.completeExceptionally(
-                    TimeoutException("the operator did not answer request $id in ${timeoutMillis}ms"),
+                    TimeoutException("the operator did not answer request $id in ${entry.timeoutMillis}ms"),
                 )
             }
         }
