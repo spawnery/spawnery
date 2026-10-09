@@ -83,7 +83,7 @@ func TestSnapshotCopiesChangedLargeFilesAndEverySmallOne(t *testing.T) {
 		{Path: "worlds/world/region/gone.mca", Size: PackBelow, MTime: then.UnixNano(), Object: "objects/bbb"},
 	}
 
-	s, err := TakeSnapshot(data, snap, keepOf(t, "worlds/world"), base, 7)
+	s, err := TakeSnapshot(data, snap, keepOf(t, "worlds/world"), base, 7, time.Unix(1_700_000_000, 0))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -127,7 +127,7 @@ func TestSnapshotRefusesAFileThatNeverSettles(t *testing.T) {
 	}
 	t.Cleanup(func() { copyHook = nil })
 
-	if _, err := TakeSnapshot(data, snap, keepOf(t, "worlds/world"), nil, 1); !errors.Is(err, ErrUnsettled) {
+	if _, err := TakeSnapshot(data, snap, keepOf(t, "worlds/world"), nil, 1, time.Unix(1_700_000_000, 0)); !errors.Is(err, ErrUnsettled) {
 		t.Fatalf("err = %v, want ErrUnsettled", err)
 	}
 }
@@ -144,7 +144,7 @@ func TestAFileDeletedBeforeItsCopyIsLeftOut(t *testing.T) {
 	}
 	t.Cleanup(func() { copyHook = nil })
 
-	s, err := TakeSnapshot(data, snap, keepOf(t, "worlds/world"), nil, 1)
+	s, err := TakeSnapshot(data, snap, keepOf(t, "worlds/world"), nil, 1, time.Unix(1_700_000_000, 0))
 	if err != nil {
 		t.Fatalf("a deleted file failed the snapshot: %v", err)
 	}
@@ -166,7 +166,7 @@ func TestAFileSwappedForAFIFOStillFailsTheSnapshot(t *testing.T) {
 	}
 	t.Cleanup(func() { copyHook = nil })
 
-	if _, err := TakeSnapshot(data, snap, keepOf(t, "worlds/world"), nil, 1); err == nil {
+	if _, err := TakeSnapshot(data, snap, keepOf(t, "worlds/world"), nil, 1, time.Unix(1_700_000_000, 0)); err == nil {
 		t.Fatal("a FIFO in place of a file passed the snapshot")
 	}
 }

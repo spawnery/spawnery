@@ -744,7 +744,7 @@ func (n *Node) snapshot(s *worldState) error {
 	seq := s.NextSeq
 	dir := n.snapDir(s.World, seq)
 	_ = os.RemoveAll(dir)
-	if _, err := TakeSnapshot(n.dataDir(s.World), dir, keep, base, seq); err != nil {
+	if _, err := TakeSnapshot(n.dataDir(s.World), dir, keep, base, seq, n.cfg.Clock()); err != nil {
 		_ = os.RemoveAll(dir)
 		return err
 	}

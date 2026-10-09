@@ -25,6 +25,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"time"
 
 	"golang.org/x/sys/unix"
 
@@ -50,7 +51,9 @@ type SnapFile struct {
 }
 
 type Snap struct {
-	Seq   int64      `json:"seq"`
+	Seq int64 `json:"seq"`
+	// Taken is unix milliseconds on the node's clock.
+	Taken int64      `json:"taken,omitempty"`
 	Files []SnapFile `json:"files"`
 }
 
@@ -127,7 +130,7 @@ func copyFile(in io.Reader, dst string) error {
 // TakeSnapshot copies what an upload needs out of dataDir into snapDir: every
 // file below PackBelow, and every larger file whose size or mtime differs
 // from base. Unchanged large files are carried over by reference.
-func TakeSnapshot(dataDir, snapDir string, keep prune.Keep, base []FileEntry, seq int64) (Snap, error) {
+func TakeSnapshot(dataDir, snapDir string, keep prune.Keep, base []FileEntry, seq int64, taken time.Time) (Snap, error) {
 	files, err := Scan(dataDir, keep)
 	if err != nil {
 		return Snap{}, err
@@ -136,7 +139,7 @@ func TakeSnapshot(dataDir, snapDir string, keep prune.Keep, base []FileEntry, se
 	for _, b := range base {
 		prev[b.Path] = b
 	}
-	s := Snap{Seq: seq}
+	s := Snap{Seq: seq, Taken: taken.UnixMilli()}
 	for _, f := range files {
 		b, ok := prev[f.Path]
 		if ok && f.Size >= PackBelow && b.Size == f.Size && b.MTime == f.MTime {

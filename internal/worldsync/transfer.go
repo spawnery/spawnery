@@ -66,6 +66,15 @@ func hashFile(path string) (string, error) {
 }
 
 func UploadSnapshot(ctx context.Context, st Store, prefix, snapDir string, prev *Manifest, prevETag string, newWorldID func() string) (Manifest, string, error) {
+	m, etag, err := CommitSnapshot(ctx, st, prefix, snapDir, prev, prevETag, false, newWorldID)
+	if err != nil {
+		return Manifest{}, "", err
+	}
+	_, _ = Prune(ctx, st, prefix, PruneRequest{Current: m, Replaced: prev})
+	return m, etag, nil
+}
+
+func CommitSnapshot(ctx context.Context, st Store, prefix, snapDir string, prev *Manifest, prevETag string, keepPrev bool, newWorldID func() string) (Manifest, string, error) {
 	snap, err := ReadSnap(snapDir)
 	if err != nil {
 		return Manifest{}, "", err
@@ -156,6 +165,15 @@ func UploadSnapshot(ctx context.Context, st Store, prefix, snapDir string, prev 
 		return Manifest{}, "", err
 	}
 
+	m.Taken = snap.Taken
+	if m.Taken == 0 {
+		m.Taken = time.Now().UnixMilli()
+	}
+	if keepPrev && prev != nil {
+		if err := putHistory(ctx, st, prefix, *prev); err != nil {
+			return Manifest{}, "", err
+		}
+	}
 	body, err := json.Marshal(m)
 	if err != nil {
 		return Manifest{}, "", err
@@ -164,22 +182,48 @@ func UploadSnapshot(ctx context.Context, st Store, prefix, snapDir string, prev 
 	if prev == nil {
 		cond.IfMatch = ""
 	}
-	info, err := st.Put(ctx, prefix+ManifestName, bytes.NewReader(body), cond)
-	if errors.Is(err, ErrPrecondition) || errors.Is(err, ErrNotFound) {
-		// The SDK's retryer re-sends a conditional put after a 5xx or a reset
-		// connection; when the first attempt had committed, the retry fails
-		// its own condition.
-		stored, storedInfo, rerr := readObject(ctx, st, prefix+ManifestName)
-		if rerr != nil || !bytes.Equal(stored, body) {
-			return Manifest{}, "", fmt.Errorf("%w: %v", ErrConflict, err)
-		}
-		info, err = storedInfo, nil
-	}
+	info, err := putManifest(ctx, st, prefix, body, cond)
 	if err != nil {
 		return Manifest{}, "", err
 	}
-	_, _ = Prune(ctx, st, prefix, PruneRequest{Current: m, Replaced: prev})
 	return m, info.ETag, nil
+}
+
+// putManifest: the SDK's retryer re-sends a conditional put after a 5xx or a
+// reset connection; when the first attempt had committed, the retry fails
+// its own condition.
+func putManifest(ctx context.Context, st Store, prefix string, body []byte, cond PutCondition) (ObjectInfo, error) {
+	info, err := st.Put(ctx, prefix+ManifestName, bytes.NewReader(body), cond)
+	if errors.Is(err, ErrPrecondition) || errors.Is(err, ErrNotFound) {
+		stored, storedInfo, rerr := readObject(ctx, st, prefix+ManifestName)
+		if rerr != nil || !bytes.Equal(stored, body) {
+			return ObjectInfo{}, fmt.Errorf("%w: %v", ErrConflict, err)
+		}
+		return storedInfo, nil
+	}
+	return info, err
+}
+
+// putHistory: a 412 is an earlier attempt of the same upload that already
+// wrote the entry.
+func putHistory(ctx context.Context, st Store, prefix string, m Manifest) error {
+	var lastModified time.Time
+	if m.Taken == 0 {
+		info, err := st.Head(ctx, prefix+ManifestName)
+		if err != nil {
+			return fmt.Errorf("worldsync: when was generation %d written: %w", m.Generation, err)
+		}
+		lastModified = info.LastModified
+	}
+	b, err := json.Marshal(m)
+	if err != nil {
+		return err
+	}
+	_, err = st.Put(ctx, prefix+HistoryKey(m.Generation, m.TakenAt(lastModified)), bytes.NewReader(b), PutCondition{IfNoneMatch: true})
+	if errors.Is(err, ErrPrecondition) {
+		return nil
+	}
+	return err
 }
 
 func readObject(ctx context.Context, st Store, key string) ([]byte, ObjectInfo, error) {

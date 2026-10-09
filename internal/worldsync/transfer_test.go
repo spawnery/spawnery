@@ -30,10 +30,12 @@ import (
 
 const prefix = "ns/g/k/"
 
+func snapTaken(seq int64) int64 { return 1_700_000_000_000 + seq }
+
 func snapshotOf(t *testing.T, data string, base []FileEntry, seq int64) string {
 	t.Helper()
 	snap := t.TempDir()
-	if _, err := TakeSnapshot(data, snap, keepOf(t, "worlds/world"), base, seq); err != nil {
+	if _, err := TakeSnapshot(data, snap, keepOf(t, "worlds/world"), base, seq, time.UnixMilli(snapTaken(seq))); err != nil {
 		t.Fatal(err)
 	}
 	return snap
