@@ -391,6 +391,8 @@ func main() {
 	}
 
 	var worlds agentserver.WorldDeleter
+	// An interface left nil, not a nil *Policies, when world sync is off.
+	var retention controller.RetentionPublisher
 	if worldSync {
 		cfg, base, err := worldsync.S3ConfigFromEnv(os.Getenv)
 		if err != nil {
@@ -403,6 +405,7 @@ func main() {
 			os.Exit(1)
 		}
 		worlds = worldsync.BucketWorlds{Store: st, Base: base}
+		retention = &worldsync.Policies{Store: st, Base: base}
 		if err := mgr.Add(&worldsync.Sweeper{Store: st, Base: base, Interval: time.Minute,
 			StaleAfter: worldsync.StaleAfter, Log: ctrl.Log.WithName("worldsync")}); err != nil {
 			setupLog.Error(err, "add world deletion sweeper")
@@ -452,6 +455,7 @@ func main() {
 		AOTCache:             aotCache,
 		WorldSync:            worldSync,
 		WorldSyncInterval:    worldSyncInterval,
+		Retention:            retention,
 		ReportInterval:       reportInterval,
 		Clock:                time.Now,
 		StartupDeadline:      startupDeadline,
