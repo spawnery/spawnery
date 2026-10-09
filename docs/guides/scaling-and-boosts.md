@@ -20,7 +20,7 @@ spec:
   networkRef:
     name: production
   type: Ephemeral
-  image: ghcr.io/spawnery/purpur:26.3-0.25.0
+  image: ghcr.io/spawnery/purpur:26.3-0.25.1
   maxPlayers: 50
   drain:
     timeoutSeconds: 60
