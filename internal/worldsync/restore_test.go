@@ -19,6 +19,7 @@ package worldsync
 import (
 	"context"
 	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -173,5 +174,116 @@ func TestAPublishWaitsForARestore(t *testing.T) {
 	}
 	if _, err := h.publish("b", w, "p1"); err != nil {
 		t.Fatalf("publish after the restore: %v", err)
+	}
+}
+
+func TestASecondRestoreFindsTheLeaseHeldAndLeavesItAlone(t *testing.T) {
+	st := NewMemStore(time.Now)
+	ctx := context.Background()
+	fiveGenerations(t, st)
+	first := Lease{Node: OperatorLeaseNode + "/first", RenewedAt: time.Now()}
+	if _, err := TakeLease(ctx, st, prefix, first, StaleAfter); err != nil {
+		t.Fatal(err)
+	}
+	_, before, err := ReadLease(ctx, st, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = RestoreWorld(ctx, st, prefix, 2, Retention{Last: 10}, time.Now())
+	var held *HeldError
+	if !errors.As(err, &held) || held.Node != first.Node {
+		t.Fatalf("err = %v, want HeldError{%s}", err, first.Node)
+	}
+	l, after, err := ReadLease(ctx, st, prefix)
+	if err != nil || l.Node != first.Node || after.ETag != before.ETag {
+		t.Fatalf("lease = %+v (%v), %v; want the first restore's, untouched", l, after.ETag, err)
+	}
+}
+
+type duringHistoryPut struct {
+	*MemStore
+	hook func()
+}
+
+func (d *duringHistoryPut) Put(ctx context.Context, key string, body io.ReadSeeker, cond PutCondition) (ObjectInfo, error) {
+	if strings.Contains(key, HistoryDir) && d.hook != nil {
+		hook := d.hook
+		d.hook = nil
+		hook()
+	}
+	return d.MemStore.Put(ctx, key, body, cond)
+}
+
+func TestAFailedSecondRestoreDoesNotFreeTheLeaseTheFirstHolds(t *testing.T) {
+	mem := NewMemStore(time.Now)
+	ctx := context.Background()
+	fiveGenerations(t, mem)
+	st := &duringHistoryPut{MemStore: mem}
+	st.hook = func() {
+		var held *HeldError
+		if _, err := RestoreWorld(ctx, st, prefix, 99, Retention{Last: 10}, time.Now()); !errors.As(err, &held) {
+			t.Errorf("second restore err = %v, want HeldError", err)
+		}
+		if _, err := TakeLease(ctx, st, prefix, Lease{Node: "a", RenewedAt: time.Now()}, StaleAfter); !errors.As(err, &held) {
+			t.Errorf("a node's TakeLease err = %v, want HeldError: the second restore freed the first one's lease", err)
+		}
+	}
+	if _, err := RestoreWorld(ctx, st, prefix, 2, Retention{Last: 10}, time.Now()); err != nil {
+		t.Fatal(err)
+	}
+}
+
+type cancelAfterManifest struct {
+	*MemStore
+	cancel context.CancelFunc
+}
+
+func (c *cancelAfterManifest) Put(ctx context.Context, key string, body io.ReadSeeker, cond PutCondition) (ObjectInfo, error) {
+	if err := ctx.Err(); err != nil {
+		return ObjectInfo{}, err
+	}
+	info, err := c.MemStore.Put(ctx, key, body, cond)
+	if err == nil && strings.HasSuffix(key, ManifestName) {
+		c.cancel()
+	}
+	return info, err
+}
+
+func TestTheLeaseIsReleasedWhenTheRequestIsCancelledAfterTheCommit(t *testing.T) {
+	mem := NewMemStore(time.Now)
+	fiveGenerations(t, mem)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	st := &cancelAfterManifest{MemStore: mem, cancel: cancel}
+	if _, err := RestoreWorld(ctx, st, prefix, 2, Retention{Last: 10}, time.Now()); err != nil && ctx.Err() == nil {
+		t.Fatal(err)
+	}
+	if m, _, err := ReadManifest(context.Background(), mem, prefix); err != nil || m.Generation != 6 {
+		t.Fatalf("manifest = %+v, %v; want the restore committed", m, err)
+	}
+	if l, _, err := ReadLease(context.Background(), mem, prefix); err != nil || l.Node != "" {
+		t.Fatalf("lease = %+v, %v; want released", l, err)
+	}
+}
+
+func TestARestoreUnderAPolicyThatDropsItsSourceKeepsTheRestoredObjects(t *testing.T) {
+	st := NewMemStore(time.Now)
+	ctx := context.Background()
+	fiveGenerations(t, st)
+	got, err := RestoreWorld(ctx, st, prefix, 1, Retention{Last: 2}, time.Now())
+	if err != nil || got.Generation != 6 || got.PruneErr != nil {
+		t.Fatalf("restore = %+v, %v", got, err)
+	}
+	m, _, err := ReadManifest(ctx, st, prefix)
+	if err != nil || m.Generation != 6 || m.RestoredFrom != 1 {
+		t.Fatalf("manifest = %+v, %v", m, err)
+	}
+	for _, f := range m.Files {
+		if !stored(t, st, prefix+f.Object) {
+			t.Errorf("object %s of the restored manifest was pruned; store = %v", f.Object, st.Keys())
+		}
+	}
+	if !stored(t, st, prefix+ObjectsDir+"g1") || !stored(t, st, prefix+ObjectsDir+"shared") {
+		t.Fatalf("store = %v; want objects/g1 and objects/shared", st.Keys())
 	}
 }

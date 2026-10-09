@@ -19,6 +19,8 @@ package worldsync
 import (
 	"bytes"
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"time"
@@ -73,7 +75,15 @@ func RestoreWorld(ctx context.Context, st Store, prefix string, generation int64
 	if _, err := st.Head(ctx, prefix+ManifestName); err != nil {
 		return Restored{}, err
 	}
-	leaseETag, err := TakeLease(ctx, st, prefix, Lease{Node: OperatorLeaseNode, Pod: "restore", RenewedAt: now}, StaleAfter)
+	id := make([]byte, 8)
+	if _, err := rand.Read(id); err != nil {
+		return Restored{}, err
+	}
+	// TakeLease re-takes a lease held under its own node name, so a name
+	// shared by all restores would let a second one steal and then release
+	// the first one's lease.
+	me := Lease{Node: OperatorLeaseNode + "/" + hex.EncodeToString(id), Pod: "restore", RenewedAt: now}
+	leaseETag, err := TakeLease(ctx, st, prefix, me, StaleAfter)
 	if err != nil {
 		return Restored{}, err
 	}

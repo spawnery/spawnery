@@ -225,7 +225,8 @@ The operator's `restoreWorld`:
 1. Resolves the group (OnDemand, ObjectStore) and the member's name, and
    refuses while the member's `Server` exists and is not terminal.
 2. Refuses while a deletion marker exists for the world.
-3. Takes the world's lease as `spawnery-operator`. A held lease is
+3. Takes the world's lease as `spawnery-operator/<restore id>`, a name of
+   its own per restore. A held lease is
    `UNAVAILABLE`. A node publishing the member meanwhile gets
    `UNAVAILABLE` from its own lease attempt and kubelet retries, so a start
    during a restore waits for it instead of racing it.
@@ -239,10 +240,9 @@ The operator's `restoreWorld`:
 8. Records an Event on the ServerGroup: `world <key> restored to generation
    <n> of <taken>`.
 
-Two restores of one world at once both take the lease as
-`spawnery-operator`, so the lease does not keep them apart. The manifest's
-`If-Match` does: the second put fails, and that restore answers
-`UNAVAILABLE`.
+Each restore holds the lease under its own name, so a second restore of the
+same world finds it held and answers `UNAVAILABLE`. `If-Match` on the
+manifest remains the guard against any writer that got past the lease.
 
 A restore writes a new generation number because the node's cache identity is
 `(worldId, generation)` plus a size check of each file. A restore that
