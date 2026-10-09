@@ -352,9 +352,9 @@ and alerts are listed in
 [metrics and alerts](../reference/metrics-and-alerts.md).
 
 The dashboard shows per node the worlds mounted and cached, snapshots not yet
-in the bucket, download and upload times and counts, objects pruned, retries, lease
-conflicts, orphans and failed downloads, and the agents' network traffic,
-CPU and memory from the kubelet's cAdvisor series.
+in the bucket, download and upload times and counts, objects pruned, retries,
+lease conflicts, orphans and failed downloads, and the agents' network
+traffic, CPU and memory from the kubelet's cAdvisor series.
 
 ## Limits
 
