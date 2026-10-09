@@ -24,6 +24,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/container-storage-interface/spec/lib/go/csi"
 	"google.golang.org/grpc/codes"
@@ -160,7 +161,7 @@ func Import(ctx context.Context, st Store, base, world string, keep []string, di
 		return Manifest{}, err
 	}
 	defer func() { _ = os.RemoveAll(snap) }()
-	if _, err := TakeSnapshot(dir, snap, k, nil, 1); err != nil {
+	if _, err := TakeSnapshot(dir, snap, k, nil, 1, time.Now()); err != nil {
 		return Manifest{}, err
 	}
 	m, _, err := UploadSnapshot(ctx, st, WorldPrefix(base, world), snap, nil, "", NewWorldID)

@@ -154,6 +154,6 @@ check_forwarding_secret_reader_subject "$GAME_NAMESPACE"
 kubectl -n "$OPERATOR_NAMESPACE" rollout status deployment/spawnery-operator --timeout="${DEADLINE}s"
 kubectl -n "$WORLDSYNC_NAMESPACE" rollout status daemonset/spawnery-worldsync --timeout="${DEADLINE}s"
 
-# 40m: a real world is generated once and downloaded to a second node.
-SPAWNERY_E2E_WORLDSYNC=1 go test -tags e2e -count=1 -v -timeout 40m \
+# 60m: a real world is generated once and downloaded to a second node.
+SPAWNERY_E2E_WORLDSYNC=1 go test -tags e2e -count=1 -v -timeout 60m \
 	-run TestAnObjectStoreWorld ./test/e2e/...

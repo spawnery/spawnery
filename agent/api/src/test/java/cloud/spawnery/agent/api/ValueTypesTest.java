@@ -89,4 +89,16 @@ class ValueTypesTest {
 
         assertEquals(0, old.number());
     }
+
+    @Test
+    void aRestorePointWithoutATimeIsRefusedWhereItIsBuilt() {
+        assertThrows(NullPointerException.class, () -> new RestorePoint(3, null, false));
+    }
+
+    @Test
+    void twoDescriptionsOfTheSameGenerationAreEqual() {
+        var taken = java.time.Instant.ofEpochMilli(1_791_460_800_000L);
+        assertEquals(new RestorePoint(3, taken, false), new RestorePoint(3, taken, false));
+        assertEquals(new RestoredWorld(10, 3), new RestoredWorld(10, 3));
+    }
 }

@@ -93,6 +93,16 @@ final class FakeApi implements SpawneryApi {
     }
 
     @Override
+    public CompletionStage<List<RestorePoint>> listRestorePoints(String group, String key) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
+    }
+
+    @Override
+    public CompletionStage<RestoredWorld> restoreWorld(String group, String key, long generation) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
+    }
+
+    @Override
     public CompletionStage<Integer> stopBoosts(String group) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
     }

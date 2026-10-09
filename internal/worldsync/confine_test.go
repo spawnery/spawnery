@@ -183,7 +183,7 @@ func TestASnapshotDoesNotFollowAParentDirectorySwappedForASymlink(t *testing.T) 
 		symlink(t, away, filepath.Join(data, "worlds/world/region"))
 	})
 
-	if _, err := TakeSnapshot(data, snap, keepOf(t, "worlds/world"), nil, 1); err == nil {
+	if _, err := TakeSnapshot(data, snap, keepOf(t, "worlds/world"), nil, 1, time.Unix(1_700_000_000, 0)); err == nil {
 		t.Error("the snapshot went through a directory symlinked out of the world")
 	}
 	if treeHolds(t, snap, secret) {
@@ -233,7 +233,7 @@ func TestASnapshotDoesNotOpenAFIFOSwappedIn(t *testing.T) {
 
 	var err error
 	withTimeout(t, "a snapshot over a FIFO", func() {
-		_, err = TakeSnapshot(data, snap, keepOf(t, "worlds/world"), nil, 1)
+		_, err = TakeSnapshot(data, snap, keepOf(t, "worlds/world"), nil, 1, time.Unix(1_700_000_000, 0))
 	}, func() { unblockFIFO(fifo) })
 	if err == nil {
 		t.Error("the snapshot read a FIFO")

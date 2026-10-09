@@ -80,11 +80,25 @@ type download struct {
 }
 
 type uploadJob struct {
-	seq      int64
-	dir      string
-	prev     *Manifest
-	prevETag string
+	seq         int64
+	dir         string
+	prev        *Manifest
+	prevETag    string
+	policy      Retention
+	policyKnown bool
+	cache       ObjectCache
+	sweep       bool
+	deadline    time.Time
 }
+
+func (j *uploadJob) keepPrev() bool { return !j.policyKnown || j.policy.KeepsHistory() }
+
+const (
+	sweepEvery = 12
+	// lockedPruneTimeout bounds a prune that holds the world's lock, which
+	// renewAll waits for on its way to every other world.
+	lockedPruneTimeout = 2 * time.Minute
+)
 
 // Node keeps the worlds on one node. A world's state is touched only under
 // that world's lock; n.mu guards the maps and is never held while waiting
@@ -437,6 +451,8 @@ func (n *Node) Publish(ctx context.Context, req PublishRequest) error {
 		return fmt.Errorf("%w: take the lease: %v", ErrUnavailable, err)
 	}
 	s.LeaseETag = etag
+	s.kept = nil
+	n.refreshPolicy(ctx, s)
 
 	fetch, metag, err := n.settleContent(ctx, s)
 	if err == nil {
@@ -539,7 +555,7 @@ func (n *Node) renewLease(ctx context.Context, s *worldState) error {
 
 // ownLease reads the lease back after a 412. Only this node writes its own
 // name, so a lease that still names it is a write that committed and whose
-// retry failed the condition (see UploadSnapshot).
+// retry failed the condition (see putManifest).
 func (n *Node) ownLease(ctx context.Context, world string) (string, error) {
 	ctx, cancel := n.call(ctx)
 	defer cancel()
@@ -657,6 +673,7 @@ func (n *Node) startDownload(s *worldState, m Manifest, etag string) {
 		}
 		downloadSeconds.Observe(time.Since(started).Seconds())
 		s.WorldID, s.Generation, s.ManifestETag, s.Files, s.Incomplete = m.WorldID, m.Generation, etag, m.Files, false
+		s.Taken, s.RestoredFrom = m.Taken, m.RestoredFrom
 		if err := n.saveState(s); err != nil {
 			_ = n.control(s, FailedFile, err.Error())
 			return
@@ -744,7 +761,7 @@ func (n *Node) snapshot(s *worldState) error {
 	seq := s.NextSeq
 	dir := n.snapDir(s.World, seq)
 	_ = os.RemoveAll(dir)
-	if _, err := TakeSnapshot(n.dataDir(s.World), dir, keep, base, seq); err != nil {
+	if _, err := TakeSnapshot(n.dataDir(s.World), dir, keep, base, seq, n.cfg.Clock()); err != nil {
 		_ = os.RemoveAll(dir)
 		return err
 	}
@@ -916,13 +933,14 @@ func (n *Node) work(ctx context.Context, s *worldState) {
 		s.uploading = running
 		unlock()
 
-		uctx, cancel := context.WithTimeout(ctx, n.uploadTimeout)
+		uctx, cancel := context.WithDeadline(ctx, job.deadline)
 		started := time.Now()
-		m, etag, err := UploadSnapshot(uctx, n.cfg.Store, n.prefix(s.World), job.dir, job.prev, job.prevETag, NewWorldID)
-		cancel()
+		m, etag, err := CommitSnapshot(uctx, n.cfg.Store, n.prefix(s.World), job.dir, job.prev, job.prevETag, job.keepPrev(), NewWorldID)
 		if err == nil {
 			uploadSeconds.Observe(time.Since(started).Seconds())
+			n.pruneAfter(uctx, s.World, job, m, job.sweep)
 		}
+		cancel()
 
 		unlock = n.lock(s.World)
 		s.uploading = nil
@@ -958,6 +976,8 @@ func (n *Node) nextUpload(ctx context.Context, s *worldState) *uploadJob {
 		}
 		return nil
 	}
+	// The lease is proven fresh only as of before its renewal.
+	start := time.Now()
 	if err := n.confirmLease(ctx, s); errors.Is(err, ErrLeaseLost) {
 		n.orphan(s, "another node took the lease")
 		return nil
@@ -965,11 +985,13 @@ func (n *Node) nextUpload(ctx context.Context, s *worldState) *uploadJob {
 		n.retryLater(s, "lease check before the upload failed", err)
 		return nil
 	}
+	n.refreshPolicy(ctx, s)
 	job, err := n.prepareUpload(s)
 	if err != nil {
 		n.retryLater(s, "could not prepare the upload", err)
 		return nil
 	}
+	job.deadline = start.Add(n.uploadTimeout)
 	return job
 }
 
@@ -1000,9 +1022,14 @@ func (n *Node) prepareUpload(s *worldState) (*uploadJob, error) {
 	if err := writeJSON(filepath.Join(dir, snapFile), snap); err != nil {
 		return nil, err
 	}
-	job := &uploadJob{seq: seq, dir: dir}
+	if s.kept == nil {
+		s.kept = ObjectCache{}
+	}
+	s.prunes++
+	job := &uploadJob{seq: seq, dir: dir, policy: s.policy, policyKnown: s.policyRead, cache: s.kept, sweep: s.prunes%sweepEvery == 0}
 	if s.WorldID != "" {
-		job.prev = &Manifest{WorldID: s.WorldID, Generation: s.Generation, Files: s.Files}
+		prev := s.manifest()
+		job.prev = &prev
 		job.prevETag = s.ManifestETag
 	}
 	return job, nil
@@ -1026,6 +1053,7 @@ func (n *Node) finishUpload(ctx context.Context, s *worldState, job *uploadJob, 
 		return false
 	}
 	s.WorldID, s.Generation, s.ManifestETag, s.Files = m.WorldID, m.Generation, etag, m.Files
+	s.Taken, s.RestoredFrom = m.Taken, m.RestoredFrom
 	s.Pending = s.Pending[1:]
 	s.retryAt, s.retryDelay = time.Time{}, 0
 	n.save(s)
@@ -1037,6 +1065,8 @@ func (n *Node) finishUpload(ctx context.Context, s *worldState, job *uploadJob, 
 // manifest put and the state save. With the lease chain unbroken no other
 // node wrote since, so a manifest of exactly the snapshot's files is ours.
 func (n *Node) adoptCommitted(ctx context.Context, s *worldState, job *uploadJob) (Manifest, string, error) {
+	pc, cancel := context.WithDeadline(ctx, time.Now().Add(n.lockedPruneTimeout()))
+	defer cancel()
 	if err := n.renewLease(ctx, s); err != nil {
 		return Manifest{}, "", err
 	}
@@ -1054,11 +1084,9 @@ func (n *Node) adoptCommitted(ctx context.Context, s *worldState, job *uploadJob
 	if !sameUpload(s, snap, m) {
 		return Manifest{}, "", fmt.Errorf("%w: generation %d of world %s is not this node's", ErrConflict, m.Generation, m.WorldID)
 	}
-	c, cancel := n.call(ctx)
-	defer cancel()
-	dropUnnamed(c, n.cfg.Store, n.prefix(s.World), job.prev, m)
-	n.dropStrayPacks(c, s.World, m)
 	n.cfg.Log.Info("adopted an upload that committed before its answer arrived", "world", s.World, "generation", m.Generation)
+	// Swept: the retry that conflicted wrote its pack under a fresh name.
+	n.pruneAfter(pc, s.World, job, m, true)
 	return m, etag, nil
 }
 
@@ -1075,24 +1103,6 @@ func sameUpload(s *worldState, snap Snap, m Manifest) bool {
 		}
 	}
 	return true
-}
-
-// dropStrayPacks deletes the packs m does not name: the conflicting retry
-// wrote one under a fresh name. The lease keeps other writers out.
-func (n *Node) dropStrayPacks(ctx context.Context, world string, m Manifest) {
-	named := map[string]bool{}
-	for _, e := range m.Files {
-		named[e.Object] = true
-	}
-	keys, err := n.cfg.Store.List(ctx, n.prefix(world)+PacksDir)
-	if err != nil {
-		return
-	}
-	for _, k := range keys {
-		if !named[strings.TrimPrefix(k, n.prefix(world))] {
-			_ = n.cfg.Store.Delete(ctx, k)
-		}
-	}
 }
 
 // fillReferences names the object of every entry a queued snapshot carried
@@ -1122,6 +1132,7 @@ func (n *Node) retryLater(s *worldState, msg string, err error) {
 
 func (n *Node) release(ctx context.Context, s *worldState) {
 	n.dropScratch(s)
+	n.sweepAtRelease(ctx, s)
 	c, cancel := n.call(ctx)
 	defer cancel()
 	err := ReleaseLease(c, n.cfg.Store, n.prefix(s.World), s.LeaseETag)
@@ -1132,6 +1143,83 @@ func (n *Node) release(ctx context.Context, s *worldState) {
 	s.LeaseETag = ""
 	s.retryAt, s.retryDelay = time.Time{}, 0
 	n.save(s)
+}
+
+func groupOf(world string) (namespace, group string) {
+	parts := strings.SplitN(world, "/", 3)
+	return parts[0], parts[1]
+}
+
+func (n *Node) refreshPolicy(ctx context.Context, s *worldState) {
+	ns, group := groupOf(s.World)
+	c, cancel := n.call(ctx)
+	defer cancel()
+	r, etag, changed, err := ReadRetention(c, n.cfg.Store, n.cfg.Base, ns, group, s.policyETag)
+	if err != nil {
+		n.cfg.Log.Error(err, "could not read the group's retention; keeping the one read before", "world", s.World)
+		return
+	}
+	if changed {
+		s.policy, s.policyETag = r, etag
+	}
+	s.policyRead = true
+}
+
+func (n *Node) pruneAfter(ctx context.Context, world string, job *uploadJob, m Manifest, sweep bool) {
+	if !job.policyKnown {
+		return
+	}
+	deleted, err := Prune(ctx, n.cfg.Store, n.prefix(world), PruneRequest{
+		Current: m, Replaced: job.prev, Policy: job.policy, Cache: job.cache, Sweep: sweep,
+	})
+	prunedObjects.Add(float64(deleted))
+	if err != nil {
+		n.cfg.Log.Error(err, "prune failed; the next one catches up", "world", world)
+	}
+}
+
+func (n *Node) lockedPruneTimeout() time.Duration { return min(lockedPruneTimeout, n.uploadTimeout) }
+
+// sweepAtRelease renews first: a lease another node took over must not
+// sweep away objects that node uploaded. It sweeps only against the
+// bucket's current manifest, which a publish that failed after taking the
+// lease may never have brought onto this node.
+func (n *Node) sweepAtRelease(ctx context.Context, s *worldState) {
+	if s.WorldID == "" {
+		return
+	}
+	ctx, cancel := context.WithDeadline(ctx, time.Now().Add(n.lockedPruneTimeout()))
+	defer cancel()
+	if err := n.renewLease(ctx, s); errors.Is(err, ErrLeaseLost) {
+		n.cfg.Log.Info("not sweeping at the lease's release: the lease is no longer this node's", "world", s.World)
+		return
+	} else if err != nil {
+		n.cfg.Log.Error(err, "not sweeping at the lease's release: the lease could not be renewed", "world", s.World)
+		return
+	}
+	m, etag, err := n.readManifest(ctx, s.World)
+	if err != nil {
+		n.cfg.Log.Error(err, "not sweeping at the lease's release: the manifest could not be read", "world", s.World)
+		return
+	}
+	if etag != s.ManifestETag || m.WorldID != s.WorldID || m.Generation != s.Generation {
+		n.cfg.Log.Info("not sweeping at the lease's release: the local copy is not the bucket's current generation", "world", s.World, "local", s.Generation, "bucket", m.Generation)
+		return
+	}
+	n.refreshPolicy(ctx, s)
+	if !s.policyRead {
+		return
+	}
+	if s.kept == nil {
+		s.kept = ObjectCache{}
+	}
+	deleted, err := Prune(ctx, n.cfg.Store, n.prefix(s.World), PruneRequest{
+		Current: m, Policy: s.policy, Cache: s.kept, Sweep: true,
+	})
+	prunedObjects.Add(float64(deleted))
+	if err != nil {
+		n.cfg.Log.Error(err, "the sweep at the lease's release failed; the next one catches up", "world", s.World)
+	}
 }
 
 // checkWorldsKept refuses a world the prune would refuse to delete: it is

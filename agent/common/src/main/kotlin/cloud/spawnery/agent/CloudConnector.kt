@@ -5,6 +5,8 @@ import cloud.spawnery.agent.api.ConnectResult
 import cloud.spawnery.agent.api.StartedServer
 import cloud.spawnery.agent.api.Target
 import cloud.spawnery.agent.api.NetworkStatus
+import cloud.spawnery.agent.api.RestorePoint
+import cloud.spawnery.agent.api.RestoredWorld
 import cloud.spawnery.agent.api.ScaleResult
 import cloud.spawnery.agent.pb.AcceptJoinsRequest
 import cloud.spawnery.agent.pb.AnnounceRequest
@@ -15,7 +17,9 @@ import cloud.spawnery.agent.pb.ConnectRequest
 import cloud.spawnery.agent.pb.DeleteServerRequest
 import cloud.spawnery.agent.pb.ExecuteRequest
 import cloud.spawnery.agent.pb.ForceStopRequest
+import cloud.spawnery.agent.pb.ListRestorePointsRequest
 import cloud.spawnery.agent.pb.RequestError
+import cloud.spawnery.agent.pb.RestoreWorldRequest
 import cloud.spawnery.agent.pb.RetireRequest
 import cloud.spawnery.agent.pb.ScaleRequest
 import cloud.spawnery.agent.pb.StartServerRequest
@@ -173,6 +177,28 @@ class CloudConnector(
             )
         }
 
+    fun listRestorePoints(group: String, key: String): CompletionStage<List<RestorePoint>> =
+        requests.start<List<RestorePoint>> { id ->
+            sendRequest(
+                CloudRequest.newBuilder()
+                    .setId(id)
+                    .setListRestorePoints(ListRestorePointsRequest.newBuilder().setGroup(group).setKey(key))
+                    .build(),
+            )
+        }
+
+    fun restoreWorld(group: String, key: String, generation: Long): CompletionStage<RestoredWorld> =
+        requests.start<RestoredWorld> { id ->
+            sendRequest(
+                CloudRequest.newBuilder()
+                    .setId(id)
+                    .setRestoreWorld(
+                        RestoreWorldRequest.newBuilder().setGroup(group).setKey(key).setGeneration(generation),
+                    )
+                    .build(),
+            )
+        }
+
     /**
      * Re-sent on every new stream: the operator forgets an announcement with
      * the session that made it. Null until something announces.
@@ -267,6 +293,16 @@ class CloudConnector(
             )
             response.hasStopServer() -> requests.complete(response.id, null)
             response.hasDeleteServer() -> requests.complete(response.id, null)
+            response.hasListRestorePoints() -> requests.complete(
+                response.id,
+                response.listRestorePoints.pointsList.map {
+                    RestorePoint(it.generation, Instant.ofEpochMilli(it.takenUnixMillis), it.current)
+                },
+            )
+            response.hasRestoreWorld() -> requests.complete(
+                response.id,
+                RestoredWorld(response.restoreWorld.generation, response.restoreWorld.restoredFrom),
+            )
             response.hasStopBoost() -> requests.complete(response.id, response.stopBoost.removed)
             response.hasAnnounce() -> requests.complete(response.id, null)
             response.hasAcceptJoins() -> requests.complete(response.id, null)

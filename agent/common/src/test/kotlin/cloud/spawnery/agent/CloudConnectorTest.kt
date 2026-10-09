@@ -1,6 +1,8 @@
 package cloud.spawnery.agent
 
 import cloud.spawnery.agent.api.Group
+import cloud.spawnery.agent.api.RestorePoint
+import cloud.spawnery.agent.api.RestoredWorld
 import cloud.spawnery.agent.pb.CloudRequest
 import cloud.spawnery.agent.pb.CloudResponse
 import cloud.spawnery.agent.pb.DeleteServerResult
@@ -8,12 +10,16 @@ import cloud.spawnery.agent.pb.ExecuteOutcome
 import cloud.spawnery.agent.pb.ExecuteResult
 import cloud.spawnery.agent.pb.ForceStopResult
 import cloud.spawnery.agent.pb.GroupState
+import cloud.spawnery.agent.pb.ListRestorePointsResult
 import cloud.spawnery.agent.pb.RequestError
+import cloud.spawnery.agent.pb.RestorePoint as PbRestorePoint
+import cloud.spawnery.agent.pb.RestoreWorldResult
 import cloud.spawnery.agent.pb.ScaleResult as PbScaleResult
 import cloud.spawnery.agent.pb.StartServerResult
 import cloud.spawnery.agent.pb.StatusResult
 import cloud.spawnery.agent.pb.StopServerResult
 import java.time.Duration
+import java.time.Instant
 import java.util.OptionalDouble
 import java.util.concurrent.CompletionException
 import java.util.concurrent.ExecutionException
@@ -447,4 +453,60 @@ class CloudConnectorTest {
     private fun pbUsage(cpuUsed: Long, pods: Int, measured: Int) =
         cloud.spawnery.agent.pb.ResourceUsage.newBuilder()
             .setCpuUsedMillicores(cpuUsed).setPods(pods).setPodsMeasured(measured).build()
+
+    @Test
+    fun `restore points are asked for by group and key and read back newest first`() {
+        val connector = connector()
+        val stage = connector.listRestorePoints("private-servers", "c0ffee")
+
+        val sent = requested.single().listRestorePoints
+        assertEquals("private-servers", sent.group)
+        assertEquals("c0ffee", sent.key)
+        answer(connector) {
+            setListRestorePoints(
+                ListRestorePointsResult.newBuilder()
+                    .addPoints(PbRestorePoint.newBuilder().setGeneration(9).setTakenUnixMillis(1_791_460_800_000).setCurrent(true))
+                    .addPoints(PbRestorePoint.newBuilder().setGeneration(7).setTakenUnixMillis(1_791_457_200_000)),
+            )
+        }
+
+        assertEquals(
+            listOf(
+                RestorePoint(9, Instant.ofEpochMilli(1_791_460_800_000), true),
+                RestorePoint(7, Instant.ofEpochMilli(1_791_457_200_000), false),
+            ),
+            stage.toCompletableFuture().get(1, TimeUnit.SECONDS),
+        )
+    }
+
+    @Test
+    fun `a restore sends the generation and reads the new one back`() {
+        val connector = connector()
+        val stage = connector.restoreWorld("private-servers", "c0ffee", 7)
+
+        val sent = requested.single().restoreWorld
+        assertEquals("private-servers", sent.group)
+        assertEquals("c0ffee", sent.key)
+        assertEquals(7L, sent.generation)
+        answer(connector) { setRestoreWorld(RestoreWorldResult.newBuilder().setGeneration(10).setRestoredFrom(7)) }
+
+        assertEquals(RestoredWorld(10, 7), stage.toCompletableFuture().get(1, TimeUnit.SECONDS))
+    }
+
+    @Test
+    fun `a restore while the world is written fails with UNAVAILABLE and the operator's words`() {
+        val connector = connector()
+        val stage = connector.restoreWorld("private-servers", "c0ffee", 7)
+        answer(connector) {
+            setError(
+                RequestError.newBuilder()
+                    .setReason(RequestError.Reason.UNAVAILABLE)
+                    .setMessage("that world is being written"),
+            )
+        }
+
+        val failure = assertFailsWith<ExecutionException> { stage.toCompletableFuture().get(1, TimeUnit.SECONDS) }
+        assertTrue(failure.cause is IllegalStateException, "${failure.cause}")
+        assertEquals("UNAVAILABLE: that world is being written", failure.cause!!.message)
+    }
 }

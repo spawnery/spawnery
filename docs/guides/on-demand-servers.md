@@ -14,7 +14,7 @@ spec:
   networkRef:
     name: production
   type: OnDemand
-  image: ghcr.io/spawnery/purpur:26.3-0.24.3
+  image: ghcr.io/spawnery/purpur:26.3-0.25.0
   maxPlayers: 10
   # A fleet ceiling, not a per-player quota: who may have one is a question
   # about a player, and the system that knows the player answers it.
@@ -82,6 +82,11 @@ What comes back, by reason:
 | `deleteServer` | `REFUSED` | the group is not `OnDemand`, the key is not a label, a claim of that name was not made by this operator for that group, or the world predates the key label (only an admin can delete it). |
 | `deleteServer` | `NOT_FOUND` | no such group, or the key has neither a server nor a world, including a delete that finished a moment ago. |
 | `startServer` | `UNAVAILABLE` | also: the key's world is still being deleted. |
+| `listRestorePoints`, `restoreWorld` | `NOT_FOUND` | no such group, or the key has no world; for `restoreWorld` also a generation the world does not keep. |
+| `listRestorePoints`, `restoreWorld` | `REFUSED` | the group is not `OnDemand`, keeps its worlds on claims, the key is one no name can be built from, or the operator runs without world sync. |
+| `listRestorePoints`, `restoreWorld` | `UNAVAILABLE` | the operator could not read the bucket just now. Ask again. |
+| `restoreWorld` | `REFUSED` | also: the member is running, its world is being deleted, or the generation is the current one. |
+| `restoreWorld` | `UNAVAILABLE` | the member is still stopping, or its final upload or another restore still writes the world. A restore whose operator died holds the world until its lease goes stale after 10 minutes. Ask again. |
 
 Every failure reaches Java as an `IllegalStateException` whose message is
 `<REASON>: <the operator's sentence>`; the Javadoc says when it arrives wrapped.

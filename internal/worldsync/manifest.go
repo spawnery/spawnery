@@ -20,6 +20,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"time"
 )
 
 type FileEntry struct {
@@ -31,9 +32,33 @@ type FileEntry struct {
 }
 
 type Manifest struct {
-	WorldID    string      `json:"worldId"`
-	Generation int64       `json:"generation"`
-	Files      []FileEntry `json:"files"`
+	WorldID    string `json:"worldId"`
+	Generation int64  `json:"generation"`
+	// Taken is the node's clock in unix milliseconds when it took the
+	// snapshot; manifests written before it existed have none.
+	Taken        int64       `json:"taken,omitempty"`
+	RestoredFrom int64       `json:"restoredFrom,omitempty"`
+	Files        []FileEntry `json:"files"`
+}
+
+func (m Manifest) TakenAt(lastModified time.Time) time.Time {
+	if m.Taken > 0 {
+		return time.UnixMilli(m.Taken).UTC()
+	}
+	return lastModified.UTC()
+}
+
+// readCurrent returns the manifest's bytes too, for a copy into history/.
+func readCurrent(ctx context.Context, st Store, prefix string) ([]byte, Manifest, ObjectInfo, error) {
+	b, info, err := readObject(ctx, st, prefix+ManifestName)
+	if err != nil {
+		return nil, Manifest{}, ObjectInfo{}, err
+	}
+	var m Manifest
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, Manifest{}, ObjectInfo{}, fmt.Errorf("decode %s%s: %w", prefix, ManifestName, err)
+	}
+	return b, m, info, nil
 }
 
 func ReadManifest(ctx context.Context, st Store, prefix string) (Manifest, string, error) {

@@ -105,10 +105,25 @@ group and the key because a stopped member is nothing but its world. It reaches
 on-demand members only, and the chart's admission policy holds the operator to
 exactly those claims.
 
+`listRestorePoints(group, key)` and `restoreWorld(group, key, generation)`
+take a private server's world back to an older generation, for a group
+whose worlds live in the object store and keep a history
+([worlds in an object store](../guides/object-store-worlds.md#older-generations)).
+The list is newest first, and its first entry is the world as it stands. A
+restore needs the member stopped and writes the old content as a new
+generation, so it can itself be undone. Who may restore is your plugin's
+decision; the operator asks nobody. Right after a stop the world's final
+upload may still run, and the restore answers `UNAVAILABLE` until it is
+done, so ask again a few seconds later. It answers the same while another
+restore of that world runs, or while a restore whose operator died still holds
+the world, which lasts until its lease goes stale after 10 minutes.
+
 Each fails with a reason. `startServer` says `REFUSED`, `NOT_FOUND`, or
 `UNAVAILABLE` for a request that succeeds once a server that is stopping has
 gone. `stopServer` says `REFUSED` or `NOT_FOUND`, and `UNAVAILABLE` only when
-the operator could not act at all just now. The
+the operator could not act at all just now. `listRestorePoints` and
+`restoreWorld` say `NOT_FOUND`, `REFUSED`, or `UNAVAILABLE`, the last also
+when the operator could not read the bucket just now. The
 [private servers guide](../guides/on-demand-servers.md) has the table.
 
 ## Telling one run of a server from the next

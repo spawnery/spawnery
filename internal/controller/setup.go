@@ -44,8 +44,11 @@ type Options struct {
 	AOTCache          bool
 	// WorldSync: spawnery-worldsync runs on the nodes and the operator holds
 	// the bucket; groups with storage.backend ObjectStore get pods only then.
-	WorldSync            bool
-	WorldSyncInterval    time.Duration
+	WorldSync         bool
+	WorldSyncInterval time.Duration
+	// Retention publishes each group's storage.retention for the node
+	// agents; nil without world sync.
+	Retention            RetentionPublisher
 	Clock                func() time.Time
 	StartupDeadline      time.Duration
 	PlayerStatusInterval time.Duration
@@ -157,6 +160,7 @@ func newServerGroupReconciler(mgr ctrl.Manager, opts Options) *ServerGroupReconc
 		AllowFileVolumes:   opts.AllowFileVolumes,
 		AllowMountVolumes:  opts.AllowMountVolumes,
 		ClaimReader:        mgr.GetAPIReader(),
+		Retention:          opts.Retention,
 	}
 }
 

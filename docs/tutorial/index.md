@@ -48,7 +48,7 @@ kind create cluster --name spawnery-tutorial --config kind-config.yaml
 
 ```bash
 helm install spawnery oci://ghcr.io/spawnery/charts/spawnery \
-  --version 0.24.8 \
+  --version 0.25.0 \
   --namespace spawnery-system --create-namespace
 ```
 
@@ -148,7 +148,7 @@ spec:
   networkRef:
     name: tutorial
   type: Ephemeral
-  image: ghcr.io/spawnery/purpur:26.3-0.24.3
+  image: ghcr.io/spawnery/purpur:26.3-0.25.0
   maxPlayers: 20
   scaling:
     minReplicas: 1
@@ -164,7 +164,7 @@ spec:
   networkRef:
     name: tutorial
   replicas: 1
-  image: ghcr.io/spawnery/velocity:4.2.0-0.24.3
+  image: ghcr.io/spawnery/velocity:4.2.0-0.25.0
   # Velocity does not need a backend's heap; overriding the Network's
   # defaults keeps the proxy off the 2Gi a Paper server needs.
   resources:

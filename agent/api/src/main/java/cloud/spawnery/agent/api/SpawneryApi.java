@@ -321,6 +321,62 @@ public interface SpawneryApi {
     CompletionStage<Void> deleteServer(String group, String key);
 
     /**
+     * Lists the generations of a private server's world that
+     * {@link #restoreWorld} can go back to, newest first. The first is the
+     * world as it stands and says {@link RestorePoint#current()}.
+     *
+     * <p>Only for a group whose worlds live in the object store
+     * ({@code storage.backend: ObjectStore}). Which older generations stay is
+     * the group's {@code storage.retention}; without one the list holds the
+     * current generation alone. A member that runs adds a generation about
+     * every five minutes, and one more when it stops.
+     *
+     * <p>It answers while the member runs and while its world is being
+     * deleted; it only reads. The list is what the bucket held at that moment:
+     * an upload right after it can drop a listed generation, and a restore of
+     * that one then fails with {@code NOT_FOUND}.
+     *
+     * <p>It fails with {@code NOT_FOUND} for a group this network does not
+     * have or a key without a world; with {@code REFUSED} for a group that is
+     * not on-demand or keeps its worlds on claims, a key no name can be built
+     * from, and when the operator runs without world sync; and with
+     * {@code UNAVAILABLE} when the operator could not read the bucket just
+     * now. The failure has the shape {@link #startServer} describes.
+     */
+    CompletionStage<List<RestorePoint>> listRestorePoints(String group, String key);
+
+    /**
+     * Makes an older generation of a private server's world its current
+     * world, as a new generation. The generation that was current stays a
+     * restore point, so a restore can itself be undone before the member
+     * runs again; after its next upload, only while the group's retention
+     * keeps it. The next {@link #startServer} of the key starts on the
+     * restored world.
+     *
+     * <p>Who may restore, and what a restore means for the players, is your
+     * plugin's decision; the operator asks nobody.
+     *
+     * <p>Only while the member is stopped. It fails with:
+     * <ul>
+     *   <li>{@code NOT_FOUND} for a group this network does not have, a key
+     *       without a world, or a generation the world does not keep.</li>
+     *   <li>{@code REFUSED} for a group that is not on-demand or keeps its
+     *       worlds on claims, an operator that runs without world sync, a
+     *       member that is running, a world that is being deleted, and the
+     *       current generation.</li>
+     *   <li>{@code UNAVAILABLE} while the member is still stopping, while
+     *       its world is being written, and when the operator could not reach
+     *       the bucket just now. Right after a stop it is the final upload of
+     *       the world: ask again a few seconds later.</li>
+     * </ul>
+     * The failure has the shape {@link #startServer} describes, the timeout
+     * and the renewed stream included. Asking again after either is safe: if
+     * the restore was carried out and the member has not run since, the
+     * answer is the generation it made.
+     */
+    CompletionStage<RestoredWorld> restoreWorld(String group, String key, long generation);
+
+    /**
      * Opens or closes this server's own door.
      *
      * <p><b>Closing is not {@link #retire}.</b> Retiring says the server is

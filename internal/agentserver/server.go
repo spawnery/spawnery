@@ -286,6 +286,7 @@ func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) 
 	defer leaveFanout()
 
 	received, errs := recvPump(ctx, stream.Recv)
+	late := make(chan *agentpb.OperatorToServer)
 
 	for {
 		select {
@@ -297,10 +298,14 @@ func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) 
 			}
 			return err
 		case msg := <-received:
-			if answer := s.handle(ctx, logger, id, msg); answer != nil {
+			if answer := s.handle(ctx, logger, id, msg, late); answer != nil {
 				if err := sendBounded(SendDeadline, "an answer", func() error { return stream.Send(answer) }); err != nil {
 					return err
 				}
+			}
+		case answer := <-late:
+			if err := sendBounded(SendDeadline, "an answer", func() error { return stream.Send(answer) }); err != nil {
+				return err
 			}
 		case msg, ok := <-outbox:
 			if !ok {
@@ -386,6 +391,7 @@ func (s *Server) handle(
 	logger logr.Logger,
 	id grpcauth.Identity,
 	msg *agentpb.ServerMessage,
+	late chan<- *agentpb.OperatorToServer,
 ) *agentpb.OperatorToServer {
 	switch m := msg.GetMessage().(type) {
 	case *agentpb.ServerMessage_Hello:
@@ -421,6 +427,20 @@ func (s *Server) handle(
 	case *agentpb.ServerMessage_ExecuteOutcome:
 		s.executions.deliver(id.PodUID, m.ExecuteOutcome)
 	case *agentpb.ServerMessage_CloudRequest:
+		if answersOffTheLoop(m.CloudRequest) {
+			go func() {
+				answer := &agentpb.OperatorToServer{
+					Message: &agentpb.OperatorToServer_CloudResponse{
+						CloudResponse: s.answerCloudRequest(ctx, logger, id, m.CloudRequest),
+					},
+				}
+				select {
+				case late <- answer:
+				case <-ctx.Done():
+				}
+			}()
+			return nil
+		}
 		return &agentpb.OperatorToServer{
 			Message: &agentpb.OperatorToServer_CloudResponse{
 				CloudResponse: s.answerCloudRequest(ctx, logger, id, m.CloudRequest),
@@ -574,8 +594,8 @@ func (s *Server) handleProxy(
 		logger.V(1).Info("player joined a server",
 			"player", m.PlayerJoinedServer.GetPlayer(), "server", m.PlayerJoinedServer.GetServer())
 	case *agentpb.ProxyMessage_CloudRequest:
-		if m.CloudRequest.GetExecute() != nil {
-			// Waits on servers for up to ExecuteWait; inline, it would hold this
+		if m.CloudRequest.GetExecute() != nil || answersOffTheLoop(m.CloudRequest) {
+			// Waits on servers or the object store; inline, it would hold this
 			// proxy's outbox as long.
 			go func() {
 				answer := &agentpb.OperatorToProxy{

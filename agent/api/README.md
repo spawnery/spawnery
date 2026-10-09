@@ -5,7 +5,7 @@ Paper or Velocity plugin can ask the cloud, with the same calls on both.
 
 ```kotlin
 dependencies {
-    compileOnly("cloud.spawnery:spawnery-api:0.24.3")
+    compileOnly("cloud.spawnery:spawnery-api:0.25.0")
 }
 ```
 

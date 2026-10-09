@@ -713,6 +713,56 @@
       "description": "The agents' pod network: almost all of it is the object store."
     },
     {
+      "type": "timeseries",
+      "title": "Pruned objects",
+      "id": 21,
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 24,
+        "x": 0,
+        "y": 22
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "expr": "sum by (node) (increase(spawnery_worldsync_pruned_objects_total{namespace=\"$namespace\",node=~\"$node\"}[$__interval]))",
+          "refId": "A",
+          "legendFormat": "{{node}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "none",
+          "custom": {
+            "drawStyle": "bars",
+            "fillOpacity": 60,
+            "showPoints": "never",
+            "spanNulls": false
+          }
+        },
+        "overrides": []
+      },
+      "options": {
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        },
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        }
+      },
+      "interval": "5m",
+      "description": "Objects and packs that prunes deleted: generations the retention dropped, and what failed uploads left behind."
+    },
+    {
       "type": "row",
       "title": "Health",
       "id": 15,
@@ -721,7 +771,7 @@
         "h": 1,
         "w": 24,
         "x": 0,
-        "y": 22
+        "y": 30
       },
       "panels": []
     },
@@ -737,7 +787,7 @@
         "h": 8,
         "w": 8,
         "x": 0,
-        "y": 23
+        "y": 31
       },
       "targets": [
         {
@@ -785,7 +835,7 @@
         "h": 8,
         "w": 8,
         "x": 8,
-        "y": 23
+        "y": 31
       },
       "targets": [
         {
@@ -834,7 +884,7 @@
         "h": 8,
         "w": 8,
         "x": 16,
-        "y": 23
+        "y": 31
       },
       "targets": [
         {
@@ -901,7 +951,7 @@
         "h": 8,
         "w": 12,
         "x": 0,
-        "y": 31
+        "y": 39
       },
       "targets": [
         {
@@ -949,7 +999,7 @@
         "h": 8,
         "w": 12,
         "x": 12,
-        "y": 31
+        "y": 39
       },
       "targets": [
         {

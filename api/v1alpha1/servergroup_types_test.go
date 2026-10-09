@@ -97,3 +97,19 @@ func TestUsesClaim(t *testing.T) {
 		t.Fatal("an Ephemeral group uses no claim")
 	}
 }
+
+func TestWorldRetentionIsTheObjectStoresOnly(t *testing.T) {
+	r := &RetentionSpec{Last: 12, Daily: 7}
+	g := &ServerGroup{Spec: ServerGroupSpec{Type: ServerGroupOnDemand, Storage: &StorageSpec{Keep: []string{"world"}, Retention: r}}}
+	if got := g.WorldRetention(); got != (RetentionSpec{}) {
+		t.Fatalf("a group on claims has world retention %+v", got)
+	}
+	g.Spec.Storage.Backend = StorageBackendObjectStore
+	if got := g.WorldRetention(); got != *r {
+		t.Fatalf("WorldRetention = %+v, want %+v", got, *r)
+	}
+	g.Spec.Storage.Retention = nil
+	if got := g.WorldRetention(); got != (RetentionSpec{}) {
+		t.Fatalf("WorldRetention without retention = %+v, want zero", got)
+	}
+}

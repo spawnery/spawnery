@@ -49,6 +49,7 @@ import (
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/render"
+	"github.com/spawnery/spawnery/internal/worldsync"
 )
 
 // nameSuffixAlphabet avoids characters that are easy to misread in a terminal.
@@ -100,6 +101,9 @@ type ServerGroupReconciler struct {
 	// label (cmd/spawnery-operator/main.go), and an administrator's plugin claim
 	// does not. envtest does not restrict its cache, so no test catches this.
 	ClaimReader client.Reader
+
+	// Retention is nil when the operator runs without --world-sync.
+	Retention RetentionPublisher
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servergroups,verbs=get;list;watch
@@ -129,6 +133,9 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		r.Expectations.forget(group.Namespace + "/" + group.Name)
 		return ctrl.Result{}, nil
 	}
+	// Never withdrawn on deletion: the members' final uploads still prune by
+	// it, and the zero policy would drop their history.
+	r.publishRetention(ctx, group.Namespace, group.Name, worldsync.Retention(group.WorldRetention()))
 
 	network := &spawneryv1alpha1.Network{}
 	networkKey := types.NamespacedName{Name: group.Spec.NetworkRef.Name, Namespace: group.Namespace}

@@ -88,7 +88,7 @@ func answering(s *Server, fan *recordingFanout, reply func(podUID string, cmd *a
 		}
 		go s.handle(context.Background(), logr.Discard(),
 			grpcauth.Identity{Namespace: "ns", PodUID: podUID, Role: agent.RoleServer},
-			&agentpb.ServerMessage{Message: &agentpb.ServerMessage_ExecuteOutcome{ExecuteOutcome: outcome}})
+			&agentpb.ServerMessage{Message: &agentpb.ServerMessage_ExecuteOutcome{ExecuteOutcome: outcome}}, nil)
 	}
 }
 
@@ -211,7 +211,7 @@ func TestOneServerCannotAnswerForAnother(t *testing.T) {
 			grpcauth.Identity{Namespace: "ns", PodUID: "pod-evil", Role: agent.RoleServer},
 			&agentpb.ServerMessage{Message: &agentpb.ServerMessage_ExecuteOutcome{
 				ExecuteOutcome: &agentpb.ExecuteOutcome{Id: cmd.GetId(), Ok: true, Output: []string{"forged"}},
-			}})
+			}}, nil)
 	}
 
 	got := askExecute(s, proxyCaller, "lobby-a", "list").GetExecute().GetOutcomes()

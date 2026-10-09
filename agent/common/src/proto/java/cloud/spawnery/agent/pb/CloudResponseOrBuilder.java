@@ -241,5 +241,35 @@ public interface CloudResponseOrBuilder extends
    */
   cloud.spawnery.agent.pb.ExecuteResultOrBuilder getExecuteOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.ListRestorePointsResult list_restore_points = 17;</code>
+   * @return Whether the listRestorePoints field is set.
+   */
+  boolean hasListRestorePoints();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ListRestorePointsResult list_restore_points = 17;</code>
+   * @return The listRestorePoints.
+   */
+  cloud.spawnery.agent.pb.ListRestorePointsResult getListRestorePoints();
+  /**
+   * <code>.spawnery.agent.v1alpha1.ListRestorePointsResult list_restore_points = 17;</code>
+   */
+  cloud.spawnery.agent.pb.ListRestorePointsResultOrBuilder getListRestorePointsOrBuilder();
+
+  /**
+   * <code>.spawnery.agent.v1alpha1.RestoreWorldResult restore_world = 18;</code>
+   * @return Whether the restoreWorld field is set.
+   */
+  boolean hasRestoreWorld();
+  /**
+   * <code>.spawnery.agent.v1alpha1.RestoreWorldResult restore_world = 18;</code>
+   * @return The restoreWorld.
+   */
+  cloud.spawnery.agent.pb.RestoreWorldResult getRestoreWorld();
+  /**
+   * <code>.spawnery.agent.v1alpha1.RestoreWorldResult restore_world = 18;</code>
+   */
+  cloud.spawnery.agent.pb.RestoreWorldResultOrBuilder getRestoreWorldOrBuilder();
+
   cloud.spawnery.agent.pb.CloudResponse.ResultCase getResultCase();
 }
