@@ -274,17 +274,22 @@ func TestARestoreUnderAPolicyThatDropsItsSourceKeepsTheRestoredObjects(t *testin
 	if err != nil || got.Generation != 6 || got.PruneErr != nil {
 		t.Fatalf("restore = %+v, %v", got, err)
 	}
+	if h := historyGenerations(t, st); slices.Contains(h, 1) {
+		t.Fatalf("history = %v; the policy kept generation 1's entry, so the test proves nothing", h)
+	}
 	m, _, err := ReadManifest(ctx, st, prefix)
 	if err != nil || m.Generation != 6 || m.RestoredFrom != 1 {
 		t.Fatalf("manifest = %+v, %v", m, err)
 	}
-	for _, f := range m.Files {
-		if !stored(t, st, prefix+f.Object) {
-			t.Errorf("object %s of the restored manifest was pruned; store = %v", f.Object, st.Keys())
-		}
+	dir := t.TempDir()
+	if err := Download(ctx, st, prefix, dir, m, 2, -1); err != nil {
+		t.Fatalf("the restored world does not download: %v; store = %v", err, st.Keys())
 	}
-	if !stored(t, st, prefix+ObjectsDir+"g1") || !stored(t, st, prefix+ObjectsDir+"shared") {
-		t.Fatalf("store = %v; want objects/g1 and objects/shared", st.Keys())
+	for _, f := range m.Files {
+		b, err := os.ReadFile(filepath.Join(dir, f.Path))
+		if err != nil || string(b) != f.Object {
+			t.Errorf("%s = %q, %v; want the content of %s", f.Path, b, err, f.Object)
+		}
 	}
 }
 

@@ -185,6 +185,19 @@ func TestAKeptEntryThatCannotBeReadDeletesNothing(t *testing.T) {
 	}
 }
 
+func TestADroppedEntryThatCannotBeReadDeletesNothing(t *testing.T) {
+	mem := NewMemStore(time.Now)
+	cur := fiveGenerations(t, mem)
+	before := mem.Keys()
+	st := &brokenEntry{MemStore: mem, key: entryKey(manifestOf(1))}
+	if _, err := Prune(context.Background(), st, prefix, PruneRequest{Current: cur, Policy: Retention{Last: 3}}); err == nil {
+		t.Fatal("a prune that could not read a dropped entry reported success")
+	}
+	if after := mem.Keys(); !slices.Equal(after, before) {
+		t.Fatalf("keys after = %v, before = %v; nothing may go while a dropped entry's names are unknown", after, before)
+	}
+}
+
 func TestTheSweepDeletesStraysAndNothingAKeptManifestNames(t *testing.T) {
 	st := NewMemStore(time.Now)
 	cur := fiveGenerations(t, st)

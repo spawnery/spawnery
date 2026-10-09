@@ -79,6 +79,26 @@ func TestAPolicyRoundTripsAndTheZeroPolicyIsNoFile(t *testing.T) {
 	}
 }
 
+func TestAPolicyChangedSinceTheLastReadIsReadAgain(t *testing.T) {
+	st := NewMemStore(time.Now)
+	ctx := context.Background()
+	if err := WriteRetention(ctx, st, "", "ns", "g", Retention{Last: 3}); err != nil {
+		t.Fatal(err)
+	}
+	_, first, _, err := ReadRetention(ctx, st, "", "ns", "g", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := Retention{Last: 5, Daily: 7}
+	if err := WriteRetention(ctx, st, "", "ns", "g", want); err != nil {
+		t.Fatal(err)
+	}
+	got, etag, changed, err := ReadRetention(ctx, st, "", "ns", "g", first)
+	if err != nil || got != want || !changed || etag == "" || etag == first {
+		t.Fatalf("a read with the old ETag = %+v, %q (old %q), %v, %v; want the new policy and its ETag", got, etag, first, changed, err)
+	}
+}
+
 func TestAMalformedPolicyIsAnError(t *testing.T) {
 	st := NewMemStore(time.Now)
 	ctx := context.Background()

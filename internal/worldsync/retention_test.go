@@ -103,6 +103,13 @@ func TestRetentionSelect(t *testing.T) {
 			want:   []int64{4, 2, 1},
 		},
 		{
+			// 2026-W53 runs from Monday 28 December 2026 to 3 January 2027.
+			name:   "a week across the turn of the year is one week",
+			policy: Retention{Weekly: 3},
+			times:  []string{"2027-01-05T12:00:00Z", "2027-01-02T12:00:00Z", "2026-12-29T12:00:00Z", "2026-12-20T12:00:00Z"},
+			want:   []int64{4, 3, 1},
+		},
+		{
 			// All three fall on 2026-10-07 in UTC; in UTC+2 the first is on the 8th.
 			name:   "periods are UTC",
 			policy: Retention{Daily: 2},
