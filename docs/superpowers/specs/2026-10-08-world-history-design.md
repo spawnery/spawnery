@@ -1,6 +1,6 @@
 # World history for object store worlds
 
-**Status:** draft for review
+**Status:** implemented (branch feat/world-history)
 **Date:** 2026-10-08
 
 ## 1. Goal
@@ -216,6 +216,14 @@ closes the known issue "Upload attempts that fail leave objects in the
 bucket". The lease makes this safe: no other writer can have uploaded an
 object it has not committed yet.
 
+The sweep at the release of a lease runs only after a renewal proves the
+lease is still this node's, and only when the bucket's manifest is the one
+the node holds (same ETag, world id and generation); otherwise it is
+skipped. Prune and sweep deadlines start at the renewal that justifies
+them. A prune or sweep that runs while the node holds the world's lock is
+bounded to 2 minutes. A cut-off one is safe, because entries go before
+objects and the next sweep collects strays.
+
 `dropStrayPacks` in `adoptCommitted` goes; the full sweep covers it.
 
 ### 4.5 Restore
@@ -243,6 +251,11 @@ The operator's `restoreWorld`:
 Each restore holds the lease under its own name, so a second restore of the
 same world finds it held and answers `UNAVAILABLE`. `If-Match` on the
 manifest remains the guard against any writer that got past the lease.
+
+The operator runs a restore on a context detached from the plugin's request,
+with its own timeout of 60 s, and answers listing and restore off the agent
+session's loop, so a slow bucket does not hold the other requests of that
+pod.
 
 A restore writes a new generation number because the node's cache identity is
 `(worldId, generation)` plus a size check of each file. A restore that
