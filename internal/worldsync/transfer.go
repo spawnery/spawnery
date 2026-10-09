@@ -178,7 +178,7 @@ func UploadSnapshot(ctx context.Context, st Store, prefix, snapDir string, prev 
 	if err != nil {
 		return Manifest{}, "", err
 	}
-	dropUnnamed(ctx, st, prefix, prev, m)
+	_, _ = Prune(ctx, st, prefix, PruneRequest{Current: m, Replaced: prev})
 	return m, info.ETag, nil
 }
 
@@ -190,22 +190,6 @@ func readObject(ctx context.Context, st Store, key string) ([]byte, ObjectInfo, 
 	defer func() { _ = rc.Close() }()
 	b, err := io.ReadAll(rc)
 	return b, info, err
-}
-
-func dropUnnamed(ctx context.Context, st Store, prefix string, prev *Manifest, m Manifest) {
-	if prev == nil {
-		return
-	}
-	handled := map[string]bool{}
-	for _, e := range m.Files {
-		handled[e.Object] = true
-	}
-	for _, e := range prev.Files {
-		if !handled[e.Object] {
-			handled[e.Object] = true
-			_ = st.Delete(ctx, prefix+e.Object)
-		}
-	}
 }
 
 func Download(ctx context.Context, st Store, prefix, dataDir string, m Manifest, parallel, gid int) error {

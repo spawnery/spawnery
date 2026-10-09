@@ -1056,7 +1056,7 @@ func (n *Node) adoptCommitted(ctx context.Context, s *worldState, job *uploadJob
 	}
 	c, cancel := n.call(ctx)
 	defer cancel()
-	dropUnnamed(c, n.cfg.Store, n.prefix(s.World), job.prev, m)
+	_, _ = Prune(c, n.cfg.Store, n.prefix(s.World), PruneRequest{Current: m, Replaced: job.prev})
 	n.dropStrayPacks(c, s.World, m)
 	n.cfg.Log.Info("adopted an upload that committed before its answer arrived", "world", s.World, "generation", m.Generation)
 	return m, etag, nil
