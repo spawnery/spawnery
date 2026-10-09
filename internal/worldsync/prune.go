@@ -32,6 +32,7 @@ type PruneRequest struct {
 	Current  Manifest
 	Replaced *Manifest
 	Policy   Retention
+	Pin      int64
 	Cache    ObjectCache
 	Sweep    bool
 }
@@ -56,7 +57,7 @@ func Prune(ctx context.Context, st Store, prefix string, req PruneRequest) (int,
 	}
 	keep := req.Policy.Select(points)
 	for i, e := range older {
-		if keep[i+1] {
+		if keep[i+1] || e.Generation == req.Pin {
 			kept = append(kept, e)
 		} else {
 			dropped = append(dropped, e)

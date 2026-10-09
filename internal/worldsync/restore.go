@@ -130,7 +130,8 @@ func RestoreWorld(ctx context.Context, st Store, prefix string, generation int64
 	if _, err := putManifest(ctx, st, prefix, body, PutCondition{IfMatch: info.ETag}); err != nil {
 		return Restored{}, err
 	}
-	_, perr := Prune(ctx, st, prefix, PruneRequest{Current: next, Policy: policy})
+	// Pinned so that the restore can be undone before the next start.
+	_, perr := Prune(ctx, st, prefix, PruneRequest{Current: next, Policy: policy, Pin: cur.Generation})
 	return Restored{Generation: next.Generation, RestoredFrom: generation, RestoredTaken: from.Taken, PruneErr: perr}, nil
 }
 

@@ -104,7 +104,8 @@ when the node took the snapshot, not when it reached the bucket.
 
 `restoreWorld` makes the content of `generation` the member's current world
 as a new generation. The generation that was current before stays a restore
-point, so a restore can itself be undone, until the retention drops it.
+point until the member's next upload, so a restore can itself be undone;
+from then on it stays only while the retention keeps it.
 
 They fail the way the other calls do, with an `IllegalStateException`
 whose message starts with the operator's reason:
@@ -245,7 +246,8 @@ The operator's `restoreWorld`:
 6. Puts a manifest with the same `worldId`, generation current+1, `taken`
    now, `restoredFrom` set, and the files of the restored entry, `If-Match`
    the current ETag.
-7. Prunes, then releases the lease.
+7. Prunes, keeping the generation it replaced whatever the policy says,
+   then releases the lease.
 8. Records an Event on the ServerGroup: `world <key> restored to generation
    <n> of <taken>`.
 
@@ -299,9 +301,10 @@ operator dashboard gets restores.
   about every five minutes while the member runs. Play after the last
   snapshot before a crash is not in any generation.
 - No restore of a deleted world.
-- Under a policy that keeps only the current generation, a restore's prune
-  drops the generation it replaced, so only a group with `retention` can
-  undo a restore.
+- The member's first upload after a restore prunes by the policy alone. It
+  keeps the generation the restore replaced only under `last` of 3 or more
+  (the upload, the restored generation and that one), or when a period
+  option keeps it from an earlier period than the upload's.
 - The retention counts have no upper bound. Every prune and restore reads
   each kept entry once per cold cache, so very large counts make restores
   slow; the plugin request times out after 10 s.

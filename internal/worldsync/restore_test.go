@@ -287,3 +287,28 @@ func TestARestoreUnderAPolicyThatDropsItsSourceKeepsTheRestoredObjects(t *testin
 		t.Fatalf("store = %v; want objects/g1 and objects/shared", st.Keys())
 	}
 }
+
+func TestARestoreKeepsTheGenerationItReplacedWhateverThePolicy(t *testing.T) {
+	st := NewMemStore(time.Now)
+	ctx := context.Background()
+	cur := fiveGenerations(t, st)
+	now := time.UnixMilli(cur.Taken).Add(time.Hour)
+	policy := Retention{Daily: 7}
+	if keep := policy.Select([]Point{{Generation: 6, Taken: now}, {Generation: 5, Taken: time.UnixMilli(cur.Taken)}}); keep[1] {
+		t.Fatal("the policy keeps generation 5 by itself; the test proves nothing")
+	}
+	got, err := RestoreWorld(ctx, st, prefix, 2, policy, now)
+	if err != nil || got.Generation != 6 || got.PruneErr != nil {
+		t.Fatalf("restore = %+v, %v", got, err)
+	}
+	if !slices.Contains(historyGenerations(t, st), 5) {
+		t.Fatalf("history = %v; the generation the restore replaced is gone, so the restore cannot be undone", historyGenerations(t, st))
+	}
+	if !stored(t, st, prefix+ObjectsDir+"g5") {
+		t.Fatalf("store = %v; generation 5's own object is gone", st.Keys())
+	}
+	undo, err := RestoreWorld(ctx, st, prefix, 5, policy, now.Add(time.Minute))
+	if err != nil || undo.Generation != 7 || undo.RestoredFrom != 5 {
+		t.Fatalf("undo = %+v, %v; want generation 7 from 5", undo, err)
+	}
+}

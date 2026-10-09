@@ -246,9 +246,13 @@ A plugin lists a member's generations with `listRestorePoints(group, key)`,
 whether the member runs or not, and makes one of them current with
 `restoreWorld(group, key, generation)` while the member is stopped. See
 [what a plugin can do](../plugin-api/what-a-plugin-can-do.md). The restore
-writes the old content as a new generation, so the generation that was
-current stays a restore point until the retention drops it. The next start
-downloads the whole world, even on a node that holds most of it. A restore
+writes the old content as a new generation, and the generation that was
+current stays a restore point whatever the retention says, so the restore
+can be undone. The member's next upload prunes by the retention alone: it
+keeps that generation under `last: 3` or more (the upload, the restored
+generation and the replaced one), or when another option keeps it from an
+earlier period than the upload's. The next start downloads the whole world,
+even on a node that holds most of it. A restore
 takes the world's lease under a name of its own, so a second restore of the
 same world at the same time answers `UNAVAILABLE`. If the operator dies
 mid-restore, the world stays held until that lease goes stale after 10

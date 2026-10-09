@@ -342,9 +342,10 @@ public interface SpawneryApi {
     /**
      * Makes an older generation of a private server's world its current
      * world, as a new generation. The generation that was current stays a
-     * restore point, so a restore can itself be undone until the group's
-     * retention drops it. The next {@link #startServer} of the key starts on
-     * the restored world.
+     * restore point, so a restore can itself be undone before the member
+     * runs again; after its next upload, only while the group's retention
+     * keeps it. The next {@link #startServer} of the key starts on the
+     * restored world.
      *
      * <p>Who may restore, and what a restore means for the players, is your
      * plugin's decision; the operator asks nobody.
