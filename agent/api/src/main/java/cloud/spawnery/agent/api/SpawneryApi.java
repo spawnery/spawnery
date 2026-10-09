@@ -376,9 +376,10 @@ public interface SpawneryApi {
      * stream included. The operator answers once the restore is written,
      * which can take up to a minute. The stage therefore times out after 75
      * seconds instead of ten, and after a timeout you cannot tell whether the
-     * restore happened. Asking again after either is safe: if the restore was carried
-     * out and the member has not run since, the answer is the generation it
-     * made, even once the world no longer keeps the generation it restored.
+     * restore happened. Asking again after either is safe: if the restore was
+     * carried out and the member has not run since, the answer is the
+     * generation it made, even once the world no longer keeps the generation it
+     * restored.
      */
     CompletionStage<RestoredWorld> restoreWorld(String group, String key, long generation);
 
