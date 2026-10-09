@@ -5189,6 +5189,54 @@ spec:
                     maxItems: 64
                     minItems: 1
                     type: array
+                  retention:
+                    description: |-
+                      Retention keeps older generations of each member's world restorable,
+                      with the prune options of Proxmox Backup Server, applied in the order
+                      last, hourly, daily, weekly, monthly, yearly. Each counts only periods
+                      that hold a generation and skips a period an earlier option already
+                      kept one from. Periods are UTC. The current generation is always kept
+                      and counts as one of last. Unset, or all zero, a world keeps only its
+                      current generation. A change reaches each world at its next upload and
+                      restarts no member. Needs backend ObjectStore.
+                    properties:
+                      daily:
+                        description: Daily keeps the newest generation of each of
+                          that many days.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      hourly:
+                        description: Hourly keeps the newest generation of each of
+                          that many hours.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      last:
+                        description: Last keeps the newest generations; the current
+                          one counts as one.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      monthly:
+                        description: Monthly keeps the newest generation of each of
+                          that many months.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      weekly:
+                        description: Weekly keeps the newest generation of each of
+                          that many ISO weeks.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                      yearly:
+                        description: Yearly keeps the newest generation of each of
+                          that many years.
+                        format: int32
+                        minimum: 0
+                        type: integer
+                    type: object
                   size:
                     anyOf:
                     - type: integer
@@ -5212,6 +5260,9 @@ spec:
                 - message: a path cannot be in both spec.storage.keep and spec.storage.replace
                   rule: '!has(self.replace) || !has(self.keep) || self.replace.all(r,
                     !(r in self.keep))'
+                - message: spec.storage.retention needs spec.storage.backend ObjectStore
+                  rule: '!has(self.retention) || (has(self.backend) && self.backend
+                    == ''ObjectStore'')'
               substitution:
                 description: |-
                   Substitution fills placeholders in the files the entrypoint copies from

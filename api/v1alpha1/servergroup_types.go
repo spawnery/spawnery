@@ -166,10 +166,40 @@ const (
 	StorageBackendObjectStore StorageBackend = "ObjectStore"
 )
 
+// RetentionSpec keeps older generations of an ObjectStore world, with the
+// prune options of Proxmox Backup Server.
+type RetentionSpec struct {
+	// Last keeps the newest generations; the current one counts as one.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Last int32 `json:"last,omitempty"`
+	// Hourly keeps the newest generation of each of that many hours.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Hourly int32 `json:"hourly,omitempty"`
+	// Daily keeps the newest generation of each of that many days.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Daily int32 `json:"daily,omitempty"`
+	// Weekly keeps the newest generation of each of that many ISO weeks.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Weekly int32 `json:"weekly,omitempty"`
+	// Monthly keeps the newest generation of each of that many months.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Monthly int32 `json:"monthly,omitempty"`
+	// Yearly keeps the newest generation of each of that many years.
+	// +kubebuilder:validation:Minimum=0
+	// +optional
+	Yearly int32 `json:"yearly,omitempty"`
+}
+
 // StorageSpec describes where a persistent or on-demand group keeps its
 // members' worlds: a PersistentVolumeClaim per member, or the object store.
 // +kubebuilder:validation:XValidation:rule="!has(self.replace) || has(self.keep)",message="spec.storage.replace needs spec.storage.keep"
 // +kubebuilder:validation:XValidation:rule="!has(self.replace) || !has(self.keep) || self.replace.all(r, !(r in self.keep))",message="a path cannot be in both spec.storage.keep and spec.storage.replace"
+// +kubebuilder:validation:XValidation:rule="!has(self.retention) || (has(self.backend) && self.backend == 'ObjectStore')",message="spec.storage.retention needs spec.storage.backend ObjectStore"
 type StorageSpec struct {
 	// Backend is where a member's world lives between runs. Claim, the
 	// default, keeps it on a PersistentVolumeClaim per member. ObjectStore
@@ -241,6 +271,17 @@ type StorageSpec struct {
 	// +kubebuilder:validation:items:XValidation:rule="!self.startsWith('/') && !self.contains('[') && !self.contains(']') && !self.contains('\\\\') && !self.contains('\\n') && !self.contains('\\r') && self.split('/').all(s, s != '' && s != '.' && s != '..')",message="a replace entry is a relative path without [ ] \\, line breaks or empty, . and .. segments"
 	// +optional
 	Replace []string `json:"replace,omitempty"`
+
+	// Retention keeps older generations of each member's world restorable,
+	// with the prune options of Proxmox Backup Server, applied in the order
+	// last, hourly, daily, weekly, monthly, yearly. Each counts only periods
+	// that hold a generation and skips a period an earlier option already
+	// kept one from. Periods are UTC. The current generation is always kept
+	// and counts as one of last. Unset, or all zero, a world keeps only its
+	// current generation. A change reaches each world at its next upload and
+	// restarts no member. Needs backend ObjectStore.
+	// +optional
+	Retention *RetentionSpec `json:"retention,omitempty"`
 }
 
 // ServerGroupSpec describes a group of Minecraft servers.
@@ -574,6 +615,14 @@ func (g *ServerGroup) IsOnDemand() bool {
 
 func (g *ServerGroup) UsesObjectStore() bool {
 	return g.Spec.Storage != nil && g.Spec.Storage.Backend == StorageBackendObjectStore
+}
+
+// WorldRetention converts to worldsync.Retention field for field.
+func (g *ServerGroup) WorldRetention() RetentionSpec {
+	if !g.UsesObjectStore() || g.Spec.Storage.Retention == nil {
+		return RetentionSpec{}
+	}
+	return *g.Spec.Storage.Retention
 }
 
 // UsesClaim reports whether members get a data claim of their own.

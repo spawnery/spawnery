@@ -783,3 +783,60 @@ func TestTheBackendMayChangeBothWays(t *testing.T) {
 		}
 	}
 }
+
+func objectStoreGroup(ns, name string) *spawneryv1alpha1.ServerGroup {
+	g := onDemandGroup(ns, name)
+	g.Spec.Storage.Backend = spawneryv1alpha1.StorageBackendObjectStore
+	g.Spec.Storage.Keep = []string{"world"}
+	return g
+}
+
+func TestRetentionNeedsTheObjectStore(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	const msg = "spec.storage.retention needs spec.storage.backend ObjectStore"
+
+	o := onDemandGroup(ns, "retention-on-claims")
+	o.Spec.Storage.Keep = []string{"world"}
+	o.Spec.Storage.Retention = &spawneryv1alpha1.RetentionSpec{Last: 3}
+	if err := c.Create(ctx, o); err == nil || !strings.Contains(err.Error(), msg) {
+		t.Fatalf("retention on claims: err = %v, want %q", err, msg)
+	}
+
+	g := objectStoreGroup(ns, "retention-in-the-store")
+	g.Spec.Storage.Retention = &spawneryv1alpha1.RetentionSpec{Last: 12, Hourly: 24, Daily: 7, Weekly: 4, Monthly: 3}
+	if err := c.Create(ctx, g); err != nil {
+		t.Fatalf("retention in the object store: %v", err)
+	}
+	g.Spec.Storage.Backend = spawneryv1alpha1.StorageBackendClaim
+	if err := c.Update(ctx, g); err == nil || !strings.Contains(err.Error(), msg) {
+		t.Fatalf("switching back to Claim with retention set: err = %v, want %q", err, msg)
+	}
+}
+
+func TestRetentionRefusesANegativeCount(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	g := objectStoreGroup(ns, "negative-retention")
+	g.Spec.Storage.Retention = &spawneryv1alpha1.RetentionSpec{Daily: -1}
+	if err := c.Create(ctx, g); err == nil || !strings.Contains(err.Error(), "should be greater than or equal to 0") {
+		t.Fatalf("daily -1: err = %v, want a minimum of 0", err)
+	}
+}
+
+func TestRetentionOptionsDefaultToZero(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	g := objectStoreGroup(ns, "sparse-retention")
+	g.Spec.Storage.Retention = &spawneryv1alpha1.RetentionSpec{Daily: 7}
+	if err := c.Create(ctx, g); err != nil {
+		t.Fatal(err)
+	}
+	var got spawneryv1alpha1.ServerGroup
+	if err := c.Get(ctx, client.ObjectKeyFromObject(g), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.Spec.Storage.Retention == nil || *got.Spec.Storage.Retention != (spawneryv1alpha1.RetentionSpec{Daily: 7}) {
+		t.Fatalf("retention = %+v, want daily 7 and every other option 0", got.Spec.Storage.Retention)
+	}
+}
