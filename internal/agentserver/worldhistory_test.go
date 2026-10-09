@@ -51,9 +51,12 @@ type fakeHistory struct {
 	deadline bool
 	gate     chan struct{}
 	entered  chan struct{}
+
+	listDeadline time.Time
 }
 
-func (f *fakeHistory) RestorePoints(context.Context, string) ([]worldsync.RestorePoint, error) {
+func (f *fakeHistory) RestorePoints(ctx context.Context, _ string) ([]worldsync.RestorePoint, error) {
+	f.listDeadline, _ = ctx.Deadline()
 	return f.points, f.err
 }
 
@@ -199,6 +202,16 @@ func TestRestorePointsAreAnsweredNewestFirstWithTheirTimes(t *testing.T) {
 		points[0].GetGeneration() != 9 || !points[0].GetCurrent() || points[0].GetTakenUnixMillis() != taken.UnixMilli() ||
 		points[1].GetGeneration() != 7 || points[1].GetCurrent() || points[1].GetTakenUnixMillis() != taken.Add(-time.Hour).UnixMilli() {
 		t.Fatalf("points = %v; a running member's restore points are listed too", points)
+	}
+}
+
+func TestAListingOfRestorePointsHasATimeout(t *testing.T) {
+	history := &fakeHistory{points: []worldsync.RestorePoint{{Generation: 1, Current: true}}}
+	s, _ := historyServer(t, &fakeWorlds{}, history, objectStoreGroup())
+	asked := time.Now()
+	askRestorePoints(s)
+	if history.listDeadline.IsZero() || history.listDeadline.After(asked.Add(restoreTimeout+time.Second)) {
+		t.Fatalf("listing deadline = %v; a bucket that never answers would hold the request for the session's life", history.listDeadline)
 	}
 }
 

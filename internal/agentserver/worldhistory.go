@@ -90,6 +90,8 @@ func (w KubeWriter) ListRestorePoints(ctx context.Context, namespace, group, key
 	if _, _, err := w.historyGroup(ctx, namespace, group, key); err != nil {
 		return nil, err
 	}
+	ctx, cancel := context.WithTimeout(ctx, restoreTimeout)
+	defer cancel()
 	points, err := w.History.RestorePoints(ctx, namespace+"/"+group+"/"+key)
 	if errors.Is(err, worldsync.ErrNotFound) {
 		return nil, ErrNoWorld

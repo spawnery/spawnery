@@ -595,8 +595,8 @@ func (s *Server) handleProxy(
 			"player", m.PlayerJoinedServer.GetPlayer(), "server", m.PlayerJoinedServer.GetServer())
 	case *agentpb.ProxyMessage_CloudRequest:
 		if m.CloudRequest.GetExecute() != nil || answersOffTheLoop(m.CloudRequest) {
-			// Waits on servers or the object store for up to a minute; inline,
-			// it would hold this proxy's outbox as long.
+			// Waits on servers or the object store; inline, it would hold this
+			// proxy's outbox as long.
 			go func() {
 				answer := &agentpb.OperatorToProxy{
 					Message: &agentpb.OperatorToProxy_CloudResponse{
