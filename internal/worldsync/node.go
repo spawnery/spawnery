@@ -555,7 +555,7 @@ func (n *Node) renewLease(ctx context.Context, s *worldState) error {
 
 // ownLease reads the lease back after a 412. Only this node writes its own
 // name, so a lease that still names it is a write that committed and whose
-// retry failed the condition (see UploadSnapshot).
+// retry failed the condition (see putManifest).
 func (n *Node) ownLease(ctx context.Context, world string) (string, error) {
 	ctx, cancel := n.call(ctx)
 	defer cancel()
@@ -1150,7 +1150,6 @@ func groupOf(world string) (namespace, group string) {
 	return parts[0], parts[1]
 }
 
-// refreshPolicy keeps the last policy read when a read fails.
 func (n *Node) refreshPolicy(ctx context.Context, s *worldState) {
 	ns, group := groupOf(s.World)
 	c, cancel := n.call(ctx)

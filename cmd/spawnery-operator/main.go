@@ -392,7 +392,6 @@ func main() {
 
 	var worlds agentserver.WorldDeleter
 	var history agentserver.WorldHistory
-	// An interface left nil, not a nil *Policies, when world sync is off.
 	var retention controller.RetentionPublisher
 	if worldSync {
 		cfg, base, err := worldsync.S3ConfigFromEnv(os.Getenv)
