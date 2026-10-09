@@ -20,11 +20,13 @@ import (
 	"context"
 	"errors"
 	"io"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/prometheus/client_golang/prometheus/testutil"
 )
@@ -203,5 +205,86 @@ func TestPrunedObjectsAreCounted(t *testing.T) {
 	h.upload("a", target, 6, 2)
 	if got := testutil.ToFloat64(prunedObjects); got != before+1 {
 		t.Fatalf("pruned objects = %v, want %v: the pack of generation 1", got, before+1)
+	}
+}
+
+func TestTheReleaseSweepsNothingOnALeaseAnotherNodeTookOver(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	ta, _ := h.publish("a", w, "p1")
+	h.upload("a", ta, 5, 1)
+
+	h.now = h.now.Add(StaleAfter + time.Second)
+	tb, err := h.publish("b", w, "p2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); ; time.Sleep(5 * time.Millisecond) {
+		if _, err := os.Stat(filepath.Join(tb, ReadyFile)); err == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("b's download never finished")
+		}
+	}
+	inFlight := prefix + ObjectsDir + strings.Repeat("e", 64)
+	if _, err := h.st.Put(ctx, inFlight, strings.NewReader("b's upload, its manifest still to come"), PutCondition{}); err != nil {
+		t.Fatal(err)
+	}
+
+	a := h.node("a")
+	unlock := a.lock(w)
+	a.release(ctx, a.lookup(w))
+	unlock()
+
+	if !stored(t, h.st, inFlight) {
+		t.Fatal("a swept an object of the node that holds the lease")
+	}
+	if l, _, err := ReadLease(ctx, h.st, prefix); err != nil || l.Node != "b" {
+		t.Fatalf("lease = %+v, %v; want b's", l, err)
+	}
+}
+
+func TestTheReleaseSweepsNothingOnALocalCopyBehindTheBucket(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	failManifest := false
+	h.store = &failingKeys{MemStore: h.st, match: func(key string) bool {
+		return failManifest && strings.HasSuffix(key, ManifestName)
+	}}
+	ta, err := h.publish("a", w, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.upload("a", ta, 5, 1)
+	h.unpublish("a", ta)
+	h.node("a").Settle(ctx)
+
+	h.store = nil
+	tb, err := h.publish("b", w, "p2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.waitFile(tb, "worlds/world/level.dat")
+	h.upload("b", tb, 7, 1)
+	h.upload("b", tb, 9, 2)
+	h.unpublish("b", tb)
+	h.node("b").Settle(ctx)
+	m, _, err := ReadManifest(ctx, h.st, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	failManifest = true
+	if _, err := h.publish("a", w, "p3"); err == nil {
+		t.Fatal("the publish succeeded while the manifest could not be read")
+	}
+	failManifest = false
+	h.node("a").Settle(ctx)
+
+	for _, f := range m.Files {
+		if !stored(t, h.st, prefix+f.Object) {
+			t.Errorf("object %s of the bucket's current generation %d is gone", f.Object, m.Generation)
+		}
 	}
 }
