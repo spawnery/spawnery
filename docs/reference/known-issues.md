@@ -80,15 +80,3 @@ take; a Server carrying `PodNameTerminating` with no such pod present says the
 controller decided against a pod that is no longer there; an empty namespace
 with a clean condition says something else refused the create. The second
 occurrence should be a diagnosis, and this entry leaves with it.
-
-## Upload attempts that fail leave objects in the bucket
-
-An `ObjectStore` world's upload writes its objects and its pack before the
-manifest, and each attempt writes its pack under a fresh name
-(`packs/<generation>-<16 hex>.tar.gz`). When an attempt fails before its
-manifest is in place, nothing deletes what it wrote: the next attempt
-writes a new pack, and the old manifest's cleanup only removes what that
-manifest named. The leftovers stay in the bucket until the world is deleted,
-when the sweep removes everything under its prefix. A sweep of objects and
-packs no manifest names would end it; there is none yet. See
-[Worlds in an object store](../guides/object-store-worlds.md).

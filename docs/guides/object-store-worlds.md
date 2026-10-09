@@ -202,6 +202,59 @@ the same key answers `UNAVAILABLE`; after it, the key starts an empty world.
 Without `--world-sync`, `startServer` refuses every key of an `ObjectStore`
 group.
 
+## Older generations
+
+Each upload of a member's world makes a new generation: about every five
+minutes while the member runs, and once more when it stops. By default the
+bucket keeps only the newest. `storage.retention` keeps older ones, using the
+prune options of Proxmox Backup Server:
+
+```yaml
+spec:
+  storage:
+    backend: ObjectStore
+    keep: [world]
+    retention:
+      last: 12    # the newest 12, the current one included
+      hourly: 24  # then the newest of each of 24 more hours
+      daily: 7
+      weekly: 4
+      monthly: 3
+```
+
+The options apply in the order `last`, `hourly`, `daily`, `weekly`,
+`monthly`, `yearly`. Each counts only periods that hold a generation, skips a
+period an earlier option already kept a generation from, and keeps the
+newest generation of each further period. Weeks are ISO weeks and every
+period is UTC. A member nobody plays makes no generations, so its history
+stays as it is.
+
+A kept generation costs what its upload cost: the region files that changed
+and one pack of the small files. On a pregenerated world of about 2.75 GB,
+two players changed 8 region files (41.7 MB) within an hour; a member nobody
+played changed one file of 0.7 MB.
+
+The operator writes the policy to `.retention/<namespace>/<group>.json` in
+the bucket, and the node agent reads it before each upload. A change reaches
+each world at its next upload and restarts no member. Removing `retention`
+drops a world's history at its next upload. The API refuses `retention`
+without `backend: ObjectStore`, so a group goes back to `Claim` only after
+dropping it.
+
+A plugin lists a member's generations with `listRestorePoints(group, key)`,
+whether the member runs or not, and makes one of them current with
+`restoreWorld(group, key, generation)` while the member is stopped. See
+[what a plugin can do](../plugin-api/what-a-plugin-can-do.md). The restore
+writes the old content as a new generation, so the generation that was
+current stays a restore point until the retention drops it. The next start
+downloads the whole world, even on a node that holds most of it. A restore
+takes the world's lease under a name of its own, so a second restore of the
+same world at the same time answers `UNAVAILABLE`. If the operator dies
+mid-restore, the world stays held until that lease goes stale after 10
+minutes, and starts and further restores answer `UNAVAILABLE` meanwhile. Each
+restore records the event `WorldRestored` on the group and counts in
+`spawnery_world_restores_total`.
+
 ## Moving existing worlds in
 
 `spawnery-worldsync import` uploads the `keep` paths of a directory as the
@@ -293,7 +346,7 @@ and alerts are listed in
 [metrics and alerts](../reference/metrics-and-alerts.md).
 
 The dashboard shows per node the worlds mounted and cached, snapshots not yet
-in the bucket, download and upload times and counts, retries, lease
+in the bucket, download and upload times and counts, objects pruned, retries, lease
 conflicts, orphans and failed downloads, and the agents' network traffic,
 CPU and memory from the kubelet's cAdvisor series.
 
@@ -306,8 +359,14 @@ CPU and memory from the kubelet's cAdvisor series.
   third node holds a current copy. A cache nobody uses is evicted after 24
   hours, or earlier, oldest first, when the node directory's filesystem has
   less than 15 % free.
-- Objects and packs written by an upload attempt that failed stay in the
-  bucket until the world is deleted.
+- What an upload attempt that failed wrote stays in the bucket until the
+  world's next sweep: every twelfth upload, and when a node releases the
+  world.
+- A policy change does not prune worlds nobody plays.
+- The history holds what the snapshots held. Play after the last snapshot
+  before a crash is in no generation, and a deleted world cannot be
+  restored.
 
 The design and its measurements are in
-`docs/superpowers/specs/2026-10-06-object-store-worlds-design.md`.
+`docs/superpowers/specs/2026-10-06-object-store-worlds-design.md` and
+`docs/superpowers/specs/2026-10-08-world-history-design.md`.

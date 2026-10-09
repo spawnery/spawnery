@@ -82,6 +82,10 @@ What comes back, by reason:
 | `deleteServer` | `REFUSED` | the group is not `OnDemand`, the key is not a label, a claim of that name was not made by this operator for that group, or the world predates the key label (only an admin can delete it). |
 | `deleteServer` | `NOT_FOUND` | no such group, or the key has neither a server nor a world, including a delete that finished a moment ago. |
 | `startServer` | `UNAVAILABLE` | also: the key's world is still being deleted. |
+| `listRestorePoints`, `restoreWorld` | `NOT_FOUND` | no such group, or the key has no world; for `restoreWorld` also a generation the world does not keep. |
+| `listRestorePoints`, `restoreWorld` | `REFUSED` | the group is not `OnDemand`, keeps its worlds on claims, or the operator runs without world sync. |
+| `restoreWorld` | `REFUSED` | also: a key no name can be built from, the member is running, its world is being deleted, or the generation is the current one. |
+| `restoreWorld` | `UNAVAILABLE` | the member is still stopping, or its final upload or another restore still writes the world. A restore whose operator died holds the world until its lease goes stale after 10 minutes. Ask again. |
 
 Every failure reaches Java as an `IllegalStateException` whose message is
 `<REASON>: <the operator's sentence>`; the Javadoc says when it arrives wrapped.
