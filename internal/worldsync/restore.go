@@ -23,6 +23,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
+	"slices"
 	"time"
 )
 
@@ -119,6 +120,9 @@ func RestoreWorld(ctx context.Context, st Store, prefix string, generation int64
 	}
 	if old.WorldID != cur.WorldID {
 		return Restored{}, ErrNoGeneration
+	}
+	if cur.RestoredFrom == generation && slices.Equal(cur.Files, old.Files) {
+		return Restored{Generation: cur.Generation, RestoredFrom: generation, RestoredTaken: from.Taken}, nil
 	}
 
 	_, err = st.Put(ctx, prefix+HistoryKey(cur.Generation, cur.TakenAt(info.LastModified)), bytes.NewReader(raw), PutCondition{IfNoneMatch: true})

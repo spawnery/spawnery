@@ -327,3 +327,31 @@ func TestARestoreRefusesAnEntryOfAnotherWorld(t *testing.T) {
 		t.Fatalf("manifest = %+v, %v; a refused restore changed it", m, err)
 	}
 }
+
+func TestAskingAgainForTheSameRestoreMakesNoNewGeneration(t *testing.T) {
+	st := NewMemStore(time.Now)
+	ctx := context.Background()
+	fiveGenerations(t, st)
+	first, err := RestoreWorld(ctx, st, prefix, 2, Retention{Last: 10}, time.Now())
+	if err != nil || first.Generation != 6 {
+		t.Fatalf("restore = %+v, %v", first, err)
+	}
+	again, err := RestoreWorld(ctx, st, prefix, 2, Retention{Last: 10}, time.Now())
+	if err != nil || again.Generation != 6 || again.RestoredFrom != 2 || !again.RestoredTaken.Equal(first.RestoredTaken) {
+		t.Fatalf("second restore = %+v, %v; want the first one's generation 6 from 2", again, err)
+	}
+	if m, _, err := ReadManifest(ctx, st, prefix); err != nil || m.Generation != 6 {
+		t.Fatalf("manifest = %+v, %v; want generation 6", m, err)
+	}
+	if got := historyGenerations(t, st); !slices.Equal(got, []int64{5, 4, 3, 2, 1}) {
+		t.Fatalf("history = %v, want [5 4 3 2 1]", got)
+	}
+	if l, _, err := ReadLease(ctx, st, prefix); err != nil || l.Node != "" {
+		t.Fatalf("lease = %+v, %v; want released", l, err)
+	}
+
+	other, err := RestoreWorld(ctx, st, prefix, 3, Retention{Last: 10}, time.Now())
+	if err != nil || other.Generation != 7 || other.RestoredFrom != 3 {
+		t.Fatalf("restore of another generation = %+v, %v; want generation 7 from 3", other, err)
+	}
+}

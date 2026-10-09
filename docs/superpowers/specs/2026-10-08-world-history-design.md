@@ -255,6 +255,11 @@ Each restore holds the lease under its own name, so a second restore of the
 same world finds it held and answers `UNAVAILABLE`. `If-Match` on the
 manifest remains the guard against any writer that got past the lease.
 
+A restore of the generation the current manifest was restored from, whose
+entry names the same files, answers the current generation and writes
+nothing. A plugin that asks again after its 10 s timeout gets the
+generation the first request made instead of another one.
+
 The operator runs a restore on a context detached from the plugin's request,
 with its own timeout of 60 s, and answers listing and restore off the agent
 session's loop, so a slow bucket does not hold the other requests of that

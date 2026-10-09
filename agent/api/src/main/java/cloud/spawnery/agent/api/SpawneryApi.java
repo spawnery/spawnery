@@ -363,9 +363,9 @@ public interface SpawneryApi {
      *       upload of the world: ask again a few seconds later.</li>
      * </ul>
      * The failure has the shape {@link #startServer} describes, the timeout
-     * and the renewed stream included. Asking again after either is safe: a
-     * restore that was carried out made a new generation, and asking again
-     * for the same old one only makes another.
+     * and the renewed stream included. Asking again after either is safe: if
+     * the restore was carried out and the member has not run since, the
+     * answer is the generation it made.
      */
     CompletionStage<RestoredWorld> restoreWorld(String group, String key, long generation);
 
