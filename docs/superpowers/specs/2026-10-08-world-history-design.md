@@ -148,8 +148,10 @@ one listing and read no entry. The current generation is not in `history/`;
 it is `manifest.json`.
 
 `Manifest` gains `taken` (unix ms, the node's clock when it took the
-snapshot) and `restoredFrom` (the generation a restore copied, else
-absent). A manifest written before this version has no `taken`; when it
+snapshot), `restoredFrom` (the generation a restore copied, else absent)
+and `restoredTaken` (the `taken` of that generation, written with
+`restoredFrom`). Only a restore writes the last two; the node's next upload
+leaves them out. A manifest written before this version has no `taken`; when it
 moves into history, the node uses the manifest's `LastModified` instead.
 
 Per group, written by the operator:
@@ -240,11 +242,13 @@ The operator's `restoreWorld`:
    `UNAVAILABLE`. A node publishing the member meanwhile gets
    `UNAVAILABLE` from its own lease attempt and kubelet retries, so a start
    during a restore waits for it instead of racing it.
-4. Reads the current manifest and its ETag, and the history entry of
-   `generation` (`NOT_FOUND` if absent).
+4. Reads the current manifest and its ETag. If its `restoredFrom` is
+   `generation`, the restore is a repeat (below) and ends here. Otherwise
+   it reads the history entry of `generation` (`NOT_FOUND` if absent).
 5. Puts the current manifest's bytes at its history key.
 6. Puts a manifest with the same `worldId`, generation current+1, `taken`
-   now, `restoredFrom` set, and the files of the restored entry, `If-Match`
+   now, `restoredFrom` and `restoredTaken` set, and the files of the
+   restored entry, `If-Match`
    the current ETag.
 7. Prunes, keeping the generation it replaced whatever the policy says,
    then releases the lease.
@@ -255,15 +259,19 @@ Each restore holds the lease under its own name, so a second restore of the
 same world finds it held and answers `UNAVAILABLE`. `If-Match` on the
 manifest remains the guard against any writer that got past the lease.
 
-A restore of the generation the current manifest was restored from, whose
-entry names the same files, answers the current generation and writes
-nothing. A plugin that asks again after its 10 s timeout gets the
-generation the first request made instead of another one.
+A restore of the generation the current manifest was restored from answers
+the current generation and that manifest's `restoredTaken`, and writes
+nothing. It needs no history entry, so it answers the same after a prune
+dropped the restored one. A plugin that asks again after its timeout gets
+the generation the first request made instead of another one. A manifest
+written by a restore of 0.25.0 has no `restoredTaken`; the repeat then
+answers without the time, and the Event leaves it out.
 
 The operator runs a restore on a context detached from the plugin's request,
 with its own timeout of 60 s, and answers listing and restore off the agent
 session's loop, so a slow bucket does not hold the other requests of that
-pod.
+pod. The agent gives listing and restore 75 s instead of the 10 s of its
+other requests, so it waits out that minute before it reports a timeout.
 
 A restore writes a new generation number because the node's cache identity is
 `(worldId, generation)` plus a size check of each file. A restore that
@@ -312,7 +320,7 @@ operator dashboard gets restores.
   option keeps it from an earlier period than the upload's.
 - The retention counts have no upper bound. Every prune and restore reads
   each kept entry once per cold cache, so very large counts make restores
-  slow; the plugin request times out after 10 s.
+  slow; the operator gives up after 60 s and the plugin request after 75 s.
 
 ## 7. Testing
 
