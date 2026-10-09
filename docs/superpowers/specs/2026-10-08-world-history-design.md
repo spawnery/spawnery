@@ -113,8 +113,8 @@ whose message starts with the operator's reason:
 | reason | when |
 |---|---|
 | `NOT_FOUND` | no such group, no world for the key, or no such generation |
-| `REFUSED` | the group is not `OnDemand` with `ObjectStore`, or the operator runs without `--world-sync`, as for `startServer`; for `restoreWorld` also: the member's `Server` runs, the world is marked for deletion, or `generation` is the current one |
-| `UNAVAILABLE` | `restoreWorld` only: the member's `Server` is being deleted, or the world's lease is held; after a stop, both mean the final upload is still running |
+| `REFUSED` | the group is not `OnDemand` with `ObjectStore`, the key is one no name can be built from, or the operator runs without `--world-sync`, as for `startServer`; for `restoreWorld` also: the member's `Server` runs, the world is marked for deletion, or `generation` is the current one |
+| `UNAVAILABLE` | the bucket could not be read; for `restoreWorld` also: the member's `Server` is being deleted, or the world's lease is held; after a stop, both mean the final upload is still running |
 
 `listRestorePoints` answers for a running member and for a world marked for
 deletion too; it only reads.

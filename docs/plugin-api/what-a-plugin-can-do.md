@@ -121,8 +121,9 @@ the world, which lasts until its lease goes stale after 10 minutes.
 Each fails with a reason. `startServer` says `REFUSED`, `NOT_FOUND`, or
 `UNAVAILABLE` for a request that succeeds once a server that is stopping has
 gone. `stopServer` says `REFUSED` or `NOT_FOUND`, and `UNAVAILABLE` only when
-the operator could not act at all just now. `listRestorePoints` and `restoreWorld` answer `NOT_FOUND`, `REFUSED` and
-`UNAVAILABLE` as the table there lists. The
+the operator could not act at all just now. `listRestorePoints` and
+`restoreWorld` say `NOT_FOUND`, `REFUSED`, or `UNAVAILABLE`, the last also
+when the operator could not read the bucket just now. The
 [private servers guide](../guides/on-demand-servers.md) has the table.
 
 ## Telling one run of a server from the next

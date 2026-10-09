@@ -331,11 +331,17 @@ public interface SpawneryApi {
      * current generation alone. A member that runs adds a generation about
      * every five minutes, and one more when it stops.
      *
+     * <p>It answers while the member runs and while its world is being
+     * deleted; it only reads. The list is what the bucket held at that moment:
+     * an upload right after it can drop a listed generation, and a restore of
+     * that one then fails with {@code NOT_FOUND}.
+     *
      * <p>It fails with {@code NOT_FOUND} for a group this network does not
-     * have or a key without a world, and with {@code REFUSED} for a group that
-     * is not on-demand or keeps its worlds on claims, and when the operator
-     * runs without world sync. The failure has the shape {@link #startServer}
-     * describes.
+     * have or a key without a world; with {@code REFUSED} for a group that is
+     * not on-demand or keeps its worlds on claims, a key no name can be built
+     * from, and when the operator runs without world sync; and with
+     * {@code UNAVAILABLE} when the operator could not read the bucket just
+     * now. The failure has the shape {@link #startServer} describes.
      */
     CompletionStage<List<RestorePoint>> listRestorePoints(String group, String key);
 
@@ -358,9 +364,10 @@ public interface SpawneryApi {
      *       worlds on claims, an operator that runs without world sync, a
      *       member that is running, a world that is being deleted, and the
      *       current generation.</li>
-     *   <li>{@code UNAVAILABLE} while the member is still stopping, and while
-     *       its world is being written. Right after a stop that is the final
-     *       upload of the world: ask again a few seconds later.</li>
+     *   <li>{@code UNAVAILABLE} while the member is still stopping, while
+     *       its world is being written, and when the operator could not reach
+     *       the bucket just now. Right after a stop it is the final upload of
+     *       the world: ask again a few seconds later.</li>
      * </ul>
      * The failure has the shape {@link #startServer} describes, the timeout
      * and the renewed stream included. Asking again after either is safe: if

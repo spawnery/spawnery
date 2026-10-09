@@ -243,8 +243,9 @@ without `backend: ObjectStore`, so a group goes back to `Claim` only after
 dropping it.
 
 A plugin lists a member's generations with `listRestorePoints(group, key)`,
-whether the member runs or not, and makes one of them current with
-`restoreWorld(group, key, generation)` while the member is stopped. See
+whether the member runs or not, and also while its world is being deleted.
+`restoreWorld(group, key, generation)` makes one of them current while the
+member is stopped. See
 [what a plugin can do](../plugin-api/what-a-plugin-can-do.md). The restore
 writes the old content as a new generation, and the generation that was
 current stays a restore point whatever the retention says, so the restore
