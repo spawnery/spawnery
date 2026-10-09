@@ -54,7 +54,7 @@ class AgentPlugin : JavaPlugin(), Listener {
     private var loginGate: LoginGateListener? = null
 
     private val connector = CloudConnector(
-        Requests(timeoutMillis = CloudConnector.TIMEOUT_MILLIS, clock = System::currentTimeMillis),
+        Requests(timeoutMillis = CloudConnector.TIMEOUT_MILLIS),
     ) { request ->
         val loop = this.loop
             ?: throw IllegalStateException("this agent has no session to the operator")

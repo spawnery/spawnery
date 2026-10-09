@@ -17,7 +17,7 @@ import java.util.concurrent.atomic.AtomicLong
  */
 class Requests(
     private val timeoutMillis: Long,
-    private val clock: () -> Long,
+    private val clock: () -> Long = { System.nanoTime() / 1_000_000 },
 ) {
     private class Pending(val future: CompletableFuture<Any?>, val timeoutMillis: Long, val deadline: Long)
 
