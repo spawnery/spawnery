@@ -7,8 +7,8 @@ type: application
 # otherwise); it is the address installs and Flux pull by. appVersion is the
 # operator release installed by default and moves only with operatorVersion
 # in flake.nix, so a chart-only fix bumps version alone.
-version: 0.25.1
-appVersion: "0.25.1"
+version: 0.26.0
+appVersion: "0.26.0"
 
 # ValidatingAdmissionPolicy (world-deletion policy) is GA from 1.30.
 kubeVersion: ">=1.30.0-0"
