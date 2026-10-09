@@ -227,9 +227,11 @@ func (s *Server) answerRestoreWorld(
 		logger.Error(restored.PruneErr, "the prune after a restore failed; the world's next prune catches up",
 			"group", req.GetGroup(), "key", req.GetKey())
 	}
-	s.recordOnGroup(ctx, id.Namespace, req.GetGroup(), corev1.EventTypeNormal, "WorldRestored", "RestoreWorld",
-		fmt.Sprintf("world %s restored to generation %d of %s",
-			req.GetKey(), restored.RestoredFrom, restored.RestoredTaken.UTC().Format(time.RFC3339)))
+	note := fmt.Sprintf("world %s restored to generation %d", req.GetKey(), restored.RestoredFrom)
+	if !restored.RestoredTaken.IsZero() {
+		note += " of " + restored.RestoredTaken.UTC().Format(time.RFC3339)
+	}
+	s.recordOnGroup(ctx, id.Namespace, req.GetGroup(), corev1.EventTypeNormal, "WorldRestored", "RestoreWorld", note)
 	return &agentpb.CloudResponse{
 		Id: reqID,
 		Result: &agentpb.CloudResponse_RestoreWorld{RestoreWorld: &agentpb.RestoreWorldResult{

@@ -341,7 +341,10 @@ public interface SpawneryApi {
      * not on-demand or keeps its worlds on claims, a key no name can be built
      * from, and when the operator runs without world sync; and with
      * {@code UNAVAILABLE} when the operator could not read the bucket just
-     * now. The failure has the shape {@link #startServer} describes.
+     * now. The failure has the shape {@link #startServer} describes, except
+     * that the operator may take up to a minute to answer, so the stage times
+     * out after 75 seconds rather than ten. Asking again after a timeout is
+     * safe.
      */
     CompletionStage<List<RestorePoint>> listRestorePoints(String group, String key);
 
@@ -369,10 +372,14 @@ public interface SpawneryApi {
      *       the bucket just now. Right after a stop it is the final upload of
      *       the world: ask again a few seconds later.</li>
      * </ul>
-     * The failure has the shape {@link #startServer} describes, the timeout
-     * and the renewed stream included. Asking again after either is safe: if
-     * the restore was carried out and the member has not run since, the
-     * answer is the generation it made.
+     * The failure has the shape {@link #startServer} describes, the renewed
+     * stream included. The operator answers once the restore is written,
+     * which can take up to a minute. The stage therefore times out after 75
+     * seconds instead of ten, and after a timeout you cannot tell whether the
+     * restore happened. Asking again after either is safe: if the restore was
+     * carried out and the member has not run since, the answer is the
+     * generation it made, even once the world no longer keeps the generation it
+     * restored.
      */
     CompletionStage<RestoredWorld> restoreWorld(String group, String key, long generation);
 

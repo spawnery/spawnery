@@ -23,7 +23,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"slices"
 	"time"
 )
 
@@ -97,6 +96,14 @@ func RestoreWorld(ctx context.Context, st Store, prefix string, generation int64
 	if generation == cur.Generation {
 		return Restored{}, ErrCurrentGeneration
 	}
+	// Only a restore writes RestoredFrom, and the member's next upload drops it.
+	if cur.RestoredFrom == generation {
+		var taken time.Time
+		if cur.RestoredTaken > 0 {
+			taken = time.UnixMilli(cur.RestoredTaken).UTC()
+		}
+		return Restored{Generation: cur.Generation, RestoredFrom: generation, RestoredTaken: taken}, nil
+	}
 	entries, err := ListHistory(ctx, st, prefix)
 	if err != nil {
 		return Restored{}, err
@@ -121,15 +128,12 @@ func RestoreWorld(ctx context.Context, st Store, prefix string, generation int64
 	if old.WorldID != cur.WorldID {
 		return Restored{}, ErrNoGeneration
 	}
-	if cur.RestoredFrom == generation && slices.Equal(cur.Files, old.Files) {
-		return Restored{Generation: cur.Generation, RestoredFrom: generation, RestoredTaken: from.Taken}, nil
-	}
 
 	_, err = st.Put(ctx, prefix+HistoryKey(cur.Generation, cur.TakenAt(info.LastModified)), bytes.NewReader(raw), PutCondition{IfNoneMatch: true})
 	if err != nil && !errors.Is(err, ErrPrecondition) {
 		return Restored{}, err
 	}
-	next := Manifest{WorldID: cur.WorldID, Generation: cur.Generation + 1, Taken: now.UnixMilli(), RestoredFrom: generation, Files: old.Files}
+	next := Manifest{WorldID: cur.WorldID, Generation: cur.Generation + 1, Taken: now.UnixMilli(), RestoredFrom: generation, RestoredTaken: from.Taken.UnixMilli(), Files: old.Files}
 	body, err := json.Marshal(next)
 	if err != nil {
 		return Restored{}, err

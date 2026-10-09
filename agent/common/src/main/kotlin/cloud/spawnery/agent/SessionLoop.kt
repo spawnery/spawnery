@@ -223,10 +223,17 @@ class SessionLoop<Req, Resp>(
      * state the operator forgets across a changeover, such as EventInterest.
      */
     private val onStreamChanged: () -> Unit = {},
+    /**
+     * Run every [EXPIRY_PERIOD_MILLIS] from [start] to [stop], whatever the
+     * stream does: an answer lost on a stream that stays up is noticed by
+     * nothing else. No default, so a platform cannot forget it.
+     */
+    private val expireRequests: () -> Unit,
 ) : AutoCloseable {
     private val current = AtomicReference<Session<Req>?>(null)
     private val attempt = AtomicInteger(0)
     private val stopped = AtomicBoolean(false)
+    private val expiry = AtomicReference<ScheduledFuture<*>?>(null)
 
     /**
      * The operator's last `hardDeadlineSeconds`, in milliseconds. Zero until it
@@ -245,11 +252,14 @@ class SessionLoop<Req, Resp>(
          * in microseconds, and this is only a finite number in place of none.
          */
         const val FALLBACK_ANSWER_BOUND_MILLIS = 5L * 60 * 1000
+
+        const val EXPIRY_PERIOD_MILLIS = 1_000L
     }
 
     fun start() {
         stopped.set(false)
         attempt.set(0)
+        startExpiry()
         try {
             connect()
         } catch (e: Exception) {
@@ -274,6 +284,7 @@ class SessionLoop<Req, Resp>(
         // Set first, so a reconnect or renewal already sitting on the scheduler
         // cannot open a stream the plugin has no way left to close.
         stopped.set(true)
+        expiry.getAndSet(null)?.cancel(false)
         val session = current.getAndSet(null) ?: return
         // The same choice as [answerOverdue]: an unanswered call never finishes,
         // and onDisable() gives the scheduler only two seconds, so a parked
@@ -479,6 +490,28 @@ class SessionLoop<Req, Resp>(
             log(whenRejected, e)
             null
         }
+    }
+
+    private fun startExpiry() {
+        val timer = try {
+            scheduler.scheduleAtFixedRate(
+                {
+                    // A throw would cancel the timer for good.
+                    try {
+                        expireRequests()
+                    } catch (e: Exception) {
+                        log("could not expire the requests in flight", e)
+                    }
+                },
+                EXPIRY_PERIOD_MILLIS,
+                EXPIRY_PERIOD_MILLIS,
+                TimeUnit.MILLISECONDS,
+            )
+        } catch (e: RejectedExecutionException) {
+            log("the request expiry could not be scheduled", e)
+            null
+        }
+        expiry.getAndSet(timer)?.cancel(false)
     }
 
     private fun startReporting(session: Session<Req>, seconds: Int) {

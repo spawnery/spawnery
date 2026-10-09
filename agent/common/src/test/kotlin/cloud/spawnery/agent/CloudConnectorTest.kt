@@ -509,4 +509,26 @@ class CloudConnectorTest {
         assertTrue(failure.cause is IllegalStateException, "${failure.cause}")
         assertEquals("UNAVAILABLE: that world is being written", failure.cause!!.message)
     }
+
+    @Test
+    fun `a restore outlasts the operator's one-minute restore and fails at its own deadline`() {
+        var now = 0L
+        val connector = CloudConnector(Requests(timeoutMillis = CloudConnector.TIMEOUT_MILLIS, clock = { now })) { }
+        val status = connector.status("lobby").toCompletableFuture()
+        val restore = connector.restoreWorld("private-servers", "c0ffee", 7).toCompletableFuture()
+        val points = connector.listRestorePoints("private-servers", "c0ffee").toCompletableFuture()
+
+        now = 60_001
+        connector.expire()
+        assertTrue(status.isCompletedExceptionally, "an ordinary request keeps the ten-second deadline")
+        assertFalse(restore.isDone, "the restore expired while the operator may still be working on it")
+        assertFalse(points.isDone, "the listing expired while the operator may still be working on it")
+
+        now = 75_001
+        connector.expire()
+        for (stage in listOf(restore, points)) {
+            val failure = assertFailsWith<ExecutionException> { stage.get(1, TimeUnit.SECONDS) }
+            assertTrue(failure.cause is java.util.concurrent.TimeoutException, "${failure.cause}")
+        }
+    }
 }

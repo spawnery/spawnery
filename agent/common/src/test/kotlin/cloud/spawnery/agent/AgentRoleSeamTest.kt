@@ -41,6 +41,7 @@ class AgentRoleSeamTest {
             note = { },
             jitter = { it },
             fallbackAnswerBoundMillis = fallbackAnswerBoundMillis,
+            expireRequests = {},
         )
     }
 
