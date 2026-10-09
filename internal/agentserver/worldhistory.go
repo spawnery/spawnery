@@ -49,6 +49,13 @@ var (
 type WorldHistory interface {
 	RestorePoints(ctx context.Context, world string) ([]worldsync.RestorePoint, error)
 	Restore(ctx context.Context, world string, generation int64, policy worldsync.Retention) (worldsync.Restored, error)
+	// Held reports whether a node or a restore holds the world's lease.
+	Held(ctx context.Context, world string) (bool, error)
+}
+
+type RestorePoints struct {
+	Points   []worldsync.RestorePoint
+	Settling bool
 }
 
 // answersOffTheLoop is true for the requests that wait on the object store,
@@ -86,17 +93,45 @@ func (w KubeWriter) historyGroup(ctx context.Context, namespace, group, key stri
 	return &g, name, nil
 }
 
-func (w KubeWriter) ListRestorePoints(ctx context.Context, namespace, group, key string) ([]worldsync.RestorePoint, error) {
-	if _, _, err := w.historyGroup(ctx, namespace, group, key); err != nil {
-		return nil, err
+func (w KubeWriter) ListRestorePoints(ctx context.Context, namespace, group, key string) (RestorePoints, error) {
+	_, name, err := w.historyGroup(ctx, namespace, group, key)
+	if err != nil {
+		return RestorePoints{}, err
+	}
+	settling, err := w.memberStopping(ctx, namespace, name, group, key)
+	if err != nil {
+		return RestorePoints{}, err
 	}
 	ctx, cancel := context.WithTimeout(ctx, restoreTimeout)
 	defer cancel()
-	points, err := w.History.RestorePoints(ctx, namespace+"/"+group+"/"+key)
-	if errors.Is(err, worldsync.ErrNotFound) {
-		return nil, ErrNoWorld
+	world := namespace + "/" + group + "/" + key
+	// The lease before the points: a release seen here comes after the
+	// manifest the points are then read from.
+	if !settling {
+		if settling, err = w.History.Held(ctx, world); err != nil {
+			return RestorePoints{}, err
+		}
 	}
-	return points, err
+	points, err := w.History.RestorePoints(ctx, world)
+	if errors.Is(err, worldsync.ErrNotFound) {
+		return RestorePoints{}, ErrNoWorld
+	}
+	if err != nil {
+		return RestorePoints{}, err
+	}
+	return RestorePoints{Points: points, Settling: settling}, nil
+}
+
+func (w KubeWriter) memberStopping(ctx context.Context, namespace, name, group, key string) (bool, error) {
+	var srv spawneryv1alpha1.Server
+	err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &srv)
+	if apierrors.IsNotFound(err) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return srv.Spec.GroupRef.Name == group && srv.Spec.Key == key && !srv.DeletionTimestamp.IsZero(), nil
 }
 
 func (w KubeWriter) RestoreWorld(ctx context.Context, namespace, group, key string, generation int64) (worldsync.Restored, error) {
@@ -179,7 +214,7 @@ func (s *Server) answerListRestorePoints(
 	reqID uint64,
 	req *agentpb.ListRestorePointsRequest,
 ) *agentpb.CloudResponse {
-	points, err := s.opts.Writer.ListRestorePoints(ctx, id.Namespace, req.GetGroup(), req.GetKey())
+	listed, err := s.opts.Writer.ListRestorePoints(ctx, id.Namespace, req.GetGroup(), req.GetKey())
 	if err != nil {
 		if reason, message, known := historyRefusal(err); known {
 			return refuse(reqID, reason, message)
@@ -187,13 +222,13 @@ func (s *Server) answerListRestorePoints(
 		logger.V(1).Info("could not list restore points", "group", req.GetGroup(), "key", req.GetKey(), "reason", err.Error())
 		return refuse(reqID, agentpb.RequestError_UNAVAILABLE, "the operator could not read that world's history just now")
 	}
-	out := make([]*agentpb.RestorePoint, 0, len(points))
-	for _, p := range points {
+	out := make([]*agentpb.RestorePoint, 0, len(listed.Points))
+	for _, p := range listed.Points {
 		out = append(out, &agentpb.RestorePoint{Generation: p.Generation, TakenUnixMillis: p.Taken.UnixMilli(), Current: p.Current})
 	}
 	return &agentpb.CloudResponse{
 		Id:     reqID,
-		Result: &agentpb.CloudResponse_ListRestorePoints{ListRestorePoints: &agentpb.ListRestorePointsResult{Points: out}},
+		Result: &agentpb.CloudResponse_ListRestorePoints{ListRestorePoints: &agentpb.ListRestorePointsResult{Points: out, Settling: listed.Settling}},
 	}
 }
 

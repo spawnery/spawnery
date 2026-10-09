@@ -186,3 +186,53 @@ func TestTakeLeaseFailsWithoutStoreTimes(t *testing.T) {
 		})
 	}
 }
+
+func TestLeaseIsHeldFollowsTheLeaseWithoutTakingIt(t *testing.T) {
+	storeNow := time.Unix(1_700_000_000, 0)
+	st := NewMemStore(func() time.Time { return storeNow })
+	ctx := context.Background()
+	held := func() bool {
+		t.Helper()
+		got, err := LeaseIsHeld(ctx, st, prefix, StaleAfter)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return got
+	}
+	if held() {
+		t.Fatal("no lease reads as held")
+	}
+	etag, err := TakeLease(ctx, st, prefix, Lease{Node: "a", RenewedAt: storeNow}, StaleAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !held() {
+		t.Fatal("a fresh lease reads as free")
+	}
+	if l, _, err := ReadLease(ctx, st, prefix); err != nil || l.Node != "a" {
+		t.Fatalf("lease = %+v, %v; reading it must leave node a's lease alone", l, err)
+	}
+	storeNow = storeNow.Add(StaleAfter + time.Second)
+	if held() {
+		t.Fatal("a stale lease reads as held")
+	}
+	storeNow = storeNow.Add(-StaleAfter)
+	if err := ReleaseLease(ctx, st, prefix, etag); err != nil {
+		t.Fatal(err)
+	}
+	if held() {
+		t.Fatal("a released lease reads as held")
+	}
+}
+
+func TestLeaseIsHeldFailsWithoutStoreTimes(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	mem := NewMemStore(func() time.Time { return now })
+	ctx := context.Background()
+	if _, err := TakeLease(ctx, mem, prefix, Lease{Node: "a", RenewedAt: now}, StaleAfter); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := LeaseIsHeld(ctx, zeroDates{Store: mem, date: true}, prefix, StaleAfter); err == nil {
+		t.Fatal("a lease without store times reads as settled")
+	}
+}

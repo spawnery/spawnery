@@ -153,3 +153,7 @@ func (b BucketWorlds) RestorePoints(ctx context.Context, world string) ([]Restor
 func (b BucketWorlds) Restore(ctx context.Context, world string, generation int64, policy Retention) (Restored, error) {
 	return RestoreWorld(ctx, b.Store, WorldPrefix(b.Base, world), generation, policy, time.Now())
 }
+
+func (b BucketWorlds) Held(ctx context.Context, world string) (bool, error) {
+	return LeaseIsHeld(ctx, b.Store, WorldPrefix(b.Base, world), StaleAfter)
+}

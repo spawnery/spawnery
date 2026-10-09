@@ -143,9 +143,12 @@ type ClusterWriter interface {
 	// ErrNoSuchServer when neither a server nor a world is there.
 	DeleteServer(ctx context.Context, namespace, group, key string) (DeletedServer, error)
 	// ListRestorePoints lists the kept generations of a member's world,
-	// newest first. It returns ErrNoSuchGroup, ErrGroupNotOnDemand,
-	// ErrNotObjectStore, instance.ErrBadKey, ErrWorldSyncOff and ErrNoWorld.
-	ListRestorePoints(ctx context.Context, namespace, group, key string) ([]worldsync.RestorePoint, error)
+	// newest first, and whether the world is settling: its member is being
+	// stopped, or its lease is held (by the node of a running member, by the
+	// upload after a stop, or by a restore). It returns ErrNoSuchGroup,
+	// ErrGroupNotOnDemand, ErrNotObjectStore, instance.ErrBadKey,
+	// ErrWorldSyncOff and ErrNoWorld.
+	ListRestorePoints(ctx context.Context, namespace, group, key string) (RestorePoints, error)
 	// RestoreWorld makes generation the member's current world as a new
 	// generation. Beside ListRestorePoints' errors it returns
 	// ErrMemberRunning, ErrInstanceStopping, ErrWorldDeleting,

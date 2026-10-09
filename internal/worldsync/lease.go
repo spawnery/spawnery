@@ -105,6 +105,18 @@ func TakeLease(ctx context.Context, st Store, prefix string, me Lease, staleAfte
 	return "", errors.New("worldsync: the lease kept changing while taking it")
 }
 
+// LeaseIsHeld reads the lease without taking it. No lease is not held.
+func LeaseIsHeld(ctx context.Context, st Store, prefix string, staleAfter time.Duration) (bool, error) {
+	l, info, err := ReadLease(ctx, st, prefix)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return leaseHeld(l, info, staleAfter)
+}
+
 func leaseHeld(l Lease, info ObjectInfo, staleAfter time.Duration) (bool, error) {
 	if l.Node == "" {
 		return false, nil
