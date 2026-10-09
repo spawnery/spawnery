@@ -267,3 +267,37 @@ func TestHistoryEntriesGoBeforeTheObjectsOnlyTheyNamed(t *testing.T) {
 		t.Fatalf("deletes in order %v; every entry must go before the first object, or a restore could pick an entry whose objects are gone", st.keys)
 	}
 }
+
+type failingEntryDelete struct {
+	*MemStore
+	key string
+}
+
+func (f *failingEntryDelete) Delete(ctx context.Context, key string) error {
+	if key == f.key {
+		return errors.New("store down")
+	}
+	return f.MemStore.Delete(ctx, key)
+}
+
+func TestObjectsStayWhenADroppedEntryCannotBeDeleted(t *testing.T) {
+	mem := NewMemStore(time.Now)
+	cur := fiveGenerations(t, mem)
+	blobs := func() []string {
+		var out []string
+		for _, k := range mem.Keys() {
+			if strings.HasPrefix(k, prefix+ObjectsDir) || strings.HasPrefix(k, prefix+PacksDir) {
+				out = append(out, k)
+			}
+		}
+		return out
+	}
+	before := blobs()
+	st := &failingEntryDelete{MemStore: mem, key: entryKey(manifestOf(2))}
+	if _, err := Prune(context.Background(), st, prefix, PruneRequest{Current: cur, Policy: Retention{Last: 2}}); err == nil {
+		t.Fatal("a prune that could not delete a dropped entry reported success")
+	}
+	if after := blobs(); !slices.Equal(after, before) {
+		t.Fatalf("objects after = %v, before = %v; none may go while a dropped entry is still listed", after, before)
+	}
+}
