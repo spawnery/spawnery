@@ -108,3 +108,5 @@ spec:
     backend: ObjectStore
     keep:
       - world
+    retention:
+      last: 50
