@@ -360,3 +360,75 @@ func TestAskingAgainForTheSameRestoreMakesNoNewGeneration(t *testing.T) {
 		t.Fatalf("restore of another generation = %+v, %v; want generation 7 from 3", other, err)
 	}
 }
+
+func TestAskingAgainAfterThePruneDroppedTheRestoredEntryAnswersTheSameRestore(t *testing.T) {
+	st := NewMemStore(time.Now)
+	ctx := context.Background()
+	fiveGenerations(t, st)
+	first, err := RestoreWorld(ctx, st, prefix, 2, Retention{Last: 2}, time.Now())
+	if err != nil || first.Generation != 6 {
+		t.Fatalf("restore = %+v, %v", first, err)
+	}
+	history := historyGenerations(t, st)
+	if slices.Contains(history, 2) {
+		t.Fatalf("history = %v; the prune kept generation 2's entry, so the test proves nothing", history)
+	}
+	_, etag, err := ReadManifest(ctx, st, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := RestoreWorld(ctx, st, prefix, 2, Retention{Last: 2}, time.Now())
+	if err != nil || again.Generation != 6 || again.RestoredFrom != 2 || !again.RestoredTaken.Equal(first.RestoredTaken) {
+		t.Fatalf("second restore = %+v, %v; want the first one's generation 6 from 2", again, err)
+	}
+	if _, after, err := ReadManifest(ctx, st, prefix); err != nil || after != etag {
+		t.Fatalf("manifest etag = %q, %v; want %q, the repeat wrote a manifest", after, err, etag)
+	}
+	if got := historyGenerations(t, st); !slices.Equal(got, history) {
+		t.Fatalf("history = %v, want %v", got, history)
+	}
+	if l, _, err := ReadLease(ctx, st, prefix); err != nil || l.Node != "" {
+		t.Fatalf("lease = %+v, %v; want released", l, err)
+	}
+}
+
+func TestAskingAgainAfterTheMemberUploadedRestoresAgain(t *testing.T) {
+	h := newHarness(t)
+	ctx := context.Background()
+	setPolicy(t, h.st, Retention{Last: 10})
+	target, err := h.publish("a", w, "p1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.upload("a", target, 5, 1)
+	h.upload("a", target, 6, 2)
+	h.unpublish("a", target)
+	h.node("a").Settle(ctx)
+	first, err := BucketWorlds{Store: h.st}.Restore(ctx, w, 1, Retention{Last: 10})
+	if err != nil || first.RestoredFrom != 1 {
+		t.Fatalf("restore = %+v, %v", first, err)
+	}
+
+	target2, err := h.publish("a", w, "p2")
+	if err != nil {
+		t.Fatal(err)
+	}
+	h.waitFile(target2, ReadyFile)
+	h.upload("a", target2, 7, 1)
+	uploaded, _, err := ReadManifest(ctx, h.st, prefix)
+	if err != nil || uploaded.Generation <= first.Generation || uploaded.RestoredFrom != 0 {
+		t.Fatalf("manifest = %+v, %v; want an upload after generation %d that is no restore", uploaded, err, first.Generation)
+	}
+	h.unpublish("a", target2)
+	h.node("a").Settle(ctx)
+	stopped, _, err := ReadManifest(ctx, h.st, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	again, err := BucketWorlds{Store: h.st}.Restore(ctx, w, 1, Retention{Last: 10})
+	if err != nil || again.Generation != stopped.Generation+1 || again.RestoredFrom != 1 {
+		t.Fatalf("restore after the member ran = %+v, %v; want generation %d from 1", again, err, stopped.Generation+1)
+	}
+}

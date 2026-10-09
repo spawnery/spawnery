@@ -372,7 +372,8 @@ public interface SpawneryApi {
      * The failure has the shape {@link #startServer} describes, the timeout
      * and the renewed stream included. Asking again after either is safe: if
      * the restore was carried out and the member has not run since, the
-     * answer is the generation it made.
+     * answer is the generation it made, even once the world no longer keeps
+     * the generation it restored.
      */
     CompletionStage<RestoredWorld> restoreWorld(String group, String key, long generation);
 

@@ -36,9 +36,12 @@ type Manifest struct {
 	Generation int64  `json:"generation"`
 	// Taken is the node's clock in unix milliseconds when it took the
 	// snapshot; manifests written before it existed have none.
-	Taken        int64       `json:"taken,omitempty"`
-	RestoredFrom int64       `json:"restoredFrom,omitempty"`
-	Files        []FileEntry `json:"files"`
+	Taken        int64 `json:"taken,omitempty"`
+	RestoredFrom int64 `json:"restoredFrom,omitempty"`
+	// RestoredTaken is the Taken of RestoredFrom; restores before it existed
+	// wrote none.
+	RestoredTaken int64       `json:"restoredTaken,omitempty"`
+	Files         []FileEntry `json:"files"`
 }
 
 func (m Manifest) TakenAt(lastModified time.Time) time.Time {

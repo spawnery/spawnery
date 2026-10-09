@@ -190,6 +190,22 @@ func TestARestoreAnswersTheNewGenerationAndIsRecordedOnTheGroup(t *testing.T) {
 	}
 }
 
+func TestARestoreWithoutTheTimeOfItsSourceRecordsNoTime(t *testing.T) {
+	history := &fakeHistory{restored: worldsync.Restored{Generation: 9, RestoredFrom: 3}}
+	s, rec := historyServer(t, &fakeWorlds{}, history, objectStoreGroup(), historyMember(phase.Failed, false))
+	if got := askRestore(s, 3).GetRestoreWorld(); got == nil || got.GetGeneration() != 9 {
+		t.Fatalf("result = %+v, want generation 9", got)
+	}
+	select {
+	case ev := <-rec.Events:
+		if !strings.HasSuffix(ev, "world c0ffee restored to generation 3") {
+			t.Errorf("event %q, want it to end at the generation", ev)
+		}
+	default:
+		t.Fatal("no event was recorded")
+	}
+}
+
 func TestRestorePointsAreAnsweredNewestFirstWithTheirTimes(t *testing.T) {
 	taken := time.Date(2026, 10, 8, 10, 0, 0, 0, time.UTC)
 	history := &fakeHistory{points: []worldsync.RestorePoint{
