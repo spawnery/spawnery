@@ -288,6 +288,7 @@ class AgentPlugin @Inject constructor(
                 connector.onStreamChanged()
                 lastInterest = null
             },
+            expireRequests = connector::expire,
         )
         loop = session
         session.start()

@@ -196,6 +196,7 @@ class AgentPlugin : JavaPlugin(), Listener {
                         connector.onStreamChanged()
                         lastInterest = null
                     },
+                    expireRequests = connector::expire,
                 )
                 loop = session
 

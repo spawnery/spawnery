@@ -15,15 +15,19 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Collections
+import java.util.concurrent.ExecutionException
 import java.util.concurrent.Executors
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.TimeoutException
+import java.util.concurrent.atomic.AtomicLong
 
 /**
  * A [ManagedChannel] that reports, in program order, when a message is sent on
@@ -105,6 +109,7 @@ class SessionLoopTest {
         jitter: (Long) -> Long = { it },
         fallbackAnswerBoundMillis: Long = SessionLoop.FALLBACK_ANSWER_BOUND_MILLIS,
         onStreamChanged: () -> Unit = {},
+        expireRequests: () -> Unit = {},
         log: (String, Throwable?) -> Unit = { _, _ -> },
         note: (String) -> Unit = { },
     ): SessionLoop<ServerMessage, OperatorToServer> {
@@ -121,7 +126,49 @@ class SessionLoopTest {
             jitter = jitter,
             fallbackAnswerBoundMillis = fallbackAnswerBoundMillis,
             onStreamChanged = onStreamChanged,
+            expireRequests = expireRequests,
         )
+    }
+
+    @Test
+    fun `a request the operator never answers fails with a timeout`(@TempDir dir: Path) {
+        FakeOperator("expires").use { operator ->
+            val now = AtomicLong(0)
+            val connector = CloudConnector(Requests(timeoutMillis = 10_000, clock = now::get)) { }
+            loopAgainst(
+                operator,
+                FakeRole(),
+                dir,
+                onStreamChanged = connector::onStreamChanged,
+                expireRequests = connector::expire,
+            ).use { loop ->
+                loop.start()
+                operator.awaitStream(0).awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                val stop = connector.stopServer("lost").toCompletableFuture()
+                now.set(10_000)
+
+                val failure = assertThrows<ExecutionException> { stop.get(5, TimeUnit.SECONDS) }
+                assertTrue(failure.cause is TimeoutException, "failed with ${failure.cause}")
+            }
+        }
+    }
+
+    @Test
+    fun `stopping the loop stops expiring requests`(@TempDir dir: Path) {
+        FakeOperator("expiry-stops").use { operator ->
+            val ticks = LinkedBlockingQueue<Unit>()
+            loopAgainst(operator, FakeRole(), dir, expireRequests = { ticks.put(Unit) }).use { loop ->
+                loop.start()
+                ticks.poll(5, TimeUnit.SECONDS) ?: error("requests were never expired")
+                loop.stop()
+                ticks.clear()
+
+                Thread.sleep(2 * SessionLoop.EXPIRY_PERIOD_MILLIS)
+
+                assertTrue(ticks.isEmpty(), "still expiring after stop()")
+            }
+        }
     }
 
     @Test
