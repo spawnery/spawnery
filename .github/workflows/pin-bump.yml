@@ -27,7 +27,7 @@ jobs:
         id: token
         uses: actions/create-github-app-token@v2
         with:
-          app-id: ${{ vars.PIN_BOT_APP_ID }}
+          app-id: ${{ secrets.PIN_BOT_APP_ID }}
           private-key: ${{ secrets.PIN_BOT_PRIVATE_KEY }}
 
       # Tags: hack/image-version-bump.sh numbers the release from them.

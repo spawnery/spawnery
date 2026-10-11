@@ -74,8 +74,8 @@ pin without a new `imageVersion` would quietly never ship.
 A pull request opened with `GITHUB_TOKEN` starts no `ci.yml` run, and this
 repository does not let `GITHUB_TOKEN` open pull requests. The workflow
 takes a token from a GitHub App instead
-(`actions/create-github-app-token`): the variable `PIN_BOT_APP_ID` and the
-secret `PIN_BOT_PRIVATE_KEY`. The app needs Contents and Pull requests,
+(`actions/create-github-app-token`): the secrets `PIN_BOT_APP_ID` and
+`PIN_BOT_PRIVATE_KEY`. The app needs Contents and Pull requests,
 read and write, on this repository only. Its commits are unsigned, and the
 merge commit is the maintainer's.
 
