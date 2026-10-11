@@ -34,7 +34,7 @@ and are therefore part of no other target, not even `make all`: `agent-deps`,
 | `make docs-serve` | `mkdocs serve` for writing, after `docs-assets` |
 | `make agent-deps` | Regenerates `agent/deps.json`. Reaches Maven Central, so it is part of no other target |
 | `make agent-test` | Both real images against the stub operator in `cmd/spawnery-stubop` |
-| `make paper-pin` | Computes the Paper pin; `paper-pin-check` fails if `nix/paper.nix` is behind |
+| `make paper-pin` | Computes the Paper pin; `paper-pin-check` fails if `nix/paper.nix` is behind. `purpur-pin` does the same for Purpur, and `pin-bump.yml` runs both on Mondays and opens a pull request |
 | `make purpur-image` | The Purpur base image; `purpur-image-load`, `purpur-image-test` |
 | `make velocity-image` | The Velocity image, same three steps scoped to it alone |
 | `make operator-image` | The operator's own image, same three steps |
