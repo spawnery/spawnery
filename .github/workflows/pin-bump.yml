@@ -127,6 +127,8 @@ jobs:
         id: test
         if: steps.pins.outputs.moved == 'true' && steps.commit.outputs.unchanged == 'false'
         continue-on-error: true
+        # A hang still ends in a draft pull request rather than a cancelled job.
+        timeout-minutes: 40
         run: |
           set -euo pipefail
           nix develop -c make purpur-image-test agent-test 2>&1 | tee "$RUNNER_TEMP/test.log"
