@@ -109,12 +109,13 @@ start_stub() {
 # start_agent <name> <volume> <agent-dir> <config-dir> <endpoint> <image> [-e VAR=value...]
 #
 # --memory matters: both entrypoints drop AlwaysPreTouch when the cgroup is
-# unbounded. host-gateway works under both Docker and Podman.
+# unbounded. host-gateway works under both Docker and Podman. -i because Docker,
+# unlike Podman, passes an attach's stdin only to a container started with it.
 start_agent() {
 	local name="$1" volume="$2" agent_dir="$3" config_dir="$4" endpoint="$5" image="$6"
 	shift 6
 	"$CONTAINER" volume create "$volume" >/dev/null
-	"$CONTAINER" run -d --name "$name" \
+	"$CONTAINER" run -d -i --name "$name" \
 		--add-host stubop:host-gateway \
 		--read-only --tmpfs /tmp:rw,exec,size=256m \
 		--cap-drop ALL \
@@ -179,10 +180,11 @@ require_api_installed() {
 }
 
 # console <container> <line> - type one line into the server's console.
-# The timeout guards against an attach that does not return when its stdin closes.
+# The timeout guards against an attach that does not return when its stdin closes;
+# -k because Docker's CLI does not exit on a single SIGTERM.
 console() {
 	local name="$1" line="$2"
-	printf '%s\n' "$line" | timeout 10 "$CONTAINER" attach --sig-proxy=false "$name" >/dev/null 2>&1 || true
+	printf '%s\n' "$line" | timeout -k 5 10 "$CONTAINER" attach --sig-proxy=false "$name" >/dev/null 2>&1 || true
 }
 
 # Retried: the platform buffers its stdout, and the mirror is empty until the
