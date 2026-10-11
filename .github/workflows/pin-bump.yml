@@ -1,0 +1,215 @@
+name: Pin bump
+
+on:
+  schedule:
+    # Mondays, after the nightly at 03:17, off the hour.
+    - cron: "23 4 * * 1"
+  workflow_dispatch:
+
+# Writes go through the app token below: a pull request opened with
+# GITHUB_TOKEN starts no ci.yml run, and this repository does not let
+# GITHUB_TOKEN open pull requests at all.
+permissions:
+  contents: read
+
+concurrency:
+  group: pin-bump
+  cancel-in-progress: false
+
+jobs:
+  bump:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      BRANCH: auto/upstream-pins
+    steps:
+      - name: App token
+        id: token
+        uses: actions/create-github-app-token@v2
+        with:
+          app-id: ${{ vars.PIN_BOT_APP_ID }}
+          private-key: ${{ secrets.PIN_BOT_PRIVATE_KEY }}
+
+      # Tags: hack/image-version-bump.sh numbers the release from them.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          token: ${{ steps.token.outputs.token }}
+
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Commit as the app
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          SLUG: ${{ steps.token.outputs.app-slug }}
+        run: |
+          set -euo pipefail
+          id="$(gh api "/users/${SLUG}%5Bbot%5D" --jq .id)"
+          git config user.name "${SLUG}[bot]"
+          git config user.email "${id}+${SLUG}[bot]@users.noreply.github.com"
+
+      # Paper first: purpur-pin.sh refuses a Purpur build that wants another
+      # Mojang jar than nix/paper.nix pins. Both stay on the pinned Minecraft
+      # version; moving to a new one is not a weekly chore.
+      - name: Move the pins
+        id: pins
+        run: |
+          set -euo pipefail
+          pin() { sed -n "s/^  $1 = \"\(.*\)\";$/\1/p" "$2"; }
+          paper_old="$(pin paperBuild nix/paper.nix)"
+          purpur_old="$(pin purpurBuild nix/purpur.nix)"
+          nix develop -c hack/paper-pin.sh
+          nix develop -c hack/purpur-pin.sh
+          paper_new="$(pin paperBuild nix/paper.nix)"
+          purpur_new="$(pin purpurBuild nix/purpur.nix)"
+          mc="$(pin paperVersion nix/paper.nix)"
+
+          summary=""
+          [ "$paper_old" = "$paper_new" ] || summary="Paper $mc build $paper_new"
+          if [ "$purpur_old" != "$purpur_new" ]; then
+            summary="${summary:+$summary, }Purpur $mc build $purpur_new"
+          fi
+          {
+            echo "mc=$mc"
+            echo "paper_old=$paper_old"
+            echo "paper_new=$paper_new"
+            echo "purpur_old=$purpur_old"
+            echo "purpur_new=$purpur_new"
+            echo "summary=$summary"
+            echo "moved=$([ -n "$summary" ] && echo true || echo false)"
+          } >>"$GITHUB_OUTPUT"
+          echo "moved: ${summary:-nothing}"
+
+      - name: Close a pull request master has caught up with
+        if: steps.pins.outputs.moved == 'false'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+        run: |
+          set -euo pipefail
+          pr="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          [ -n "$pr" ] || exit 0
+          gh pr close "$pr" --delete-branch \
+            --comment "master already names the newest builds; closed by ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
+
+      - name: Commit the pins and number the release
+        id: commit
+        if: steps.pins.outputs.moved == 'true'
+        run: |
+          set -euo pipefail
+          git switch -c "$BRANCH"
+          git add nix/paper.nix nix/purpur.nix
+          git commit -q -m "fix(images): ${{ steps.pins.outputs.summary }}"
+
+          nix develop -c hack/image-version-bump.sh
+          nix develop -c make image-tag-lint
+          version="$(nix eval --raw .#agents.version)"
+          if ! git diff --quiet; then
+            git commit -q -a -m "chore: ${version}, game images on ${{ steps.pins.outputs.summary }}"
+          fi
+          echo "version=$version" >>"$GITHUB_OUTPUT"
+
+          # The same tree as last week's push needs neither a test nor a push.
+          if git fetch -q origin "$BRANCH" 2>/dev/null &&
+            git diff --quiet FETCH_HEAD HEAD; then
+            echo "unchanged=true" >>"$GITHUB_OUTPUT"
+            echo "origin/$BRANCH already carries this tree"
+          else
+            echo "unchanged=false" >>"$GITHUB_OUTPUT"
+          fi
+
+      # What ci.yml cannot say for a pin: whether a server starts on it and the
+      # agent talks to the operator. Both need a container runtime and no kind.
+      - name: Start a server on the new pins
+        id: test
+        if: steps.pins.outputs.moved == 'true' && steps.commit.outputs.unchanged == 'false'
+        continue-on-error: true
+        run: |
+          set -euo pipefail
+          nix develop -c make purpur-image-test agent-test 2>&1 | tee "$RUNNER_TEMP/test.log"
+
+      - name: Push and open or update the pull request
+        if: steps.pins.outputs.moved == 'true' && steps.commit.outputs.unchanged == 'false'
+        env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
+          MC: ${{ steps.pins.outputs.mc }}
+          SUMMARY: ${{ steps.pins.outputs.summary }}
+          PAPER_OLD: ${{ steps.pins.outputs.paper_old }}
+          PAPER_NEW: ${{ steps.pins.outputs.paper_new }}
+          PURPUR_OLD: ${{ steps.pins.outputs.purpur_old }}
+          PURPUR_NEW: ${{ steps.pins.outputs.purpur_new }}
+          VERSION: ${{ steps.commit.outputs.version }}
+          OUTCOME: ${{ steps.test.outcome }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+          body="$RUNNER_TEMP/body.md"
+          title="fix(images): $SUMMARY"
+
+          if [ "$OUTCOME" = success ]; then
+            verdict="\`make purpur-image-test agent-test\` passed on this tree: the image starts a server with no network, and both agents run their session against the stub operator."
+          else
+            verdict="**\`make purpur-image-test agent-test\` failed on this tree.** The pull request stays a draft until a run passes. Log below and in the [run]($RUN_URL)."
+          fi
+
+          {
+            echo "Moves the game images to newer upstream builds of Minecraft $MC and numbers the release that ships them."
+            echo
+            echo "| | before | after |"
+            echo "|---|---|---|"
+            echo "| Paper | $PAPER_OLD | $PAPER_NEW |"
+            echo "| Purpur | $PURPUR_OLD | $PURPUR_NEW |"
+            echo "| imageVersion | $(git show origin/master:flake.nix | sed -n 's/^[[:space:]]*imageVersion = "\([^"]*\)";/\1/p') | $VERSION |"
+            echo
+            echo "$verdict"
+            echo
+            echo "Nothing here runs the plugins a network installs on top. A build that breaks one of them shows up in its changelog below, not in the test."
+            echo
+            echo "After the merge, \`git tag -s v$VERSION\` once CI on master is green."
+            for p in paper purpur; do
+              old_var="${p^^}_OLD"; new_var="${p^^}_NEW"
+              [ "${!old_var}" != "${!new_var}" ] || continue
+              echo
+              echo "<details><summary>${p^} $MC, builds after ${!old_var} up to ${!new_var}</summary>"
+              echo
+              nix develop -c hack/upstream-changes.sh "$p" "$MC" "${!old_var}" "${!new_var}" ||
+                echo "(the changelog could not be fetched)"
+              echo
+              echo "</details>"
+            done
+            echo
+            echo "<details><summary>Test log, last 60 lines</summary>"
+            echo
+            echo '```'
+            tail -60 "$RUNNER_TEMP/test.log" 2>/dev/null || echo "(no log)"
+            echo '```'
+            echo
+            echo "</details>"
+            echo
+            echo "Opened by \`.github/workflows/pin-bump.yml\` ([run]($RUN_URL)). The next run force-pushes this branch onto master again."
+          } >"$body"
+
+          git push -q --force origin "HEAD:refs/heads/$BRANCH"
+
+          pr="$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')"
+          if [ -z "$pr" ]; then
+            draft=()
+            [ "$OUTCOME" = success ] || draft=(--draft)
+            gh pr create --base master --head "$BRANCH" --title "$title" --body-file "$body" "${draft[@]}"
+          else
+            gh pr edit "$pr" --title "$title" --body-file "$body"
+            if [ "$OUTCOME" = success ]; then
+              gh pr ready "$pr" 2>/dev/null || true
+            else
+              gh pr ready "$pr" --undo 2>/dev/null || true
+            fi
+          fi
+
+      - name: Fail the run on a failed server test
+        if: steps.test.outcome == 'failure'
+        run: |
+          echo "::error::the new pins did not pass make purpur-image-test agent-test; see the pull request"
+          exit 1

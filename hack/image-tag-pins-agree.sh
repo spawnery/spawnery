@@ -15,8 +15,10 @@
 #   hack/image-tag-pins-agree.sh [--flake FILE] [--image-version VERSION]
 #                                 [--purpur-version V] [--velocity-version V]
 #                                 [--manifest FILE]...
+#   hack/image-tag-pins-agree.sh --list
 #
-# With no --manifest, checks the list below.
+# With no --manifest, checks the list below. --list prints it and checks
+# nothing; hack/image-version-bump.sh rewrites the files it names.
 #
 # Exit status: 0 every tag agrees, 1 one does not or something could not be
 # read.
@@ -28,6 +30,7 @@ image_version=""
 purpur_version=""
 velocity_version=""
 manifests=()
+list_only=0
 
 while [ $# -gt 0 ]; do
   case "$1" in
@@ -36,6 +39,7 @@ while [ $# -gt 0 ]; do
     --purpur-version) purpur_version="$2"; shift 2 ;;
     --velocity-version) velocity_version="$2"; shift 2 ;;
     --manifest) manifests+=("$2"); shift 2 ;;
+    --list) list_only=1; shift ;;
     *) echo "image-tag-pins-agree: unknown argument $1" >&2; exit 1 ;;
   esac
 done
@@ -55,6 +59,11 @@ if [ "${#manifests[@]}" -eq 0 ]; then
     "$root/docs/plugin-api/index.md"
     "$root/agent/api/README.md"
   )
+fi
+
+if [ "$list_only" -eq 1 ]; then
+  printf '%s\n' "${manifests[@]}"
+  exit 0
 fi
 
 fail() { echo "image-tag-pins-agree: $*" >&2; exit 1; }
