@@ -11,11 +11,11 @@
 # what freezes the input.
 rec {
   purpurVersion = "26.3";
-  purpurBuild = "2642";
+  purpurBuild = "2647";
 
   purpurJar = fetchurl {
     url = "https://api.purpurmc.org/v2/purpur/${purpurVersion}/${purpurBuild}/download";
-    hash = "sha256-zAdiFPyFb1XlL3/oPhL7Q2HeCWd/XIncrwJKKlgs21A=";
+    hash = "sha256-6AA8ipln1REc8iL9m4PO1vNOsk6Q17p6naiG3XH7dG8=";
   };
 
   # Paper's Mojang jar: same Minecraft version, same object. paperclip verifies
