@@ -80,3 +80,18 @@ take; a Server carrying `PodNameTerminating` with no such pod present says the
 controller decided against a pod that is no longer there; an empty namespace
 with a clean condition says something else refused the create. The second
 occurrence should be a diagnosis, and this entry leaves with it.
+
+## Voice relay: the first sender holds a player's reply path
+
+The relay in a proxy ties a player's voice bridge to the address of the first
+frame it sees for that UUID. A UUID is public, so anyone who can reach the
+relay's UDP port can send about one frame per second for a player's UUID
+before that player starts voice, or right after a server switch rebuilds the
+bridge, and receive the replies meant for the player. The player then hears
+nothing. The payload is encrypted, so nothing leaks; the damage is a denial
+of service for chosen players. SVC's own Velocity plugin captures the reply
+address the same way. A player who is already talking keeps the path.
+
+Closing it means preferring a source whose IP matches the player's game
+connection, which breaks behind SNAT or an ingress and so needs a decision
+first.

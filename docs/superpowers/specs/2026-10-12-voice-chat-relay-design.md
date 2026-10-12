@@ -165,8 +165,8 @@ port would fail with nothing to point at the cause.
 1. The packet is dropped if it is shorter than 17 bytes or its first byte is
    not `0xFF`.
 2. If the UUID is SVC's fixed ping UUID, the packet is dropped and counted as
-   `ping` (amended 2026-10-12). The reply format is not verified, and a player
-   does not need the answer to talk.
+   `ping` (amended 2026-10-12). The reply format is not verified, and whether a
+   player needs the answer to talk is not verified either.
 3. Otherwise the proxy picks the backend:
    - If the player is connected through this proxy, it uses their current
      server as Velocity sees it. This is correct the moment a server switch
@@ -191,9 +191,14 @@ player as in SVC's proxy.
 - *The client's source address changes.* The bridge adopts the new address
   only once the old one has been silent for 3 s. Until then, packets from the
   new address are still forwarded upstream, but replies keep going to the old
-  one. The client echoes a keepalive every second, so someone who knows a
-  player's UUID (which is public) cannot take the reply path of a player who
-  is active. A NAT rebind costs 3 s instead of the backend's 10-second
+  one. The client echoes a keepalive every second, so the holder of an
+  active reply path keeps it. An empty bridge, or one rebuilt by a server
+  switch, goes to whoever sends a frame first. Someone who knows a player's
+  UUID (which is public) and sends about one frame per second before that
+  player starts voice can take the reply path, and the player hears nothing.
+  The payload stays encrypted, so this is a denial of service, not a leak.
+  SVC's own Velocity plugin takes the reply address the same way, from the
+  first packet. A NAT rebind costs 3 s instead of the backend's 10-second
   timeout.
 - *Idle.* After 15 s without traffic in either direction the bridge is
   removed. That is longer than SVC's 10 s timeout, so a bridge never goes away
@@ -261,7 +266,7 @@ Both additions exist only while `Network.spec.voice` is set.
 - The Service ports for all four strategies, with and without
   `voice.expose`. This includes a TCP and a UDP port sharing one `nodePort`
   number, which the API server must accept.
-- The policies, `status.voiceAddress`, and both `Degraded` reasons.
+- The policies, `status.voiceAddress`, and the `Voice` condition's reasons.
 - The proxy hash golden unchanged for a group without voice.
 
 **Cross-proxy proof (amended 2026-10-12):** `make e2e` starts no game image,

@@ -23,6 +23,14 @@ spec:
 `voicechat-server.properties`. Switching voice on rolls the network's proxies
 once; backend pods do not change.
 
+Proxies need an image that carries this agent release. With an older image the
+`Voice` condition still shows `Relaying`, because it reflects configuration,
+not what the agent reports.
+
+If a group's load balancer cannot carry UDP or mixed protocols, set
+`spec.voice.expose` on that group before you turn voice on in the network,
+because turning it on adds a UDP port to the group's LoadBalancer Service.
+
 Add a `spec.voice.expose` to a group only when its game entry point cannot
 carry UDP, see below:
 
