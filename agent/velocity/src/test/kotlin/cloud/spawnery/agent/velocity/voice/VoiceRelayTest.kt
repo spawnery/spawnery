@@ -2,8 +2,11 @@ package cloud.spawnery.agent.velocity.voice
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertThrows
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
+import java.io.File
 import java.net.DatagramPacket
 import java.net.DatagramSocket
 import java.net.Inet6Address
@@ -197,5 +200,24 @@ class VoiceRelayTest {
             }
         }
         backend.close()
+    }
+
+    @Test
+    fun `a bind that fails leaks no descriptors`() {
+        val fds = File("/proc/self/fd")
+        assumeTrue(fds.isDirectory)
+        DatagramSocket(0, InetAddress.getLoopbackAddress()).use { taken ->
+            val address = InetSocketAddress(InetAddress.getLoopbackAddress(), taken.localPort)
+            fun attempt() {
+                assertThrows(java.net.BindException::class.java) {
+                    VoiceRelay(address, resolve = { Backend.UnknownPlayer }, counters = VoiceCounters(), log = { _, _ -> })
+                }
+            }
+            repeat(5) { attempt() }
+            val before = fds.list()!!.size
+            repeat(50) { attempt() }
+            val after = fds.list()!!.size
+            assertTrue(after - before < 10, "open descriptors went from $before to $after over 50 failed binds")
+        }
     }
 }

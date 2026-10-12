@@ -25,7 +25,7 @@ import cloud.spawnery.agent.pb.OperatorToProxy
 import cloud.spawnery.agent.pb.PlayerJoinedServer
 import cloud.spawnery.agent.pb.ProxyMessage
 import cloud.spawnery.agent.pb.VoiceConfig
-import cloud.spawnery.agent.velocity.voice.Backend
+import cloud.spawnery.agent.velocity.voice.Backend as VoiceBackend
 import cloud.spawnery.agent.velocity.voice.VoiceControl
 import cloud.spawnery.agent.velocity.voice.VoiceCounters
 import cloud.spawnery.agent.velocity.voice.VoiceRelay
@@ -324,8 +324,14 @@ class AgentPlugin @Inject constructor(
         val voiceCounters = VoiceCounters()
         val voice = VoiceControl(
             startRelay = { port ->
-                VoiceRelay(InetSocketAddress(port), resolve = ::resolveVoice, counters = voiceCounters, log = ::warn)
-                    .also { it.start() }
+                val relay = VoiceRelay(InetSocketAddress(port), resolve = ::resolveVoice, counters = voiceCounters, log = ::warn)
+                try {
+                    relay.start()
+                } catch (e: Exception) {
+                    runCatching { relay.close() }
+                    throw e
+                }
+                relay
             },
             hostIp = System.getenv("SPAWNERY_HOST_IP"),
             counters = voiceCounters,
@@ -338,13 +344,13 @@ class AgentPlugin @Inject constructor(
         return voice
     }
 
-    private fun resolveVoice(player: UUID): Backend {
+    private fun resolveVoice(player: UUID): VoiceBackend {
         val server = proxy.getPlayer(player).flatMap { it.currentServer }.map { it.serverInfo.name }.orElse(null)
             ?: mirror.players().firstOrNull { it.id() == player }?.server()?.orElse(null)
-            ?: return Backend.UnknownPlayer
-        val host = directory?.hostOf(server) ?: return Backend.UnknownServer
-        val port = voice?.backendPort() ?: return Backend.UnknownServer
-        return Backend.At(InetSocketAddress(host, port))
+            ?: return VoiceBackend.UnknownPlayer
+        val host = directory?.hostOf(server) ?: return VoiceBackend.UnknownServer
+        val port = voice?.backendPort() ?: return VoiceBackend.UnknownServer
+        return VoiceBackend.At(InetSocketAddress(host, port))
     }
 
     @Subscribe

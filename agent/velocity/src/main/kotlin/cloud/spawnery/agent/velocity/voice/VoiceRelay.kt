@@ -29,7 +29,12 @@ class VoiceRelay(
     private val clock: () -> Long = System::currentTimeMillis,
 ) : AutoCloseable {
     private val selector = Selector.open()
-    private val public = open(bind).bind(bind).also { it.configureBlocking(false) }
+    private val public = try {
+        bound(bind)
+    } catch (e: Exception) {
+        selector.close()
+        throw e
+    }
     private val bridges = Bridges(clock)
     private val upstream = HashMap<UUID, DatagramChannel>()
     private val buffer = ByteBuffer.allocateDirect(MAX_DATAGRAM)
@@ -176,6 +181,18 @@ class VoiceRelay(
         const val WARN_MILLIS = 60_000L
 
         /** A wildcard bind stays dual-stack; an explicit family would refuse the other one's clients. */
+        fun bound(bind: InetSocketAddress): DatagramChannel {
+            val channel = open(bind)
+            try {
+                channel.bind(bind)
+                channel.configureBlocking(false)
+            } catch (e: Exception) {
+                channel.close()
+                throw e
+            }
+            return channel
+        }
+
         fun open(bind: InetSocketAddress): DatagramChannel = when {
             bind.address.isAnyLocalAddress -> DatagramChannel.open()
             bind.address is Inet6Address -> DatagramChannel.open(StandardProtocolFamily.INET6)

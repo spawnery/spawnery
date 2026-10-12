@@ -28,6 +28,16 @@ class VoiceControlTest {
         assertEquals(1, started)
         c.apply(config(enabled = false))
         assertEquals(1, closed)
+        c.apply(config(enabled = false))
+        assertEquals(1, closed)
+    }
+
+    @Test
+    fun `disabled before any enable starts and closes nothing`() {
+        val c = control()
+        c.apply(config(enabled = false)); c.apply(config(enabled = false))
+        assertEquals(0, started)
+        assertEquals(0, closed)
     }
 
     @Test
@@ -37,6 +47,16 @@ class VoiceControlTest {
         c.recordVersion(player, byteArrayOf(0, 0, 0, 20))
         val patched = c.secretFor(player, secretV20(24454, "x"))!!
         assertArrayEquals(secretV20(30765, ""), patched)
+        assertNull(counters.totals()[VoiceCounters.UNKNOWN_VERSION])
+    }
+
+    @Test
+    fun `a secret that does not parse is forwarded unchanged and counted`() {
+        val c = control()
+        c.apply(config())
+        c.recordVersion(player, byteArrayOf(0, 0, 0, 20))
+        assertNull(c.secretFor(player, secretV20(24454, "", tail = byteArrayOf(1, 0, 0, 0, 7))))
+        assertEquals(1L, counters.totals()[VoiceCounters.UNKNOWN_VERSION])
     }
 
     @Test
@@ -78,11 +98,17 @@ class VoiceControlTest {
     }
 
     @Test
-    fun `own node without a node address forwards the secret unchanged`() {
-        val c = control(hostIp = null)
+    fun `own node without a node address forwards the secret unchanged and says so once`() {
+        val logged = mutableListOf<String>()
+        val c = VoiceControl(
+            startRelay = { AutoCloseable { } },
+            hostIp = null, counters = counters, log = { message, _ -> logged += message },
+        )
         c.apply(config(ownNode = true))
         c.recordVersion(player, byteArrayOf(0, 0, 0, 20))
         assertNull(c.secretFor(player, secretV20(24454, "")))
+        assertNull(c.secretFor(UUID.randomUUID(), secretV20(24454, "")))
+        assertEquals(1, logged.count { "SPAWNERY_HOST_IP" in it }, logged.toString())
     }
 
     @Test

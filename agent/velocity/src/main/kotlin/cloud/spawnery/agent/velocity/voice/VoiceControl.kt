@@ -4,6 +4,7 @@ import cloud.spawnery.agent.pb.ProxyMessage
 import cloud.spawnery.agent.pb.VoiceConfig
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import cloud.spawnery.agent.pb.VoiceCounters as PbVoiceCounters
 
 /**
@@ -22,6 +23,7 @@ class VoiceControl(
     private var relay: AutoCloseable? = null
     private val versions = ConcurrentHashMap<UUID, Int>()
     private val warnedVersion = ConcurrentHashMap.newKeySet<UUID>()
+    private val warnedHostIp = AtomicBoolean(false)
 
     @Synchronized
     fun apply(config: VoiceConfig) {
@@ -53,7 +55,9 @@ class VoiceControl(
         if (!config.enabled || config.announcePort == 0) return null
         val host = if (config.announceOwnNode) {
             hostIp?.takeIf { it.isNotBlank() } ?: run {
-                log("spawnery: voice is announced on this pod's node, but SPAWNERY_HOST_IP is unset; secret passed through", null)
+                if (warnedHostIp.compareAndSet(false, true)) {
+                    log("spawnery: voice is announced on this pod's node, but SPAWNERY_HOST_IP is unset; secrets pass through", null)
+                }
                 return null
             }
         } else {
