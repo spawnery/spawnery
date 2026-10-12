@@ -55,15 +55,14 @@ func PublicPort(group *spawneryv1alpha1.ProxyGroup) int32 {
 				return port
 			}
 		}
-		return RelayPort
+		return 0
 	case spawneryv1alpha1.ExposeLoadBalancer:
 		return RelayPort
 	}
 	return 0
 }
 
-// Announce is the endpoint for this group's clients, and false while voice is
-// off or the endpoint is not known yet (a LoadBalancer without an ingress).
+// Announce is the endpoint for this group's clients; false when voice is off, there is no port, the LoadBalancer has no ingress yet, or a ClusterIP address is missing or unparsable.
 func Announce(network *spawneryv1alpha1.Network, group *spawneryv1alpha1.ProxyGroup) (Endpoint, bool) {
 	if _, on := network.VoiceBackendPort(); !on {
 		return Endpoint{}, false
@@ -80,7 +79,13 @@ func Announce(network *spawneryv1alpha1.Network, group *spawneryv1alpha1.ProxyGr
 	case spawneryv1alpha1.ExposeHostPort, spawneryv1alpha1.ExposeNodePort:
 		return Endpoint{Port: port, OwnNode: true}, true
 	case spawneryv1alpha1.ExposeClusterIP:
-		host, _, _ := splitAddress(spec.ClusterIP.Address)
+		if spec.ClusterIP == nil {
+			return Endpoint{}, false
+		}
+		host, _, ok := splitAddress(spec.ClusterIP.Address)
+		if !ok {
+			return Endpoint{}, false
+		}
 		return Endpoint{Host: host, Port: port}, true
 	case spawneryv1alpha1.ExposeLoadBalancer:
 		host, _, ok := splitAddress(group.Status.VoiceAddress)

@@ -64,6 +64,11 @@ func TestAnnounce(t *testing.T) {
 		{"LoadBalancer override: the voice Service's ingress", group(nodePort, &lb, "198.51.100.4:25565"), Endpoint{Host: "198.51.100.4", Port: 25565}, true},
 		{"LoadBalancer override, no ingress yet: unknown", group(nodePort, &lb, ""), Endpoint{}, false},
 		{"ClusterIP override: the address as written", group(lb, &clusterIP, "voice.example.test:24000"), Endpoint{Host: "voice.example.test", Port: 24000}, true},
+		{"ClusterIP override without a clusterIP block: unknown", group(lb, &spawneryv1alpha1.ExposeSpec{Type: spawneryv1alpha1.ExposeClusterIP}, ""), Endpoint{}, false},
+		{"ClusterIP override with an out-of-range port: unknown", group(lb, &spawneryv1alpha1.ExposeSpec{Type: spawneryv1alpha1.ExposeClusterIP,
+			ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "voice.example.test:99999"}}, ""), Endpoint{}, false},
+		{"ClusterIP override with an unparsable port: unknown", group(lb, &spawneryv1alpha1.ExposeSpec{Type: spawneryv1alpha1.ExposeClusterIP,
+			ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "voice.example.test:abc"}}, ""), Endpoint{}, false},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
