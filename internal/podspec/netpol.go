@@ -161,6 +161,8 @@ func BuildNetworkPolicy(
 
 func ProxyNetworkPolicyName(group string) string { return group + "-proxies" }
 
+func VoiceServiceName(group string) string { return group + "-voice" }
+
 // HTTPSPort is what Mojang's session and API servers answer on.
 const HTTPSPort int32 = 443
 

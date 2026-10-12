@@ -49,7 +49,7 @@ func TestLoadBalancerServiceShape(t *testing.T) {
 		}
 	})
 
-	svc, err := r.reconcileService(f.ctx, group)
+	svc, err := r.reconcileService(f.ctx, f.network, group)
 	if err != nil {
 		t.Fatalf("reconcileService: %v", err)
 	}
@@ -101,7 +101,7 @@ func TestSwitchingToHostPortDeletesTheService(t *testing.T) {
 	r := proxyGroupReconciler(f)
 	group := f.createProxyGroup("gateway")
 
-	if _, err := r.reconcileService(f.ctx, group); err != nil {
+	if _, err := r.reconcileService(f.ctx, f.network, group); err != nil {
 		t.Fatalf("reconcileService as NodePort: %v", err)
 	}
 	var before corev1.Service
@@ -113,7 +113,7 @@ func TestSwitchingToHostPortDeletesTheService(t *testing.T) {
 		Type:     spawneryv1alpha1.ExposeHostPort,
 		HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
 	}
-	svc, err := r.reconcileService(f.ctx, group)
+	svc, err := r.reconcileService(f.ctx, f.network, group)
 	if err != nil {
 		t.Fatalf("reconcileService as HostPort: %v", err)
 	}
@@ -152,7 +152,7 @@ func TestSwitchingToHostPortLeavesAForeignServiceAlone(t *testing.T) {
 		t.Fatalf("create the foreign Service: %v", err)
 	}
 
-	if _, err := r.reconcileService(f.ctx, group); err != nil {
+	if _, err := r.reconcileService(f.ctx, f.network, group); err != nil {
 		t.Fatalf("reconcileService: %v", err)
 	}
 
@@ -179,7 +179,7 @@ func TestLoadBalancerAnnotationsAreOwnedAndReleased(t *testing.T) {
 		}
 	})
 
-	if _, err := r.reconcileService(f.ctx, group); err != nil {
+	if _, err := r.reconcileService(f.ctx, f.network, group); err != nil {
 		t.Fatalf("reconcileService: %v", err)
 	}
 
@@ -200,7 +200,7 @@ func TestLoadBalancerAnnotationsAreOwnedAndReleased(t *testing.T) {
 	group.Spec.Expose.LoadBalancer.Annotations = map[string]string{
 		"metallb.universe.tf/address-pool": "minecraft",
 	}
-	if _, err := r.reconcileService(f.ctx, group); err != nil {
+	if _, err := r.reconcileService(f.ctx, f.network, group); err != nil {
 		t.Fatalf("reconcileService after the spec changed: %v", err)
 	}
 
@@ -233,7 +233,7 @@ func TestLeavingLoadBalancerReleasesTheAnnotations(t *testing.T) {
 			},
 		}
 	})
-	if _, err := r.reconcileService(f.ctx, group); err != nil {
+	if _, err := r.reconcileService(f.ctx, f.network, group); err != nil {
 		t.Fatalf("reconcileService: %v", err)
 	}
 
@@ -241,7 +241,7 @@ func TestLeavingLoadBalancerReleasesTheAnnotations(t *testing.T) {
 		Type:     spawneryv1alpha1.ExposeNodePort,
 		NodePort: &spawneryv1alpha1.NodePortSpec{Port: 30001},
 	}
-	if _, err := r.reconcileService(f.ctx, group); err != nil {
+	if _, err := r.reconcileService(f.ctx, f.network, group); err != nil {
 		t.Fatalf("reconcileService as NodePort: %v", err)
 	}
 
@@ -860,7 +860,7 @@ func TestSwitchingToHostPortLeavesAServiceItDoesNotOwnAlone(t *testing.T) {
 			t.Fatalf("create the predecessor's Service: %v", err)
 		}
 
-		if _, err := r.reconcileService(f.ctx, group); err != nil {
+		if _, err := r.reconcileService(f.ctx, f.network, group); err != nil {
 			t.Fatalf("reconcileService: %v", err)
 		}
 
@@ -878,7 +878,7 @@ func TestSwitchingToHostPortLeavesAServiceItDoesNotOwnAlone(t *testing.T) {
 		group := f.createProxyGroup("gateway")
 
 		// Built as the operator builds it, then stripped of the operator's label.
-		if _, err := r.reconcileService(f.ctx, group); err != nil {
+		if _, err := r.reconcileService(f.ctx, f.network, group); err != nil {
 			t.Fatalf("reconcileService as NodePort: %v", err)
 		}
 		var svc corev1.Service
@@ -894,7 +894,7 @@ func TestSwitchingToHostPortLeavesAServiceItDoesNotOwnAlone(t *testing.T) {
 			Type:     spawneryv1alpha1.ExposeHostPort,
 			HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
 		}
-		if _, err := r.reconcileService(f.ctx, group); err != nil {
+		if _, err := r.reconcileService(f.ctx, f.network, group); err != nil {
 			t.Fatalf("reconcileService as HostPort: %v", err)
 		}
 
@@ -1003,7 +1003,7 @@ func TestClusterIPServiceShape(t *testing.T) {
 		}
 	})
 
-	svc, err := r.reconcileService(f.ctx, group)
+	svc, err := r.reconcileService(f.ctx, f.network, group)
 	if err != nil {
 		t.Fatalf("reconcileService: %v", err)
 	}
@@ -1043,7 +1043,7 @@ func TestNeitherNodePortNorTrafficPolicySurvivesTheMoveToClusterIP(t *testing.T)
 	r := proxyGroupReconciler(f)
 	group := f.createProxyGroup("gateway")
 
-	if _, err := r.reconcileService(f.ctx, group); err != nil {
+	if _, err := r.reconcileService(f.ctx, f.network, group); err != nil {
 		t.Fatalf("reconcileService as NodePort: %v", err)
 	}
 
@@ -1051,7 +1051,7 @@ func TestNeitherNodePortNorTrafficPolicySurvivesTheMoveToClusterIP(t *testing.T)
 		Type:      spawneryv1alpha1.ExposeClusterIP,
 		ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
 	}
-	if _, err := r.reconcileService(f.ctx, group); err != nil {
+	if _, err := r.reconcileService(f.ctx, f.network, group); err != nil {
 		t.Fatalf("reconcileService as ClusterIP: %v", err)
 	}
 
@@ -1089,7 +1089,7 @@ func TestSwitchingFromLoadBalancerToClusterIPReleasesTheAnnotations(t *testing.T
 			},
 		}
 	})
-	if _, err := r.reconcileService(f.ctx, group); err != nil {
+	if _, err := r.reconcileService(f.ctx, f.network, group); err != nil {
 		t.Fatalf("first reconcile: %v", err)
 	}
 
@@ -1107,7 +1107,7 @@ func TestSwitchingFromLoadBalancerToClusterIPReleasesTheAnnotations(t *testing.T
 		Type:      spawneryv1alpha1.ExposeClusterIP,
 		ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
 	}
-	if _, err := r.reconcileService(f.ctx, group); err != nil {
+	if _, err := r.reconcileService(f.ctx, f.network, group); err != nil {
 		t.Fatalf("second reconcile: %v", err)
 	}
 
@@ -1132,7 +1132,7 @@ func TestSwitchingFromHostPortToClusterIPCreatesTheService(t *testing.T) {
 			HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25565},
 		}
 	})
-	if _, err := r.reconcileService(f.ctx, group); err != nil {
+	if _, err := r.reconcileService(f.ctx, f.network, group); err != nil {
 		t.Fatalf("first reconcile: %v", err)
 	}
 
@@ -1146,7 +1146,7 @@ func TestSwitchingFromHostPortToClusterIPCreatesTheService(t *testing.T) {
 		Type:      spawneryv1alpha1.ExposeClusterIP,
 		ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "mc.example.test"},
 	}
-	if _, err := r.reconcileService(f.ctx, group); err != nil {
+	if _, err := r.reconcileService(f.ctx, f.network, group); err != nil {
 		t.Fatalf("second reconcile: %v", err)
 	}
 
