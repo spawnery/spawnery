@@ -26,15 +26,14 @@ class VoiceRelay(
     private val resolve: (UUID) -> Backend,
     private val counters: VoiceCounters,
     private val log: (String, Throwable?) -> Unit,
-    clock: () -> Long = System::currentTimeMillis,
+    private val clock: () -> Long = System::currentTimeMillis,
 ) : AutoCloseable {
     private val selector = Selector.open()
-    private val public = DatagramChannel
-        .open(if (bind.address is Inet6Address) StandardProtocolFamily.INET6 else StandardProtocolFamily.INET)
-        .bind(bind).also { it.configureBlocking(false) }
+    private val public = open(bind).bind(bind).also { it.configureBlocking(false) }
     private val bridges = Bridges(clock)
     private val upstream = HashMap<UUID, DatagramChannel>()
     private val buffer = ByteBuffer.allocateDirect(MAX_DATAGRAM)
+    private val warned = HashMap<String, Long>()
     @Volatile private var running = false
     private var thread: Thread? = null
 
@@ -47,28 +46,37 @@ class VoiceRelay(
     }
 
     private fun loop() {
-        var failing = false
-        while (running) {
-            try {
-                selector.select(SWEEP_MILLIS)
-                val keys = selector.selectedKeys().iterator()
-                while (keys.hasNext()) {
-                    val key = keys.next()
-                    keys.remove()
-                    val player = key.attachment() as UUID?
-                    if (player == null) fromClient() else fromBackend(player, key.channel() as DatagramChannel)
+        var swept = clock()
+        try {
+            while (running) {
+                try {
+                    selector.select(SWEEP_MILLIS)
+                    val keys = selector.selectedKeys().iterator()
+                    while (keys.hasNext()) {
+                        val key = keys.next()
+                        keys.remove()
+                        if (!key.isValid) continue
+                        val player = key.attachment() as UUID?
+                        if (player == null) fromClient() else fromBackend(player, key.channel() as DatagramChannel)
+                    }
+                    val now = clock()
+                    if (now - swept >= SWEEP_MILLIS) {
+                        swept = now
+                        for (expired in bridges.expired()) close(expired)
+                    }
+                } catch (e: Exception) {
+                    if (running) warn("spawnery: the voice relay's loop failed; it keeps running", e)
                 }
-                for (expired in bridges.expired()) close(expired)
-                failing = false
-            } catch (e: Exception) {
-                if (running && !failing) log("spawnery: the voice relay's loop failed; it keeps running, and stays quiet until a pass succeeds", e)
-                failing = true
             }
+        } finally {
+            upstream.values.forEach { runCatching { it.close() } }
+            upstream.clear()
         }
     }
 
     private fun fromClient() {
-        while (true) {
+        var drained = 0
+        while (running && drained++ < DRAIN_LIMIT) {
             buffer.clear()
             val from = public.receive(buffer) as InetSocketAddress? ?: return
             buffer.flip()
@@ -89,33 +97,48 @@ class VoiceRelay(
         }
         if (bridges.route(player, from, backend) is Route.Open) {
             upstream.remove(player)?.close()
+            var channel: DatagramChannel? = null
             try {
-                val channel = DatagramChannel.open().connect(backend).also { it.configureBlocking(false) }
-                upstream[player] = channel
+                channel = DatagramChannel.open()
+                channel.connect(backend)
+                channel.configureBlocking(false)
                 channel.register(selector, SelectionKey.OP_READ, player)
-            } catch (e: IOException) {
-                close(player)
-                throw e
+                upstream[player] = channel
+            } catch (e: Exception) {
+                runCatching { channel?.close() }
+                bridges.remove(player)
+                counters.inc(VoiceCounters.UNKNOWN_SERVER)
+                warn("spawnery: the voice relay cannot open a channel to a backend", e)
+                return
             }
         }
-        try {
-            upstream[player]?.write(buffer)
+        val channel = upstream[player] ?: return
+        val written = try {
+            channel.write(buffer)
         } catch (_: IOException) {
             // A connected UDP channel reports an earlier ICMP refusal on its next write or read.
             return
         }
-        counters.inc(VoiceCounters.RELAYED)
+        if (written > 0) counters.inc(VoiceCounters.RELAYED)
     }
 
     private fun fromBackend(player: UUID, channel: DatagramChannel) {
-        while (true) {
+        var drained = 0
+        while (running && drained++ < DRAIN_LIMIT) {
             buffer.clear()
-            val read = runCatching { channel.read(buffer) }.getOrElse { -1 }
+            val read = try {
+                channel.read(buffer)
+            } catch (_: IOException) {
+                return
+            }
             if (read <= 0) return
             buffer.flip()
             val client = bridges.replyTo(player) ?: return
             bridges.touch(player)
-            public.send(buffer, client)
+            try {
+                public.send(buffer, client)
+            } catch (_: IOException) {
+            }
         }
     }
 
@@ -124,18 +147,39 @@ class VoiceRelay(
         upstream.remove(player)?.close()
     }
 
+    private fun warn(message: String, e: Throwable) {
+        val now = clock()
+        val last = warned[message]
+        if (last != null && now - last < WARN_MILLIS) return
+        warned[message] = now
+        log(message, e)
+    }
+
     override fun close() {
         running = false
         selector.wakeup()
         thread?.join(2_000)
-        upstream.values.forEach { it.close() }
-        public.close()
-        selector.close()
+        try {
+            public.close()
+        } finally {
+            selector.close()
+        }
     }
 
     private companion object {
         /** SVC's mtu_size tops out at 2048 bytes of Opus plus framing. */
         const val MAX_DATAGRAM = 4096
         const val SWEEP_MILLIS = 1_000L
+
+        /** Per socket and pass, so a flood on one cannot starve the others; the selector is level-triggered. */
+        const val DRAIN_LIMIT = 256
+        const val WARN_MILLIS = 60_000L
+
+        /** A wildcard bind stays dual-stack; an explicit family would refuse the other one's clients. */
+        fun open(bind: InetSocketAddress): DatagramChannel = when {
+            bind.address.isAnyLocalAddress -> DatagramChannel.open()
+            bind.address is Inet6Address -> DatagramChannel.open(StandardProtocolFamily.INET6)
+            else -> DatagramChannel.open(StandardProtocolFamily.INET)
+        }
     }
 }

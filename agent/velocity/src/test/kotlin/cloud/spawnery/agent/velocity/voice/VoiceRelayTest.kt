@@ -2,13 +2,17 @@ package cloud.spawnery.agent.velocity.voice
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
 import java.net.DatagramPacket
 import java.net.DatagramSocket
+import java.net.Inet6Address
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 import java.util.UUID
+import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
 class VoiceRelayTest {
@@ -65,17 +69,17 @@ class VoiceRelayTest {
     fun `a switch of backend reaches the new one`() {
         val lobby = echoBackend()
         val game = echoBackend()
-        var current = lobby
+        val current = AtomicReference(lobby)
         VoiceRelay(
             InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
-            resolve = { Backend.At(current.localSocketAddress as InetSocketAddress) },
+            resolve = { Backend.At(current.get().localSocketAddress as InetSocketAddress) },
             counters = VoiceCounters(), log = { _, _ -> },
         ).use { relay ->
             relay.start()
             DatagramSocket().use { client ->
                 client.soTimeout = 2_000
                 assertEquals(lobby.localPort, roundTrip(client, relay.localPort, frame(player, "a"))!!.int)
-                current = game
+                current.set(game)
                 assertEquals(game.localPort, roundTrip(client, relay.localPort, frame(player, "b"))!!.int)
             }
         }
@@ -104,5 +108,94 @@ class VoiceRelayTest {
         assertEquals(1L, counters.totals()[VoiceCounters.PING])
         assertEquals(1L, counters.totals()[VoiceCounters.UNKNOWN_PLAYER])
         assertEquals(1, resolved)
+    }
+
+    @Test
+    fun `a backend that cannot be reached opens no bridge, and other players still relay`() {
+        val backend = echoBackend()
+        val counters = VoiceCounters()
+        val logs = CopyOnWriteArrayList<String>()
+        val broken = UUID.randomUUID()
+        VoiceRelay(
+            InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+            resolve = {
+                if (it == broken) Backend.At(InetSocketAddress.createUnresolved("voice.invalid", 24454))
+                else Backend.At(backend.localSocketAddress as InetSocketAddress)
+            },
+            counters = counters, log = { message, _ -> logs.add(message) },
+        ).use { relay ->
+            relay.start()
+            DatagramSocket().use { client ->
+                client.soTimeout = 300
+                assertNull(roundTrip(client, relay.localPort, frame(broken, "a")))
+                assertNull(roundTrip(client, relay.localPort, frame(broken, "b")))
+                client.soTimeout = 2_000
+                assertEquals(backend.localPort, roundTrip(client, relay.localPort, frame(player, "c"))!!.int)
+            }
+        }
+        backend.close()
+        assertEquals(2L, counters.totals()[VoiceCounters.UNKNOWN_SERVER])
+        assertEquals(1L, counters.totals()[VoiceCounters.RELAYED])
+        assertEquals(1, logs.size, logs.toString())
+    }
+
+    @Test
+    fun `a backend gone mid-session costs only its own player`() {
+        val gone = echoBackend()
+        val alive = echoBackend()
+        val other = UUID.randomUUID()
+        VoiceRelay(
+            InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+            resolve = { Backend.At((if (it == player) gone else alive).localSocketAddress as InetSocketAddress) },
+            counters = VoiceCounters(), log = { _, _ -> },
+        ).use { relay ->
+            relay.start()
+            DatagramSocket().use { client ->
+                client.soTimeout = 2_000
+                assertEquals(gone.localPort, roundTrip(client, relay.localPort, frame(player, "a"))!!.int)
+                gone.close()
+                client.soTimeout = 300
+                repeat(3) { assertNull(roundTrip(client, relay.localPort, frame(player, "b"))) }
+                client.soTimeout = 2_000
+                assertEquals(alive.localPort, roundTrip(client, relay.localPort, frame(other, "c"))!!.int)
+            }
+        }
+        alive.close()
+    }
+
+    @Test
+    fun `close releases the port`() {
+        val relay = VoiceRelay(
+            InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+            resolve = { Backend.UnknownPlayer }, counters = VoiceCounters(), log = { _, _ -> },
+        )
+        relay.start()
+        val port = relay.localPort
+        relay.close()
+        DatagramSocket(port, InetAddress.getLoopbackAddress()).close()
+    }
+
+    @Test
+    fun `a wildcard bind takes IPv6 clients too`() {
+        val v6 = InetAddress.getByName("::1") as Inet6Address
+        assumeTrue(runCatching { DatagramSocket(0, v6).close() }.isSuccess, "no IPv6 loopback here")
+        val backend = echoBackend()
+        VoiceRelay(
+            InetSocketAddress(InetAddress.getByName("0.0.0.0"), 0),
+            resolve = { Backend.At(backend.localSocketAddress as InetSocketAddress) },
+            counters = VoiceCounters(), log = { _, _ -> },
+        ).use { relay ->
+            relay.start()
+            DatagramSocket(0, v6).use { client ->
+                client.soTimeout = 2_000
+                val packet = frame(player, "hello")
+                client.send(DatagramPacket(packet, packet.size, v6, relay.localPort))
+                val buf = ByteArray(2048)
+                val p = DatagramPacket(buf, buf.size)
+                client.receive(p)
+                assertEquals(backend.localPort, ByteBuffer.wrap(buf, 0, p.length).int)
+            }
+        }
+        backend.close()
     }
 }
