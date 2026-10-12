@@ -202,28 +202,14 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonSchedulingNotAllowed, message)
 		return r.refuse(ctx, group)
 	}
-	if group.Spec.Expose.Type == spawneryv1alpha1.ExposeHostPort && group.Spec.Expose.HostPort != nil {
-		if message, ok := podspec.HostPortRefusal(network, group.Spec.Expose.HostPort.Port); !ok {
-			if !hasConditionReason(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted, spawneryv1alpha1.ReasonHostPortNotAllowed) {
-				r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, spawneryv1alpha1.ReasonHostPortNotAllowed, actionSyncStatus,
-					"%s", message)
-			}
-			setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonHostPortNotAllowed, message)
-			return r.refuse(ctx, group)
+	if message, ok := proxyHostPortRefusal(network, group); !ok {
+		if c := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted); c == nil ||
+			c.Reason != spawneryv1alpha1.ReasonHostPortNotAllowed || c.Message != message {
+			r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, spawneryv1alpha1.ReasonHostPortNotAllowed, actionSyncStatus,
+				"%s", message)
 		}
-	}
-	if spec, own := group.VoiceExpose(); own && spec.Type == spawneryv1alpha1.ExposeHostPort && spec.HostPort != nil {
-		if _, on := network.VoiceBackendPort(); on {
-			if message, ok := podspec.HostPortRefusal(network, spec.HostPort.Port); !ok {
-				message = "spec.voice.expose: " + message
-				if !hasConditionReason(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted, spawneryv1alpha1.ReasonHostPortNotAllowed) {
-					r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, spawneryv1alpha1.ReasonHostPortNotAllowed, actionSyncStatus,
-						"%s", message)
-				}
-				setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonHostPortNotAllowed, message)
-				return r.refuse(ctx, group)
-			}
-		}
+		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonHostPortNotAllowed, message)
+		return r.refuse(ctx, group)
 	}
 	setProxyGroupAccepted(group, true, spawneryv1alpha1.ReasonAccepted, "")
 	// Persisted before the side effects, so a failure below (a NodePort
@@ -255,7 +241,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// pass failing partway does not keep advertising what an earlier pass saw;
 	// and nowhere else, so a missing Network does not blank a working address.
 	if obs.observed {
-		r.setStatus(group, network, obs.pods, obs.svc, obs.voiceSvc, obs.foreignVoice)
+		r.setStatus(group, network, obs.pods, obs.svc, obs.voiceSvc, obs.voiceErr)
 		if werr := r.writeStatus(ctx, group); werr != nil {
 			if err == nil {
 				return res, werr
@@ -269,11 +255,11 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 // proxyObservation is what one pass of reconcileObserved saw. observed is a
 // flag because HostPort creates no Service, so a nil svc is normal there.
 type proxyObservation struct {
-	observed     bool
-	pods         []corev1.Pod
-	svc          *corev1.Service
-	voiceSvc     *corev1.Service
-	foreignVoice bool
+	observed bool
+	pods     []corev1.Pod
+	svc      *corev1.Service
+	voiceSvc *corev1.Service
+	voiceErr error
 }
 
 // reconcileObserved does everything from the namespace bootstrap onward and
@@ -297,12 +283,8 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 	if err != nil {
 		return obs, ctrl.Result{}, err
 	}
-	// A foreign <group>-voice costs voice only; the game keeps working.
-	voiceSvc, err := r.reconcileVoiceService(ctx, network, group)
-	foreignVoice := errors.Is(err, errForeignVoiceService)
-	if err != nil && !foreignVoice {
-		return obs, ctrl.Result{}, err
-	}
+	// Not returned: a voice Service problem costs voice only, on the Voice condition.
+	voiceSvc, voiceErr := r.reconcileVoiceService(ctx, network, group)
 	if err := r.reconcileNetworkPolicy(ctx, network, group); err != nil {
 		return obs, ctrl.Result{}, err
 	}
@@ -315,7 +297,7 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 	if err := r.announceReady(ctx, pods); err != nil {
 		return obs, ctrl.Result{}, err
 	}
-	obs = proxyObservation{observed: true, pods: pods, svc: svc, voiceSvc: voiceSvc, foreignVoice: foreignVoice}
+	obs = proxyObservation{observed: true, pods: pods, svc: svc, voiceSvc: voiceSvc, voiceErr: voiceErr}
 
 	if err := r.reconcileReplicas(ctx, network, group, pods); err != nil {
 		// A refused create belongs on the group: Pod Security (every HostPort
@@ -986,7 +968,7 @@ func (r *ProxyGroupReconciler) reconcileService(
 	group *spawneryv1alpha1.ProxyGroup,
 ) (*corev1.Service, error) {
 	if group.Spec.Expose.Type == spawneryv1alpha1.ExposeHostPort {
-		return nil, r.deleteServiceIfOurs(ctx, group)
+		return nil, r.deleteServiceIfOurs(ctx, group, group.Name)
 	}
 
 	svc := &corev1.Service{
@@ -1087,27 +1069,32 @@ func loadBalancerTrafficPolicy(group *spawneryv1alpha1.ProxyGroup) corev1.Servic
 	return corev1.ServiceExternalTrafficPolicyLocal
 }
 
-// deleteServiceIfOurs removes the Service a group had before it switched to
-// HostPort, and only that one: controlled by this group's UID (not a
-// same-named predecessor) and carrying our managed-by label. The cache does not
-// narrow Services, so this check is all that stands before an irreversible
-// delete; the preconditions pin the object the decision was made about.
+// serviceIsOurs: controlled by this group's UID (not a same-named predecessor)
+// and carrying our managed-by label. The cache does not narrow Services, so
+// this check is all that stands before an irreversible delete or rewrite.
+func serviceIsOurs(svc *corev1.Service, group *spawneryv1alpha1.ProxyGroup) bool {
+	owner := metav1.GetControllerOf(svc)
+	return owner != nil && owner.UID == group.UID &&
+		svc.Labels[podspec.LabelManagedBy] == podspec.ManagedByValue
+}
+
+// deleteServiceIfOurs removes the named Service if serviceIsOurs: the game's
+// after a switch to HostPort, <group>-voice once voice needs none. The
+// preconditions pin the object the decision was made about.
 func (r *ProxyGroupReconciler) deleteServiceIfOurs(
 	ctx context.Context,
 	group *spawneryv1alpha1.ProxyGroup,
+	name string,
 ) error {
 	svc := &corev1.Service{}
-	err := r.Get(ctx, client.ObjectKey{Namespace: group.Namespace, Name: group.Name}, svc)
+	err := r.Get(ctx, client.ObjectKey{Namespace: group.Namespace, Name: name}, svc)
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if owner := metav1.GetControllerOf(svc); owner == nil || owner.UID != group.UID {
-		return nil
-	}
-	if svc.Labels[podspec.LabelManagedBy] != podspec.ManagedByValue {
+	if !serviceIsOurs(svc, group) {
 		return nil
 	}
 	uid := svc.UID
@@ -1293,7 +1280,7 @@ func (r *ProxyGroupReconciler) setStatus(
 	network *spawneryv1alpha1.Network,
 	pods []corev1.Pod,
 	svc, voiceSvc *corev1.Service,
-	foreignVoice bool,
+	voiceErr error,
 ) {
 	var ready int32
 	var players int32
@@ -1310,8 +1297,8 @@ func (r *ProxyGroupReconciler) setStatus(
 	group.Status.ReadyReplicas = ready
 	group.Status.ConnectedPlayers = players
 	group.Status.Address = proxyAddress(group, pods, svc)
-	group.Status.VoiceAddress = voiceAddress(network, group, pods, svc, voiceSvc)
-	setVoiceCondition(group, network, foreignVoice, voicePluginPod(r.Agents, pods))
+	group.Status.VoiceAddress = voiceAddress(network, group, pods, voiceSvc)
+	setVoiceCondition(group, network, voiceErr, voicePluginPod(r.Agents, pods))
 	group.Status.ObservedGeneration = group.Generation
 
 	switch {

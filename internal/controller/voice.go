@@ -29,7 +29,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
@@ -69,31 +68,17 @@ func (r *ProxyGroupReconciler) reconcileVoiceService(
 ) (*corev1.Service, error) {
 	name := podspec.VoiceServiceName(group.Name)
 	spec, wanted := voiceOwnService(network, group)
+	if !wanted {
+		return nil, r.deleteServiceIfOurs(ctx, group, name)
+	}
 
 	existing := &corev1.Service{}
 	err := r.Get(ctx, types.NamespacedName{Name: name, Namespace: group.Namespace}, existing)
 	switch {
-	case apierrors.IsNotFound(err):
-		existing = nil
-	case err != nil:
+	case err == nil && !serviceIsOurs(existing, group):
+		return nil, errForeignVoiceService
+	case err != nil && !apierrors.IsNotFound(err):
 		return nil, err
-	}
-	if existing != nil {
-		if owner := metav1.GetControllerOf(existing); owner == nil || owner.UID != group.UID {
-			if wanted {
-				return nil, errForeignVoiceService
-			}
-			return nil, nil
-		}
-		if !wanted {
-			uid, rv := existing.UID, existing.ResourceVersion
-			return nil, client.IgnoreNotFound(r.Delete(ctx, existing, &client.DeleteOptions{
-				Preconditions: &metav1.Preconditions{UID: &uid, ResourceVersion: &rv},
-			}))
-		}
-	}
-	if !wanted {
-		return nil, nil
 	}
 
 	svc := &corev1.Service{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: group.Namespace}}
@@ -154,7 +139,7 @@ func voiceAddress(
 	network *spawneryv1alpha1.Network,
 	group *spawneryv1alpha1.ProxyGroup,
 	pods []corev1.Pod,
-	gameSvc, voiceSvc *corev1.Service,
+	voiceSvc *corev1.Service,
 ) string {
 	if _, on := network.VoiceBackendPort(); !on {
 		return ""
@@ -215,7 +200,7 @@ func voicePluginPod(agents *agent.Registry, pods []corev1.Pod) string {
 	return ""
 }
 
-func setVoiceCondition(group *spawneryv1alpha1.ProxyGroup, network *spawneryv1alpha1.Network, foreign bool, conflictPod string) {
+func setVoiceCondition(group *spawneryv1alpha1.ProxyGroup, network *spawneryv1alpha1.Network, serviceErr error, conflictPod string) {
 	_, on := network.VoiceBackendPort()
 	cond := metav1.Condition{Type: spawneryv1alpha1.ConditionVoice, Status: metav1.ConditionTrue,
 		Reason: spawneryv1alpha1.ReasonVoiceRelaying, Message: "this group's proxies relay voice chat"}
@@ -226,14 +211,36 @@ func setVoiceCondition(group *spawneryv1alpha1.ProxyGroup, network *spawneryv1al
 	case !on:
 		cond.Status, cond.Reason = metav1.ConditionFalse, spawneryv1alpha1.ReasonVoiceOffInNetwork
 		cond.Message = fmt.Sprintf("network %q has no spec.voice; this group's spec.voice is ignored", network.Name)
-	case foreign:
+	case errors.Is(serviceErr, errForeignVoiceService):
 		cond.Status, cond.Reason = metav1.ConditionFalse, spawneryv1alpha1.ReasonVoiceServiceNotOurs
 		cond.Message = fmt.Sprintf("Service %q exists and is not controlled by this group; voice has no way out",
 			podspec.VoiceServiceName(group.Name))
+	case serviceErr != nil:
+		cond.Status, cond.Reason = metav1.ConditionFalse, spawneryv1alpha1.ReasonVoiceServiceRejected
+		cond.Message = serviceErr.Error()
 	case conflictPod != "":
 		cond.Status, cond.Reason = metav1.ConditionFalse, spawneryv1alpha1.ReasonVoicePluginConflict
 		cond.Message = fmt.Sprintf("proxy %s has Simple Voice Chat's own Velocity plugin loaded; "+
 			"remove it, spawnery relays voice itself", conflictPod)
 	}
 	meta.SetStatusCondition(&group.Status.Conditions, cond)
+}
+
+// proxyHostPortRefusal checks every host port the group's proxies bind against
+// the network's range: the game's, then voice's override.
+func proxyHostPortRefusal(network *spawneryv1alpha1.Network, group *spawneryv1alpha1.ProxyGroup) (string, bool) {
+	if group.Spec.Expose.Type == spawneryv1alpha1.ExposeHostPort && group.Spec.Expose.HostPort != nil {
+		if message, ok := podspec.HostPortRefusal(network, group.Spec.Expose.HostPort.Port); !ok {
+			return message, false
+		}
+	}
+	if _, on := network.VoiceBackendPort(); !on {
+		return "", true
+	}
+	if spec, own := group.VoiceExpose(); own && spec.Type == spawneryv1alpha1.ExposeHostPort && spec.HostPort != nil {
+		if message, ok := podspec.HostPortRefusal(network, spec.HostPort.Port); !ok {
+			return "spec.voice.expose: " + message, false
+		}
+	}
+	return "", true
 }

@@ -120,10 +120,11 @@ const (
 	ReasonPodShapeCurrent        = "PodShapeCurrent"
 	ReasonOrdinalNameTaken       = "OrdinalNameTaken"
 	// The Voice reasons on a ProxyGroup.
-	ReasonVoiceRelaying       = "Relaying"
-	ReasonVoiceOffInNetwork   = "VoiceOffInNetwork"
-	ReasonVoicePluginConflict = "VoicePluginConflict"
-	ReasonVoiceServiceNotOurs = "VoiceServiceNotOwnedByGroup"
+	ReasonVoiceRelaying        = "Relaying"
+	ReasonVoiceOffInNetwork    = "VoiceOffInNetwork"
+	ReasonVoicePluginConflict  = "VoicePluginConflict"
+	ReasonVoiceServiceNotOurs  = "VoiceServiceNotOwnedByGroup"
+	ReasonVoiceServiceRejected = "VoiceServiceRejected"
 	// ReasonOrdinalDuplicated: the operator will not choose between two
 	// worlds, so this needs a person.
 	ReasonOrdinalDuplicated = "OrdinalCarriedByTwoServers"

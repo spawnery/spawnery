@@ -72,7 +72,7 @@ func TestVoiceAddress(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			if got := voiceAddress(c.net, c.g, c.pods, nil, c.voiceSvc); got != c.want {
+			if got := voiceAddress(c.net, c.g, c.pods, c.voiceSvc); got != c.want {
 				t.Fatalf("voiceAddress() = %q; want %q", got, c.want)
 			}
 		})
