@@ -146,3 +146,50 @@ func TestTheSweeperSkipsAMarkerThatNamesNoWorld(t *testing.T) {
 		t.Fatalf("logged %q, want one line per stray marker", said)
 	}
 }
+
+func TestAWorldStillUploadingItsFirstGenerationIsDeletedOnceTheUploadLands(t *testing.T) {
+	now := time.Unix(1_700_000_000, 0)
+	st := NewMemStore(func() time.Time { return now })
+	ctx := context.Background()
+	worlds := BucketWorlds{Store: st}
+	p := WorldPrefix("", "ns/g/k")
+	etag, err := TakeLease(ctx, st, p, Lease{Node: "a", RenewedAt: now}, StaleAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	exists, err := worlds.Exists(ctx, "ns/g/k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !exists {
+		t.Fatal("a world whose node holds its lease reads as missing before its first manifest, so its delete is never marked")
+	}
+	if err := worlds.MarkDeleted(ctx, "ns/g/k"); err != nil {
+		t.Fatal(err)
+	}
+	for _, k := range []string{"objects/a", "packs/1.tar.gz", ManifestName} {
+		mustPut(t, st, p+k)
+	}
+	if err := ReleaseLease(ctx, st, p, etag); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := (&Sweeper{Store: st, StaleAfter: StaleAfter, Log: logr.Discard()}).SweepOnce(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if keys := st.Keys(); len(keys) != 0 {
+		t.Fatalf("after the sweep: %v", keys)
+	}
+}
+
+func TestAKeyNoNodeEverMountedHasNoWorld(t *testing.T) {
+	st := NewMemStore(time.Now)
+	exists, err := BucketWorlds{Store: st}.Exists(context.Background(), "ns/g/k")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if exists {
+		t.Fatal("an empty prefix reads as a world")
+	}
+}

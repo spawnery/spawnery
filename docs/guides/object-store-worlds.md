@@ -95,7 +95,7 @@ for ns in spawnery-system spawnery-worldsync; do
     --from-literal=AWS_ACCESS_KEY_ID="$KEY_ID" \
     --from-literal=AWS_SECRET_ACCESS_KEY="$SECRET"
 done
-helm upgrade spawnery oci://ghcr.io/spawnery/charts/spawnery --version 0.26.2 \
+helm upgrade spawnery oci://ghcr.io/spawnery/charts/spawnery --version 0.26.3 \
   --namespace spawnery-system --reuse-values -f worldsync-values.yaml
 ```
 
@@ -199,6 +199,9 @@ A stop always uploads, whether or not the agent ever asked for a snapshot.
 deletes the member's `Server`. The operator sweeps marked worlds once a minute, as
 soon as no node holds their lease. Until the sweep is done, `startServer` for
 the same key answers `UNAVAILABLE`; after it, the key starts an empty world.
+A new world whose first upload is still running when its `Server` is already
+gone still counts as a world, since the node agent holds its lease from the
+mount on. The delete marks it, and the sweep removes the upload once it lands.
 Without `--world-sync`, `startServer` refuses every key of an `ObjectStore`
 group.
 
@@ -292,7 +295,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: import
-          image: ghcr.io/spawnery/spawnery-worldsync:0.26.0
+          image: ghcr.io/spawnery/spawnery-worldsync:0.26.3
           args:
             - import
             - --world=minecraft/private-servers/0b5c1c82-4c7f-4a6e-9d1b-2c1f2b9d5e10
