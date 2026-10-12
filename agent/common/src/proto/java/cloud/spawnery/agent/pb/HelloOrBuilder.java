@@ -45,4 +45,14 @@ public interface HelloOrBuilder extends
    * @return The readTimeoutMillis.
    */
   int getReadTimeoutMillis();
+
+  /**
+   * <pre>
+   * Proxy agents only: SVC's own Velocity plugin (id "voicechat") is loaded, which would bind the relay's port.
+   * </pre>
+   *
+   * <code>bool voice_plugin_loaded = 4;</code>
+   * @return The voicePluginLoaded.
+   */
+  boolean getVoicePluginLoaded();
 }

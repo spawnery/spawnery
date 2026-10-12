@@ -29,6 +29,7 @@ import (
 	"k8s.io/utils/ptr"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/voice"
 )
 
 const (
@@ -52,6 +53,12 @@ const (
 	// EnvTransferForceGroups is spec.update.transfer.forceGroups, comma
 	// separated; absent when the list is empty, which forces in every group.
 	EnvTransferForceGroups = "SPAWNERY_TRANSFER_FORCE_GROUPS"
+
+	VoicePortName = "voice"
+	// EnvVoice tells the agent to start the relay; EnvHostIP is the node
+	// address it announces when voice leaves by HostPort or NodePort.
+	EnvVoice  = "SPAWNERY_VOICE"
+	EnvHostIP = "SPAWNERY_HOST_IP"
 
 	// DefaultPlayerLimit exists because zero would make the registry discard
 	// every count.
@@ -226,27 +233,43 @@ func renderProxyPod(
 		minecraft.HostPort = group.Spec.Expose.HostPort.Port
 	}
 
+	ports := []corev1.ContainerPort{
+		minecraft,
+		{Name: ProxyReadyPortName, ContainerPort: ProxyReadyPort, Protocol: corev1.ProtocolTCP},
+	}
+	var voiceEnv []corev1.EnvVar
+	if _, on := net.VoiceBackendPort(); on {
+		relay := corev1.ContainerPort{
+			Name:          VoicePortName,
+			ContainerPort: voice.RelayPort,
+			Protocol:      corev1.ProtocolUDP,
+		}
+		if spec, _ := group.VoiceExpose(); spec.Type == spawneryv1alpha1.ExposeHostPort && spec.HostPort != nil {
+			relay.HostPort = spec.HostPort.Port
+		}
+		ports = append(ports, relay)
+		voiceEnv = []corev1.EnvVar{
+			{Name: EnvVoice, Value: "1"},
+			{Name: EnvHostIP, ValueFrom: &corev1.EnvVarSource{
+				FieldRef: &corev1.ObjectFieldSelector{FieldPath: "status.hostIP"},
+			}},
+		}
+	}
+
 	container := corev1.Container{
 		Name:  ProxyContainerName,
 		Image: group.Spec.Image,
 		Stdin: true,
 
-		Ports: []corev1.ContainerPort{
-			minecraft,
-			{
-				Name:          ProxyReadyPortName,
-				ContainerPort: ProxyReadyPort,
-				Protocol:      corev1.ProtocolTCP,
-			},
-		},
-		Env: append(append(append([]corev1.EnvVar{
+		Ports: ports,
+		Env: append(append(append(append([]corev1.EnvVar{
 			{Name: "SPAWNERY_NETWORK", Value: net.Name},
 			{Name: "SPAWNERY_GROUP", Value: group.Name},
 			{Name: EnvProxy, Value: name},
 			{Name: EnvPlayerLimit, Value: strconv.FormatInt(int64(playerLimit), 10)},
 			{Name: EnvFallbackGroups, Value: strings.Join(group.Spec.Routing.FallbackGroups, ",")},
 			{Name: EnvOperatorEndpoint, Value: agentEndpoint},
-		}, transferEnv(group)...), substitutionEnv(group.Spec.Substitution)...), group.Spec.Env...),
+		}, transferEnv(group)...), voiceEnv...), substitutionEnv(group.Spec.Substitution)...), group.Spec.Env...),
 		VolumeMounts: mounts,
 		// Readiness only: a restart would disconnect every player on this proxy.
 		ReadinessProbe: &corev1.Probe{

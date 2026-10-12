@@ -982,3 +982,44 @@ func TestPlayableSlotsNeedsALiveStream(t *testing.T) {
 		t.Fatal("a report for an unknown pod was accepted")
 	}
 }
+
+func TestVoiceTotalsBecomeIncrements(t *testing.T) {
+	r, _ := newTestRegistry()
+	r.Connect("pod-a", RoleProxy)
+	got := r.ReportVoiceTotals("pod-a", map[string]int64{"relayed": 10, "not_svc": 2})
+	if got["relayed"] != 10 || got["not_svc"] != 2 {
+		t.Fatalf("first report = %v", got)
+	}
+	got = r.ReportVoiceTotals("pod-a", map[string]int64{"relayed": 15, "not_svc": 2})
+	if got["relayed"] != 5 || got["not_svc"] != 0 {
+		t.Fatalf("second report = %v; want relayed 5, not_svc 0", got)
+	}
+}
+
+func TestADecreasingVoiceTotalIsARestartNotANegativeIncrement(t *testing.T) {
+	r, _ := newTestRegistry()
+	r.Connect("pod-a", RoleProxy)
+	r.ReportVoiceTotals("pod-a", map[string]int64{"relayed": 100})
+	got := r.ReportVoiceTotals("pod-a", map[string]int64{"relayed": 7})
+	if got["relayed"] != 7 {
+		t.Fatalf("after a restart = %v; want relayed 7", got)
+	}
+}
+
+func TestUnknownVoiceReasonsAreDropped(t *testing.T) {
+	r, _ := newTestRegistry()
+	r.Connect("pod-a", RoleProxy)
+	got := r.ReportVoiceTotals("pod-a", map[string]int64{"anything-a-plugin-says": 1, "relayed": 1})
+	if _, ok := got["anything-a-plugin-says"]; ok || got["relayed"] != 1 {
+		t.Fatalf("got %v; an agent must not mint metric label values", got)
+	}
+}
+
+func TestTheVoicePluginFlagIsInTheSnapshot(t *testing.T) {
+	r, _ := newTestRegistry()
+	r.Connect("pod-a", RoleProxy)
+	r.ReportVoicePlugin("pod-a", true)
+	if !r.Lookup("pod-a").VoicePluginLoaded {
+		t.Fatal("Lookup lost the flag")
+	}
+}

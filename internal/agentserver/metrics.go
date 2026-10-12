@@ -81,6 +81,15 @@ var WorldRestores = prometheus.NewCounterVec(
 	[]string{"result"},
 )
 
+// No pod or player label; reason is one of agent.VoiceReasons.
+var VoicePackets = prometheus.NewCounterVec(
+	prometheus.CounterOpts{
+		Name: "spawnery_voice_packets_total",
+		Help: "Voice chat packets the proxies' relays handled, by proxy group and by what became of them.",
+	},
+	[]string{"group", "reason"},
+)
+
 const (
 	BoundPeer  = "peer"
 	BoundFleet = "fleet"
@@ -90,7 +99,7 @@ func init() {
 	metrics.Registry.MustRegister(
 		RequestsRefused,
 		OpenStreams, RejectedReports, OpenConnections, ExpectedAgents, ConnectionsRefused,
-		WorldRestores,
+		WorldRestores, VoicePackets,
 	)
 	// A labelled counter does not exist until incremented, and increase() over
 	// a series born mid-window has nothing to subtract from.

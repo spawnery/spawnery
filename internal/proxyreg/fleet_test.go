@@ -900,3 +900,89 @@ func TestProxyInterestForAPodWithNoSessionIsIgnored(t *testing.T) {
 		t.Error("interest was recorded for a pod with no session")
 	}
 }
+
+func network(voice *spawneryv1alpha1.NetworkVoiceSpec) *spawneryv1alpha1.Network {
+	return &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: ns},
+		Spec:       spawneryv1alpha1.NetworkSpec{Voice: voice},
+	}
+}
+
+func loadBalancerGroup() *spawneryv1alpha1.ProxyGroup {
+	pg := proxyGroup("lobby")
+	pg.Spec.Expose = spawneryv1alpha1.ExposeSpec{Type: spawneryv1alpha1.ExposeLoadBalancer}
+	return pg
+}
+
+func joinVoiceConfig(t *testing.T, f *proxyreg.Fleet) *agentpb.VoiceConfig {
+	t.Helper()
+	outbox, leave, err := f.Join(context.Background(), ns, group, "proxy-a")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+	var found *agentpb.VoiceConfig
+	for _, msg := range drain(t, outbox) {
+		if cfg := msg.GetVoiceConfig(); cfg != nil {
+			if found != nil {
+				t.Fatal("the join snapshot carries two VoiceConfigs")
+			}
+			found = cfg
+		}
+	}
+	if found == nil {
+		t.Fatal("the join snapshot carries no VoiceConfig")
+	}
+	return found
+}
+
+func TestASessionInAVoiceNetworkGetsItsVoiceConfig(t *testing.T) {
+	f := newFleet(t, network(&spawneryv1alpha1.NetworkVoiceSpec{BackendPort: 24454}), loadBalancerGroup())
+
+	got := joinVoiceConfig(t, f)
+	if !got.GetEnabled() || got.GetBackendPort() != 24454 || got.GetAnnouncePort() != 25565 ||
+		got.GetAnnounceHost() != "" || got.GetAnnounceOwnNode() {
+		t.Errorf("VoiceConfig = %v, want enabled, backend 24454, announce port 25565 and nothing else", got)
+	}
+}
+
+// An explicit off, so a proxy whose network turned voice off stops relaying.
+func TestASessionWithoutVoiceIsToldVoiceIsOff(t *testing.T) {
+	f := newFleet(t, network(nil), loadBalancerGroup())
+
+	if got := joinVoiceConfig(t, f); got.GetEnabled() || got.GetBackendPort() != 0 || got.GetAnnouncePort() != 0 {
+		t.Errorf("VoiceConfig = %v, want voice off", got)
+	}
+}
+
+func TestTheVoiceConfigComesBeforeTheNetworkState(t *testing.T) {
+	start := time.Date(2026, 10, 12, 12, 0, 0, 0, time.UTC)
+	reader := newReader(t, network(&spawneryv1alpha1.NetworkVoiceSpec{}), loadBalancerGroup(),
+		registered("lobby-0", "10.0.0.1:25565"))
+	f := proxyreg.New(proxyreg.Options{
+		Reader: reader,
+		State: netstate.Source{
+			Reader: reader,
+			Agents: agent.New(func() time.Time { return start }, 5*time.Second, start),
+		},
+	})
+
+	outbox, leave, err := f.Join(context.Background(), ns, group, "proxy-a")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+
+	voiceAt, stateAt := -1, -1
+	for i, msg := range drain(t, outbox) {
+		if msg.GetVoiceConfig() != nil {
+			voiceAt = i
+		}
+		if msg.GetNetworkState() != nil {
+			stateAt = i
+		}
+	}
+	if voiceAt < 0 || stateAt < 0 || voiceAt > stateAt {
+		t.Errorf("VoiceConfig at %d, NetworkState at %d; want both, the VoiceConfig first", voiceAt, stateAt)
+	}
+}

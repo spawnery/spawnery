@@ -217,7 +217,7 @@ func proxyGroupNamed(name string) *spawneryv1alpha1.ProxyGroup {
 }
 
 func TestTheProxyPolicyIsEgressOnlyAndSelectsOneGroupsProxies(t *testing.T) {
-	p := podspec.BuildProxyNetworkPolicy("production", proxyGroupNamed("gateway"), "spawnery-system", false)
+	p := podspec.BuildProxyNetworkPolicy("production", proxyGroupNamed("gateway"), "spawnery-system", false, 0)
 
 	if p.Name != "gateway-proxies" || p.Namespace != "minecraft" {
 		t.Errorf("name/namespace = %s/%s, want gateway-proxies/minecraft", p.Name, p.Namespace)
@@ -241,7 +241,7 @@ func TestTheProxyPolicyIsEgressOnlyAndSelectsOneGroupsProxies(t *testing.T) {
 }
 
 func TestAnOfflineProxyReachesDNSTheOperatorAndItsBackendsOnly(t *testing.T) {
-	p := podspec.BuildProxyNetworkPolicy("production", proxyGroupNamed("gateway"), "spawnery-system", false)
+	p := podspec.BuildProxyNetworkPolicy("production", proxyGroupNamed("gateway"), "spawnery-system", false, 0)
 	if len(p.Spec.Egress) != 3 {
 		t.Fatalf("got %d egress rules, want three (DNS, operator, backends)", len(p.Spec.Egress))
 	}
@@ -266,7 +266,7 @@ func TestAnOfflineProxyReachesDNSTheOperatorAndItsBackendsOnly(t *testing.T) {
 }
 
 func TestAnOnlineProxyGetsTheInternetOn443MinusThePrivateRanges(t *testing.T) {
-	p := podspec.BuildProxyNetworkPolicy("production", proxyGroupNamed("gateway"), "spawnery-system", true)
+	p := podspec.BuildProxyNetworkPolicy("production", proxyGroupNamed("gateway"), "spawnery-system", true, 0)
 	if len(p.Spec.Egress) != 4 {
 		t.Fatalf("got %d egress rules, want four (DNS, operator, backends, internet)", len(p.Spec.Egress))
 	}
@@ -286,5 +286,56 @@ func TestAnOnlineProxyGetsTheInternetOn443MinusThePrivateRanges(t *testing.T) {
 	}
 	if len(internet.Ports) != 1 || internet.Ports[0].Port.IntValue() != int(podspec.HTTPSPort) {
 		t.Errorf("internet ports = %v, want only %d", internet.Ports, podspec.HTTPSPort)
+	}
+}
+
+func udpPorts(ports []networkingv1.NetworkPolicyPort) []int32 {
+	var out []int32
+	for _, p := range ports {
+		if p.Protocol != nil && *p.Protocol == corev1.ProtocolUDP && p.Port != nil {
+			out = append(out, p.Port.IntVal)
+		}
+	}
+	return out
+}
+
+func TestBackendsAdmitNoUDPWithoutVoice(t *testing.T) {
+	pol := podspec.BuildNetworkPolicy(testNetwork(), "spawnery-system")
+	for _, rule := range pol.Spec.Ingress {
+		if got := udpPorts(rule.Ports); len(got) > 0 {
+			t.Fatalf("ingress admits UDP %v without voice", got)
+		}
+	}
+}
+
+func TestBackendsAdmitTheVoicePortFromTheirProxies(t *testing.T) {
+	net := testNetwork()
+	net.Spec.Voice = &spawneryv1alpha1.NetworkVoiceSpec{BackendPort: 24454}
+	pol := podspec.BuildNetworkPolicy(net, "spawnery-system")
+	if len(pol.Spec.Ingress) != 1 {
+		t.Fatalf("want one ingress rule (from this network's proxies), got %d", len(pol.Spec.Ingress))
+	}
+	if got := udpPorts(pol.Spec.Ingress[0].Ports); len(got) != 1 || got[0] != 24454 {
+		t.Fatalf("ingress UDP ports = %v; want [24454] in the proxies' rule", got)
+	}
+}
+
+func TestAProxyReachesTheBackendVoicePortOnlyWithVoice(t *testing.T) {
+	g := proxyGroupNamed("gateway")
+	off := podspec.BuildProxyNetworkPolicy("production", g, "spawnery-system", false, 0)
+	on := podspec.BuildProxyNetworkPolicy("production", g, "spawnery-system", false, 24454)
+	count := func(p *networkingv1.NetworkPolicy) int {
+		n := 0
+		for _, r := range p.Spec.Egress {
+			for _, port := range udpPorts(r.Ports) {
+				if port == 24454 {
+					n++
+				}
+			}
+		}
+		return n
+	}
+	if count(off) != 0 || count(on) != 1 {
+		t.Fatalf("UDP 24454 egress rules: off=%d on=%d; want 0 and 1", count(off), count(on))
 	}
 }

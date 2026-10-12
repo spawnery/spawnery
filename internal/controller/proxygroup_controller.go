@@ -202,15 +202,14 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonSchedulingNotAllowed, message)
 		return r.refuse(ctx, group)
 	}
-	if group.Spec.Expose.Type == spawneryv1alpha1.ExposeHostPort && group.Spec.Expose.HostPort != nil {
-		if message, ok := podspec.HostPortRefusal(network, group.Spec.Expose.HostPort.Port); !ok {
-			if !hasConditionReason(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted, spawneryv1alpha1.ReasonHostPortNotAllowed) {
-				r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, spawneryv1alpha1.ReasonHostPortNotAllowed, actionSyncStatus,
-					"%s", message)
-			}
-			setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonHostPortNotAllowed, message)
-			return r.refuse(ctx, group)
+	if message, ok := proxyHostPortRefusal(network, group); !ok {
+		if c := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionAccepted); c == nil ||
+			c.Reason != spawneryv1alpha1.ReasonHostPortNotAllowed || c.Message != message {
+			r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, spawneryv1alpha1.ReasonHostPortNotAllowed, actionSyncStatus,
+				"%s", message)
 		}
+		setProxyGroupAccepted(group, false, spawneryv1alpha1.ReasonHostPortNotAllowed, message)
+		return r.refuse(ctx, group)
 	}
 	setProxyGroupAccepted(group, true, spawneryv1alpha1.ReasonAccepted, "")
 	// Persisted before the side effects, so a failure below (a NodePort
@@ -242,7 +241,7 @@ func (r *ProxyGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request) 
 	// pass failing partway does not keep advertising what an earlier pass saw;
 	// and nowhere else, so a missing Network does not blank a working address.
 	if obs.observed {
-		r.setStatus(group, obs.pods, obs.svc)
+		r.setStatus(group, network, obs.pods, obs.svc, obs.voiceSvc, obs.voiceErr)
 		if werr := r.writeStatus(ctx, group); werr != nil {
 			if err == nil {
 				return res, werr
@@ -259,6 +258,8 @@ type proxyObservation struct {
 	observed bool
 	pods     []corev1.Pod
 	svc      *corev1.Service
+	voiceSvc *corev1.Service
+	voiceErr error
 }
 
 // reconcileObserved does everything from the namespace bootstrap onward and
@@ -275,14 +276,16 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 	}
 	// Every proxy pod mounts this ConfigMap by name; the early return keeps
 	// reconcileReplicas from creating one before it exists.
-	if err := r.reconcileConfigMap(ctx, group); err != nil {
+	if err := r.reconcileConfigMap(ctx, network, group); err != nil {
 		return obs, ctrl.Result{}, err
 	}
-	svc, err := r.reconcileService(ctx, group)
+	svc, err := r.reconcileService(ctx, network, group)
 	if err != nil {
 		return obs, ctrl.Result{}, err
 	}
-	if err := r.reconcileNetworkPolicy(ctx, group); err != nil {
+	// Not returned: a voice Service problem costs voice only, on the Voice condition.
+	voiceSvc, voiceErr := r.reconcileVoiceService(ctx, network, group)
+	if err := r.reconcileNetworkPolicy(ctx, network, group); err != nil {
 		return obs, ctrl.Result{}, err
 	}
 	// A snapshot from before this pass's own creates: a pod created below is
@@ -294,7 +297,7 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 	if err := r.announceReady(ctx, pods); err != nil {
 		return obs, ctrl.Result{}, err
 	}
-	obs = proxyObservation{observed: true, pods: pods, svc: svc}
+	obs = proxyObservation{observed: true, pods: pods, svc: svc, voiceSvc: voiceSvc, voiceErr: voiceErr}
 
 	if err := r.reconcileReplicas(ctx, network, group, pods); err != nil {
 		// A refused create belongs on the group: Pod Security (every HostPort
@@ -547,7 +550,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	group *spawneryv1alpha1.ProxyGroup,
 	pods []corev1.Pod,
 ) error {
-	configValues, err := yaml.Marshal(proxyConfigValues(group))
+	configValues, err := yaml.Marshal(proxyConfigValues(network, group))
 	if err != nil {
 		return err
 	}
@@ -961,10 +964,11 @@ func (r *ProxyGroupReconciler) announceReady(ctx context.Context, pods []corev1.
 // returns nil: nothing inside the cluster dials a proxy.
 func (r *ProxyGroupReconciler) reconcileService(
 	ctx context.Context,
+	network *spawneryv1alpha1.Network,
 	group *spawneryv1alpha1.ProxyGroup,
 ) (*corev1.Service, error) {
 	if group.Spec.Expose.Type == spawneryv1alpha1.ExposeHostPort {
-		return nil, r.deleteServiceIfOurs(ctx, group)
+		return nil, r.deleteServiceIfOurs(ctx, group, group.Name)
 	}
 
 	svc := &corev1.Service{
@@ -1015,6 +1019,11 @@ func (r *ProxyGroupReconciler) reconcileService(
 				group.Spec.Expose.Type)
 		}
 		svc.Spec.Ports = []corev1.ServicePort{port}
+		if _, on := network.VoiceBackendPort(); on {
+			if _, own := group.VoiceExpose(); !own {
+				svc.Spec.Ports = append(svc.Spec.Ports, voiceServicePort(port.NodePort))
+			}
+		}
 
 		return controllerutil.SetControllerReference(group, svc, r.Scheme)
 	})
@@ -1060,27 +1069,32 @@ func loadBalancerTrafficPolicy(group *spawneryv1alpha1.ProxyGroup) corev1.Servic
 	return corev1.ServiceExternalTrafficPolicyLocal
 }
 
-// deleteServiceIfOurs removes the Service a group had before it switched to
-// HostPort, and only that one: controlled by this group's UID (not a
-// same-named predecessor) and carrying our managed-by label. The cache does not
-// narrow Services, so this check is all that stands before an irreversible
-// delete; the preconditions pin the object the decision was made about.
+// serviceIsOurs: controlled by this group's UID (not a same-named predecessor)
+// and carrying our managed-by label. The cache does not narrow Services, so
+// this check is all that stands before an irreversible delete or rewrite.
+func serviceIsOurs(svc *corev1.Service, group *spawneryv1alpha1.ProxyGroup) bool {
+	owner := metav1.GetControllerOf(svc)
+	return owner != nil && owner.UID == group.UID &&
+		svc.Labels[podspec.LabelManagedBy] == podspec.ManagedByValue
+}
+
+// deleteServiceIfOurs removes the named Service if serviceIsOurs: the game's
+// after a switch to HostPort, <group>-voice once voice needs none. The
+// preconditions pin the object the decision was made about.
 func (r *ProxyGroupReconciler) deleteServiceIfOurs(
 	ctx context.Context,
 	group *spawneryv1alpha1.ProxyGroup,
+	name string,
 ) error {
 	svc := &corev1.Service{}
-	err := r.Get(ctx, client.ObjectKey{Namespace: group.Namespace, Name: group.Name}, svc)
+	err := r.Get(ctx, client.ObjectKey{Namespace: group.Namespace, Name: name}, svc)
 	if apierrors.IsNotFound(err) {
 		return nil
 	}
 	if err != nil {
 		return err
 	}
-	if owner := metav1.GetControllerOf(svc); owner == nil || owner.UID != group.UID {
-		return nil
-	}
-	if svc.Labels[podspec.LabelManagedBy] != podspec.ManagedByValue {
+	if !serviceIsOurs(svc, group) {
 		return nil
 	}
 	uid := svc.UID
@@ -1091,11 +1105,12 @@ func (r *ProxyGroupReconciler) deleteServiceIfOurs(
 }
 
 // reconcileNetworkPolicy keeps the group's egress policy in step with its
-// online-mode, which is the one input that changes what a proxy may reach.
-func (r *ProxyGroupReconciler) reconcileNetworkPolicy(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) error {
-	online := proxyConfigValues(group).OnlineMode
+// online-mode and voice port, the inputs that change what a proxy may reach.
+func (r *ProxyGroupReconciler) reconcileNetworkPolicy(ctx context.Context, network *spawneryv1alpha1.Network, group *spawneryv1alpha1.ProxyGroup) error {
+	online := proxyConfigValues(network, group).OnlineMode
+	voicePort, _ := network.VoiceBackendPort()
 	desired := podspec.BuildProxyNetworkPolicy(group.Spec.NetworkRef.Name, group, r.OperatorNamespace,
-		online != nil && *online)
+		online != nil && *online, voicePort)
 	policy := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: desired.Name, Namespace: desired.Namespace},
 	}
@@ -1107,8 +1122,8 @@ func (r *ProxyGroupReconciler) reconcileNetworkPolicy(ctx context.Context, group
 	return err
 }
 
-func (r *ProxyGroupReconciler) reconcileConfigMap(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) error {
-	data, err := yaml.Marshal(proxyConfigValues(group))
+func (r *ProxyGroupReconciler) reconcileConfigMap(ctx context.Context, network *spawneryv1alpha1.Network, group *spawneryv1alpha1.ProxyGroup) error {
+	data, err := yaml.Marshal(proxyConfigValues(network, group))
 	if err != nil {
 		return fmt.Errorf("marshal config.yaml for group %s: %w", group.Name, err)
 	}
@@ -1124,7 +1139,7 @@ func (r *ProxyGroupReconciler) reconcileConfigMap(ctx context.Context, group *sp
 // pod's environment does: render.Velocity refuses a missing limit, and every
 // pod would crash-loop. OnlineMode is never nil either, defaulting to true like
 // the CRD, so an unset spec renders an authenticating proxy.
-func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
+func proxyConfigValues(network *spawneryv1alpha1.Network, group *spawneryv1alpha1.ProxyGroup) render.Values {
 	var values render.Values
 	limit := podspec.ProxyPlayerLimit(group)
 	values.PlayerLimit = &limit
@@ -1134,6 +1149,7 @@ func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
 	}
 	values.OnlineMode = &onlineMode
 	_, values.AcceptsTransfers = group.TransferForceAfter()
+	_, values.VoiceRelay = network.VoiceBackendPort()
 	if cfg := group.Spec.Config; cfg != nil && cfg.Motd != "" {
 		motd := cfg.Motd
 		values.Motd = &motd
@@ -1260,7 +1276,13 @@ func (r *ProxyGroupReconciler) reportBlockedProxies(
 
 // setStatus writes what is observably true of the group's pods.
 // readyReplicas counts Ready pods; connectedPlayers counts every pod.
-func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, svc *corev1.Service) {
+func (r *ProxyGroupReconciler) setStatus(
+	group *spawneryv1alpha1.ProxyGroup,
+	network *spawneryv1alpha1.Network,
+	pods []corev1.Pod,
+	svc, voiceSvc *corev1.Service,
+	voiceErr error,
+) {
 	var ready int32
 	var players int32
 	for i := range pods {
@@ -1276,10 +1298,13 @@ func (r *ProxyGroupReconciler) setStatus(group *spawneryv1alpha1.ProxyGroup, pod
 	group.Status.ReadyReplicas = ready
 	group.Status.ConnectedPlayers = players
 	group.Status.Address = proxyAddress(group, pods, svc)
+	group.Status.VoiceAddress = voiceAddress(network, group, pods, voiceSvc)
+	setVoiceCondition(group, network, voiceErr, voicePluginPod(r.Agents, pods))
 	group.Status.ObservedGeneration = group.Generation
 
 	switch {
-	case meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionDegraded):
+	case meta.IsStatusConditionTrue(group.Status.Conditions, spawneryv1alpha1.ConditionDegraded),
+		meta.IsStatusConditionFalse(group.Status.Conditions, spawneryv1alpha1.ConditionVoice):
 		group.Status.Phase = "Degraded"
 	case ready >= group.Spec.Replicas && ready > 0:
 		group.Status.Phase = string(phase.Ready)

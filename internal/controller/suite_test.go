@@ -30,6 +30,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
@@ -247,6 +248,25 @@ func newFixture(t *testing.T) *fixture {
 	}); err != nil {
 		t.Fatalf("accept fixture network: %v", err)
 	}
+
+	// A manager started by a later test reconciles every one of these cluster-wide.
+	t.Cleanup(func() {
+		for _, list := range []client.ObjectList{
+			&spawneryv1alpha1.ProxyGroupList{},
+			&spawneryv1alpha1.ServerGroupList{},
+			&spawneryv1alpha1.NetworkList{},
+		} {
+			if err := c.List(ctx, list, client.InNamespace(ns)); err != nil {
+				continue
+			}
+			items, _ := meta.ExtractList(list)
+			for _, o := range items {
+				if obj, ok := o.(client.Object); ok {
+					_ = client.IgnoreNotFound(c.Delete(ctx, obj))
+				}
+			}
+		}
+	})
 
 	// envtest runs no namespace controller, and a NodePort is cluster-scoped:
 	// delete the Service so the next test can reuse its port.

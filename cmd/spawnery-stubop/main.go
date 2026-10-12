@@ -26,7 +26,9 @@ limitations under the License.
 // FullSync, which opens a proxy's readiness gate; --full-sync-after delays it
 // and --set-ready-after later closes the gate again. --require-token refuses a
 // stream without this stub's token, since an agent that stopped attaching
-// credentials would otherwise pass every other check.
+// credentials would otherwise pass every other check. --voice-echo and
+// --voice-player stand in for a backend's voice chat server and a player on
+// it whom the proxy knows only from the NetworkState.
 package main
 
 import (
@@ -86,10 +88,19 @@ const (
 	syncedName    = "lobby-0"
 	syncedAddress = "10.255.255.1:25565"
 	syncedGroup   = "lobby"
+
+	// Under --voice-echo the synced backend has to be the host the echo runs
+	// on: the relay sends to its host at VoiceConfig.backend_port.
+	// hack/agent-test.sh maps stubop to the host.
+	voiceSyncedAddress = "stubop:25565"
+	voicePlayerName    = "voiceprobe"
+	voiceAnnouncePort  = 25565
 )
 
 func main() {
-	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr))
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
+	os.Exit(run(os.Args[1:], os.Stdout, os.Stderr, signals))
 }
 
 // names collects the repeatable --san flag.
@@ -105,8 +116,8 @@ func (n *names) Set(value string) error {
 	return nil
 }
 
-// run returns the process exit code: 0 on a clean SIGTERM, 1 on anything else.
-func run(args []string, stdout, stderr io.Writer) int {
+// run returns the process exit code: 0 on a clean stop, 1 on anything else.
+func run(args []string, stdout, stderr io.Writer, stop <-chan os.Signal) int {
 	fs := flag.NewFlagSet("spawnery-stubop", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
@@ -144,6 +155,13 @@ func run(args []string, stdout, stderr io.Writer) int {
 			"the second of the two, the way an agent sees mid-rotation. Used by "+
 			"hack/agent-test.sh phase 6 to prove OperatorChannel.trustManager trusts every "+
 			"certificate the bundle holds and not only the first")
+	voiceEcho := fs.String("voice-echo", "",
+		"answer every UDP datagram on this address with \"echo:\" and the datagram, send "+
+			"every proxy a VoiceConfig pointing at it after the FullSync, and sync the backend "+
+			"at "+voiceSyncedAddress+"; needs --proxy and --voice-player")
+	voicePlayer := fs.String("voice-player", "",
+		"UUID of a player the NetworkState puts on "+syncedName+", so a proxy knows them "+
+			"only from its mirror; needs --voice-echo")
 
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -154,6 +172,14 @@ func run(args []string, stdout, stderr io.Writer) int {
 	}
 	if len(sans) == 0 {
 		sans = names{"stubop"}
+	}
+	if (*voiceEcho == "") != (*voicePlayer == "") {
+		_, _ = fmt.Fprintln(stderr, "--voice-echo and --voice-player go together: a relay with nobody to route, or a player with nowhere to go, tests nothing")
+		return 1
+	}
+	if *voiceEcho != "" && !*proxy {
+		_, _ = fmt.Fprintln(stderr, "--voice-echo needs --proxy: the VoiceConfig follows the FullSync")
+		return 1
 	}
 
 	var material *material
@@ -168,6 +194,23 @@ func run(args []string, stdout, stderr io.Writer) int {
 		return 1
 	}
 
+	events := newRecorder(stdout)
+
+	var voice *voiceFixture
+	if *voiceEcho != "" {
+		echo, err := net.ListenPacket("udp", *voiceEcho)
+		if err != nil {
+			_, _ = fmt.Fprintf(stderr, "listen on %s/udp: %v\n", *voiceEcho, err)
+			return 1
+		}
+		defer func() { _ = echo.Close() }()
+		go serveEcho(echo, events)
+		voice = &voiceFixture{
+			player:   *voicePlayer,
+			echoPort: int32(echo.LocalAddr().(*net.UDPAddr).Port),
+		}
+	}
+
 	listener, err := net.Listen("tcp", *listen)
 	if err != nil {
 		_, _ = fmt.Fprintf(stderr, "listen on %s: %v\n", *listen, err)
@@ -179,7 +222,6 @@ func run(args []string, stdout, stderr io.Writer) int {
 		Certificates: []tls.Certificate{material.Certificate},
 		MinVersion:   tls.VersionTLS13,
 	})
-	events := newRecorder(stdout)
 
 	// A zero limit counts connections without refusing any. Connections, not
 	// streams: SessionLoop opens a fresh channel per attempt, so an agent
@@ -214,6 +256,7 @@ func run(args []string, stdout, stderr io.Writer) int {
 		proxy:          *proxy,
 		fullSyncAfter:  time.Duration(*fullSyncAfter) * time.Second,
 		setReadyAfter:  *setReadyAfter,
+		voice:          voice,
 		token:          material.Token,
 	}
 
@@ -232,10 +275,8 @@ func run(args []string, stdout, stderr io.Writer) int {
 	server := grpc.NewServer(options...)
 	agentpb.RegisterAgentServiceServer(server, served)
 
-	signals := make(chan os.Signal, 1)
-	signal.Notify(signals, syscall.SIGTERM, syscall.SIGINT)
 	go func() {
-		<-signals
+		<-stop
 		// GracefulStop would wait for streams the agent never closes.
 		server.Stop()
 	}()
@@ -461,8 +502,29 @@ type stub struct {
 	proxy         bool
 	fullSyncAfter time.Duration
 	setReadyAfter time.Duration
+	voice         *voiceFixture
 
 	token string
+}
+
+type voiceFixture struct {
+	player   string
+	echoPort int32
+}
+
+func serveEcho(conn net.PacketConn, events *recorder) {
+	buf := make([]byte, 4096)
+	for {
+		n, from, err := conn.ReadFrom(buf)
+		if err != nil {
+			return
+		}
+		if _, err := conn.WriteTo(append([]byte("echo:"), buf[:n]...), from); err != nil {
+			events.record("voice_echo_failed", map[string]any{"from": from.String(), "error": err.Error()})
+			continue
+		}
+		events.record("voice_echoed", map[string]any{"from": from.String(), "bytes": n})
+	}
 }
 
 // requireBearer refuses a stream that does not present this stub's token, and
@@ -554,7 +616,11 @@ func answerCloudRequest(of func(map[string]any) map[string]any, events recorderL
 }
 
 // networkState is the mirror both agent kinds are sent on connect.
-func networkState() *agentpb.NetworkState {
+func (s *stub) networkState() *agentpb.NetworkState {
+	var players []*agentpb.RosterEntry
+	if s.voice != nil {
+		players = []*agentpb.RosterEntry{{Uuid: s.voice.player, Name: voicePlayerName, Server: syncedName}}
+	}
 	return &agentpb.NetworkState{
 		Groups: []*agentpb.GroupState{{
 			Name: syncedGroup, Kind: agentpb.GroupState_EPHEMERAL,
@@ -564,6 +630,7 @@ func networkState() *agentpb.NetworkState {
 			Name: syncedName, Group: syncedGroup, Phase: "Ready",
 			Players: 0, Slots: 100, Registered: true,
 		}},
+		Players: players,
 	}
 }
 
@@ -578,19 +645,23 @@ func (s *stub) ServerSession(stream agentpb.AgentService_ServerSessionServer) er
 				HardDeadlineSeconds: s.hardDeadline,
 			},
 		}},
-		{Message: &agentpb.OperatorToServer_NetworkState{NetworkState: networkState()}},
+		{Message: &agentpb.OperatorToServer_NetworkState{NetworkState: s.networkState()}},
 	}, nil, s.observeServer)
 }
 
 func (s *stub) ProxySession(stream agentpb.AgentService_ProxySessionServer) error {
 	var later []delayed[agentpb.OperatorToProxy]
 	if s.proxy {
+		address := syncedAddress
+		if s.voice != nil {
+			address = voiceSyncedAddress
+		}
 		later = append(later, delayed[agentpb.OperatorToProxy]{
 			message: &agentpb.OperatorToProxy{
 				Message: &agentpb.OperatorToProxy_FullSync{
 					FullSync: &agentpb.FullSync{
 						Servers: []*agentpb.RegisteredServer{
-							{Name: syncedName, Address: syncedAddress, Group: syncedGroup},
+							{Name: syncedName, Address: address, Group: syncedGroup},
 						},
 					},
 				},
@@ -599,6 +670,21 @@ func (s *stub) ProxySession(stream agentpb.AgentService_ProxySessionServer) erro
 			kind:    "full_sync_sent",
 			failure: "full_sync_failed",
 		})
+		if s.voice != nil {
+			later = append(later, delayed[agentpb.OperatorToProxy]{
+				message: &agentpb.OperatorToProxy{
+					Message: &agentpb.OperatorToProxy_VoiceConfig{
+						VoiceConfig: &agentpb.VoiceConfig{
+							Enabled:      true,
+							BackendPort:  s.voice.echoPort,
+							AnnouncePort: voiceAnnouncePort,
+						},
+					},
+				},
+				kind:    "voice_config_sent",
+				failure: "voice_config_failed",
+			})
+		}
 		// After the FullSync: against an unsynced proxy, SetReady{false} would
 		// close a gate that never opened.
 		if s.setReadyAfter > 0 {
@@ -626,7 +712,7 @@ func (s *stub) ProxySession(stream agentpb.AgentService_ProxySessionServer) erro
 		}},
 		// Ahead of the FullSync, so it could disturb the gate's opening if
 		// anything does.
-		{Message: &agentpb.OperatorToProxy_NetworkState{NetworkState: networkState()}},
+		{Message: &agentpb.OperatorToProxy_NetworkState{NetworkState: s.networkState()}},
 	}, later, s.observeProxy)
 }
 

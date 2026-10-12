@@ -1557,7 +1557,7 @@ func TestTheRolloutFinishesWithEveryProxyOnTheNewShape(t *testing.T) {
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.network.Name, Namespace: f.ns}, network); err != nil {
 		t.Fatalf("get Network: %v", err)
 	}
-	configValues, err := yaml.Marshal(proxyConfigValues(f.proxyGroup("gateway")))
+	configValues, err := yaml.Marshal(proxyConfigValues(f.network, f.proxyGroup("gateway")))
 	if err != nil {
 		t.Fatalf("marshal config values: %v", err)
 	}
@@ -1626,7 +1626,7 @@ func TestAMarkedProxyKeepsItsMarkWhenTheSurgePodIsLost(t *testing.T) {
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.network.Name, Namespace: f.ns}, network); err != nil {
 		t.Fatalf("get Network: %v", err)
 	}
-	configValues, err := yaml.Marshal(proxyConfigValues(f.proxyGroup("gateway")))
+	configValues, err := yaml.Marshal(proxyConfigValues(f.network, f.proxyGroup("gateway")))
 	if err != nil {
 		t.Fatalf("marshal config values: %v", err)
 	}
@@ -1867,7 +1867,7 @@ func TestARevertedSpecChangeKeepsTheMarkItAlreadyMade(t *testing.T) {
 	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.network.Name, Namespace: f.ns}, network); err != nil {
 		t.Fatalf("get Network: %v", err)
 	}
-	configValues, err := yaml.Marshal(proxyConfigValues(f.proxyGroup("gateway")))
+	configValues, err := yaml.Marshal(proxyConfigValues(f.network, f.proxyGroup("gateway")))
 	if err != nil {
 		t.Fatalf("marshal config values: %v", err)
 	}
@@ -2528,7 +2528,7 @@ func TestTheProxyPlayerLimitIsDecidedTheSameWayTwice(t *testing.T) {
 				t.Fatalf("the pod carries no %s at all", podspec.EnvPlayerLimit)
 			}
 
-			values := proxyConfigValues(group)
+			values := proxyConfigValues(net, group)
 			if values.PlayerLimit == nil {
 				t.Fatal("the ConfigMap's playerLimit is nil; the proxy refuses to start on that, " +
 					"and this is exactly the shape that crash-looped every pod of a group with " +
@@ -2906,7 +2906,8 @@ func TestAHealthyProxyGroupIsNotReportedAsCrashLooping(t *testing.T) {
 func TestProxyConfigValuesCarriesTheTransferOptIn(t *testing.T) {
 	group := &spawneryv1alpha1.ProxyGroup{ObjectMeta: metav1.ObjectMeta{Name: "edge", Namespace: "ns"}}
 
-	off, err := yaml.Marshal(proxyConfigValues(group))
+	net := &spawneryv1alpha1.Network{ObjectMeta: metav1.ObjectMeta{Name: "net", Namespace: "ns"}}
+	off, err := yaml.Marshal(proxyConfigValues(net, group))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -2915,7 +2916,25 @@ func TestProxyConfigValuesCarriesTheTransferOptIn(t *testing.T) {
 	}
 
 	group.Spec.Update = &spawneryv1alpha1.ProxyUpdateSpec{Transfer: &spawneryv1alpha1.ProxyTransferSpec{}}
-	if !proxyConfigValues(group).AcceptsTransfers {
+	if !proxyConfigValues(net, group).AcceptsTransfers {
 		t.Error("a group with transfer renders a proxy that refuses transferred players")
+	}
+}
+
+func TestProxyConfigValuesCarriesTheVoiceRelay(t *testing.T) {
+	group := &spawneryv1alpha1.ProxyGroup{ObjectMeta: metav1.ObjectMeta{Name: "edge", Namespace: "ns"}}
+	net := &spawneryv1alpha1.Network{ObjectMeta: metav1.ObjectMeta{Name: "net", Namespace: "ns"}}
+
+	off, err := yaml.Marshal(proxyConfigValues(net, group))
+	if err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	if strings.Contains(string(off), "voiceRelay") {
+		t.Errorf("config.yaml without voice mentions voiceRelay, which moves every proxy's hash:\n%s", off)
+	}
+
+	net.Spec.Voice = &spawneryv1alpha1.NetworkVoiceSpec{}
+	if !proxyConfigValues(net, group).VoiceRelay {
+		t.Error("a network with voice renders a proxy that does not know it hosts the relay")
 	}
 }

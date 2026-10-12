@@ -15,6 +15,7 @@ import cloud.spawnery.agent.pb.Hello
 import cloud.spawnery.agent.pb.OperatorToProxy
 import cloud.spawnery.agent.pb.PlayerCount
 import cloud.spawnery.agent.pb.ProxyMessage
+import cloud.spawnery.agent.velocity.voice.VoiceControl
 import io.grpc.CallCredentials
 import io.grpc.ManagedChannel
 import io.grpc.stub.StreamObserver
@@ -54,6 +55,8 @@ class ProxyRole(
     private val connector: CloudConnector,
     private val feed: Feed,
     private val events: CloudEvents,
+    private val voicePluginLoaded: Boolean = false,
+    private val voice: VoiceControl? = null,
 ) : AgentRole<ProxyMessage, OperatorToProxy> {
     /**
      * Whether a `FullSync` has ever been applied, paired with the last
@@ -92,7 +95,8 @@ class ProxyRole(
                 Hello.newBuilder()
                     .setVersion(version)
                     // Only the proxy knows its effective read timeout.
-                    .setReadTimeoutMillis(readTimeoutMillis),
+                    .setReadTimeoutMillis(readTimeoutMillis)
+                    .setVoicePluginLoaded(voicePluginLoaded),
             )
             .build()
 
@@ -144,13 +148,14 @@ class ProxyRole(
             )
         }
 
-        return listOf(
+        return listOfNotNull(
             ProxyMessage.newBuilder()
                 .setBackendPlayers(BackendPlayers.newBuilder().putAllPlayers(counts))
                 .build(),
             ProxyMessage.newBuilder()
                 .setPlayerRoster(roster)
                 .build(),
+            voice?.report(),
         )
     }
 
@@ -238,6 +243,10 @@ class ProxyRole(
             }
             OperatorToProxy.MessageCase.NETWORK_STATE -> {
                 mirror.apply(message.networkState)
+                Directive.None
+            }
+            OperatorToProxy.MessageCase.VOICE_CONFIG -> {
+                voice?.apply(message.voiceConfig)
                 Directive.None
             }
             // Including MESSAGE_NOT_SET, for a newer operator.

@@ -206,3 +206,20 @@ func TestProxyGroupNetworkRefIsImmutable(t *testing.T) {
 		t.Fatalf("update rejected as %q, want it to mention %q", err, want)
 	}
 }
+
+func TestProxyGroupVoiceExposeReusesTheExposeRules(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	g := proxyGroup(ns, spawneryv1alpha1.ExposeSpec{Type: spawneryv1alpha1.ExposeLoadBalancer})
+	g.Spec.Voice = &spawneryv1alpha1.ProxyVoiceSpec{
+		Expose: &spawneryv1alpha1.ExposeSpec{Type: spawneryv1alpha1.ExposeNodePort},
+	}
+	err := c.Create(ctx, g)
+	if err == nil {
+		t.Fatal("create succeeded with voice.expose NodePort and no nodePort, want CEL rejection")
+	}
+	if want := "expose.nodePort is required for type NodePort"; !strings.Contains(err.Error(), want) {
+		t.Errorf("error = %v, want it to mention %q", err, want)
+	}
+}

@@ -150,7 +150,7 @@
             version = "0.2.0";
             src = ./.;
             vendorHash = "sha256-OmwQKY8ZdBx4c64WfuTbLapIIEnEWj/SdrWENk5O69g=";
-            subPackages = [ "cmd/spawnery-stubop" ];
+            subPackages = [ "cmd/spawnery-stubop" "cmd/spawnery-voiceprobe" ];
             env.CGO_ENABLED = 0;
           };
 

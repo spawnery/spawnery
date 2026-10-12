@@ -30,7 +30,7 @@ envtest-backed packages (`api/v1alpha1`, `internal/{agentserver,certs,controller
 
 The e2e package carries `//go:build e2e`, so `go test ./...` never sees it. Run it through `make e2e`; `E2E_KEEP=1` keeps the cluster and prints its `KUBECONFIG`. Under rootless Podman it needs `systemd-run --scope --user --property=Delegate=yes -- nix develop -c env KIND_EXPERIMENTAL_PROVIDER=podman make e2e`.
 
-Image targets (`image-test`, `agent-test`, `image-repro`, `*-image`) need a container runtime, x86_64-linux, and `CONTAINER=podman` if there is no docker. `make agent-test` rebuilds both images first; to rerun against already-loaded images call `hack/agent-test.sh` directly with the tags it expects.
+Image targets (`image-test`, `agent-test`, `image-repro`, `*-image`) need a container runtime, x86_64-linux, and `CONTAINER=podman` if there is no docker. `make agent-test` rebuilds both images first; to rerun against already-loaded images call `hack/agent-test.sh` directly with the tags it expects (`AGENT_TEST_ONLY=voice` runs the voice phase alone).
 
 ## Things that bite
 
@@ -67,7 +67,7 @@ Read `internal/controller/setup.go` (`Options`, `SetupAll`) to see how the piece
 
 **Agents** (`agent/`): Gradle root with subprojects `api` (the public plugin API, published to Maven Central as `cloud.spawnery:spawnery-api`, consumed `compileOnly`), `common` (session loop, token source, channel, network mirror), `paper`, `velocity`. `make agent` builds them through Nix with `agent/deps.json` as the Maven lockfile.
 
-**Auxiliary binaries** in `cmd/`: `spawnery-slp` (server-list-ping readiness probe in the game image), `spawnery-config` (config renderer in the images), `spawnery-stubop` and `spawnery-join` (test-only; never shipped in an image).
+**Auxiliary binaries** in `cmd/`: `spawnery-slp` (server-list-ping readiness probe in the game image), `spawnery-config` (config renderer in the images), `spawnery-stubop`, `spawnery-join` and `spawnery-voiceprobe` (test-only; the last sends one SVC frame to a relay and checks the echo; never shipped in an image).
 
 **Chart** (`charts/spawnery/`) is the only installation form. CRDs live in `templates/crds.yaml` with `helm.sh/resource-policy: keep` so `helm upgrade` carries schema changes. `internal/rbacaudit` checks the rendered ClusterRole/Role against its table both ways and through SubjectAccessReview.
 

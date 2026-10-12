@@ -34,6 +34,9 @@ type Values struct {
 	// AcceptsTransfers omits false, so a group without transfer keeps its
 	// config.yaml and pod hash.
 	AcceptsTransfers bool `yaml:"acceptsTransfers,omitempty" json:"acceptsTransfers,omitempty"`
+	// VoiceRelay omits false, so a network without voice keeps its config.yaml
+	// and pod hash.
+	VoiceRelay bool `yaml:"voiceRelay,omitempty" json:"voiceRelay,omitempty"`
 }
 
 // RequireMaxPlayers refuses a backend without its capacity: the upstream

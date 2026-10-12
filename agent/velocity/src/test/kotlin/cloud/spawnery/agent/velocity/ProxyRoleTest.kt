@@ -18,6 +18,9 @@ import cloud.spawnery.agent.pb.ReportInterval
 import cloud.spawnery.agent.pb.SessionDeadline
 import cloud.spawnery.agent.pb.SetReady
 import cloud.spawnery.agent.pb.UnregisterServer
+import cloud.spawnery.agent.pb.VoiceConfig
+import cloud.spawnery.agent.velocity.voice.VoiceControl
+import cloud.spawnery.agent.velocity.voice.VoiceCounters
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -554,5 +557,50 @@ class ProxyRoleTest {
 
         // Absence is the answer: a state rather than a stream of changes.
         assertTrue(counts.isEmpty(), "expected an empty map, got $counts")
+    }
+
+    private fun voiceRole(voicePluginLoaded: Boolean = false, voice: VoiceControl? = null) = ProxyRole(
+        state = state,
+        directory = directory,
+        drain = drain,
+        players = players,
+        readTimeoutMillis = 30_000,
+        onFirstSync = { },
+        onSetReady = { },
+        log = { message, error -> logs += message to error },
+        mirror = mirror,
+        connector = dormantConnector(),
+        feed = inertFeed(),
+        events = CloudEvents(),
+        voicePluginLoaded = voicePluginLoaded,
+        voice = voice,
+    )
+
+    @Test
+    fun `hello says whether SVC's own proxy plugin is loaded`() {
+        assertTrue(voiceRole(voicePluginLoaded = true).hello("v").hello.voicePluginLoaded)
+        assertFalse(role.hello("v").hello.voicePluginLoaded)
+    }
+
+    @Test
+    fun `a voice config reaches the relay control and its counters join the report`() {
+        var started = 0
+        val voice = VoiceControl(
+            startRelay = { started++; AutoCloseable { } },
+            hostIp = null,
+            counters = VoiceCounters(),
+            log = { message, error -> logs += message to error },
+        )
+        val role = voiceRole(voice = voice)
+
+        val directive = role.onMessage(
+            OperatorToProxy.newBuilder()
+                .setVoiceConfig(VoiceConfig.newBuilder().setEnabled(true).setBackendPort(24454))
+                .build(),
+        )
+
+        assertEquals(Directive.None, directive)
+        assertEquals(1, started)
+        assertTrue(role.extraReports().last().hasVoiceCounters())
     }
 }

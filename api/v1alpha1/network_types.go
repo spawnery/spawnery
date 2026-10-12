@@ -50,6 +50,13 @@ type NetworkSpec struct {
 	// objects. Absent, all of them are off.
 	// +optional
 	Commands *NetworkCommands `json:"commands,omitempty"`
+
+	// Voice relays Simple Voice Chat through this network's proxies. Present
+	// means on: every ProxyGroup relays, and the backends' policy admits UDP
+	// backendPort from the proxies. The SVC plugin itself is not installed by
+	// the operator, and SVC's own Velocity plugin must not be.
+	// +optional
+	Voice *NetworkVoiceSpec `json:"voice,omitempty"`
 }
 
 // NetworkUpdateSpec bounds changeovers across the network's groups.
@@ -83,6 +90,33 @@ type NetworkCommands struct {
 
 func (n *Network) ExecuteEnabled() bool {
 	return n.Spec.Commands != nil && n.Spec.Commands.Execute
+}
+
+// DefaultVoiceBackendPort is Simple Voice Chat's own default for port in
+// voicechat-server.properties.
+const DefaultVoiceBackendPort int32 = 24454
+
+// NetworkVoiceSpec says where the voice server listens on every backend.
+type NetworkVoiceSpec struct {
+	// BackendPort is the UDP port SVC listens on in each backend pod. The
+	// operator writes it nowhere; it has to match the plugin's own
+	// configuration.
+	// +kubebuilder:default=24454
+	// +kubebuilder:validation:Minimum=1
+	// +kubebuilder:validation:Maximum=65535
+	// +optional
+	BackendPort int32 `json:"backendPort,omitempty"`
+}
+
+// VoiceBackendPort is spec.voice.backendPort and whether voice is on.
+func (n *Network) VoiceBackendPort() (int32, bool) {
+	if n.Spec.Voice == nil {
+		return 0, false
+	}
+	if n.Spec.Voice.BackendPort == 0 {
+		return DefaultVoiceBackendPort, true
+	}
+	return n.Spec.Voice.BackendPort, true
 }
 
 // SchedulingPolicy names what a group's spec.scheduling may contain. Each

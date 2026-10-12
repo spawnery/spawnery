@@ -31,6 +31,8 @@ var VelocityFiles = []string{"velocity.toml"}
 // from under the renderer.
 const velocityConfigVersion = "2.9"
 
+const velocityDefaultQueryPort = 25565
+
 // Velocity renders velocity.toml. Five keys are critical and no overlay can
 // move them: bind (the Service targets 25565, not Velocity's 25577),
 // online-mode (from ProxyGroup.spec.config.onlineMode only),
@@ -96,6 +98,9 @@ func velocityToml(v Values, secretPath, overlay string) (string, error) {
 		if err := checkTransferVersion(v, fragment); err != nil {
 			return "", err
 		}
+		if err := checkQueryPort(v, fragment); err != nil {
+			return "", err
+		}
 		for k, val := range fragment {
 			doc[k] = val
 		}
@@ -139,6 +144,25 @@ func velocityToml(v Values, secretPath, overlay string) (string, error) {
 		return "", fmt.Errorf("velocity.toml: marshalling failed: %w", err)
 	}
 	return string(out), nil
+}
+
+// Velocity's query listens on UDP as well, and on the relay's port by default.
+func checkQueryPort(v Values, fragment map[string]any) error {
+	if !v.VoiceRelay {
+		return nil
+	}
+	query, ok := fragment["query"].(map[string]any)
+	if !ok || query["enabled"] != true {
+		return nil
+	}
+	port := int64(velocityDefaultQueryPort)
+	if p, ok := query["port"].(int64); ok {
+		port = p
+	}
+	if port == 25565 {
+		return fmt.Errorf("velocity.toml: the overlay enables [query] on UDP 25565, where this network's voice relay listens; move query.port")
+	}
+	return nil
 }
 
 // Velocity migrates a velocity.toml older than the jar's, and the migration

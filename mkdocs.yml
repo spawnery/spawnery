@@ -69,6 +69,7 @@ nav:
       - From an empty machine to a player: tutorial/index.md
   - Guides:
       - How players reach the proxies: guides/expose-strategies.md
+      - Voice chat: guides/voice-chat.md
       - Scaling and boosts: guides/scaling-and-boosts.md
       - Updates and drain: guides/updates-and-drain.md
       - Scheduling: guides/scheduling.md

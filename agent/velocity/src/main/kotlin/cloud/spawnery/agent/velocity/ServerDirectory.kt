@@ -81,6 +81,10 @@ class ServerDirectory(
     @Synchronized
     fun groupOf(server: String): String? = backends[server.lowercase()]?.group
 
+    @Synchronized
+    fun hostOf(server: String): String? =
+        backends[server.lowercase()]?.let { parseAddress(it.address)?.hostString }
+
     /**
      * Absent from the registry -> register. Present with the address
      * unchanged -> nothing. Present with a different address -> unregister

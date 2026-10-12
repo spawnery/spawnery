@@ -83,6 +83,9 @@ type Snapshot struct {
 	// checks players == 0 && !PlayersStale, because scaleDownStabilizationSeconds
 	// may be 0.
 	EmptyFor time.Duration
+	// VoicePluginLoaded is whether a proxy's Hello said Simple Voice Chat's own
+	// Velocity plugin is loaded beside spawnery's relay.
+	VoicePluginLoaded bool
 }
 
 // Announcement is what one server last said about itself. The operator carries
@@ -138,7 +141,14 @@ type entry struct {
 	// and for every server agent. It cannot change without a restart, which is a
 	// new stream, so it has no timestamp.
 	readTimeout time.Duration
+
+	voicePlugin bool
+	voiceTotals map[string]int64
 }
+
+// VoiceReasons are the only label values spawnery_voice_packets_total takes;
+// a proxy's report is filtered against them.
+var VoiceReasons = []string{"relayed", "not_svc", "unknown_player", "unknown_server", "unknown_version", "ping"}
 
 // Registry is the in-memory state of all connected agents. It is safe for
 // concurrent use.
@@ -532,6 +542,46 @@ func (r *Registry) ReportReadTimeout(key, namespace string, timeout time.Duratio
 	e.readTimeout = timeout
 }
 
+// ReportVoicePlugin records what a proxy said on its Hello. Like readTimeout
+// it cannot change without a restart, so it has no timestamp.
+func (r *Registry) ReportVoicePlugin(key string, loaded bool) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, ok := r.entries[key]; ok && e.role == RoleProxy {
+		e.voicePlugin = loaded
+	}
+}
+
+// ReportVoiceTotals turns a proxy's cumulative relay totals into increments.
+// Kept per pod, not per stream: during a renewal both streams report the
+// same process's totals.
+func (r *Registry) ReportVoiceTotals(key string, totals map[string]int64) map[string]int64 {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	e, ok := r.entries[key]
+	if !ok || e.role != RoleProxy {
+		return nil
+	}
+	if e.voiceTotals == nil {
+		e.voiceTotals = make(map[string]int64, len(VoiceReasons))
+	}
+	out := make(map[string]int64, len(VoiceReasons))
+	for _, reason := range VoiceReasons {
+		now, reported := totals[reason]
+		if !reported || now < 0 {
+			continue
+		}
+		last := e.voiceTotals[reason]
+		if now < last {
+			out[reason] = now
+		} else {
+			out[reason] = now - last
+		}
+		e.voiceTotals[reason] = now
+	}
+	return out
+}
+
 // ShortestReadTimeout is the smallest read timeout any connected proxy in this
 // namespace reported, and whether any did. The smallest, because the first
 // proxy to give up is the one that kicks the players.
@@ -618,6 +668,7 @@ func (r *Registry) Lookup(key string) Snapshot {
 		HeapUsed:          e.heapUsed,
 		HeapMax:           e.heapMax,
 		PlayersReportedAt: e.lastReportAt,
+		VoicePluginLoaded: e.voicePlugin,
 	}
 	if !e.connected {
 		snap.StreamDownFor = now.Sub(e.disconnectedAt)

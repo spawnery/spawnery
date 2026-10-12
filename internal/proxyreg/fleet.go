@@ -38,6 +38,7 @@ import (
 	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/phase"
+	"github.com/spawnery/spawnery/internal/voice"
 )
 
 const (
@@ -179,7 +180,8 @@ func (f *Fleet) send(s *session, msg *agentpb.OperatorToProxy) {
 }
 
 // snapshot builds what a session is sent on join and on every resync: the full
-// registered list, followed by one DrainPlayers per draining server.
+// registered list, one DrainPlayers per draining server, the group's
+// VoiceConfig when it can be read, and the NetworkState mirror.
 //
 // Callers hold f.mu.
 func (f *Fleet) snapshot(ctx context.Context, namespace, group string) ([]*agentpb.OperatorToProxy, error) {
@@ -213,6 +215,9 @@ func (f *Fleet) snapshot(ctx context.Context, namespace, group string) ([]*agent
 	for _, srv := range draining {
 		out = append(out, drainMessage(srv, fallbacks))
 	}
+	if cfg := f.voiceConfig(ctx, namespace, group); cfg != nil {
+		out = append(out, cfg)
+	}
 
 	// Last: ProxyRole opens the readiness gate on the FullSync, and the drains
 	// refer to its list. A state that cannot be built is skipped: losing the
@@ -243,6 +248,27 @@ func (f *Fleet) fallbacks(ctx context.Context, namespace, group string) []string
 		return nil
 	}
 	return pg.Spec.Routing.FallbackGroups
+}
+
+// voiceConfig is nil when the group or its network cannot be read; the agent
+// then keeps what it had, as with fallbacks.
+func (f *Fleet) voiceConfig(ctx context.Context, namespace, group string) *agentpb.OperatorToProxy {
+	pg := &spawneryv1alpha1.ProxyGroup{}
+	if err := f.opts.Reader.Get(ctx, types.NamespacedName{Name: group, Namespace: namespace}, pg); err != nil {
+		return nil
+	}
+	network := &spawneryv1alpha1.Network{}
+	if err := f.opts.Reader.Get(ctx, types.NamespacedName{Name: pg.Spec.NetworkRef.Name, Namespace: namespace}, network); err != nil {
+		return nil
+	}
+	cfg := &agentpb.VoiceConfig{}
+	if port, on := network.VoiceBackendPort(); on {
+		cfg.Enabled, cfg.BackendPort = true, port
+		if ep, known := voice.Announce(network, pg); known {
+			cfg.AnnounceHost, cfg.AnnouncePort, cfg.AnnounceOwnNode = ep.Host, ep.Port, ep.OwnNode
+		}
+	}
+	return &agentpb.OperatorToProxy{Message: &agentpb.OperatorToProxy_VoiceConfig{VoiceConfig: cfg}}
 }
 
 func registeredServer(srv *spawneryv1alpha1.Server) *agentpb.RegisteredServer {

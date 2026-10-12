@@ -62,6 +62,7 @@ private static final long serialVersionUID = 0L;
     PLAYER_ROSTER(6),
     CLOUD_REQUEST(7),
     EVENT_INTEREST(8),
+    VOICE_COUNTERS(9),
     MESSAGE_NOT_SET(0);
     private final int value;
     private MessageCase(int value) {
@@ -87,6 +88,7 @@ private static final long serialVersionUID = 0L;
         case 6: return PLAYER_ROSTER;
         case 7: return CLOUD_REQUEST;
         case 8: return EVENT_INTEREST;
+        case 9: return VOICE_COUNTERS;
         case 0: return MESSAGE_NOT_SET;
         default: return null;
       }
@@ -350,6 +352,37 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.EventInterest.getDefaultInstance();
   }
 
+  public static final int VOICE_COUNTERS_FIELD_NUMBER = 9;
+  /**
+   * <code>.spawnery.agent.v1alpha1.VoiceCounters voice_counters = 9;</code>
+   * @return Whether the voiceCounters field is set.
+   */
+  @java.lang.Override
+  public boolean hasVoiceCounters() {
+    return messageCase_ == 9;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.VoiceCounters voice_counters = 9;</code>
+   * @return The voiceCounters.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.VoiceCounters getVoiceCounters() {
+    if (messageCase_ == 9) {
+       return (cloud.spawnery.agent.pb.VoiceCounters) message_;
+    }
+    return cloud.spawnery.agent.pb.VoiceCounters.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.VoiceCounters voice_counters = 9;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.VoiceCountersOrBuilder getVoiceCountersOrBuilder() {
+    if (messageCase_ == 9) {
+       return (cloud.spawnery.agent.pb.VoiceCounters) message_;
+    }
+    return cloud.spawnery.agent.pb.VoiceCounters.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -388,6 +421,9 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 8) {
       output.writeMessage(8, (cloud.spawnery.agent.pb.EventInterest) message_);
     }
+    if (messageCase_ == 9) {
+      output.writeMessage(9, (cloud.spawnery.agent.pb.VoiceCounters) message_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -423,6 +459,10 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 8) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(8, (cloud.spawnery.agent.pb.EventInterest) message_);
+    }
+    if (messageCase_ == 9) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(9, (cloud.spawnery.agent.pb.VoiceCounters) message_);
     }
     return size;
   }
@@ -482,6 +522,10 @@ private static final long serialVersionUID = 0L;
         if (!getEventInterest()
             .equals(other.getEventInterest())) return false;
         break;
+      case 9:
+        if (!getVoiceCounters()
+            .equals(other.getVoiceCounters())) return false;
+        break;
       case 0:
       default:
     }
@@ -528,6 +572,10 @@ private static final long serialVersionUID = 0L;
       case 8:
         hash = (37 * hash) + EVENT_INTEREST_FIELD_NUMBER;
         hash = (53 * hash) + getEventInterest().hashCode();
+        break;
+      case 9:
+        hash = (37 * hash) + VOICE_COUNTERS_FIELD_NUMBER;
+        hash = (53 * hash) + getVoiceCounters().hashCode();
         break;
       case 0:
       default:
@@ -687,6 +735,9 @@ private static final long serialVersionUID = 0L;
       if (eventInterestBuilder_ != null) {
         eventInterestBuilder_.clear();
       }
+      if (voiceCountersBuilder_ != null) {
+        voiceCountersBuilder_.clear();
+      }
       messageCase_ = 0;
       message_ = null;
       return this;
@@ -760,6 +811,10 @@ private static final long serialVersionUID = 0L;
           eventInterestBuilder_ != null) {
         result.message_ = eventInterestBuilder_.build();
       }
+      if (messageCase_ == 9 &&
+          voiceCountersBuilder_ != null) {
+        result.message_ = voiceCountersBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -805,6 +860,10 @@ private static final long serialVersionUID = 0L;
         }
         case EVENT_INTEREST: {
           mergeEventInterest(other.getEventInterest());
+          break;
+        }
+        case VOICE_COUNTERS: {
+          mergeVoiceCounters(other.getVoiceCounters());
           break;
         }
         case MESSAGE_NOT_SET: {
@@ -893,6 +952,13 @@ private static final long serialVersionUID = 0L;
               messageCase_ = 8;
               break;
             } // case 66
+            case 74: {
+              input.readMessage(
+                  internalGetVoiceCountersFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              messageCase_ = 9;
+              break;
+            } // case 74
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2059,6 +2125,148 @@ private static final long serialVersionUID = 0L;
       messageCase_ = 8;
       onChanged();
       return eventInterestBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.VoiceCounters, cloud.spawnery.agent.pb.VoiceCounters.Builder, cloud.spawnery.agent.pb.VoiceCountersOrBuilder> voiceCountersBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceCounters voice_counters = 9;</code>
+     * @return Whether the voiceCounters field is set.
+     */
+    @java.lang.Override
+    public boolean hasVoiceCounters() {
+      return messageCase_ == 9;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceCounters voice_counters = 9;</code>
+     * @return The voiceCounters.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.VoiceCounters getVoiceCounters() {
+      if (voiceCountersBuilder_ == null) {
+        if (messageCase_ == 9) {
+          return (cloud.spawnery.agent.pb.VoiceCounters) message_;
+        }
+        return cloud.spawnery.agent.pb.VoiceCounters.getDefaultInstance();
+      } else {
+        if (messageCase_ == 9) {
+          return voiceCountersBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.VoiceCounters.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceCounters voice_counters = 9;</code>
+     */
+    public Builder setVoiceCounters(cloud.spawnery.agent.pb.VoiceCounters value) {
+      if (voiceCountersBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        message_ = value;
+        onChanged();
+      } else {
+        voiceCountersBuilder_.setMessage(value);
+      }
+      messageCase_ = 9;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceCounters voice_counters = 9;</code>
+     */
+    public Builder setVoiceCounters(
+        cloud.spawnery.agent.pb.VoiceCounters.Builder builderForValue) {
+      if (voiceCountersBuilder_ == null) {
+        message_ = builderForValue.build();
+        onChanged();
+      } else {
+        voiceCountersBuilder_.setMessage(builderForValue.build());
+      }
+      messageCase_ = 9;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceCounters voice_counters = 9;</code>
+     */
+    public Builder mergeVoiceCounters(cloud.spawnery.agent.pb.VoiceCounters value) {
+      if (voiceCountersBuilder_ == null) {
+        if (messageCase_ == 9 &&
+            message_ != cloud.spawnery.agent.pb.VoiceCounters.getDefaultInstance()) {
+          message_ = cloud.spawnery.agent.pb.VoiceCounters.newBuilder((cloud.spawnery.agent.pb.VoiceCounters) message_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          message_ = value;
+        }
+        onChanged();
+      } else {
+        if (messageCase_ == 9) {
+          voiceCountersBuilder_.mergeFrom(value);
+        } else {
+          voiceCountersBuilder_.setMessage(value);
+        }
+      }
+      messageCase_ = 9;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceCounters voice_counters = 9;</code>
+     */
+    public Builder clearVoiceCounters() {
+      if (voiceCountersBuilder_ == null) {
+        if (messageCase_ == 9) {
+          messageCase_ = 0;
+          message_ = null;
+          onChanged();
+        }
+      } else {
+        if (messageCase_ == 9) {
+          messageCase_ = 0;
+          message_ = null;
+        }
+        voiceCountersBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceCounters voice_counters = 9;</code>
+     */
+    public cloud.spawnery.agent.pb.VoiceCounters.Builder getVoiceCountersBuilder() {
+      return internalGetVoiceCountersFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceCounters voice_counters = 9;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.VoiceCountersOrBuilder getVoiceCountersOrBuilder() {
+      if ((messageCase_ == 9) && (voiceCountersBuilder_ != null)) {
+        return voiceCountersBuilder_.getMessageOrBuilder();
+      } else {
+        if (messageCase_ == 9) {
+          return (cloud.spawnery.agent.pb.VoiceCounters) message_;
+        }
+        return cloud.spawnery.agent.pb.VoiceCounters.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceCounters voice_counters = 9;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.VoiceCounters, cloud.spawnery.agent.pb.VoiceCounters.Builder, cloud.spawnery.agent.pb.VoiceCountersOrBuilder> 
+        internalGetVoiceCountersFieldBuilder() {
+      if (voiceCountersBuilder_ == null) {
+        if (!(messageCase_ == 9)) {
+          message_ = cloud.spawnery.agent.pb.VoiceCounters.getDefaultInstance();
+        }
+        voiceCountersBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.VoiceCounters, cloud.spawnery.agent.pb.VoiceCounters.Builder, cloud.spawnery.agent.pb.VoiceCountersOrBuilder>(
+                (cloud.spawnery.agent.pb.VoiceCounters) message_,
+                getParentForChildren(),
+                isClean());
+        message_ = null;
+      }
+      messageCase_ = 9;
+      onChanged();
+      return voiceCountersBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.ProxyMessage)

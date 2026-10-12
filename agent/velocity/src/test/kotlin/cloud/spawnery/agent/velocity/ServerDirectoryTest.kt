@@ -281,4 +281,13 @@ class ServerDirectoryTest {
         fun serverInfo(name: String, host: String, port: Int) =
             ServerInfo(name, InetSocketAddress.createUnresolved(host, port))
     }
+
+    @Test
+    fun `hostOf names a registered backend's host, case-insensitively`() {
+        val directory = ServerDirectory(FakeRegistry()) { _, _ -> }
+        directory.apply(listOf(Backend("lobby-1", "10.0.0.1:25565", "lobby")))
+
+        assertEquals("10.0.0.1", directory.hostOf("LOBBY-1"))
+        assertNull(directory.hostOf("nope"))
+    }
 }

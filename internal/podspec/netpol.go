@@ -74,6 +74,17 @@ func BuildNetworkPolicy(
 	proxies := ManagedSelector(network.Name)
 	proxies[LabelRole] = RoleProxy
 
+	ingressPorts := []networkingv1.NetworkPolicyPort{{
+		Protocol: &tcp,
+		Port:     ptr.To(intstr.FromInt32(MinecraftPort)),
+	}}
+	if port, on := network.VoiceBackendPort(); on {
+		ingressPorts = append(ingressPorts, networkingv1.NetworkPolicyPort{
+			Protocol: &udp,
+			Port:     ptr.To(intstr.FromInt32(port)),
+		})
+	}
+
 	return &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      NetworkPolicyName(network.Name),
@@ -110,10 +121,7 @@ func BuildNetworkPolicy(
 				From: []networkingv1.NetworkPolicyPeer{{
 					PodSelector: &metav1.LabelSelector{MatchLabels: proxies},
 				}},
-				Ports: []networkingv1.NetworkPolicyPort{{
-					Protocol: &tcp,
-					Port:     ptr.To(intstr.FromInt32(MinecraftPort)),
-				}},
+				Ports: ingressPorts,
 			}},
 			Egress: []networkingv1.NetworkPolicyEgressRule{
 				{
@@ -153,6 +161,8 @@ func BuildNetworkPolicy(
 
 func ProxyNetworkPolicyName(group string) string { return group + "-proxies" }
 
+func VoiceServiceName(group string) string { return group + "-voice" }
+
 // HTTPSPort is what Mojang's session and API servers answer on.
 const HTTPSPort int32 = 443
 
@@ -171,6 +181,7 @@ func BuildProxyNetworkPolicy(
 	group *spawneryv1alpha1.ProxyGroup,
 	operatorNamespace string,
 	onlineMode bool,
+	voiceBackendPort int32,
 ) *networkingv1.NetworkPolicy {
 	tcp := corev1.ProtocolTCP
 	udp := corev1.ProtocolUDP
@@ -209,6 +220,12 @@ func BuildProxyNetworkPolicy(
 				{Protocol: &tcp, Port: ptr.To(intstr.FromInt32(MinecraftPort))},
 			},
 		},
+	}
+	if voiceBackendPort != 0 {
+		egress[2].Ports = append(egress[2].Ports, networkingv1.NetworkPolicyPort{
+			Protocol: &udp,
+			Port:     ptr.To(intstr.FromInt32(voiceBackendPort)),
+		})
 	}
 	if onlineMode {
 		egress = append(egress, networkingv1.NetworkPolicyEgressRule{
