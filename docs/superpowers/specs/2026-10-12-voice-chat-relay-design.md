@@ -86,7 +86,15 @@ their players ever arrives. The UDP port the policy opens then has nothing
 listening on it. A proxy group whose relay receives nothing costs nothing.
 
 `ProxyGroup.spec.voice` is set on a group without `Network.spec.voice` →
-`Degraded`, reason `VoiceOffInNetwork`.
+`Voice=False`, reason `VoiceOffInNetwork`.
+
+*Amended 2026-10-12:* The refusals of this section and section 5 sit on a
+`Voice` condition of the group, not on `Degraded`, which the controller already
+rewrites on every pass. While `Voice` is `False` the group's phase is
+`Degraded`. A third reason, `VoiceServiceNotOwnedByGroup`, covers a foreign
+Service at `<group>-voice`, and a fourth, `VoiceServiceRejected`, an error from
+the API server on the voice Service. Neither stops the game: the group keeps
+reconciling and only voice is affected.
 
 ## 4. How voice reaches the proxies
 
@@ -148,16 +156,17 @@ Part of the Velocity agent, started only when the operator's sync says voice
 is on.
 
 **Refusals at start.** If Velocity has a plugin with id `voicechat` loaded,
-the relay does not start. The agent reports it, and the group goes `Degraded`
-with reason `VoicePluginConflict`. Two relays on one port would fail with
-nothing to point at the cause.
+the relay does not start. The agent reports it, and the group's `Voice`
+condition goes `False` with reason `VoicePluginConflict`. Two relays on one
+port would fail with nothing to point at the cause.
 
 **A packet from a client:**
 
 1. The packet is dropped if it is shorter than 17 bytes or its first byte is
    not `0xFF`.
-2. If the UUID is SVC's fixed ping UUID, the proxy answers the ping itself, the
-   way SVC's proxy does (`debug/PingHandler.java`).
+2. If the UUID is SVC's fixed ping UUID, the packet is dropped and counted as
+   `ping` (amended 2026-10-12). The reply format is not verified, and a player
+   does not need the answer to talk.
 3. Otherwise the proxy picks the backend:
    - If the player is connected through this proxy, it uses their current
      server as Velocity sees it. This is correct the moment a server switch
@@ -167,6 +176,9 @@ nothing to point at the cause.
      `backendPort`.
    - An unknown player or an unknown server means the packet is dropped and
      counted.
+
+The relay binds dual-stack when its address is the wildcard (amended
+2026-10-12).
 
 **A bridge per player.** Each player gets one ephemeral UDP socket towards the
 backend, so the backend sees a stable source per player. Replies arriving on
@@ -214,7 +226,7 @@ connection, the only one that sees the packet:
   connection's.* That proxy routes to the old backend until `NetworkState`
   shows the move. The old backend ignores the packets, and SVC's timeout
   recovers in the worst case. How long the update takes to reach the other
-  proxy is measured in the e2e test (section 7) and recorded here, not
+  proxy is measured on a real cluster (section 7) and recorded here, not
   assumed.
 
 **Counting.** The agent's report carries relayed and dropped packets by
@@ -252,17 +264,20 @@ Both additions exist only while `Network.spec.voice` is set.
 - The policies, `status.voiceAddress`, and both `Degraded` reasons.
 - The proxy hash golden unchanged for a group without voice.
 
-**e2e (kind):**
-- Two proxies on `NodePort`, a stub backend that echoes UDP keyed by UUID, and
-  a test player connected through proxy A with `spawnery-join`.
-- A Go probe sends packets carrying that player's UUID to proxy **B**. The
-  claim holds when the echo comes back.
-- The same test moves the player to another server and measures how long B
-  keeps routing to the old one. The figure goes into section 5.
+**Cross-proxy proof (amended 2026-10-12):** `make e2e` starts no game image,
+so this runs as a phase of `hack/agent-test.sh` against a real Velocity image
+(`AGENT_TEST_ONLY=voice` runs it alone):
+- A real Velocity proxy that holds no player, and `spawnery-stubop`, whose
+  `NetworkState` puts one player on a backend.
+- `spawnery-voiceprobe` sends a frame carrying that player's UUID to the proxy
+  and checks the echo from a stub backend. The claim holds when it comes back:
+  a proxy routes a player it only knows from the mirror.
 
 **On a real cluster**, which no test here can cover:
 - Two proxies behind a `LoadBalancer`, the SVC plugin on a lobby group, and
   two clients with the SVC mod standing near each other.
+- To measure: after a server switch, how long the other proxy keeps routing to
+  the old backend. The figure goes into section 5.
 - To see:
   - both hear each other;
   - after `/server` to a second group with the plugin, they hear each other
