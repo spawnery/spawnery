@@ -545,3 +545,47 @@ func TestVelocityRefusesAMisshapenAdvancedTable(t *testing.T) {
 		t.Fatal("an advanced that is not a table was accepted")
 	}
 }
+
+func TestAVoiceProxyRefusesQueryOnTheRelayPort(t *testing.T) {
+	for name, overlay := range map[string]string{
+		"explicit port": "[query]\nenabled = true\nport = 25565\n",
+		"default port":  "[query]\nenabled = true\n",
+	} {
+		t.Run(name, func(t *testing.T) {
+			v := velocityValues()
+			v.VoiceRelay = true
+			_, err := Velocity(v, testSecretPath, map[string]string{"velocity.toml": overlay})
+			if err == nil || !strings.Contains(err.Error(), "query") {
+				t.Fatalf("err = %v; want a refusal naming query", err)
+			}
+		})
+	}
+}
+
+func TestAVoiceProxyAcceptsQueryElsewhere(t *testing.T) {
+	v := velocityValues()
+	v.VoiceRelay = true
+	if _, err := Velocity(v, testSecretPath, map[string]string{
+		"velocity.toml": "[query]\nenabled = true\nport = 25570\n",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestAVoiceProxyAcceptsQueryWhenItIsOff(t *testing.T) {
+	v := velocityValues()
+	v.VoiceRelay = true
+	if _, err := Velocity(v, testSecretPath, map[string]string{
+		"velocity.toml": "[query]\nenabled = false\nport = 25565\n",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestQueryOnTheGamePortIsFineWithoutVoice(t *testing.T) {
+	if _, err := Velocity(velocityValues(), testSecretPath, map[string]string{
+		"velocity.toml": "[query]\nenabled = true\nport = 25565\n",
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

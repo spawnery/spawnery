@@ -276,7 +276,7 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 	}
 	// Every proxy pod mounts this ConfigMap by name; the early return keeps
 	// reconcileReplicas from creating one before it exists.
-	if err := r.reconcileConfigMap(ctx, group); err != nil {
+	if err := r.reconcileConfigMap(ctx, network, group); err != nil {
 		return obs, ctrl.Result{}, err
 	}
 	svc, err := r.reconcileService(ctx, network, group)
@@ -550,7 +550,7 @@ func (r *ProxyGroupReconciler) reconcileReplicas(
 	group *spawneryv1alpha1.ProxyGroup,
 	pods []corev1.Pod,
 ) error {
-	configValues, err := yaml.Marshal(proxyConfigValues(group))
+	configValues, err := yaml.Marshal(proxyConfigValues(network, group))
 	if err != nil {
 		return err
 	}
@@ -1107,7 +1107,7 @@ func (r *ProxyGroupReconciler) deleteServiceIfOurs(
 // reconcileNetworkPolicy keeps the group's egress policy in step with its
 // online-mode and voice port, the inputs that change what a proxy may reach.
 func (r *ProxyGroupReconciler) reconcileNetworkPolicy(ctx context.Context, network *spawneryv1alpha1.Network, group *spawneryv1alpha1.ProxyGroup) error {
-	online := proxyConfigValues(group).OnlineMode
+	online := proxyConfigValues(network, group).OnlineMode
 	voicePort, _ := network.VoiceBackendPort()
 	desired := podspec.BuildProxyNetworkPolicy(group.Spec.NetworkRef.Name, group, r.OperatorNamespace,
 		online != nil && *online, voicePort)
@@ -1122,8 +1122,8 @@ func (r *ProxyGroupReconciler) reconcileNetworkPolicy(ctx context.Context, netwo
 	return err
 }
 
-func (r *ProxyGroupReconciler) reconcileConfigMap(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) error {
-	data, err := yaml.Marshal(proxyConfigValues(group))
+func (r *ProxyGroupReconciler) reconcileConfigMap(ctx context.Context, network *spawneryv1alpha1.Network, group *spawneryv1alpha1.ProxyGroup) error {
+	data, err := yaml.Marshal(proxyConfigValues(network, group))
 	if err != nil {
 		return fmt.Errorf("marshal config.yaml for group %s: %w", group.Name, err)
 	}
@@ -1139,7 +1139,7 @@ func (r *ProxyGroupReconciler) reconcileConfigMap(ctx context.Context, group *sp
 // pod's environment does: render.Velocity refuses a missing limit, and every
 // pod would crash-loop. OnlineMode is never nil either, defaulting to true like
 // the CRD, so an unset spec renders an authenticating proxy.
-func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
+func proxyConfigValues(network *spawneryv1alpha1.Network, group *spawneryv1alpha1.ProxyGroup) render.Values {
 	var values render.Values
 	limit := podspec.ProxyPlayerLimit(group)
 	values.PlayerLimit = &limit
@@ -1149,6 +1149,7 @@ func proxyConfigValues(group *spawneryv1alpha1.ProxyGroup) render.Values {
 	}
 	values.OnlineMode = &onlineMode
 	_, values.AcceptsTransfers = group.TransferForceAfter()
+	_, values.VoiceRelay = network.VoiceBackendPort()
 	if cfg := group.Spec.Config; cfg != nil && cfg.Motd != "" {
 		motd := cfg.Motd
 		values.Motd = &motd
