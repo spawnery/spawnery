@@ -180,7 +180,8 @@ func (f *Fleet) send(s *session, msg *agentpb.OperatorToProxy) {
 }
 
 // snapshot builds what a session is sent on join and on every resync: the full
-// registered list, followed by one DrainPlayers per draining server.
+// registered list, one DrainPlayers per draining server, the group's
+// VoiceConfig when it can be read, and the NetworkState mirror.
 //
 // Callers hold f.mu.
 func (f *Fleet) snapshot(ctx context.Context, namespace, group string) ([]*agentpb.OperatorToProxy, error) {

@@ -69,6 +69,10 @@ func TestVoiceAddress(t *testing.T) {
 		{"ClusterIP override without its clusterIP block", voiceNet,
 			withStatus(lb, &spawneryv1alpha1.ExposeSpec{Type: spawneryv1alpha1.ExposeClusterIP}, "203.0.113.7:25565"),
 			[]corev1.Pod{readyProxyPod("192.168.1.10", 0)}, clusterIPService(), ""},
+		{"ClusterIP game address with an unparsable port: nothing", voiceNet,
+			withStatus(spawneryv1alpha1.ExposeSpec{Type: spawneryv1alpha1.ExposeClusterIP,
+				ClusterIP: &spawneryv1alpha1.ClusterIPSpec{Address: "voice.example.test:abc"}}, nil, "10.0.0.5:25565"),
+			[]corev1.Pod{readyProxyPod("192.168.1.10", 0)}, clusterIPService(), ""},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {

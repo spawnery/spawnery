@@ -62,7 +62,9 @@ func PublicPort(group *spawneryv1alpha1.ProxyGroup) int32 {
 	return 0
 }
 
-// Announce is the endpoint for this group's clients; false when voice is off, there is no port, the LoadBalancer has no ingress yet, or a ClusterIP address is missing or unparsable.
+// Announce is the endpoint for this group's clients; false when voice is off,
+// there is no port, the LoadBalancer has no ingress yet, or a ClusterIP
+// address is missing or unparsable.
 func Announce(network *spawneryv1alpha1.Network, group *spawneryv1alpha1.ProxyGroup) (Endpoint, bool) {
 	if _, on := network.VoiceBackendPort(); !on {
 		return Endpoint{}, false

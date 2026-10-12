@@ -40,7 +40,10 @@ import (
 var errForeignVoiceService = errors.New("the voice Service name is taken by an object this group does not control")
 
 // voiceServicePort is the UDP twin of the game's port: the same number and,
-// for NodePort, the same node port, since the API server keys both on protocol.
+// for NodePort, the same node port. Port uniqueness within a Service is per
+// (port, protocol), but the node-port allocator ignores protocol across
+// Services, so the twin may reuse the game's node port only inside the same
+// Service.
 func voiceServicePort(nodePort int32) corev1.ServicePort {
 	return corev1.ServicePort{
 		Name:       podspec.VoicePortName,
@@ -154,7 +157,11 @@ func voiceAddress(
 		if err != nil {
 			host = group.Status.Address
 		}
-		return join(host, voice.PublicPort(group))
+		port := voice.PublicPort(group)
+		if port == 0 {
+			return ""
+		}
+		return join(host, port)
 	}
 	switch spec.Type {
 	case spawneryv1alpha1.ExposeHostPort:
