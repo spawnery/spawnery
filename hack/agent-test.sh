@@ -3,13 +3,17 @@
 # only a real JVM, TLS handshake and HTTP/2 stream can show -- the shaded gRPC
 # stack inside Paper's classloader, trust in the mounted CA bundle and nothing
 # else, renewals that really overlap, the proxy's readiness port, and a CA
-# rotation's two-certificate bundle. Each phase is described where it starts.
+# rotation's two-certificate bundle, a voice relay routing a player it only
+# knows from the mirror. Each phase is described where it starts.
+#
+# AGENT_TEST_ONLY=voice runs the voice phase alone.
 set -euo pipefail
 
 CONTAINER="${CONTAINER:-docker}"
 IMAGE="${IMAGE:?IMAGE must be set}"
 VELOCITY_IMAGE="${VELOCITY_IMAGE:?VELOCITY_IMAGE must be set}"
 STUBOP="${STUBOP:?STUBOP must be set}"
+VOICEPROBE="${VOICEPROBE:?VOICEPROBE must be set}"
 DEADLINE="${DEADLINE:-240}"
 
 # Shared by every phase's stub but the proxy-sync one, so the stream-rate
@@ -46,6 +50,8 @@ NAME6="spawnery-agent-test-rotate-$$"
 VOLUME6="spawnery-agent-test-rotate-$$"
 NAME7="spawnery-agent-test-deaf-$$"
 VOLUME7="spawnery-agent-test-deaf-$$"
+NAME8="spawnery-agent-test-voice-$$"
+VOLUME8="spawnery-agent-test-voice-$$"
 WORK="$(mktemp -d)"
 EVENTS="$WORK/events.jsonl"
 EVENTS2="$WORK/events-supersede.jsonl"
@@ -54,6 +60,7 @@ EVENTS4="$WORK/events-proxy.jsonl"
 EVENTS5="$WORK/events-proxy-supersede.jsonl"
 EVENTS6="$WORK/events-rotate.jsonl"
 EVENTS7="$WORK/events-deaf.jsonl"
+EVENTS8="$WORK/events-voice.jsonl"
 STUB_PID=""
 STUB2_PID=""
 STUB3_PID=""
@@ -61,6 +68,7 @@ STUB4_PID=""
 STUB5_PID=""
 STUB6_PID=""
 STUB7_PID=""
+STUB8_PID=""
 
 cleanup() {
 	[ -n "$STUB_PID" ] && kill "$STUB_PID" 2>/dev/null || true
@@ -70,10 +78,11 @@ cleanup() {
 	[ -n "$STUB5_PID" ] && kill "$STUB5_PID" 2>/dev/null || true
 	[ -n "$STUB6_PID" ] && kill "$STUB6_PID" 2>/dev/null || true
 	[ -n "$STUB7_PID" ] && kill "$STUB7_PID" 2>/dev/null || true
-	"$CONTAINER" rm -f "$NAME" "$NAME2" "$NAME3" "$NAME4" "$NAME5" "$NAME6" "$NAME7" \
+	[ -n "$STUB8_PID" ] && kill "$STUB8_PID" 2>/dev/null || true
+	"$CONTAINER" rm -f "$NAME" "$NAME2" "$NAME3" "$NAME4" "$NAME5" "$NAME6" "$NAME7" "$NAME8" \
 		>/dev/null 2>&1 || true
 	"$CONTAINER" volume rm -f "$VOLUME" "$VOLUME2" "$VOLUME3" "$VOLUME4" "$VOLUME5" "$VOLUME6" \
-		"$VOLUME7" >/dev/null 2>&1 || true
+		"$VOLUME7" "$VOLUME8" >/dev/null 2>&1 || true
 	rm -rf "$WORK"
 }
 # INT and TERM too: an untrapped SIGINT exits without running the handler.
@@ -90,6 +99,25 @@ printf 'maxPlayers: 100\n' >"$WORK/config/config.yaml"
 printf 'test-forwarding-secret\n' >"$WORK/config/forwarding.secret"
 chmod 0755 "$WORK/config"
 chmod 0644 "$WORK/config/config.yaml" "$WORK/config/forwarding.secret"
+
+# A proxy's own config, as in hack/velocity-image-test.sh. playerLimit and
+# SPAWNERY_PLAYER_LIMIT come from one ProxyGroup field in a cluster.
+PROXY_LIMIT=100
+mkdir -p "$WORK/velocity-config"
+# render.Velocity refuses to guess onlineMode; true costs nothing, since no
+# phase here joins as a player.
+printf 'playerLimit: %s\nonlineMode: true\n' "$PROXY_LIMIT" >"$WORK/velocity-config/config.yaml"
+printf 'test-forwarding-secret\n' >"$WORK/velocity-config/forwarding.secret"
+# Nothing renders read-timeout, so only an overlay makes the reported value
+# differ from Velocity's default. It belongs under [advanced]; spawnery-config
+# refuses a key at the wrong depth.
+PROXY_READ_TIMEOUT=12000
+mkdir -p "$WORK/velocity-config/overlay"
+printf '[advanced]\nread-timeout = %s\n' "$PROXY_READ_TIMEOUT" \
+	>"$WORK/velocity-config/overlay/velocity.toml"
+chmod 0755 "$WORK/velocity-config" "$WORK/velocity-config/overlay"
+chmod 0644 "$WORK/velocity-config/config.yaml" "$WORK/velocity-config/forwarding.secret" \
+	"$WORK/velocity-config/overlay/velocity.toml"
 
 # start_stub <events-file> <log-file> <what> [stubop flags...] - prints the PID.
 start_stub() {
@@ -128,26 +156,6 @@ start_agent() {
 		"$@" \
 		"$image" >/dev/null
 }
-
-STUB_PID="$(start_stub "$EVENTS" "$WORK/stub.log" "passive" \
-	--dir "$WORK/agent" \
-	--san stubop \
-	--listen ":19443" \
-	--report-interval 1 \
-	--renew-after "$RENEW_AFTER" \
-	--hard-deadline 20)"
-
-# -i on this container only: a pod runs with stdin closed, and this is the one
-# phase that drives the server console (Paper runs `java ... --nogui`).
-#
-# $WORK/agent/plugins stands in for the plugin claim at
-# /var/run/spawnery/plugins. The jar is deliberately not a jar: only the copy
-# is under test, not Paper's plugin loader.
-mkdir -p "$WORK/agent/plugins/ProbePlugin"
-printf 'not a jar\n' >"$WORK/agent/plugins/probe-plugin.jar"
-printf 'probe: true\n' >"$WORK/agent/plugins/ProbePlugin/config.yml"
-
-start_agent "$NAME" "$VOLUME" "$WORK/agent" "$WORK/config" "stubop:19443" "$IMAGE" -i
 
 # Dormant and hung look the same on the wire; only the container log tells them apart.
 explain_silence() {
@@ -255,6 +263,117 @@ streams_opened() {
 port_open() {
 	"$CONTAINER" exec "$1" bash -c "exec 3<>/dev/tcp/127.0.0.1/$2" >/dev/null 2>&1
 }
+
+# ---------------------------------------------------------------------------
+# Phase eight: a voice relay routing a player it only knows from the mirror.
+#
+# The proxy holds no player at all. The stub's NetworkState puts one on the
+# synced backend, whose voice port is the stub's own UDP echo, so an answer
+# to the probe proves a proxy routes a player that is on another proxy, which
+# the multi-proxy design rests on. Defined here so AGENT_TEST_ONLY=voice can
+# run it before phase one.
+VOICE_PLAYER=6f6d2c1e-9d1a-4a8e-8f43-0b7a52c1d3e4
+VOICE_ECHO_PORT=24460
+# The relay binds once the VoiceConfig is applied, a moment after the gate
+# opens; the probe is repeated until then.
+VOICE_WITHIN=30
+
+voice_phase() {
+	echo
+	echo "starting a proxy with the voice relay, for a player on another proxy..."
+	mkdir -p "$WORK/agent-voice"
+	chmod 0755 "$WORK/agent-voice"
+	STUB8_PID="$(start_stub "$EVENTS8" "$WORK/stub8.log" "voice" \
+		--dir "$WORK/agent-voice" \
+		--san stubop \
+		--listen ":19449" \
+		--report-interval 1 \
+		--renew-after 180 \
+		--hard-deadline 240 \
+		--proxy \
+		--require-token \
+		--voice-echo ":$VOICE_ECHO_PORT" \
+		--voice-player "$VOICE_PLAYER")"
+
+	start_agent "$NAME8" "$VOLUME8" "$WORK/agent-voice" "$WORK/velocity-config" "stubop:19449" "$VELOCITY_IMAGE" \
+		-e SPAWNERY_PLAYER_LIMIT="$PROXY_LIMIT" \
+		-e SPAWNERY_FALLBACK_GROUPS=lobby \
+		-e SPAWNERY_VOICE=1 \
+		-e SPAWNERY_HOST_IP=127.0.0.1 \
+		-p 127.0.0.1::25565/udp
+
+	echo "waiting up to ${DEADLINE}s for the voice proxy to greet..."
+	await_event hello "$EVENTS8" "$NAME8"
+	await_event full_sync_sent "$EVENTS8" "$NAME8"
+	await_event voice_config_sent "$EVENTS8" "$NAME8"
+
+	local start=$SECONDS
+	until port_open "$NAME8" 8081; do
+		if [ $((SECONDS - start)) -gt 30 ]; then
+			echo "the voice proxy's ready gate was still closed 30s after its server list" >&2
+			"$CONTAINER" logs "$NAME8" 2>&1 | grep -i spawnery >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
+
+	local published port
+	published="$("$CONTAINER" port "$NAME8" 25565/udp | head -1)"
+	port="${published##*:}"
+	case "$port" in
+	'' | *[!0-9]*)
+		echo "could not read the published voice port: '$published'" >&2
+		exit 1
+		;;
+	esac
+
+	echo "probing the relay on 127.0.0.1:$port for player $VOICE_PLAYER..."
+	local answer
+	start=$SECONDS
+	until answer="$("$VOICEPROBE" --to "127.0.0.1:$port" --uuid "$VOICE_PLAYER" --timeout 2s)"; do
+		echo "$answer"
+		if [ $((SECONDS - start)) -gt "$VOICE_WITHIN" ]; then
+			echo "the relay never routed player $VOICE_PLAYER to the backend the mirror puts them on, within ${VOICE_WITHIN}s" >&2
+			echo "a proxy that only routes its own players drops every frame of a player on another proxy" >&2
+			echo "the stub's voice events:" >&2
+			jq -c 'select(.kind | startswith("voice_"))' <"$EVENTS8" >&2 || true
+			echo "the stub's log:" >&2
+			cat "$WORK/stub8.log" >&2
+			echo "the proxy's spawnery lines:" >&2
+			"$CONTAINER" logs "$NAME8" 2>&1 | grep -i spawnery >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
+	echo "$answer"
+	echo "a proxy holding no player relayed voice for one it only knows from the mirror"
+}
+
+if [ "${AGENT_TEST_ONLY:-}" = voice ]; then
+	voice_phase
+	echo "agent-test: ok (voice phase only)"
+	exit 0
+fi
+
+STUB_PID="$(start_stub "$EVENTS" "$WORK/stub.log" "passive" \
+	--dir "$WORK/agent" \
+	--san stubop \
+	--listen ":19443" \
+	--report-interval 1 \
+	--renew-after "$RENEW_AFTER" \
+	--hard-deadline 20)"
+
+# -i on this container only: a pod runs with stdin closed, and this is the one
+# phase that drives the server console (Paper runs `java ... --nogui`).
+#
+# $WORK/agent/plugins stands in for the plugin claim at
+# /var/run/spawnery/plugins. The jar is deliberately not a jar: only the copy
+# is under test, not Paper's plugin loader.
+mkdir -p "$WORK/agent/plugins/ProbePlugin"
+printf 'not a jar\n' >"$WORK/agent/plugins/probe-plugin.jar"
+printf 'probe: true\n' >"$WORK/agent/plugins/ProbePlugin/config.yml"
+
+start_agent "$NAME" "$VOLUME" "$WORK/agent" "$WORK/config" "stubop:19443" "$IMAGE" -i
 
 echo "waiting up to ${DEADLINE}s for the agent to greet..."
 await_event hello
@@ -569,25 +688,6 @@ echo "starting the proxy against an operator that holds its server list back..."
 "$CONTAINER" rm -f "$NAME3" >/dev/null 2>&1 || true
 kill "$STUB3_PID" 2>/dev/null || true
 STUB3_PID=""
-
-# A proxy's own config, as in hack/velocity-image-test.sh. playerLimit and
-# SPAWNERY_PLAYER_LIMIT come from one ProxyGroup field in a cluster.
-PROXY_LIMIT=100
-mkdir -p "$WORK/velocity-config"
-# render.Velocity refuses to guess onlineMode; true costs nothing, since no
-# phase here joins as a player.
-printf 'playerLimit: %s\nonlineMode: true\n' "$PROXY_LIMIT" >"$WORK/velocity-config/config.yaml"
-printf 'test-forwarding-secret\n' >"$WORK/velocity-config/forwarding.secret"
-# Nothing renders read-timeout, so only an overlay makes the reported value
-# differ from Velocity's default. It belongs under [advanced]; spawnery-config
-# refuses a key at the wrong depth.
-PROXY_READ_TIMEOUT=12000
-mkdir -p "$WORK/velocity-config/overlay"
-printf '[advanced]\nread-timeout = %s\n' "$PROXY_READ_TIMEOUT" \
-	>"$WORK/velocity-config/overlay/velocity.toml"
-chmod 0755 "$WORK/velocity-config" "$WORK/velocity-config/overlay"
-chmod 0644 "$WORK/velocity-config/config.yaml" "$WORK/velocity-config/forwarding.secret" \
-	"$WORK/velocity-config/overlay/velocity.toml"
 
 # Counted from the stream opening; the closed-gate probes must fit inside it.
 FULL_SYNC_AFTER=45
@@ -1009,5 +1109,13 @@ until [ "$(count_events connection "$EVENTS7")" -gt "$before" ]; do
 	sleep 2
 done
 echo "the agent reconnected $((SECONDS - deaf_start))s after the operator went silent, on its keepalive alone"
+
+# ---------------------------------------------------------------------------
+# Phase eight is voice_phase, defined before phase one.
+"$CONTAINER" rm -f "$NAME7" >/dev/null 2>&1 || true
+kill "$STUB7_PID" 2>/dev/null || true
+STUB7_PID=""
+
+voice_phase
 
 echo "agent-test: ok"

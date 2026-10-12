@@ -18,19 +18,24 @@ package main
 
 import (
 	"context"
+	"crypto/tls"
 	"crypto/x509"
 	"encoding/json"
 	"encoding/pem"
 	"io"
+	"net"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
+	"syscall"
 	"testing"
 	"time"
 
 	"github.com/spawnery/spawnery/internal/agentpb"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 func TestMaterialiseWritesACaBundleAndTokenTheAgentCanRead(t *testing.T) {
@@ -279,5 +284,178 @@ func TestTheMutingAndSupersedingGatesAreOffByDefault(t *testing.T) {
 	served = &stub{muteAfter: 2}
 	if served.muted(1) || !served.muted(2) || !served.muted(3) {
 		t.Error("muteAfter 2 does not mute from the third stream onward")
+	}
+}
+
+const voicePlayer = "0f8fad5b-d9cb-469f-a165-70867728950e"
+
+// serving runs the stub in-process on loopback and returns the address it
+// serves AgentService on; it is stopped when the test ends.
+func serving(t *testing.T, args ...string) (dir, addr string) {
+	t.Helper()
+	dir = t.TempDir()
+	stop := make(chan os.Signal, 1)
+	var stdout, stderr lockedBuffer
+	var code int
+	exited := make(chan struct{})
+	go func() {
+		defer close(exited)
+		code = run(append([]string{"--dir", dir, "--listen", "127.0.0.1:0"}, args...), &stdout, &stderr, stop)
+	}()
+	t.Cleanup(func() {
+		stop <- syscall.SIGTERM
+		<-exited
+	})
+
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		select {
+		case <-exited:
+			t.Fatalf("the stub exited with %d before serving: %s", code, stderr.String())
+		default:
+		}
+		if _, rest, ok := strings.Cut(stderr.String(), "serving AgentService on "); ok {
+			addr, _, _ = strings.Cut(rest, " ")
+			return dir, addr
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the stub never started serving: %s", stderr.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// proxyStream opens a ProxySession against a stub started by serving, over the
+// TLS the agent uses, and returns what the stub sends until want reports done.
+func proxyStream(t *testing.T, dir, addr string, want func(*agentpb.OperatorToProxy) bool) []*agentpb.OperatorToProxy {
+	t.Helper()
+	ca, err := os.ReadFile(filepath.Join(dir, "ca.crt"))
+	if err != nil {
+		t.Fatalf("ca.crt: %v", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(ca) {
+		t.Fatal("ca.crt holds no certificate")
+	}
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+		RootCAs:    pool,
+		ServerName: "stubop",
+		MinVersion: tls.VersionTLS13,
+	})))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	stream, err := agentpb.NewAgentServiceClient(conn).ProxySession(ctx)
+	if err != nil {
+		t.Fatalf("ProxySession: %v", err)
+	}
+	var got []*agentpb.OperatorToProxy
+	for {
+		message, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("Recv after %d messages: %v", len(got), err)
+		}
+		got = append(got, message)
+		if want(message) {
+			return got
+		}
+	}
+}
+
+func TestVoiceFlagsAddAVoiceConfigARosterEntryAndAReachableBackend(t *testing.T) {
+	dir, addr := serving(t, "--proxy", "--voice-echo", "127.0.0.1:0", "--voice-player", voicePlayer)
+
+	got := proxyStream(t, dir, addr, func(m *agentpb.OperatorToProxy) bool { return m.GetVoiceConfig() != nil })
+
+	var state *agentpb.NetworkState
+	var sync *agentpb.FullSync
+	syncedAt := -1
+	for i, m := range got {
+		if m.GetNetworkState() != nil {
+			state = m.GetNetworkState()
+		}
+		if m.GetFullSync() != nil {
+			sync, syncedAt = m.GetFullSync(), i
+		}
+	}
+	voice := got[len(got)-1].GetVoiceConfig()
+
+	if syncedAt < 0 {
+		t.Fatal("the VoiceConfig arrived without a FullSync before it")
+	}
+	if len(sync.GetServers()) != 1 || sync.GetServers()[0].GetName() != syncedName ||
+		sync.GetServers()[0].GetAddress() != "stubop:25565" {
+		t.Errorf("FullSync servers = %v, want %s at stubop:25565", sync.GetServers(), syncedName)
+	}
+
+	if state == nil {
+		t.Fatal("no NetworkState was sent")
+	}
+	roster := state.GetPlayers()
+	if len(roster) != 1 || roster[0].GetUuid() != voicePlayer || roster[0].GetName() != "voiceprobe" ||
+		roster[0].GetServer() != syncedName {
+		t.Errorf("roster = %v, want {%s voiceprobe %s}", roster, voicePlayer, syncedName)
+	}
+
+	if !voice.GetEnabled() || voice.GetAnnouncePort() != 25565 || voice.GetBackendPort() == 0 {
+		t.Fatalf("VoiceConfig = %v, want enabled, announce_port 25565 and the echo's port", voice)
+	}
+
+	echo, err := net.Dial("udp", net.JoinHostPort("127.0.0.1", strconv.Itoa(int(voice.GetBackendPort()))))
+	if err != nil {
+		t.Fatalf("dial the echo: %v", err)
+	}
+	defer func() { _ = echo.Close() }()
+	_ = echo.SetDeadline(time.Now().Add(5 * time.Second))
+	if _, err := echo.Write([]byte("frame")); err != nil {
+		t.Fatalf("write to the echo: %v", err)
+	}
+	buf := make([]byte, 64)
+	n, err := echo.Read(buf)
+	if err != nil {
+		t.Fatalf("the echo at backend_port %d did not answer: %v", voice.GetBackendPort(), err)
+	}
+	if string(buf[:n]) != "echo:frame" {
+		t.Errorf("the echo answered %q, want %q", buf[:n], "echo:frame")
+	}
+}
+
+func TestWithoutVoiceFlagsTheBackendStaysUnroutableAndTheRosterEmpty(t *testing.T) {
+	dir, addr := serving(t, "--proxy")
+
+	got := proxyStream(t, dir, addr, func(m *agentpb.OperatorToProxy) bool { return m.GetFullSync() != nil })
+
+	for _, m := range got {
+		if len(m.GetNetworkState().GetPlayers()) != 0 {
+			t.Errorf("roster = %v, want empty", m.GetNetworkState().GetPlayers())
+		}
+		if m.GetVoiceConfig() != nil {
+			t.Errorf("a VoiceConfig was sent without --voice-echo: %v", m.GetVoiceConfig())
+		}
+	}
+	if servers := got[len(got)-1].GetFullSync().GetServers(); len(servers) != 1 || servers[0].GetAddress() != syncedAddress {
+		t.Errorf("FullSync servers = %v, want %s at %s", servers, syncedName, syncedAddress)
+	}
+}
+
+func TestVoiceFlagsAreRefusedIncomplete(t *testing.T) {
+	for name, args := range map[string][]string{
+		"echo without a player": {"--proxy", "--voice-echo", "127.0.0.1:0"},
+		"player without echo":   {"--proxy", "--voice-player", voicePlayer},
+		"without --proxy":       {"--voice-echo", "127.0.0.1:0", "--voice-player", voicePlayer},
+	} {
+		t.Run(name, func(t *testing.T) {
+			var stdout, stderr lockedBuffer
+			stop := make(chan os.Signal, 1)
+			stop <- syscall.SIGTERM
+			code := run(append([]string{"--dir", t.TempDir(), "--listen", "127.0.0.1:0"}, args...), &stdout, &stderr, stop)
+			if code != 1 || strings.Contains(stderr.String(), "serving AgentService") {
+				t.Errorf("exit %d, want 1 before serving: %s", code, stderr.String())
+			}
+		})
 	}
 }
