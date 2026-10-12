@@ -197,6 +197,12 @@ func voiceAddress(
 // voicePluginPod names a connected proxy of the group that has Simple Voice
 // Chat's own Velocity plugin loaded, or "".
 func voicePluginPod(agents *agent.Registry, pods []corev1.Pod) string {
+	for i := range pods {
+		snap := agents.Lookup(string(pods[i].UID))
+		if snap.Connected && snap.VoicePluginLoaded {
+			return pods[i].Name
+		}
+	}
 	return ""
 }
 

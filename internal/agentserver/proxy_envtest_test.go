@@ -24,6 +24,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
@@ -33,6 +34,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agentpb"
+	"github.com/spawnery/spawnery/internal/agentserver"
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
@@ -400,6 +402,46 @@ func TestAProxyRosterReachesTheRegistryUnderTheAuthenticatedNamespace(t *testing
 
 	if got, _ := f.agents.Roster("somewhere-else"); len(got) != 0 {
 		t.Errorf("roster in another namespace = %+v, want none", got)
+	}
+}
+
+func TestAProxysVoiceCountersAndPluginFlagReachTheOperator(t *testing.T) {
+	f := newServerFixture(t)
+	pod := f.proxyPod("gateway-aaaa")
+	stream, done := dialProxy(t, f.ctx, f.addr, f.ca,
+		f.token(podspec.ProxyServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
+	defer done()
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("the opening message never arrived: %v", err)
+	}
+
+	relayed := agentserver.VoicePackets.WithLabelValues("gateway", "relayed")
+	before := testutil.ToFloat64(relayed)
+	bogusBefore := testutil.CollectAndCount(agentserver.VoicePackets)
+
+	for _, msg := range []*agentpb.ProxyMessage{
+		{Message: &agentpb.ProxyMessage_Hello{Hello: &agentpb.Hello{Version: "test", VoicePluginLoaded: true}}},
+		{Message: &agentpb.ProxyMessage_VoiceCounters{VoiceCounters: &agentpb.VoiceCounters{
+			Totals: map[string]int64{"relayed": 3, "bogus": 9},
+		}}},
+	} {
+		if err := stream.Send(msg); err != nil {
+			t.Fatalf("send %T: %v", msg.GetMessage(), err)
+		}
+	}
+
+	deadline := time.Now().Add(10 * time.Second)
+	for testutil.ToFloat64(relayed)-before != 3 {
+		if time.Now().After(deadline) {
+			t.Fatalf("relayed rose by %v, want 3", testutil.ToFloat64(relayed)-before)
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if !f.agents.Lookup(string(pod.UID)).VoicePluginLoaded {
+		t.Error("the Hello's voice plugin flag is not in the registry")
+	}
+	if n := testutil.CollectAndCount(agentserver.VoicePackets); n != bogusBefore {
+		t.Errorf("VoicePackets has %d series after the report, want %d: a reported reason minted a label", n, bogusBefore)
 	}
 }
 

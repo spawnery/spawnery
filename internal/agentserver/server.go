@@ -539,6 +539,7 @@ func (s *Server) handleProxy(
 			"readTimeoutMillis", m.Hello.GetReadTimeoutMillis())
 		s.opts.Agents.ReportReadTimeout(id.PodUID, id.Namespace,
 			time.Duration(m.Hello.GetReadTimeoutMillis())*time.Millisecond)
+		s.opts.Agents.ReportVoicePlugin(id.PodUID, m.Hello.GetVoicePluginLoaded())
 	case *agentpb.ProxyMessage_PlayerCount:
 		if err := s.opts.Agents.ReportPlayers(id.PodUID,
 			m.PlayerCount.GetPlayers(), m.PlayerCount.GetSlots()); err != nil {
@@ -586,6 +587,12 @@ func (s *Server) handleProxy(
 			RejectedReports.WithLabelValues(string(agent.RoleProxy)).Inc()
 			// No player name: this is the one message that identifies a person.
 			logger.V(1).Info("discarded a roster report", "reason", err.Error())
+		}
+	case *agentpb.ProxyMessage_VoiceCounters:
+		for reason, n := range s.opts.Agents.ReportVoiceTotals(id.PodUID, m.VoiceCounters.GetTotals()) {
+			if n > 0 {
+				VoicePackets.WithLabelValues(id.Group, reason).Add(float64(n))
+			}
 		}
 	case *agentpb.ProxyMessage_EventInterest:
 		s.opts.Proxies.SetInterest(id.PodUID, m.EventInterest.GetWanted())

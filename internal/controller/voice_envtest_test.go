@@ -29,6 +29,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/voice"
 )
@@ -548,5 +549,35 @@ func TestARejectedVoiceServiceCostsVoiceOnly(t *testing.T) {
 	assertOnlyTCP(t, f.service(t, "gateway"))
 	if pods := f.proxyPods("gateway"); len(pods) == 0 {
 		t.Error("no proxy pods: the voice Service's refusal stopped the game's reconcile")
+	}
+}
+
+func TestAProxyWithItsOwnVoicePluginIsReported(t *testing.T) {
+	f := newFixture(t)
+	f.enableVoice(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", exposeLoadBalancer)
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := f.proxyPods("gateway")
+	if len(pods) == 0 {
+		t.Fatal("the group has no proxy pods")
+	}
+	uid := string(pods[0].UID)
+	f.agents.Connect(uid, agent.RoleProxy)
+	f.agents.ReportVoicePlugin(uid, true)
+
+	f.reconcileProxyGroup(r, "gateway")
+
+	group := f.proxyGroup("gateway")
+	c := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionVoice)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != spawneryv1alpha1.ReasonVoicePluginConflict {
+		t.Fatalf("Voice = %+v, want False/%s", c, spawneryv1alpha1.ReasonVoicePluginConflict)
+	}
+	if !strings.Contains(c.Message, pods[0].Name) {
+		t.Errorf("message = %q, want it to name %s", c.Message, pods[0].Name)
+	}
+	if group.Status.Phase != "Degraded" {
+		t.Errorf("phase = %q, want Degraded", group.Status.Phase)
 	}
 }
