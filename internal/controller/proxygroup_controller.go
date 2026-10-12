@@ -282,7 +282,7 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 	if err != nil {
 		return obs, ctrl.Result{}, err
 	}
-	if err := r.reconcileNetworkPolicy(ctx, group); err != nil {
+	if err := r.reconcileNetworkPolicy(ctx, network, group); err != nil {
 		return obs, ctrl.Result{}, err
 	}
 	// A snapshot from before this pass's own creates: a pod created below is
@@ -1092,10 +1092,11 @@ func (r *ProxyGroupReconciler) deleteServiceIfOurs(
 
 // reconcileNetworkPolicy keeps the group's egress policy in step with its
 // online-mode, which is the one input that changes what a proxy may reach.
-func (r *ProxyGroupReconciler) reconcileNetworkPolicy(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) error {
+func (r *ProxyGroupReconciler) reconcileNetworkPolicy(ctx context.Context, network *spawneryv1alpha1.Network, group *spawneryv1alpha1.ProxyGroup) error {
 	online := proxyConfigValues(group).OnlineMode
+	voicePort, _ := network.VoiceBackendPort()
 	desired := podspec.BuildProxyNetworkPolicy(group.Spec.NetworkRef.Name, group, r.OperatorNamespace,
-		online != nil && *online)
+		online != nil && *online, voicePort)
 	policy := &networkingv1.NetworkPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: desired.Name, Namespace: desired.Namespace},
 	}
