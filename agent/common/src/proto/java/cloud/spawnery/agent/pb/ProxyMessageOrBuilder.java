@@ -130,5 +130,20 @@ public interface ProxyMessageOrBuilder extends
    */
   cloud.spawnery.agent.pb.EventInterestOrBuilder getEventInterestOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.VoiceCounters voice_counters = 9;</code>
+   * @return Whether the voiceCounters field is set.
+   */
+  boolean hasVoiceCounters();
+  /**
+   * <code>.spawnery.agent.v1alpha1.VoiceCounters voice_counters = 9;</code>
+   * @return The voiceCounters.
+   */
+  cloud.spawnery.agent.pb.VoiceCounters getVoiceCounters();
+  /**
+   * <code>.spawnery.agent.v1alpha1.VoiceCounters voice_counters = 9;</code>
+   */
+  cloud.spawnery.agent.pb.VoiceCountersOrBuilder getVoiceCountersOrBuilder();
+
   cloud.spawnery.agent.pb.ProxyMessage.MessageCase getMessageCase();
 }

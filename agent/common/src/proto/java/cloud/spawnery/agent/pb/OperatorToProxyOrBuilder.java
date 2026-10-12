@@ -175,5 +175,20 @@ public interface OperatorToProxyOrBuilder extends
    */
   cloud.spawnery.agent.pb.CloudEventOrBuilder getCloudEventOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.VoiceConfig voice_config = 12;</code>
+   * @return Whether the voiceConfig field is set.
+   */
+  boolean hasVoiceConfig();
+  /**
+   * <code>.spawnery.agent.v1alpha1.VoiceConfig voice_config = 12;</code>
+   * @return The voiceConfig.
+   */
+  cloud.spawnery.agent.pb.VoiceConfig getVoiceConfig();
+  /**
+   * <code>.spawnery.agent.v1alpha1.VoiceConfig voice_config = 12;</code>
+   */
+  cloud.spawnery.agent.pb.VoiceConfigOrBuilder getVoiceConfigOrBuilder();
+
   cloud.spawnery.agent.pb.OperatorToProxy.MessageCase getMessageCase();
 }

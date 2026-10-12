@@ -61,6 +61,8 @@ message Hello {
   // The effective value, from ProxyServer.getConfiguration().getReadTimeout().
   // Zero means not reported; the operator then assumes the shipped default.
   int32 read_timeout_millis = 3;
+  // Proxy agents only: SVC's own Velocity plugin (id "voicechat") is loaded, which would bind the relay's port.
+  bool voice_plugin_loaded = 4;
 }
 
 // PlayerCount is the periodic report.
@@ -779,6 +781,7 @@ message ProxyMessage {
     PlayerRoster player_roster = 6;
     CloudRequest cloud_request = 7;
     EventInterest event_interest = 8;
+    VoiceCounters voice_counters = 9;
   }
 }
 
@@ -830,6 +833,26 @@ message SetReady {
   bool ready = 1;
 }
 
+// VoiceConfig is whether this proxy relays Simple Voice Chat, and what it
+// rewrites a backend's secret packet to. A state, re-sent with every snapshot.
+message VoiceConfig {
+  bool enabled = 1;
+  // The UDP port SVC listens on in every backend.
+  int32 backend_port = 2;
+  // The endpoint clients are told. announce_port 0: not known yet, and the
+  // secret is passed through untouched. An empty host without own_node keeps
+  // the host the client joined through.
+  string announce_host = 3;
+  int32 announce_port = 4;
+  bool announce_own_node = 5;
+}
+
+// VoiceCounters are the relay's packet totals since the agent started, by
+// reason. Cumulative: the operator turns them into increments.
+message VoiceCounters {
+  map<string, int64> totals = 1;
+}
+
 message OperatorToProxy {
   oneof message {
     FullSync full_sync = 1;
@@ -843,5 +866,6 @@ message OperatorToProxy {
     CloudResponse cloud_response = 9;
     MovePlayer move_player = 10;
     CloudEvent cloud_event = 11;
+    VoiceConfig voice_config = 12;
   }
 }

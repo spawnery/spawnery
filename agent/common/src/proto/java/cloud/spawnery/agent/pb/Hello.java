@@ -127,6 +127,21 @@ private static final long serialVersionUID = 0L;
     return readTimeoutMillis_;
   }
 
+  public static final int VOICE_PLUGIN_LOADED_FIELD_NUMBER = 4;
+  private boolean voicePluginLoaded_ = false;
+  /**
+   * <pre>
+   * Proxy agents only: SVC's own Velocity plugin (id "voicechat") is loaded, which would bind the relay's port.
+   * </pre>
+   *
+   * <code>bool voice_plugin_loaded = 4;</code>
+   * @return The voicePluginLoaded.
+   */
+  @java.lang.Override
+  public boolean getVoicePluginLoaded() {
+    return voicePluginLoaded_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -150,6 +165,9 @@ private static final long serialVersionUID = 0L;
     if (readTimeoutMillis_ != 0) {
       output.writeInt32(3, readTimeoutMillis_);
     }
+    if (voicePluginLoaded_ != false) {
+      output.writeBool(4, voicePluginLoaded_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -164,6 +182,10 @@ private static final long serialVersionUID = 0L;
     if (readTimeoutMillis_ != 0) {
       size += com.google.protobuf.CodedOutputStream
         .computeInt32Size(3, readTimeoutMillis_);
+    }
+    if (voicePluginLoaded_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(4, voicePluginLoaded_);
     }
     return size;
   }
@@ -195,6 +217,8 @@ private static final long serialVersionUID = 0L;
         != other.getReady()) return false;
     if (getReadTimeoutMillis()
         != other.getReadTimeoutMillis()) return false;
+    if (getVoicePluginLoaded()
+        != other.getVoicePluginLoaded()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -213,6 +237,9 @@ private static final long serialVersionUID = 0L;
         getReady());
     hash = (37 * hash) + READ_TIMEOUT_MILLIS_FIELD_NUMBER;
     hash = (53 * hash) + getReadTimeoutMillis();
+    hash = (37 * hash) + VOICE_PLUGIN_LOADED_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getVoicePluginLoaded());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -352,6 +379,7 @@ private static final long serialVersionUID = 0L;
       version_ = "";
       ready_ = false;
       readTimeoutMillis_ = 0;
+      voicePluginLoaded_ = false;
       return this;
     }
 
@@ -394,6 +422,9 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000004) != 0)) {
         result.readTimeoutMillis_ = readTimeoutMillis_;
       }
+      if (((from_bitField0_ & 0x00000008) != 0)) {
+        result.voicePluginLoaded_ = voicePluginLoaded_;
+      }
     }
 
     @java.lang.Override
@@ -418,6 +449,9 @@ private static final long serialVersionUID = 0L;
       }
       if (other.getReadTimeoutMillis() != 0) {
         setReadTimeoutMillis(other.getReadTimeoutMillis());
+      }
+      if (other.getVoicePluginLoaded() != false) {
+        setVoicePluginLoaded(other.getVoicePluginLoaded());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -460,6 +494,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000004;
               break;
             } // case 24
+            case 32: {
+              voicePluginLoaded_ = input.readBool();
+              bitField0_ |= 0x00000008;
+              break;
+            } // case 32
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -645,6 +684,50 @@ private static final long serialVersionUID = 0L;
     public Builder clearReadTimeoutMillis() {
       bitField0_ = (bitField0_ & ~0x00000004);
       readTimeoutMillis_ = 0;
+      onChanged();
+      return this;
+    }
+
+    private boolean voicePluginLoaded_ ;
+    /**
+     * <pre>
+     * Proxy agents only: SVC's own Velocity plugin (id "voicechat") is loaded, which would bind the relay's port.
+     * </pre>
+     *
+     * <code>bool voice_plugin_loaded = 4;</code>
+     * @return The voicePluginLoaded.
+     */
+    @java.lang.Override
+    public boolean getVoicePluginLoaded() {
+      return voicePluginLoaded_;
+    }
+    /**
+     * <pre>
+     * Proxy agents only: SVC's own Velocity plugin (id "voicechat") is loaded, which would bind the relay's port.
+     * </pre>
+     *
+     * <code>bool voice_plugin_loaded = 4;</code>
+     * @param value The voicePluginLoaded to set.
+     * @return This builder for chaining.
+     */
+    public Builder setVoicePluginLoaded(boolean value) {
+
+      voicePluginLoaded_ = value;
+      bitField0_ |= 0x00000008;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Proxy agents only: SVC's own Velocity plugin (id "voicechat") is loaded, which would bind the relay's port.
+     * </pre>
+     *
+     * <code>bool voice_plugin_loaded = 4;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearVoicePluginLoaded() {
+      bitField0_ = (bitField0_ & ~0x00000008);
+      voicePluginLoaded_ = false;
       onChanged();
       return this;
     }

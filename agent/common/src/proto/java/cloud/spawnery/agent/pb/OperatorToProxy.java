@@ -65,6 +65,7 @@ private static final long serialVersionUID = 0L;
     CLOUD_RESPONSE(9),
     MOVE_PLAYER(10),
     CLOUD_EVENT(11),
+    VOICE_CONFIG(12),
     MESSAGE_NOT_SET(0);
     private final int value;
     private MessageCase(int value) {
@@ -93,6 +94,7 @@ private static final long serialVersionUID = 0L;
         case 9: return CLOUD_RESPONSE;
         case 10: return MOVE_PLAYER;
         case 11: return CLOUD_EVENT;
+        case 12: return VOICE_CONFIG;
         case 0: return MESSAGE_NOT_SET;
         default: return null;
       }
@@ -449,6 +451,37 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.CloudEvent.getDefaultInstance();
   }
 
+  public static final int VOICE_CONFIG_FIELD_NUMBER = 12;
+  /**
+   * <code>.spawnery.agent.v1alpha1.VoiceConfig voice_config = 12;</code>
+   * @return Whether the voiceConfig field is set.
+   */
+  @java.lang.Override
+  public boolean hasVoiceConfig() {
+    return messageCase_ == 12;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.VoiceConfig voice_config = 12;</code>
+   * @return The voiceConfig.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.VoiceConfig getVoiceConfig() {
+    if (messageCase_ == 12) {
+       return (cloud.spawnery.agent.pb.VoiceConfig) message_;
+    }
+    return cloud.spawnery.agent.pb.VoiceConfig.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.VoiceConfig voice_config = 12;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.VoiceConfigOrBuilder getVoiceConfigOrBuilder() {
+    if (messageCase_ == 12) {
+       return (cloud.spawnery.agent.pb.VoiceConfig) message_;
+    }
+    return cloud.spawnery.agent.pb.VoiceConfig.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -495,6 +528,9 @@ private static final long serialVersionUID = 0L;
     }
     if (messageCase_ == 11) {
       output.writeMessage(11, (cloud.spawnery.agent.pb.CloudEvent) message_);
+    }
+    if (messageCase_ == 12) {
+      output.writeMessage(12, (cloud.spawnery.agent.pb.VoiceConfig) message_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -543,6 +579,10 @@ private static final long serialVersionUID = 0L;
     if (messageCase_ == 11) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(11, (cloud.spawnery.agent.pb.CloudEvent) message_);
+    }
+    if (messageCase_ == 12) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(12, (cloud.spawnery.agent.pb.VoiceConfig) message_);
     }
     return size;
   }
@@ -614,6 +654,10 @@ private static final long serialVersionUID = 0L;
         if (!getCloudEvent()
             .equals(other.getCloudEvent())) return false;
         break;
+      case 12:
+        if (!getVoiceConfig()
+            .equals(other.getVoiceConfig())) return false;
+        break;
       case 0:
       default:
     }
@@ -672,6 +716,10 @@ private static final long serialVersionUID = 0L;
       case 11:
         hash = (37 * hash) + CLOUD_EVENT_FIELD_NUMBER;
         hash = (53 * hash) + getCloudEvent().hashCode();
+        break;
+      case 12:
+        hash = (37 * hash) + VOICE_CONFIG_FIELD_NUMBER;
+        hash = (53 * hash) + getVoiceConfig().hashCode();
         break;
       case 0:
       default:
@@ -840,6 +888,9 @@ private static final long serialVersionUID = 0L;
       if (cloudEventBuilder_ != null) {
         cloudEventBuilder_.clear();
       }
+      if (voiceConfigBuilder_ != null) {
+        voiceConfigBuilder_.clear();
+      }
       messageCase_ = 0;
       message_ = null;
       return this;
@@ -925,6 +976,10 @@ private static final long serialVersionUID = 0L;
           cloudEventBuilder_ != null) {
         result.message_ = cloudEventBuilder_.build();
       }
+      if (messageCase_ == 12 &&
+          voiceConfigBuilder_ != null) {
+        result.message_ = voiceConfigBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -982,6 +1037,10 @@ private static final long serialVersionUID = 0L;
         }
         case CLOUD_EVENT: {
           mergeCloudEvent(other.getCloudEvent());
+          break;
+        }
+        case VOICE_CONFIG: {
+          mergeVoiceConfig(other.getVoiceConfig());
           break;
         }
         case MESSAGE_NOT_SET: {
@@ -1091,6 +1150,13 @@ private static final long serialVersionUID = 0L;
               messageCase_ = 11;
               break;
             } // case 90
+            case 98: {
+              input.readMessage(
+                  internalGetVoiceConfigFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              messageCase_ = 12;
+              break;
+            } // case 98
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2683,6 +2749,148 @@ private static final long serialVersionUID = 0L;
       messageCase_ = 11;
       onChanged();
       return cloudEventBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.VoiceConfig, cloud.spawnery.agent.pb.VoiceConfig.Builder, cloud.spawnery.agent.pb.VoiceConfigOrBuilder> voiceConfigBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceConfig voice_config = 12;</code>
+     * @return Whether the voiceConfig field is set.
+     */
+    @java.lang.Override
+    public boolean hasVoiceConfig() {
+      return messageCase_ == 12;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceConfig voice_config = 12;</code>
+     * @return The voiceConfig.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.VoiceConfig getVoiceConfig() {
+      if (voiceConfigBuilder_ == null) {
+        if (messageCase_ == 12) {
+          return (cloud.spawnery.agent.pb.VoiceConfig) message_;
+        }
+        return cloud.spawnery.agent.pb.VoiceConfig.getDefaultInstance();
+      } else {
+        if (messageCase_ == 12) {
+          return voiceConfigBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.VoiceConfig.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceConfig voice_config = 12;</code>
+     */
+    public Builder setVoiceConfig(cloud.spawnery.agent.pb.VoiceConfig value) {
+      if (voiceConfigBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        message_ = value;
+        onChanged();
+      } else {
+        voiceConfigBuilder_.setMessage(value);
+      }
+      messageCase_ = 12;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceConfig voice_config = 12;</code>
+     */
+    public Builder setVoiceConfig(
+        cloud.spawnery.agent.pb.VoiceConfig.Builder builderForValue) {
+      if (voiceConfigBuilder_ == null) {
+        message_ = builderForValue.build();
+        onChanged();
+      } else {
+        voiceConfigBuilder_.setMessage(builderForValue.build());
+      }
+      messageCase_ = 12;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceConfig voice_config = 12;</code>
+     */
+    public Builder mergeVoiceConfig(cloud.spawnery.agent.pb.VoiceConfig value) {
+      if (voiceConfigBuilder_ == null) {
+        if (messageCase_ == 12 &&
+            message_ != cloud.spawnery.agent.pb.VoiceConfig.getDefaultInstance()) {
+          message_ = cloud.spawnery.agent.pb.VoiceConfig.newBuilder((cloud.spawnery.agent.pb.VoiceConfig) message_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          message_ = value;
+        }
+        onChanged();
+      } else {
+        if (messageCase_ == 12) {
+          voiceConfigBuilder_.mergeFrom(value);
+        } else {
+          voiceConfigBuilder_.setMessage(value);
+        }
+      }
+      messageCase_ = 12;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceConfig voice_config = 12;</code>
+     */
+    public Builder clearVoiceConfig() {
+      if (voiceConfigBuilder_ == null) {
+        if (messageCase_ == 12) {
+          messageCase_ = 0;
+          message_ = null;
+          onChanged();
+        }
+      } else {
+        if (messageCase_ == 12) {
+          messageCase_ = 0;
+          message_ = null;
+        }
+        voiceConfigBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceConfig voice_config = 12;</code>
+     */
+    public cloud.spawnery.agent.pb.VoiceConfig.Builder getVoiceConfigBuilder() {
+      return internalGetVoiceConfigFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceConfig voice_config = 12;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.VoiceConfigOrBuilder getVoiceConfigOrBuilder() {
+      if ((messageCase_ == 12) && (voiceConfigBuilder_ != null)) {
+        return voiceConfigBuilder_.getMessageOrBuilder();
+      } else {
+        if (messageCase_ == 12) {
+          return (cloud.spawnery.agent.pb.VoiceConfig) message_;
+        }
+        return cloud.spawnery.agent.pb.VoiceConfig.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.VoiceConfig voice_config = 12;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.VoiceConfig, cloud.spawnery.agent.pb.VoiceConfig.Builder, cloud.spawnery.agent.pb.VoiceConfigOrBuilder> 
+        internalGetVoiceConfigFieldBuilder() {
+      if (voiceConfigBuilder_ == null) {
+        if (!(messageCase_ == 12)) {
+          message_ = cloud.spawnery.agent.pb.VoiceConfig.getDefaultInstance();
+        }
+        voiceConfigBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.VoiceConfig, cloud.spawnery.agent.pb.VoiceConfig.Builder, cloud.spawnery.agent.pb.VoiceConfigOrBuilder>(
+                (cloud.spawnery.agent.pb.VoiceConfig) message_,
+                getParentForChildren(),
+                isClean());
+        message_ = null;
+      }
+      messageCase_ = 12;
+      onChanged();
+      return voiceConfigBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.OperatorToProxy)
