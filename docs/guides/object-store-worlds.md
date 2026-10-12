@@ -199,6 +199,9 @@ A stop always uploads, whether or not the agent ever asked for a snapshot.
 deletes the member's `Server`. The operator sweeps marked worlds once a minute, as
 soon as no node holds their lease. Until the sweep is done, `startServer` for
 the same key answers `UNAVAILABLE`; after it, the key starts an empty world.
+A new world whose first upload is still running when its `Server` is already
+gone still counts as a world, since the node agent holds its lease from the
+mount on. The delete marks it, and the sweep removes the upload once it lands.
 Without `--world-sync`, `startServer` refuses every key of an `ObjectStore`
 group.
 
