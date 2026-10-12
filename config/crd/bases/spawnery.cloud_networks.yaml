@@ -1222,6 +1222,24 @@ spec:
                     minimum: 1
                     type: integer
                 type: object
+              voice:
+                description: |-
+                  Voice relays Simple Voice Chat through this network's proxies. Present
+                  means on: every ProxyGroup relays, and the backends' policy admits UDP
+                  backendPort from the proxies. The SVC plugin itself is not installed by
+                  the operator, and SVC's own Velocity plugin must not be.
+                properties:
+                  backendPort:
+                    default: 24454
+                    description: |-
+                      BackendPort is the UDP port SVC listens on in each backend pod. The
+                      operator writes it nowhere; it has to match the plugin's own
+                      configuration.
+                    format: int32
+                    maximum: 65535
+                    minimum: 1
+                    type: integer
+                type: object
             required:
             - forwardingSecretRef
             type: object

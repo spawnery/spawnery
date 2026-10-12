@@ -59,6 +59,8 @@ NetworkSpec describes one Minecraft network. Exactly one Network may exist per n
 <tr><td><code>scheduling.hostPortRange.min</code></td><td>integer (int32) (1-65535)</td><td align="center">&#10003;</td><td></td><td></td></tr>
 <tr><td><code>update</code></td><td>object</td><td align="center"></td><td></td><td>Update is how the network&#x27;s groups change over to a new spec.</td></tr>
 <tr><td><code>update.maxConcurrentChangeovers</code></td><td>integer (int32) (&gt;= 1)</td><td align="center"></td><td></td><td>MaxConcurrentChangeovers is how many server and proxy groups may change over at the same time. A group changing over runs one server more than its size until its last stale server is gone; a change that reaches every group at once needs that room for every group at once. Unset means no cap.</td></tr>
+<tr><td><code>voice</code></td><td>object</td><td align="center"></td><td></td><td>Voice relays Simple Voice Chat through this network&#x27;s proxies. Present means on: every ProxyGroup relays, and the backends&#x27; policy admits UDP backendPort from the proxies. The SVC plugin itself is not installed by the operator, and SVC&#x27;s own Velocity plugin must not be.</td></tr>
+<tr><td><code>voice.backendPort</code></td><td>integer (int32) (1-65535)</td><td align="center"></td><td><code>24454</code></td><td>BackendPort is the UDP port SVC listens on in each backend pod. The operator writes it nowhere; it has to match the plugin&#x27;s own configuration.</td></tr>
 </tbody></table></div>
 
 ### status
@@ -231,6 +233,7 @@ ProxyGroup is the Velocity layer of a network.
 <tr><td>Phase</td><td>string</td><td><code>.status.phase</code></td></tr>
 <tr><td>Ready</td><td>integer</td><td><code>.status.readyReplicas</code></td></tr>
 <tr><td>Address</td><td>string</td><td><code>.status.address</code></td></tr>
+<tr><td>Voice</td><td>string</td><td><code>.status.voiceAddress</code></td></tr>
 <tr><td>Players</td><td>integer</td><td><code>.status.connectedPlayers</code></td></tr>
 <tr><td>Age</td><td>date</td><td><code>.metadata.creationTimestamp</code></td></tr>
 </tbody></table></div>
@@ -303,6 +306,18 @@ ProxyGroupSpec describes the Velocity layer of a network.
 <tr><td><code>update.transfer</code></td><td>object</td><td align="center"></td><td></td><td>Transfer moves players to another proxy instead of waiting for them.</td></tr>
 <tr><td><code>update.transfer.forceAfterSeconds</code></td><td>integer (int32) (&gt;= 0)</td><td align="center"></td><td></td><td>ForceAfterSeconds is how long a leaving proxy waits before it transfers players who have not changed server, counted from when its agent first sees it leaving. Default 120; keep it below drain.timeoutSeconds and any maxStaleSeconds.</td></tr>
 <tr><td><code>update.transfer.forceGroups</code></td><td>array of string</td><td align="center"></td><td></td><td>ForceGroups limits the forced transfer to players on servers of these server groups; everyone else moves only when they change server. Empty forces in every group.</td></tr>
+<tr><td><code>voice</code></td><td>object</td><td align="center"></td><td></td><td>Voice changes how voice chat leaves this group. Without it, voice takes the game&#x27;s way out with the same port number, as UDP. Only read while the Network has spec.voice.</td></tr>
+<tr><td><code>voice.expose</code></td><td>object</td><td align="center"></td><td></td><td>Expose gives voice a way out of its own, for an entry point that carries no UDP. HostPort binds a UDP host port; the other types get a Service named &lt;group&gt;-voice with only the UDP port.</td></tr>
+<tr><td><code>voice.expose.clusterIP</code></td><td>object</td><td align="center"></td><td></td><td>ClusterIP configures type ClusterIP.</td></tr>
+<tr><td><code>voice.expose.clusterIP.address</code></td><td>string (length &gt;= 1)</td><td align="center">&#10003;</td><td></td><td>Address is what a player types. Required, because the operator cannot learn it from whatever routes to the Service.<details><summary>more</summary>Give &quot;host:port&quot; only when the entry point is not on 25565, the client&#x27;s default.<br><br>Nothing checks that it resolves, that anything listens, or that it leads to this group&#x27;s Service.</details></td></tr>
+<tr><td><code>voice.expose.hostPort</code></td><td>object</td><td align="center"></td><td></td><td>HostPort configures type HostPort.<details><summary>more</summary>Pod Security <code>baseline</code> and <code>restricted</code> both refuse a hostPort, so the group needs a namespace of its own with a relaxed label; the refusal is reported on Degraded. Whether the port is reachable from outside is still up to the host firewall or cluster network policy.</details></td></tr>
+<tr><td><code>voice.expose.hostPort.port</code></td><td>integer (int32) (1-65535)</td><td align="center">&#10003;</td><td></td><td>Port is bound on every node running a proxy pod. The kube-scheduler keeps at most one such pod per node, so replicas are capped by nodes.</td></tr>
+<tr><td><code>voice.expose.loadBalancer</code></td><td>object</td><td align="center"></td><td></td><td>LoadBalancer configures type LoadBalancer.</td></tr>
+<tr><td><code>voice.expose.loadBalancer.annotations</code></td><td>map[string]string</td><td align="center"></td><td></td><td>Annotations are copied onto the Service, e.g. for MetalLB pool selection.</td></tr>
+<tr><td><code>voice.expose.loadBalancer.externalTrafficPolicy</code></td><td>string</td><td align="center"></td><td><code>Local</code></td><td>ExternalTrafficPolicy defaults to Local so the client IP survives — bans and rate limits depend on it.</td></tr>
+<tr><td><code>voice.expose.nodePort</code></td><td>object</td><td align="center"></td><td></td><td>NodePort configures type NodePort.</td></tr>
+<tr><td><code>voice.expose.nodePort.port</code></td><td>integer (int32) (1-65535)</td><td align="center">&#10003;</td><td></td><td>Port must lie inside the API server&#x27;s service-node-port-range.</td></tr>
+<tr><td><code>voice.expose.type</code></td><td>string (one of: LoadBalancer, NodePort, HostPort, ClusterIP)</td><td align="center">&#10003;</td><td></td><td>Type selects the strategy.</td></tr>
 </tbody></table></div>
 
 ### status
@@ -325,6 +340,7 @@ Read by observers; the operator writes it and reads nothing back from it.
 <tr><td><code>observedGeneration</code></td><td>integer (int64)</td><td align="center"></td><td></td><td>ObservedGeneration is the spec generation this status was computed from. It advances on a refused pass too; check Degraded beside it.</td></tr>
 <tr><td><code>phase</code></td><td>string</td><td align="center"></td><td></td><td>Phase is derived from the proxy pods and conditions.</td></tr>
 <tr><td><code>readyReplicas</code></td><td>integer (int32)</td><td align="center"></td><td></td><td>ReadyReplicas is the number of proxies that passed the ready gate.</td></tr>
+<tr><td><code>voiceAddress</code></td><td>string</td><td align="center"></td><td></td><td>VoiceAddress is where voice chat reaches this group, empty while voice is off or no proxy is ready. When voice takes the game&#x27;s way out it is the game address&#x27;s host with the UDP port; clients are told the port only and keep the host they typed.</td></tr>
 </tbody></table></div>
 
 

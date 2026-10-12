@@ -306,6 +306,29 @@ type ProxyGroupSpec struct {
 	// extraPlugins and extraFiles. See Substitution.
 	// +optional
 	Substitution *Substitution `json:"substitution,omitempty"`
+
+	// Voice changes how voice chat leaves this group. Without it, voice takes
+	// the game's way out with the same port number, as UDP. Only read while
+	// the Network has spec.voice.
+	// +optional
+	Voice *ProxyVoiceSpec `json:"voice,omitempty"`
+}
+
+// ProxyVoiceSpec overrides how voice chat reaches this group's proxies.
+type ProxyVoiceSpec struct {
+	// Expose gives voice a way out of its own, for an entry point that carries
+	// no UDP. HostPort binds a UDP host port; the other types get a Service
+	// named <group>-voice with only the UDP port.
+	// +optional
+	Expose *ExposeSpec `json:"expose,omitempty"`
+}
+
+// VoiceExpose is the strategy voice leaves by, and whether it is its own.
+func (g *ProxyGroup) VoiceExpose() (ExposeSpec, bool) {
+	if g.Spec.Voice != nil && g.Spec.Voice.Expose != nil {
+		return *g.Spec.Voice.Expose, true
+	}
+	return g.Spec.Expose, false
 }
 
 // ProxyGroupStatus is the observed state of a ProxyGroup.
@@ -321,6 +344,13 @@ type ProxyGroupStatus struct {
 	// Address is where players connect.
 	// +optional
 	Address string `json:"address,omitempty"`
+
+	// VoiceAddress is where voice chat reaches this group, empty while voice
+	// is off or no proxy is ready. When voice takes the game's way out it is
+	// the game address's host with the UDP port; clients are told the port
+	// only and keep the host they typed.
+	// +optional
+	VoiceAddress string `json:"voiceAddress,omitempty"`
 
 	// ConnectedPlayers is the sum of players across all proxies.
 	// +optional
@@ -350,6 +380,7 @@ type ProxyGroupStatus struct {
 // +kubebuilder:printcolumn:name="Phase",type=string,JSONPath=`.status.phase`
 // +kubebuilder:printcolumn:name="Ready",type=integer,JSONPath=`.status.readyReplicas`
 // +kubebuilder:printcolumn:name="Address",type=string,JSONPath=`.status.address`
+// +kubebuilder:printcolumn:name="Voice",type=string,JSONPath=`.status.voiceAddress`,priority=1
 // +kubebuilder:printcolumn:name="Players",type=integer,JSONPath=`.status.connectedPlayers`
 // +kubebuilder:printcolumn:name="Age",type=date,JSONPath=`.metadata.creationTimestamp`
 

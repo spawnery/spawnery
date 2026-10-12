@@ -26,6 +26,10 @@ spec:
     - jsonPath: .status.address
       name: Address
       type: string
+    - jsonPath: .status.voiceAddress
+      name: Voice
+      priority: 1
+      type: string
     - jsonPath: .status.connectedPlayers
       name: Players
       type: integer
@@ -1798,6 +1802,115 @@ spec:
                         x-kubernetes-list-type: set
                     type: object
                 type: object
+              voice:
+                description: |-
+                  Voice changes how voice chat leaves this group. Without it, voice takes
+                  the game's way out with the same port number, as UDP. Only read while
+                  the Network has spec.voice.
+                properties:
+                  expose:
+                    description: |-
+                      Expose gives voice a way out of its own, for an entry point that carries
+                      no UDP. HostPort binds a UDP host port; the other types get a Service
+                      named <group>-voice with only the UDP port.
+                    properties:
+                      clusterIP:
+                        description: ClusterIP configures type ClusterIP.
+                        properties:
+                          address:
+                            description: |-
+                              Address is what a player types. Required, because the operator cannot
+                              learn it from whatever routes to the Service.
+
+                              Give "host:port" only when the entry point is not on 25565, the
+                              client's default.
+
+                              Nothing checks that it resolves, that anything listens, or that it
+                              leads to this group's Service.
+                            minLength: 1
+                            type: string
+                        required:
+                        - address
+                        type: object
+                        x-kubernetes-validations:
+                        - message: 'expose.clusterIP.address is what a player types,
+                            not a URL: no scheme and no spaces'
+                          rule: '!self.address.contains('' '') && !self.address.contains(''://'')'
+                      hostPort:
+                        description: |-
+                          HostPort configures type HostPort.
+
+                          Pod Security `baseline` and `restricted` both refuse a hostPort, so the
+                          group needs a namespace of its own with a relaxed label; the refusal is
+                          reported on Degraded. Whether the port is reachable from outside is
+                          still up to the host firewall or cluster network policy.
+                        properties:
+                          port:
+                            description: |-
+                              Port is bound on every node running a proxy pod. The kube-scheduler
+                              keeps at most one such pod per node, so replicas are capped by nodes.
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                        required:
+                        - port
+                        type: object
+                      loadBalancer:
+                        description: LoadBalancer configures type LoadBalancer.
+                        properties:
+                          annotations:
+                            additionalProperties:
+                              type: string
+                            description: Annotations are copied onto the Service,
+                              e.g. for MetalLB pool selection.
+                            type: object
+                          externalTrafficPolicy:
+                            default: Local
+                            description: |-
+                              ExternalTrafficPolicy defaults to Local so the client IP survives — bans
+                              and rate limits depend on it.
+                            type: string
+                        type: object
+                      nodePort:
+                        description: NodePort configures type NodePort.
+                        properties:
+                          port:
+                            description: Port must lie inside the API server's service-node-port-range.
+                            format: int32
+                            maximum: 65535
+                            minimum: 1
+                            type: integer
+                        required:
+                        - port
+                        type: object
+                      type:
+                        description: Type selects the strategy.
+                        enum:
+                        - LoadBalancer
+                        - NodePort
+                        - HostPort
+                        - ClusterIP
+                        type: string
+                    required:
+                    - type
+                    type: object
+                    x-kubernetes-validations:
+                    - message: expose.nodePort is required for type NodePort
+                      rule: self.type != 'NodePort' || has(self.nodePort)
+                    - message: expose.hostPort is required for type HostPort
+                      rule: self.type != 'HostPort' || has(self.hostPort)
+                    - message: expose.loadBalancer is only allowed for type LoadBalancer
+                      rule: self.type == 'LoadBalancer' || !has(self.loadBalancer)
+                    - message: expose.nodePort is only allowed for type NodePort
+                      rule: self.type == 'NodePort' || !has(self.nodePort)
+                    - message: expose.hostPort is only allowed for type HostPort
+                      rule: self.type == 'HostPort' || !has(self.hostPort)
+                    - message: expose.clusterIP is required for type ClusterIP
+                      rule: self.type != 'ClusterIP' || has(self.clusterIP)
+                    - message: expose.clusterIP is only allowed for type ClusterIP
+                      rule: self.type == 'ClusterIP' || !has(self.clusterIP)
+                type: object
             required:
             - expose
             - image
@@ -1902,6 +2015,13 @@ spec:
                   ready gate.
                 format: int32
                 type: integer
+              voiceAddress:
+                description: |-
+                  VoiceAddress is where voice chat reaches this group, empty while voice
+                  is off or no proxy is ready. When voice takes the game's way out it is
+                  the game address's host with the UDP port; clients are told the port
+                  only and keep the host they typed.
+                type: string
             type: object
         type: object
     served: true
