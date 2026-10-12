@@ -687,3 +687,99 @@ func TestAProxyGroupWithoutTransferCarriesNeitherVariable(t *testing.T) {
 		}
 	}
 }
+
+func voicePort(pod *corev1.Pod) *corev1.ContainerPort {
+	for i, p := range pod.Spec.Containers[0].Ports {
+		if p.Name == VoicePortName {
+			return &pod.Spec.Containers[0].Ports[i]
+		}
+	}
+	return nil
+}
+
+func TestAProxyWithoutVoiceHasNoVoicePortAndNoHostIP(t *testing.T) {
+	pod := buildProxy(t)
+	if p := voicePort(pod); p != nil {
+		t.Fatalf("voice port present without Network.spec.voice: %+v", p)
+	}
+	for _, e := range pod.Spec.Containers[0].Env {
+		if e.Name == EnvHostIP || e.Name == EnvVoice {
+			t.Fatalf("%s set without Network.spec.voice", e.Name)
+		}
+	}
+}
+
+func TestAProxyInAVoiceNetworkListensOnUDP25565(t *testing.T) {
+	net := testNetwork()
+	net.Spec.Voice = &spawneryv1alpha1.NetworkVoiceSpec{BackendPort: 24454}
+	pod, err := BuildProxyPod(net, testProxyGroup(), "gateway-abcd", "operator:9443", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	p := voicePort(pod)
+	if p == nil || p.ContainerPort != 25565 || p.Protocol != corev1.ProtocolUDP || p.HostPort != 0 {
+		t.Fatalf("voice port = %+v; want UDP 25565 without a host port", p)
+	}
+	var hostIP *corev1.EnvVar
+	for i, e := range pod.Spec.Containers[0].Env {
+		if e.Name == EnvHostIP {
+			hostIP = &pod.Spec.Containers[0].Env[i]
+		}
+	}
+	if hostIP == nil || hostIP.ValueFrom == nil || hostIP.ValueFrom.FieldRef == nil ||
+		hostIP.ValueFrom.FieldRef.FieldPath != "status.hostIP" {
+		t.Fatalf("SPAWNERY_HOST_IP = %+v; want the downward API status.hostIP", hostIP)
+	}
+}
+
+func TestVoiceTakesTheGamesHostPortAsUDP(t *testing.T) {
+	net := testNetwork()
+	net.Spec.Voice = &spawneryv1alpha1.NetworkVoiceSpec{}
+	g := testProxyGroup()
+	g.Spec.Expose = spawneryv1alpha1.ExposeSpec{Type: spawneryv1alpha1.ExposeHostPort,
+		HostPort: &spawneryv1alpha1.HostPortSpec{Port: 25577}}
+	pod, err := BuildProxyPod(net, g, "gateway-abcd", "operator:9443", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := voicePort(pod); p == nil || p.HostPort != 25577 {
+		t.Fatalf("voice port = %+v; want host port 25577 over UDP", p)
+	}
+}
+
+func TestAHostPortVoiceOverrideBindsItsOwnPort(t *testing.T) {
+	net := testNetwork()
+	net.Spec.Voice = &spawneryv1alpha1.NetworkVoiceSpec{}
+	g := testProxyGroup()
+	g.Spec.Voice = &spawneryv1alpha1.ProxyVoiceSpec{Expose: &spawneryv1alpha1.ExposeSpec{
+		Type: spawneryv1alpha1.ExposeHostPort, HostPort: &spawneryv1alpha1.HostPortSpec{Port: 24500}}}
+	pod, err := BuildProxyPod(net, g, "gateway-abcd", "operator:9443", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if p := voicePort(pod); p == nil || p.HostPort != 24500 {
+		t.Fatalf("voice port = %+v; want host port 24500", p)
+	}
+	for _, p := range pod.Spec.Containers[0].Ports {
+		if p.Name == MinecraftPortName && p.HostPort != 0 {
+			t.Fatalf("the game port gained a host port from the voice override: %+v", p)
+		}
+	}
+}
+
+func TestVoiceInTheNetworkMovesTheProxyHash(t *testing.T) {
+	g := testProxyGroup()
+	off, err := DesiredProxyHash(testNetwork(), g, "operator:9443", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	net := testNetwork()
+	net.Spec.Voice = &spawneryv1alpha1.NetworkVoiceSpec{}
+	on, err := DesiredProxyHash(net, g, "operator:9443", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if on == off {
+		t.Fatal("switching voice on must roll the proxies once")
+	}
+}
