@@ -101,7 +101,7 @@ class VoiceRelay(
             Backend.UnknownServer -> return counters.inc(VoiceCounters.UNKNOWN_SERVER)
         }
         if (bridges.route(player, from, backend) is Route.Open) {
-            upstream.remove(player)?.close()
+            runCatching { upstream.remove(player)?.close() }
             var channel: DatagramChannel? = null
             try {
                 channel = DatagramChannel.open()

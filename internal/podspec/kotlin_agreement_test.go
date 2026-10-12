@@ -20,11 +20,14 @@ import (
 	"os"
 	"path"
 	"regexp"
+	"sort"
 	"strconv"
 	"testing"
 
+	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/prune"
 	"github.com/spawnery/spawnery/internal/testenv"
+	"github.com/spawnery/spawnery/internal/voice"
 	"github.com/spawnery/spawnery/internal/worldsync"
 )
 
@@ -122,6 +125,67 @@ func TestTheWorldSyncNamesAgreeWithThePaperAgent(t *testing.T) {
 	for _, use := range []string{"WorldSync.ENV_ENABLED", "WorldSync.ENV_INTERVAL", "WorldSync.CONTROL_DIR"} {
 		if !regexp.MustCompile(regexp.QuoteMeta(use)).Match(plugin) {
 			t.Errorf("AgentPlugin.kt no longer reads %s, so the constant this test checks is unused", use)
+		}
+	}
+}
+
+const voiceKotlinDir = "agent/velocity/src/main/kotlin/cloud/spawnery/agent/velocity/"
+
+func readVoiceSource(t *testing.T, name string) string {
+	t.Helper()
+	raw, err := os.ReadFile(testenv.RepoPath(t, voiceKotlinDir+name))
+	if err != nil {
+		t.Fatalf("read the Velocity agent's source: %v", err)
+	}
+	return string(raw)
+}
+
+func TestTheVoiceEnvNamesAgreeWithTheVelocityAgent(t *testing.T) {
+	plugin := readVoiceSource(t, "AgentPlugin.kt")
+	for name, want := range map[string]string{
+		"enable": EnvVoice,
+		"host":   EnvHostIP,
+	} {
+		if !regexp.MustCompile(`System\.getenv\("` + regexp.QuoteMeta(want) + `"\)`).MatchString(plugin) {
+			t.Errorf("AgentPlugin.kt does not read System.getenv(%q) (%s variable): podspec sets "+
+				"it, the agent would never see it and voice would stay off or lose the node address",
+				want, name)
+		}
+	}
+}
+
+func TestTheVoiceRelayPortAgreesWithTheVelocityAgent(t *testing.T) {
+	control := readVoiceSource(t, "voice/VoiceControl.kt")
+	m := regexp.MustCompile(`(?m)^\s*const val RELAY_PORT\s*=\s*(\d+)\s*$`).FindStringSubmatch(control)
+	if m == nil {
+		t.Fatalf("no `const val RELAY_PORT = <number>` in VoiceControl.kt")
+	}
+	got, err := strconv.Atoi(m[1])
+	if err != nil {
+		t.Fatalf("RELAY_PORT = %q: %v", m[1], err)
+	}
+	if int32(got) != voice.RelayPort {
+		t.Errorf("VoiceControl.kt binds RELAY_PORT = %d, voice.RelayPort = %d: the container port "+
+			"and Service target would point at a port nothing listens on", got, voice.RelayPort)
+	}
+}
+
+func TestTheVoiceCounterReasonsAgreeWithTheVelocityAgent(t *testing.T) {
+	counters := readVoiceSource(t, "voice/VoiceCounters.kt")
+	var got []string
+	for _, m := range regexp.MustCompile(`(?m)^\s*const val [A-Z_]+\s*=\s*"([^"]*)"\s*$`).FindAllStringSubmatch(counters, -1) {
+		got = append(got, m[1])
+	}
+	want := append([]string(nil), agent.VoiceReasons...)
+	sort.Strings(got)
+	sort.Strings(want)
+	if len(got) == 0 || len(got) != len(want) {
+		t.Fatalf("VoiceCounters.kt declares reasons %q, agent.VoiceReasons is %q", got, want)
+	}
+	for i := range got {
+		if got[i] != want[i] {
+			t.Fatalf("VoiceCounters.kt declares reasons %q, agent.VoiceReasons is %q: the operator "+
+				"discards a reason it does not know, so the counter would silently stop", got, want)
 		}
 	}
 }
