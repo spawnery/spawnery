@@ -24,6 +24,12 @@ import cloud.spawnery.agent.pb.EventInterest
 import cloud.spawnery.agent.pb.OperatorToProxy
 import cloud.spawnery.agent.pb.PlayerJoinedServer
 import cloud.spawnery.agent.pb.ProxyMessage
+import cloud.spawnery.agent.pb.VoiceConfig
+import cloud.spawnery.agent.velocity.voice.Backend
+import cloud.spawnery.agent.velocity.voice.VoiceControl
+import cloud.spawnery.agent.velocity.voice.VoiceCounters
+import cloud.spawnery.agent.velocity.voice.VoiceRelay
+import cloud.spawnery.agent.velocity.voice.VoiceWire
 import com.google.inject.Inject
 import com.velocitypowered.api.command.BrigadierCommand
 import com.velocitypowered.api.command.CommandSource
@@ -31,6 +37,7 @@ import com.velocitypowered.api.event.EventTask
 import com.velocitypowered.api.event.Subscribe
 import com.velocitypowered.api.event.connection.DisconnectEvent
 import com.velocitypowered.api.event.connection.LoginEvent
+import com.velocitypowered.api.event.connection.PluginMessageEvent
 import com.velocitypowered.api.event.player.CookieReceiveEvent
 import com.velocitypowered.api.event.player.KickedFromServerEvent
 import com.velocitypowered.api.event.player.PlayerChooseInitialServerEvent
@@ -43,10 +50,13 @@ import com.velocitypowered.api.network.HandshakeIntent
 import com.velocitypowered.api.plugin.Plugin
 import com.velocitypowered.api.proxy.Player
 import com.velocitypowered.api.proxy.ProxyServer
+import com.velocitypowered.api.proxy.ServerConnection
+import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier
 import com.velocitypowered.proxy.VelocityServer
 import com.velocitypowered.api.scheduler.ScheduledTask
 import net.kyori.adventure.text.Component
 import org.slf4j.Logger
+import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.concurrent.Executors
@@ -102,6 +112,7 @@ class AgentPlugin @Inject constructor(
     private var drain: Drain? = null
     private var transfers: Transfers? = null
     private var transferPass: ScheduledTask? = null
+    private var voice: VoiceControl? = null
 
     /** Built here rather than in start(), because it outlives a reconnect. */
     private val feedLevels = FeedLevels(LuckPermsFeedLevels.storeIfPresent())
@@ -228,6 +239,9 @@ class AgentPlugin @Inject constructor(
         startTransfers(env, self)
         val drain = Drain(players, router, ::warn, access)
         this.drain = drain
+        val voicePlugin = proxy.pluginManager.isLoaded("voicechat")
+        val voice = startVoice(voicePlugin)
+        this.voice = voice
         val role = ProxyRole(
             state = state,
             directory = directory,
@@ -242,6 +256,8 @@ class AgentPlugin @Inject constructor(
             connector = connector,
             feed = feed,
             events = events,
+            voicePluginLoaded = voicePlugin,
+            voice = voice,
         )
 
         val scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
@@ -296,6 +312,56 @@ class AgentPlugin @Inject constructor(
         logger.info("spawnery agent connecting to ${env.base.endpoint}")
     }
 
+    private fun startVoice(voicePlugin: Boolean): VoiceControl? {
+        if (System.getenv("SPAWNERY_VOICE") != "1") return null
+        if (voicePlugin) {
+            logger.warn(
+                "spawnery: Simple Voice Chat's own Velocity plugin (voicechat) is loaded and would take " +
+                    "the relay's port; the spawnery voice relay stays off",
+            )
+            return null
+        }
+        val voiceCounters = VoiceCounters()
+        val voice = VoiceControl(
+            startRelay = { port ->
+                VoiceRelay(InetSocketAddress(port), resolve = ::resolveVoice, counters = voiceCounters, log = ::warn)
+                    .also { it.start() }
+            },
+            hostIp = System.getenv("SPAWNERY_HOST_IP"),
+            counters = voiceCounters,
+            log = ::warn,
+        )
+        proxy.channelRegistrar.register(
+            MinecraftChannelIdentifier.from(VoiceWire.SECRET_CHANNEL),
+            MinecraftChannelIdentifier.from(VoiceWire.REQUEST_SECRET_CHANNEL),
+        )
+        return voice
+    }
+
+    private fun resolveVoice(player: UUID): Backend {
+        val server = proxy.getPlayer(player).flatMap { it.currentServer }.map { it.serverInfo.name }.orElse(null)
+            ?: mirror.players().firstOrNull { it.id() == player }?.server()?.orElse(null)
+            ?: return Backend.UnknownPlayer
+        val host = directory?.hostOf(server) ?: return Backend.UnknownServer
+        val port = voice?.backendPort() ?: return Backend.UnknownServer
+        return Backend.At(InetSocketAddress(host, port))
+    }
+
+    @Subscribe
+    fun onPluginMessage(event: PluginMessageEvent) {
+        val voice = voice ?: return
+        when (event.identifier.id) {
+            VoiceWire.REQUEST_SECRET_CHANNEL ->
+                (event.source as? Player)?.let { voice.recordVersion(it.uniqueId, event.data) }
+            VoiceWire.SECRET_CHANNEL -> {
+                val server = event.source as? ServerConnection ?: return
+                val patched = voice.secretFor(server.player.uniqueId, event.data) ?: return
+                event.result = PluginMessageEvent.ForwardResult.handled()
+                server.player.sendPluginMessage(event.identifier, patched)
+            }
+        }
+    }
+
     private fun startTransfers(env: ProxyEnvironment.Configured, self: ProxySelf) {
         env.transferOff?.let { logger.warn("spawnery: transfers off, this proxy drains without them: $it") }
         val transfer = env.transfer ?: return
@@ -330,6 +396,7 @@ class AgentPlugin @Inject constructor(
         gate?.close()
         sampling?.cancel()
         transferPass?.cancel()
+        voice?.apply(VoiceConfig.getDefaultInstance())
         scheduler?.let {
             it.shutdownNow()
             it.awaitTermination(2, TimeUnit.SECONDS)
@@ -381,6 +448,7 @@ class AgentPlugin @Inject constructor(
     @Subscribe
     fun onDisconnect(event: DisconnectEvent) {
         rescue?.forget(event.player.uniqueId)
+        voice?.forget(event.player.uniqueId)
     }
 
     /** Last, so every other plugin's listener can still ask leavingByTransfer. */
