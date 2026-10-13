@@ -18,6 +18,7 @@ package agentserver
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/spawnery/spawnery/internal/agentpb"
@@ -197,5 +198,24 @@ func TestNoGenerationIsEverZero(t *testing.T) {
 	}
 	if s.leave("pod-uid-never-seen", 1) {
 		t.Error("a stream claimed the disconnect of a pod the map never knew")
+	}
+}
+
+func TestAnAnswerTheStreamCouldNotTakeWaitsForTheNextOne(t *testing.T) {
+	box := newMailbox()
+	gone := errors.New("the stream ended")
+
+	err := sendAnswer(box, &agentpb.CloudResponse{Id: 5}, func(*agentpb.CloudResponse) error { return gone })
+
+	if !errors.Is(err, gone) {
+		t.Fatalf("err = %v, want the stream's own error", err)
+	}
+	select {
+	case got := <-box.ch:
+		if got.GetId() != 5 {
+			t.Errorf("the mailbox holds answer %d, want 5", got.GetId())
+		}
+	default:
+		t.Error("an answer the stream could not take was lost")
 	}
 }

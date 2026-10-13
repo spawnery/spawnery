@@ -73,7 +73,7 @@ by a pod that keeps to its budget.
 - `Requests` starts its id counter at a random value, so two processes in one
   pod (a restarted container) cannot share ids even if an answer outlived the
   rule in §3.
-- `failAll` stays for `stop()`: a plugin being disabled gets its answer now.
+- `Requests.failAll` goes; nothing else called it.
 
 ## 5. Compatibility
 

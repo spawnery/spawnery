@@ -19,9 +19,12 @@ then the code.
 
 ## Task 2: session loops answer through the mailbox
 
-- Test (envtest, `worldhistory` or `server_envtest`): a restore-point listing
-  held open by the writer, the agent opens a replacement stream, the writer
-  releases; the answer arrives on the replacement.
+- Test (`worldhistory_test.go`): a restore held open by the writer, a
+  superseding `enter`, the writer releases; the answer arrives in the
+  renewed stream's mailbox. A unit test rather than an envtest: over the
+  wire, the renewal and the release lie milliseconds apart.
+- Test (`streams_test.go`): an answer whose send fails is back in the
+  mailbox.
 - Code: `handle` and `handleProxy` push answers into the mailbox instead of
   returning them or writing `late`; both loops drain the mailbox; an answer
   whose send fails goes back into the mailbox (non-blocking) before the

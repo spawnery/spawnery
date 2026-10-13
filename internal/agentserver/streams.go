@@ -53,6 +53,7 @@ func (m *mailbox) put(answer *agentpb.CloudResponse) bool {
 	case m.ch <- answer:
 		return true
 	default:
+		AnswersDropped.Inc()
 		return false
 	}
 }
@@ -115,4 +116,15 @@ func (s *sessions) cancel(podUID string, gen uint64) {
 	if cancel, ok := s.current[podUID]; ok {
 		cancel()
 	}
+}
+
+// sendAnswer leaves an answer this stream could not take for the stream that
+// replaces it. A send that times out may still land; the agent ignores an
+// answer for an id it no longer holds.
+func sendAnswer(box *mailbox, answer *agentpb.CloudResponse, send func(*agentpb.CloudResponse) error) error {
+	if err := sendBounded(SendDeadline, "an answer", func() error { return send(answer) }); err != nil {
+		box.put(answer)
+		return err
+	}
+	return nil
 }

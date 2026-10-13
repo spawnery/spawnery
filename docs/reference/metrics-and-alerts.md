@@ -12,6 +12,7 @@ The `spawnery_worldsync_` metrics come from the world sync node agents on port 8
 <div style="overflow-x: auto;"><table>
 <thead><tr><th>Name</th><th>Type</th><th>Labels</th><th>Help</th></tr></thead>
 <tbody>
+<tr><td><code>spawnery_agent_answers_dropped_total</code></td><td>counter</td><td><em>none</em></td><td>Answers to agent requests dropped because the pod&#39;s mailbox was full.</td></tr>
 <tr><td><code>spawnery_agent_auth_failures_total</code></td><td>counter</td><td><code>role</code></td><td>Refused agent streams, by role.</td></tr>
 <tr><td><code>spawnery_agent_connections_refused_total</code></td><td>counter</td><td><code>bound</code></td><td>Connections refused for exceeding a connection bound, by bound.</td></tr>
 <tr><td><code>spawnery_agent_open_connections</code></td><td>gauge</td><td><em>none</em></td><td>Connections open on the agent endpoint.</td></tr>

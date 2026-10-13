@@ -47,6 +47,13 @@ var RequestsRefused = prometheus.NewCounterVec(
 	[]string{"reason"},
 )
 
+var AnswersDropped = prometheus.NewCounter(
+	prometheus.CounterOpts{
+		Name: "spawnery_agent_answers_dropped_total",
+		Help: "Answers to agent requests dropped because the pod's mailbox was full.",
+	},
+)
+
 var OpenConnections = prometheus.NewGauge(
 	prometheus.GaugeOpts{
 		Name: "spawnery_agent_open_connections",
@@ -99,7 +106,7 @@ func init() {
 	metrics.Registry.MustRegister(
 		RequestsRefused,
 		OpenStreams, RejectedReports, OpenConnections, ExpectedAgents, ConnectionsRefused,
-		WorldRestores, VoicePackets,
+		WorldRestores, VoicePackets, AnswersDropped,
 	)
 	// A labelled counter does not exist until incremented, and increase() over
 	// a series born mid-window has nothing to subtract from.
