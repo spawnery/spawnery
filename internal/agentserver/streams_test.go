@@ -19,6 +19,8 @@ package agentserver
 import (
 	"context"
 	"testing"
+
+	"github.com/spawnery/spawnery/internal/agentpb"
 )
 
 // A superseded stream's hard deadline fires while the new stream is serving;
@@ -26,12 +28,12 @@ import (
 func TestAStaleGenerationCannotCancelTheFreshStream(t *testing.T) {
 	s := newSessions()
 
-	first, firstGen, superseded := s.enter(context.Background(), "pod-uid-1")
+	first, firstGen, superseded, _ := s.enter(context.Background(), "pod-uid-1")
 	if superseded {
 		t.Fatal("the first stream displaced nothing and must not claim otherwise")
 	}
 
-	second, secondGen, superseded := s.enter(context.Background(), "pod-uid-1")
+	second, secondGen, superseded, _ := s.enter(context.Background(), "pod-uid-1")
 	if !superseded {
 		t.Fatal("the second stream displaced a live one and must report it")
 	}
@@ -55,8 +57,8 @@ func TestAStaleGenerationCannotCancelTheFreshStream(t *testing.T) {
 
 func TestOnlyTheCurrentStreamMayLeave(t *testing.T) {
 	s := newSessions()
-	_, firstGen, _ := s.enter(context.Background(), "pod-uid-1")
-	_, secondGen, _ := s.enter(context.Background(), "pod-uid-1")
+	_, firstGen, _, _ := s.enter(context.Background(), "pod-uid-1")
+	_, secondGen, _, _ := s.enter(context.Background(), "pod-uid-1")
 
 	if s.leave("pod-uid-1", firstGen) {
 		t.Error("a superseded stream claimed the disconnect")
@@ -65,7 +67,7 @@ func TestOnlyTheCurrentStreamMayLeave(t *testing.T) {
 		t.Error("the current stream could not report its disconnect")
 	}
 
-	_, _, superseded := s.enter(context.Background(), "pod-uid-1")
+	_, _, superseded, _ := s.enter(context.Background(), "pod-uid-1")
 	if superseded {
 		t.Error("a reconnect after a completed disconnect displaced nothing")
 	}
@@ -75,15 +77,65 @@ func TestLeavingLeavesNothingBehind(t *testing.T) {
 	s := newSessions()
 
 	for _, uid := range []string{"pod-uid-1", "pod-uid-2", "pod-uid-3"} {
-		_, gen, _ := s.enter(context.Background(), uid)
+		_, gen, _, _ := s.enter(context.Background(), uid)
 		if !s.leave(uid, gen) {
 			t.Fatalf("the only stream of %s could not report its disconnect", uid)
 		}
 	}
 
-	if len(s.current) != 0 || len(s.generation) != 0 {
-		t.Errorf("current=%d generation=%d entries left behind, want none",
-			len(s.current), len(s.generation))
+	if len(s.current) != 0 || len(s.generation) != 0 || len(s.answers) != 0 {
+		t.Errorf("current=%d generation=%d answers=%d entries left behind, want none",
+			len(s.current), len(s.generation), len(s.answers))
+	}
+}
+
+// The agent process behind a displaced stream is still running and still
+// waiting; see enter.
+func TestARenewalHandsTheDisplacedStreamsAnswersOn(t *testing.T) {
+	s := newSessions()
+	_, _, _, first := s.enter(context.Background(), "pod-uid-1")
+	_, _, _, second := s.enter(context.Background(), "pod-uid-1")
+
+	if !first.put(&agentpb.CloudResponse{Id: 7}) {
+		t.Fatal("an answer for a pod with room in its mailbox was refused")
+	}
+
+	select {
+	case got := <-second.ch:
+		if got.GetId() != 7 {
+			t.Errorf("the renewed stream received answer %d, want 7", got.GetId())
+		}
+	default:
+		t.Error("the answer the displaced stream owed never reached the renewed one")
+	}
+}
+
+// A stream that ended without being displaced may belong to a process that
+// died, whose request ids a new process reuses.
+func TestAFreshStreamInheritsNoAnswers(t *testing.T) {
+	s := newSessions()
+	_, gen, _, old := s.enter(context.Background(), "pod-uid-1")
+	old.put(&agentpb.CloudResponse{Id: 3})
+	s.leave("pod-uid-1", gen)
+
+	_, _, _, fresh := s.enter(context.Background(), "pod-uid-1")
+
+	select {
+	case got := <-fresh.ch:
+		t.Errorf("a fresh stream received answer %d meant for a stream before it", got.GetId())
+	default:
+	}
+}
+
+func TestAFullMailboxRefusesRatherThanBlocks(t *testing.T) {
+	s := newSessions()
+	_, _, _, box := s.enter(context.Background(), "pod-uid-1")
+	for i := 0; i < cap(box.ch); i++ {
+		box.put(&agentpb.CloudResponse{Id: uint64(i + 1)})
+	}
+
+	if box.put(&agentpb.CloudResponse{Id: 999}) {
+		t.Error("a full mailbox accepted another answer")
 	}
 }
 
@@ -91,10 +143,10 @@ func TestLeavingLeavesNothingBehind(t *testing.T) {
 func TestAForgottenPodDoesNotRestartItsGenerations(t *testing.T) {
 	s := newSessions()
 
-	_, staleGen, _ := s.enter(context.Background(), "pod-uid-1")
+	_, staleGen, _, _ := s.enter(context.Background(), "pod-uid-1")
 	// A second pod in between, so a per-pod counter and a global one could not
 	// happen to agree by accident.
-	_, otherGen, _ := s.enter(context.Background(), "pod-uid-2")
+	_, otherGen, _, _ := s.enter(context.Background(), "pod-uid-2")
 	if !s.leave("pod-uid-1", staleGen) {
 		t.Fatal("the current stream could not report its disconnect")
 	}
@@ -105,7 +157,7 @@ func TestAForgottenPodDoesNotRestartItsGenerations(t *testing.T) {
 		t.Fatal("the generation of a departed stream was kept")
 	}
 
-	fresh, freshGen, superseded := s.enter(context.Background(), "pod-uid-1")
+	fresh, freshGen, superseded, _ := s.enter(context.Background(), "pod-uid-1")
 	if superseded {
 		t.Error("a reconnect into an empty map displaced something")
 	}
@@ -137,7 +189,7 @@ func TestAForgottenPodDoesNotRestartItsGenerations(t *testing.T) {
 func TestNoGenerationIsEverZero(t *testing.T) {
 	s := newSessions()
 
-	if _, gen, _ := s.enter(context.Background(), "pod-uid-1"); gen == 0 {
+	if _, gen, _, _ := s.enter(context.Background(), "pod-uid-1"); gen == 0 {
 		t.Error("the first generation is zero, which is what a forgotten pod reads as")
 	}
 	if got := s.generation["pod-uid-never-seen"]; got != 0 {

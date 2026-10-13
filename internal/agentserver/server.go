@@ -349,7 +349,7 @@ func (s *Server) sessionPrologue(streamCtx context.Context, role agent.Role, sen
 	logger := log.FromContext(streamCtx).WithValues("pod", id.PodName, "namespace", id.Namespace)
 	openedAt := s.opts.Clock()
 
-	ctx, gen, superseded := s.sessions.enter(streamCtx, id.PodUID)
+	ctx, gen, superseded, _ := s.sessions.enter(streamCtx, id.PodUID)
 	leave := func() {
 		if s.sessions.leave(id.PodUID, gen) {
 			s.opts.Agents.Disconnect(id.PodUID)
