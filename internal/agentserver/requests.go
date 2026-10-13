@@ -42,6 +42,12 @@ const (
 	// RequestRefill is how long one token takes to come back.
 	RequestRefill = time.Second
 
+	// ProxyRequestBurst and ProxyRequestRefill are a proxy's budget. A proxy
+	// acts for every player and every on-demand server behind it: one sweep
+	// after a wave of servers went away stops and deletes a dozen at once.
+	ProxyRequestBurst  = 32
+	ProxyRequestRefill = 250 * time.Millisecond
+
 	// BoostDefaultDuration is how long a boost runs when the request names no
 	// duration; a boost is meant for an event, not to linger for weeks.
 	BoostDefaultDuration = time.Hour
@@ -71,37 +77,51 @@ type requestLimiter struct {
 	maxBuckets int
 
 	mu      sync.Mutex
-	buckets map[string]struct {
-		tokens float64
-		last   time.Time
+	buckets map[string]requestBucket
+}
+
+// requestBucket carries its own budget, so the sweep judges each bucket by the
+// budget of the pod that filled it.
+type requestBucket struct {
+	tokens float64
+	last   time.Time
+	budget requestBudget
+}
+
+type requestBudget struct {
+	burst  float64
+	refill time.Duration
+}
+
+func budgetOf(role agent.Role) requestBudget {
+	if role == agent.RoleProxy {
+		return requestBudget{burst: ProxyRequestBurst, refill: ProxyRequestRefill}
 	}
+	return requestBudget{burst: RequestBurst, refill: RequestRefill}
+}
+
+func (b requestBucket) refilled(now time.Time) float64 {
+	return min(b.budget.burst, b.tokens+now.Sub(b.last).Seconds()/b.budget.refill.Seconds())
 }
 
 func newRequestLimiter(now func() time.Time) *requestLimiter {
 	return &requestLimiter{
 		now:        now,
 		maxBuckets: requestMaxBuckets,
-		buckets: map[string]struct {
-			tokens float64
-			last   time.Time
-		}{},
+		buckets:    map[string]requestBucket{},
 	}
 }
 
-func (l *requestLimiter) allow(pod string) bool {
+func (l *requestLimiter) allow(pod string, role agent.Role) bool {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	now := l.now()
 	b, seen := l.buckets[pod]
 	if !seen {
-		b.tokens = RequestBurst
-	} else {
-		b.tokens += now.Sub(b.last).Seconds() / RequestRefill.Seconds()
-		if b.tokens > RequestBurst {
-			b.tokens = RequestBurst
-		}
+		b = requestBucket{tokens: budgetOf(role).burst, last: now, budget: budgetOf(role)}
 	}
+	b.tokens = b.refilled(now)
 	b.last = now
 	if b.tokens < 1 {
 		l.buckets[pod] = b
@@ -112,7 +132,7 @@ func (l *requestLimiter) allow(pod string) bool {
 		for key, other := range l.buckets {
 			// Refilled by now, not as stored: a bucket only refills when its
 			// pod next asks, and a pod that is gone never asks again.
-			if other.tokens+now.Sub(other.last).Seconds()/RequestRefill.Seconds() >= RequestBurst {
+			if other.refilled(now) >= other.budget.burst {
 				delete(l.buckets, key)
 			}
 		}
@@ -134,7 +154,7 @@ func (s *Server) answerCloudRequest(
 ) *agentpb.CloudResponse {
 	// Here rather than per verb, so a new verb cannot forget it. Unknown
 	// requests spend a token too.
-	if !s.requestRate.allow(id.PodUID) {
+	if !s.requestRate.allow(id.PodUID, id.Role) {
 		return refuse(req.GetId(), agentpb.RequestError_RATE_LIMITED,
 			"this pod has asked more often than the operator will answer")
 	}
