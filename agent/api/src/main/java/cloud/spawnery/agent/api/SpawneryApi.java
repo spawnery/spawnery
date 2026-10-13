@@ -117,9 +117,10 @@ public interface SpawneryApi {
      * and is then refused by the proxy or the server.
      *
      * <p>The stage fails rather than returning a result when the operator
-     * refuses or cannot answer — including when the stream was renewed while
-     * the request was in flight, which is failed rather than retried because
-     * only you know whether moving that player twice is safe.
+     * refuses or cannot answer. A request in flight while the stream is
+     * renewed is answered on the new stream; one lost on the wire fails at
+     * its deadline and is not retried, because only you know whether moving
+     * that player twice is safe.
      *
      * <p>A player who logged out between your call and the operator reading it
      * is an ordinary failure and not a bug. So is a target that is not
@@ -267,13 +268,12 @@ public interface SpawneryApi {
      *       again.</li>
      * </ul>
      *
-     * <p>Two failures are not the operator's answer and carry no reason: the
+     * <p>One failure is not the operator's answer and carries no reason: the
      * stage fails with a {@link java.util.concurrent.TimeoutException} when no
-     * answer arrives within ten seconds, and with an
-     * {@link IllegalStateException} when the stream was renewed while the
-     * request was in flight, which is failed rather than retried because only
-     * you know whether asking twice is safe. For a start it is: one that was in
-     * fact carried out is answered {@code alreadyRunning} the second time.
+     * answer arrives within ten seconds. That includes a request lost while
+     * the stream was renewed; it is not retried, because only you know whether
+     * asking twice is safe. For a start it is: one that was in fact carried out
+     * is answered {@code alreadyRunning} the second time.
      */
     CompletionStage<StartedServer> startServer(String group, String key);
 
