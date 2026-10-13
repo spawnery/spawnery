@@ -4,6 +4,7 @@ import cloud.spawnery.agent.api.Group
 import cloud.spawnery.agent.api.RestorePoint
 import cloud.spawnery.agent.api.RestorePoints
 import cloud.spawnery.agent.api.RestoredWorld
+import cloud.spawnery.agent.pb.AnnounceResult
 import cloud.spawnery.agent.pb.CloudRequest
 import cloud.spawnery.agent.pb.CloudResponse
 import cloud.spawnery.agent.pb.DeleteServerResult
@@ -222,6 +223,83 @@ class CloudConnectorTest {
         reconnected.onStreamChanged()
 
         assertEquals(1, sent.size)
+    }
+
+    @Test
+    fun `an announcement the operator already has in hand is not sent again`() {
+        val connector = connector()
+        val stages = List(5) { connector.announce("ingame", mapOf("map" to "arena")) }
+
+        assertEquals(1, requested.size)
+        answer(connector) { setAnnounce(AnnounceResult.getDefaultInstance()) }
+        stages.forEach { it.toCompletableFuture().get(1, TimeUnit.SECONDS) }
+    }
+
+    @Test
+    fun `an announcement the operator has answered is not sent again`() {
+        val connector = connector()
+        connector.announce("ingame", emptyMap())
+        answer(connector) { setAnnounce(AnnounceResult.getDefaultInstance()) }
+
+        val again = connector.announce("ingame", emptyMap())
+
+        assertEquals(1, requested.size)
+        again.toCompletableFuture().get(1, TimeUnit.SECONDS)
+    }
+
+    @Test
+    fun `an announcement the operator refused is sent again when repeated`() {
+        val connector = connector()
+        connector.announce("ingame", emptyMap())
+        answer(connector) {
+            setError(RequestError.newBuilder().setReason(RequestError.Reason.RATE_LIMITED))
+        }
+
+        connector.announce("ingame", emptyMap())
+
+        assertEquals(2, requested.size)
+    }
+
+    @Test
+    fun `a changed announcement is sent although the previous one is in flight`() {
+        val connector = connector()
+        connector.announce("ingame", mapOf("map" to "arena"))
+        connector.announce("ingame", mapOf("map" to "desert"))
+
+        assertEquals(2, requested.size)
+        assertEquals("desert", requested[1].announce.attributesMap["map"])
+    }
+
+    @Test
+    fun `an announcement made before a renewal is told to the new stream once`() {
+        val connector = connector()
+        connector.announce("ingame", emptyMap())
+        answer(connector) { setAnnounce(AnnounceResult.getDefaultInstance()) }
+        requested.clear()
+
+        connector.onStreamChanged()
+        connector.announce("ingame", emptyMap())
+
+        assertEquals(1, requested.size)
+    }
+
+    @Test
+    fun `one handed-out stage cannot settle another caller's`() {
+        val connector = connector()
+        val first = connector.announce("ingame", emptyMap())
+        val second = connector.announce("ingame", emptyMap())
+
+        first.toCompletableFuture().complete(null)
+
+        assertFalse(second.toCompletableFuture().isDone)
+    }
+
+    @Test
+    fun `a door the operator already has in hand is not shut again`() {
+        val connector = connector()
+        repeat(3) { connector.acceptJoins(false) }
+
+        assertEquals(1, requested.size)
     }
 
     @Test
