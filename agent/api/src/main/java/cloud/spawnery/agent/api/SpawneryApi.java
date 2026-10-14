@@ -536,6 +536,11 @@ public interface SpawneryApi {
      * holds the last description it published and re-publishes it on every new
      * session.
      *
+     * <p>Repeating the description the operator already holds, or is about to,
+     * sends nothing; the stage follows the request already sent. The operator
+     * limits how many requests a pod may make, and a repeat that sends nothing
+     * leaves that budget to starts, stops and connects.
+     *
      * @param state what this server is doing, in a word or a short phrase.
      *     Empty clears it.
      * @param attributes anything else worth publishing. Empty clears them.

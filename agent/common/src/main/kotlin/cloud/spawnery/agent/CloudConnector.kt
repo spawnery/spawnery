@@ -32,7 +32,6 @@ import java.time.Duration
 import java.time.Instant
 import java.util.UUID
 import java.util.concurrent.CompletableFuture
-import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.CompletionStage
 
 /**
@@ -201,57 +200,73 @@ class CloudConnector(
         }
 
     /**
-     * Re-sent on every new stream: the operator forgets an announcement with
-     * the session that made it. Null until something announces.
+     * What this server last said about itself, re-sent on every new stream:
+     * the operator forgets it with the session that made it.
+     *
+     * The operator replaces rather than merges, so saying again what the
+     * stream already carries changes nothing there and still spends one of
+     * the pod's rate-limited requests.
      */
-    private val lastAnnouncement = AtomicReference<AnnounceRequest?>(null)
+    private class Statement<M>(private val send: (M) -> CompletableFuture<Void>) {
+        /** Null until something is said, which matches the operator's defaults for a new session. */
+        private var latest: M? = null
+        private var carried: Pair<M, CompletableFuture<Void>>? = null
 
-    /** The operator replaces rather than merges, so anything left out is taken back. */
-    fun announce(state: String, attributes: Map<String, String>): CompletionStage<Void> {
-        val announcement = AnnounceRequest.newBuilder()
-            .setState(state)
-            .putAllAttributes(attributes)
-            .build()
-        // Remembered before sending: a failed send is still this server's intent.
-        lastAnnouncement.set(announcement)
-        return send(announcement)
+        @Synchronized
+        fun say(message: M): CompletionStage<Void> {
+            // Remembered before sending: a failed send is still this server's intent.
+            latest = message
+            val held = carried
+            if (held != null && held.first == message && !held.second.isCompletedExceptionally) {
+                return handOut(held.second)
+            }
+            val sent = send(message)
+            carried = message to sent
+            return handOut(sent)
+        }
+
+        @Synchronized
+        fun restate() {
+            carried = null
+            latest?.let { say(it) }
+        }
+
+        /** Each caller gets its own stage, so completing one settles nobody else's. */
+        private fun handOut(stage: CompletableFuture<Void>): CompletableFuture<Void> {
+            val own = CompletableFuture<Void>()
+            stage.whenComplete { value, error ->
+                if (error != null) own.completeExceptionally(error) else own.complete(value)
+            }
+            return own
+        }
+    }
+
+    private val announcement = Statement<AnnounceRequest> { message ->
+        requests.start { id -> sendRequest(CloudRequest.newBuilder().setId(id).setAnnounce(message).build()) }
     }
 
     /**
      * Held as the built message, not two flags, so a restatement cannot
-     * recombine `accept` and `round_ended` into a pair never sent. Null means
-     * never asked, which matches the operator's defaults for a new session.
+     * recombine `accept` and `round_ended` into a pair never sent.
      */
-    private val lastAcceptJoins = AtomicReference<AcceptJoinsRequest?>(null)
+    private val door = Statement<AcceptJoinsRequest> { message ->
+        requests.start { id -> sendRequest(CloudRequest.newBuilder().setId(id).setAcceptJoins(message).build()) }
+    }
+
+    /** The operator replaces rather than merges, so anything left out is taken back. */
+    fun announce(state: String, attributes: Map<String, String>): CompletionStage<Void> =
+        announcement.say(AnnounceRequest.newBuilder().setState(state).putAllAttributes(attributes).build())
 
     /** Closing is not retiring: nobody is moved and it can be taken back. */
-    fun acceptJoins(accept: Boolean): CompletionStage<Void> {
-        val request = AcceptJoinsRequest.newBuilder().setAccept(accept).build()
-        lastAcceptJoins.set(request)
-        return send(request)
-    }
+    fun acceptJoins(accept: Boolean): CompletionStage<Void> =
+        door.say(AcceptJoinsRequest.newBuilder().setAccept(accept).build())
 
     /**
      * A closed door and an ended round in one message: the operator ends the
      * round from the same field it deregisters on. See [SpawneryApi.endRound].
      */
-    fun endRound(): CompletionStage<Void> {
-        val request = AcceptJoinsRequest.newBuilder().setAccept(false).setRoundEnded(true).build()
-        lastAcceptJoins.set(request)
-        return send(request)
-    }
-
-    private fun send(request: AcceptJoinsRequest): CompletionStage<Void> =
-        requests.start<Void> { id ->
-            sendRequest(
-                CloudRequest.newBuilder().setId(id).setAcceptJoins(request).build(),
-            )
-        }
-
-    private fun send(announcement: AnnounceRequest): CompletionStage<Void> =
-        requests.start<Void> { id ->
-            sendRequest(CloudRequest.newBuilder().setId(id).setAnnounce(announcement).build())
-        }
+    fun endRound(): CompletionStage<Void> =
+        door.say(AcceptJoinsRequest.newBuilder().setAccept(false).setRoundEnded(true).build())
 
     fun stopBoosts(group: String): CompletionStage<Int> =
         requests.start<Int> { id ->
@@ -331,8 +346,8 @@ class CloudConnector(
         requests.failAll(IllegalStateException("the session was renewed while this request was in flight"))
         // Restated on the new stream: the operator forgets a session's
         // announcement and defaults to door open, round not ended.
-        lastAnnouncement.get()?.let { send(it) }
-        lastAcceptJoins.get()?.let { send(it) }
+        announcement.restate()
+        door.restate()
     }
 
     fun expire() = requests.expire()
