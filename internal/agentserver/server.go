@@ -257,7 +257,7 @@ func (s *Server) Start(ctx context.Context) error {
 
 // ServerSession is the Paper agent's channel.
 func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) error {
-	id, logger, ctx, cleanup, err := s.sessionPrologue(stream.Context(), agent.RoleServer, func() error {
+	id, logger, ctx, box, cleanup, err := s.sessionPrologue(stream.Context(), agent.RoleServer, func() error {
 		if err := stream.Send(&agentpb.OperatorToServer{
 			Message: &agentpb.OperatorToServer_ReportInterval{
 				ReportInterval: &agentpb.ReportInterval{Seconds: seconds(s.opts.ReportInterval)},
@@ -286,7 +286,9 @@ func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) 
 	defer leaveFanout()
 
 	received, errs := recvPump(ctx, stream.Recv)
-	late := make(chan *agentpb.OperatorToServer)
+	send := func(resp *agentpb.CloudResponse) error {
+		return stream.Send(&agentpb.OperatorToServer{Message: &agentpb.OperatorToServer_CloudResponse{CloudResponse: resp}})
+	}
 
 	for {
 		select {
@@ -298,13 +300,13 @@ func (s *Server) ServerSession(stream agentpb.AgentService_ServerSessionServer) 
 			}
 			return err
 		case msg := <-received:
-			if answer := s.handle(ctx, logger, id, msg, late); answer != nil {
-				if err := sendBounded(SendDeadline, "an answer", func() error { return stream.Send(answer) }); err != nil {
+			if resp := s.handle(ctx, logger, id, msg, box).GetCloudResponse(); resp != nil {
+				if err := sendAnswer(box, resp, send); err != nil {
 					return err
 				}
 			}
-		case answer := <-late:
-			if err := sendBounded(SendDeadline, "an answer", func() error { return stream.Send(answer) }); err != nil {
+		case resp := <-box.ch:
+			if err := sendAnswer(box, resp, send); err != nil {
 				return err
 			}
 		case msg, ok := <-outbox:
@@ -341,15 +343,15 @@ func sendBounded(deadline time.Duration, what string, send func() error) error {
 // sessionPrologue is shared by both sessions so the enter/Supersede/OpenStreams
 // sequence cannot drift between roles; no client-visible test would catch it.
 func (s *Server) sessionPrologue(streamCtx context.Context, role agent.Role, sendFixed func() error) (
-	grpcauth.Identity, logr.Logger, context.Context, func(), error) {
+	grpcauth.Identity, logr.Logger, context.Context, *mailbox, func(), error) {
 	id, ok := grpcauth.IdentityFrom(streamCtx)
 	if !ok {
-		return grpcauth.Identity{}, logr.Logger{}, nil, nil, status.Error(codes.Unauthenticated, "no identity on the stream")
+		return grpcauth.Identity{}, logr.Logger{}, nil, nil, nil, status.Error(codes.Unauthenticated, "no identity on the stream")
 	}
 	logger := log.FromContext(streamCtx).WithValues("pod", id.PodName, "namespace", id.Namespace)
 	openedAt := s.opts.Clock()
 
-	ctx, gen, superseded := s.sessions.enter(streamCtx, id.PodUID)
+	ctx, gen, superseded, box := s.sessions.enter(streamCtx, id.PodUID)
 	leave := func() {
 		if s.sessions.leave(id.PodUID, gen) {
 			s.opts.Agents.Disconnect(id.PodUID)
@@ -369,7 +371,7 @@ func (s *Server) sessionPrologue(streamCtx context.Context, role agent.Role, sen
 	if err := sendBounded(s.opts.HardDeadline, "its opening messages", sendFixed); err != nil {
 		OpenStreams.WithLabelValues(string(role)).Dec()
 		leave()
-		return grpcauth.Identity{}, logr.Logger{}, nil, nil, err
+		return grpcauth.Identity{}, logr.Logger{}, nil, nil, nil, err
 	}
 
 	deadline := time.AfterFunc(s.opts.HardDeadline, func() {
@@ -381,7 +383,7 @@ func (s *Server) sessionPrologue(streamCtx context.Context, role agent.Role, sen
 		OpenStreams.WithLabelValues(string(role)).Dec()
 		leave()
 	}
-	return id, logger, ctx, cleanup, nil
+	return id, logger, ctx, box, cleanup, nil
 }
 
 // handle ignores unknown branches so a newer agent works against an older
@@ -391,7 +393,7 @@ func (s *Server) handle(
 	logger logr.Logger,
 	id grpcauth.Identity,
 	msg *agentpb.ServerMessage,
-	late chan<- *agentpb.OperatorToServer,
+	box *mailbox,
 ) *agentpb.OperatorToServer {
 	switch m := msg.GetMessage().(type) {
 	case *agentpb.ServerMessage_Hello:
@@ -429,15 +431,9 @@ func (s *Server) handle(
 	case *agentpb.ServerMessage_CloudRequest:
 		if answersOffTheLoop(m.CloudRequest) {
 			go func() {
-				answer := &agentpb.OperatorToServer{
-					Message: &agentpb.OperatorToServer_CloudResponse{
-						CloudResponse: s.answerCloudRequest(ctx, logger, id, m.CloudRequest),
-					},
-				}
-				select {
-				case late <- answer:
-				case <-ctx.Done():
-				}
+				// Not ctx: a renewal ends this stream, and the stream after it
+				// sends the answer. Each of these verbs bounds its own wait.
+				box.put(s.answerCloudRequest(context.WithoutCancel(ctx), logger, id, m.CloudRequest))
 			}()
 			return nil
 		}
@@ -451,7 +447,7 @@ func (s *Server) handle(
 }
 
 func (s *Server) ProxySession(stream agentpb.AgentService_ProxySessionServer) error {
-	id, logger, ctx, cleanup, err := s.sessionPrologue(stream.Context(), agent.RoleProxy, func() error {
+	id, logger, ctx, box, cleanup, err := s.sessionPrologue(stream.Context(), agent.RoleProxy, func() error {
 		if err := stream.Send(&agentpb.OperatorToProxy{
 			Message: &agentpb.OperatorToProxy_ReportInterval{
 				ReportInterval: &agentpb.ReportInterval{Seconds: seconds(s.opts.ReportInterval)},
@@ -482,7 +478,9 @@ func (s *Server) ProxySession(stream agentpb.AgentService_ProxySessionServer) er
 	defer leaveFleet()
 
 	received, errs := recvPump(ctx, stream.Recv)
-	late := make(chan *agentpb.OperatorToProxy)
+	send := func(resp *agentpb.CloudResponse) error {
+		return stream.Send(&agentpb.OperatorToProxy{Message: &agentpb.OperatorToProxy_CloudResponse{CloudResponse: resp}})
+	}
 
 	for {
 		select {
@@ -494,13 +492,13 @@ func (s *Server) ProxySession(stream agentpb.AgentService_ProxySessionServer) er
 			}
 			return err
 		case msg := <-received:
-			if answer := s.handleProxy(ctx, logger, id, msg, late); answer != nil {
-				if err := sendBounded(SendDeadline, "an answer", func() error { return stream.Send(answer) }); err != nil {
+			if resp := s.handleProxy(ctx, logger, id, msg, box).GetCloudResponse(); resp != nil {
+				if err := sendAnswer(box, resp, send); err != nil {
 					return err
 				}
 			}
-		case answer := <-late:
-			if err := sendBounded(SendDeadline, "an answer", func() error { return stream.Send(answer) }); err != nil {
+		case resp := <-box.ch:
+			if err := sendAnswer(box, resp, send); err != nil {
 				return err
 			}
 		case msg, ok := <-outbox:
@@ -528,7 +526,7 @@ func (s *Server) handleProxy(
 	logger logr.Logger,
 	id grpcauth.Identity,
 	msg *agentpb.ProxyMessage,
-	late chan<- *agentpb.OperatorToProxy,
+	box *mailbox,
 ) *agentpb.OperatorToProxy {
 	switch m := msg.GetMessage().(type) {
 	case *agentpb.ProxyMessage_Hello:
@@ -605,15 +603,9 @@ func (s *Server) handleProxy(
 			// Waits on servers or the object store; inline, it would hold this
 			// proxy's outbox as long.
 			go func() {
-				answer := &agentpb.OperatorToProxy{
-					Message: &agentpb.OperatorToProxy_CloudResponse{
-						CloudResponse: s.answerCloudRequest(ctx, logger, id, m.CloudRequest),
-					},
-				}
-				select {
-				case late <- answer:
-				case <-ctx.Done():
-				}
+				// Not ctx: a renewal ends this stream, and the stream after it
+				// sends the answer. Each of these verbs bounds its own wait.
+				box.put(s.answerCloudRequest(context.WithoutCancel(ctx), logger, id, m.CloudRequest))
 			}()
 			return nil
 		}

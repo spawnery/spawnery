@@ -368,7 +368,7 @@ func waitEntered(t *testing.T, history *fakeHistory) {
 
 func TestAProxyAnswersOtherRequestsWhileARestoreRuns(t *testing.T) {
 	s, history := slowRestoreFixture(t)
-	late := make(chan *agentpb.OperatorToProxy, 1)
+	late := newMailbox()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	msg := func(req *agentpb.CloudRequest) *agentpb.ProxyMessage {
@@ -395,8 +395,8 @@ func TestAProxyAnswersOtherRequestsWhileARestoreRuns(t *testing.T) {
 	}
 	close(history.gate)
 	select {
-	case answer := <-late:
-		if got := answer.GetCloudResponse(); got.GetId() != 7 || got.GetRestoreWorld().GetGeneration() != 9 {
+	case got := <-late.ch:
+		if got.GetId() != 7 || got.GetRestoreWorld().GetGeneration() != 9 {
 			t.Fatalf("late answer = %v", got)
 		}
 	case <-time.After(5 * time.Second):
@@ -406,7 +406,7 @@ func TestAProxyAnswersOtherRequestsWhileARestoreRuns(t *testing.T) {
 
 func TestAServerAnswersOtherRequestsWhileARestoreRuns(t *testing.T) {
 	s, history := slowRestoreFixture(t)
-	late := make(chan *agentpb.OperatorToServer, 1)
+	late := newMailbox()
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
 	msg := func(req *agentpb.CloudRequest) *agentpb.ServerMessage {
@@ -435,11 +435,39 @@ func TestAServerAnswersOtherRequestsWhileARestoreRuns(t *testing.T) {
 	}
 	close(history.gate)
 	select {
-	case answer := <-late:
-		if got := answer.GetCloudResponse(); got.GetId() != 7 || got.GetRestoreWorld().GetGeneration() != 9 {
+	case got := <-late.ch:
+		if got.GetId() != 7 || got.GetRestoreWorld().GetGeneration() != 9 {
 			t.Fatalf("late answer = %v", got)
 		}
 	case <-time.After(5 * time.Second):
 		t.Fatal("the restore's answer never arrived")
+	}
+}
+
+// Off the loop, an answer can outlive the stream that asked; the renewed
+// stream of the same agent process sends it.
+func TestARestoreAnsweredAfterARenewalReachesTheRenewedStream(t *testing.T) {
+	s, history := slowRestoreFixture(t)
+	streams := newSessions()
+	asked, _, _, box := streams.enter(context.Background(), "pod-uid-1")
+	id := historyCaller
+	id.Role = agent.RoleServer
+
+	s.handle(asked, logr.Discard(), id, &agentpb.ServerMessage{Message: &agentpb.ServerMessage_CloudRequest{
+		CloudRequest: &agentpb.CloudRequest{
+			Id: 7, Request: &agentpb.CloudRequest_RestoreWorld{RestoreWorld: &agentpb.RestoreWorldRequest{Group: "private-servers", Key: "c0ffee", Generation: 3}},
+		},
+	}}, box)
+	waitEntered(t, history)
+	_, _, _, renewed := streams.enter(context.Background(), "pod-uid-1")
+	close(history.gate)
+
+	select {
+	case got := <-renewed.ch:
+		if got.GetId() != 7 || got.GetRestoreWorld().GetGeneration() != 9 {
+			t.Fatalf("the renewed stream received %v", got)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the restore's answer was lost with the stream that asked")
 	}
 }

@@ -5,6 +5,7 @@ import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFailsWith
 import kotlin.test.assertFalse
+import kotlin.test.assertNotEquals
 import kotlin.test.assertTrue
 
 class RequestsTest {
@@ -72,17 +73,16 @@ class RequestsTest {
     }
 
     @Test
-    fun `a stream change fails every outstanding request rather than retrying it`() {
-        val r = requests()
-        val first: CompletableFuture<String> = r.ask()
-        val second: CompletableFuture<String> = r.ask()
-        val sentBefore = sent.size
+    fun `two processes do not start at the same id`() {
+        // A restarted container is a second process in the same pod; an
+        // answer meant for the first must not complete the second's request.
+        val firsts = List(2) {
+            val ids = mutableListOf<Long>()
+            Requests(timeoutMillis = 1_000, clock = { now }).start<Unit> { id -> ids += id }
+            ids.single()
+        }
 
-        r.failAll(IllegalStateException("stream displaced"))
-
-        assertTrue(first.isCompletedExceptionally)
-        assertTrue(second.isCompletedExceptionally)
-        assertEquals(sentBefore, sent.size, "failAll must not resend anything")
+        assertNotEquals(firsts[0], firsts[1])
     }
 
     @Test

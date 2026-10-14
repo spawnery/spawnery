@@ -2,14 +2,17 @@ package cloud.spawnery.agent
 
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ThreadLocalRandom
 import java.util.concurrent.TimeoutException
 import java.util.concurrent.atomic.AtomicLong
 
 /**
- * A request in flight on a displaced stream is failed by [failAll], not resent:
- * only the caller knows whether it is safe to repeat.
+ * A request is never resent, not even onto a new stream: only the caller knows
+ * whether it is safe to repeat.
  *
- * Ids are never reused, so a late answer cannot complete a later request.
+ * Ids are never reused, so a late answer cannot complete a later request. They
+ * start at a random value, so neither can an answer meant for an earlier
+ * process in the same pod.
  *
  * @param timeoutMillis the deadline of a request that names none. It bounds a
  *   lost message rather than a slow one, for the operator answers most requests
@@ -21,7 +24,8 @@ class Requests(
 ) {
     private class Pending(val future: CompletableFuture<Any?>, val timeoutMillis: Long, val deadline: Long)
 
-    private val counter = AtomicLong(0)
+    /** In the lower half, so the counter cannot wrap. */
+    private val counter = AtomicLong(ThreadLocalRandom.current().nextLong(1, Long.MAX_VALUE / 2))
     private val pending = ConcurrentHashMap<Long, Pending>()
 
     @Suppress("UNCHECKED_CAST")
@@ -48,13 +52,6 @@ class Requests(
 
     fun fail(id: Long, error: Throwable) {
         pending.remove(id)?.future?.completeExceptionally(error)
-    }
-
-    fun failAll(error: Throwable) {
-        val ids = pending.keys.toList()
-        for (id in ids) {
-            pending.remove(id)?.future?.completeExceptionally(error)
-        }
     }
 
     fun expire() {

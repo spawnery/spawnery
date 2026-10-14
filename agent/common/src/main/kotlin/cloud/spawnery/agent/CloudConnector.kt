@@ -342,8 +342,11 @@ class CloudConnector(
         }
     }
 
+    /**
+     * Requests in flight stay open: the operator answers on the new stream
+     * what it received on the old one, and the rest run into their deadline.
+     */
     fun onStreamChanged() {
-        requests.failAll(IllegalStateException("the session was renewed while this request was in flight"))
         // Restated on the new stream: the operator forgets a session's
         // announcement and defaults to door open, round not ended.
         announcement.restate()

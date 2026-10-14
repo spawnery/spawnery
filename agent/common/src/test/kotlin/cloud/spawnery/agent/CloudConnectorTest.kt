@@ -303,6 +303,24 @@ class CloudConnectorTest {
     }
 
     @Test
+    fun `a request in flight across a new stream is completed by its answer`() {
+        // The operator answers the pod, not the stream that asked.
+        val connector = connector()
+        val stage = connector.resetScale("lobby")
+        val asked = requested.last().id
+
+        connector.onStreamChanged()
+        connector.answer(
+            CloudResponse.newBuilder()
+                .setId(asked)
+                .setStopBoost(cloud.spawnery.agent.pb.StopBoostResult.newBuilder().setRemoved(1))
+                .build(),
+        )
+
+        assertEquals(1, stage.toCompletableFuture().get(1, TimeUnit.SECONDS))
+    }
+
+    @Test
     fun `a start is sent with the group and the key`() {
         val connector = connector()
 
