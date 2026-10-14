@@ -99,7 +99,19 @@ class AgentPlugin : JavaPlugin(), Listener {
         server.scheduler.runTaskTimer(this, Runnable { snapshot(sync) }, ticks, ticks)
     }
 
-    /** Main thread: freeze saving, flush, ask; the wait runs off the main thread. */
+    private val regionWrites by lazy {
+        RegionWrites.locate(server.javaClass.classLoader).also {
+            if (!it.available) {
+                logger.info("spawnery world sync: no chunk system queue to wait on; snapshots save with flush on the main thread")
+            }
+        }
+    }
+
+    /**
+     * Main thread: freeze saving and queue every chunk. Off it: wait for the
+     * queue, then ask. A server whose queue cannot be waited on saves with
+     * flush, which waits on the main thread instead.
+     */
     private fun snapshot(sync: WorldSync) {
         if (snapshotInFlight) return
         snapshotInFlight = true
@@ -108,19 +120,28 @@ class AgentPlugin : JavaPlugin(), Listener {
             autosave.forEach { (world, on) -> world.isAutoSave = on }
             snapshotInFlight = false
         }
+        val writes = regionWrites
         val seq: Long
+        val levels: List<Any>
         try {
             autosave.keys.forEach { it.isAutoSave = false }
-            server.dispatchCommand(server.consoleSender, "save-all flush")
+            if (writes.available) {
+                server.dispatchCommand(server.consoleSender, "save-all")
+                levels = server.worlds.map { it.javaClass.getMethod("getHandle").invoke(it) }
+            } else {
+                server.dispatchCommand(server.consoleSender, "save-all flush")
+                levels = emptyList()
+            }
             seq = ++snapshotSeq
-            sync.requestSnapshot(seq)
         } catch (t: Throwable) {
             restore.run()
-            logger.log(Level.WARNING, "spawnery world sync: could not ask for a snapshot", t)
+            logger.log(Level.WARNING, "spawnery world sync: could not save for a snapshot", t)
             return
         }
         server.scheduler.runTaskAsynchronously(this, Runnable {
             val outcome: Any = try {
+                if (levels.isNotEmpty()) writes.await(levels)
+                sync.requestSnapshot(seq)
                 sync.awaitSnapshot(seq, SNAPSHOT_WAIT_MILLIS)
             } catch (t: Throwable) {
                 t
