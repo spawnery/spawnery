@@ -80,9 +80,7 @@ private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?)
      * Retires the stream this one replaced, once. Called only when the operator
      * first answers on this stream; see [SessionLoop].
      */
-    fun takeOver() {
-        replaces.getAndSet(null)?.close()
-    }
+    fun takeOver(): Session<Req>? = replaces.getAndSet(null)?.also { it.close() }
 
     /**
      * Gives up the handover without performing it. The replaced stream keeps
@@ -171,7 +169,27 @@ private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?)
         // flight must not leave the outgoing one running. Graceful even after a
         // give-up, because the replaced stream was answered; that rests on the
         // argument in [SessionLoop.answerOverdue].
-        takeOver()
+        closedWith = takeOver()
+    }
+
+    private var closedWith: Session<Req>? = null
+
+    /**
+     * Waits for this attempt's channel, and the one [close] retired with it,
+     * to finish on gRPC's own threads; past the bound, it forces them.
+     */
+    fun awaitClosed(millis: Long) {
+        val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(millis)
+        for (c in listOfNotNull(channel, closedWith?.channel)) {
+            val left = deadline - System.nanoTime()
+            if (left > 0 && c.awaitTermination(left, TimeUnit.NANOSECONDS)) continue
+            c.shutdownNow()
+            c.awaitTermination(FORCED_WAIT_MILLIS, TimeUnit.MILLISECONDS)
+        }
+    }
+
+    private companion object {
+        const val FORCED_WAIT_MILLIS = 500L
     }
 }
 
@@ -254,6 +272,9 @@ class SessionLoop<Req, Resp>(
         const val FALLBACK_ANSWER_BOUND_MILLIS = 5L * 60 * 1000
 
         const val EXPIRY_PERIOD_MILLIS = 1_000L
+
+        /** The same two seconds onDisable() already gives the scheduler. */
+        const val STOP_WAIT_MILLIS = 2_000L
     }
 
     fun start() {
@@ -290,6 +311,9 @@ class SessionLoop<Req, Resp>(
         // and onDisable() gives the scheduler only two seconds, so a parked
         // channel would outlive the plugin inside a running JVM.
         session.close(cancel = !session.wasAnswered())
+        // The platform unloads this plugin's classes once its disable returns,
+        // and gRPC's threads load classes while they wind a channel down.
+        session.awaitClosed(STOP_WAIT_MILLIS)
     }
 
     override fun close() = stop()

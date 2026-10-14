@@ -65,6 +65,27 @@ private class TrackingChannel(
 }
 
 /**
+ * The in-process transport terminates inside `shutdown()`; a network
+ * transport finishes on its own threads afterwards. This one hands the
+ * shutdown on after a delay, as those threads do.
+ */
+private class SlowToTerminateChannel(private val delegate: ManagedChannel) : ManagedChannel() {
+    private val later = Executors.newSingleThreadScheduledExecutor()
+
+    override fun <ReqT, RespT> newCall(
+        methodDescriptor: MethodDescriptor<ReqT, RespT>,
+        callOptions: CallOptions,
+    ): ClientCall<ReqT, RespT> = delegate.newCall(methodDescriptor, callOptions)
+
+    override fun shutdown(): ManagedChannel = also { later.schedule({ delegate.shutdown() }, 200, TimeUnit.MILLISECONDS) }
+    override fun shutdownNow(): ManagedChannel = also { later.schedule({ delegate.shutdownNow() }, 200, TimeUnit.MILLISECONDS) }
+    override fun isShutdown(): Boolean = delegate.isShutdown()
+    override fun isTerminated(): Boolean = delegate.isTerminated()
+    override fun awaitTermination(timeout: Long, unit: TimeUnit): Boolean = delegate.awaitTermination(timeout, unit)
+    override fun authority(): String = delegate.authority()
+}
+
+/**
  * A channel whose calls fail synchronously from inside `stub.serverSession()`,
  * before [SessionLoop] has installed the session: any stream that dies before
  * it is established.
@@ -1014,6 +1035,30 @@ class SessionLoopTest {
                     )
                 }
             }
+        }
+    }
+
+    /**
+     * A platform unloads the plugin's classes once its disable returns; gRPC
+     * threads still winding the channel down after that load classes from a
+     * closed jar.
+     */
+    @Test
+    fun `stop returns once the channel has terminated`(@TempDir dir: Path) {
+        FakeOperator("stop-terminates").use { operator ->
+            val opened = Collections.synchronizedList(mutableListOf<ManagedChannel>())
+            val loop = loopAgainst(
+                operator,
+                FakeRole(),
+                dir,
+                channels = { SlowToTerminateChannel(operator.newChannel()).also { opened.add(it) } },
+            )
+            loop.start()
+            operator.awaitStream(0).awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+            loop.stop()
+
+            assertTrue(opened.single().isTerminated, "the channel was still winding down when stop() returned")
         }
     }
 
