@@ -304,8 +304,10 @@ and that is structural: a request names a player and a target and
 carries no namespace, and the operator resolves both inside the namespace the
 pod's own ServiceAccount token authenticated. There is no field to put another
 network's name in, so it is not a guard a later edit can drop. A rate bounds the
-rest: eight requests back to back per pod, one token back per second, counted
-per pod so that a noisy one cannot spend another's budget.
+rest: eight requests back to back per game server pod, one token back per
+second; thirty-two back to back per proxy pod, four tokens back per second,
+because a proxy acts for every player and every on-demand server behind it.
+Each is counted per pod so that a noisy one cannot spend another's budget.
 `spawnery_agent_requests_refused_total` publishes the refusals by reason, and a
 rising `RATE_LIMITED` is the shape a misbehaving or compromised plugin has.
 

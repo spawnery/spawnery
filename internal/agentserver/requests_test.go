@@ -264,11 +264,11 @@ func TestRequestsPastTheBurstAreRefused(t *testing.T) {
 	l := newRequestLimiter(func() time.Time { return now })
 
 	for i := 0; i < RequestBurst; i++ {
-		if !l.allow("pod-a") {
+		if !l.allow("pod-a", agent.RoleServer) {
 			t.Fatalf("request %d of the burst was refused", i+1)
 		}
 	}
-	if l.allow("pod-a") {
+	if l.allow("pod-a", agent.RoleServer) {
 		t.Error("a request past the burst was allowed")
 	}
 }
@@ -278,10 +278,10 @@ func TestOnePodsBurstIsNotAnothersOnesBudget(t *testing.T) {
 	l := newRequestLimiter(func() time.Time { return now })
 
 	for i := 0; i < RequestBurst+2; i++ {
-		l.allow("noisy")
+		l.allow("noisy", agent.RoleServer)
 	}
 
-	if !l.allow("quiet") {
+	if !l.allow("quiet", agent.RoleServer) {
 		t.Error("one pod exhausting its budget refused another pod's first request")
 	}
 }
@@ -290,16 +290,44 @@ func TestTheBucketRefills(t *testing.T) {
 	now := time.Unix(1000, 0)
 	l := newRequestLimiter(func() time.Time { return now })
 	for i := 0; i < RequestBurst; i++ {
-		l.allow("pod-a")
+		l.allow("pod-a", agent.RoleServer)
 	}
-	if l.allow("pod-a") {
+	if l.allow("pod-a", agent.RoleServer) {
 		t.Fatal("the bucket was not empty")
 	}
 
 	now = now.Add(RequestRefill)
 
-	if !l.allow("pod-a") {
+	if !l.allow("pod-a", agent.RoleServer) {
 		t.Error("a token did not come back after the refill interval")
+	}
+}
+
+func TestAProxyMayAskMoreBackToBackThanAServer(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := newRequestLimiter(func() time.Time { return now })
+
+	for i := 0; i < ProxyRequestBurst; i++ {
+		if !l.allow("gateway", agent.RoleProxy) {
+			t.Fatalf("request %d of a proxy's burst was refused", i+1)
+		}
+	}
+	if l.allow("gateway", agent.RoleProxy) {
+		t.Error("a request past a proxy's burst was allowed")
+	}
+}
+
+func TestAProxysBucketRefillsFasterThanAServers(t *testing.T) {
+	now := time.Unix(1000, 0)
+	l := newRequestLimiter(func() time.Time { return now })
+	for i := 0; i < ProxyRequestBurst; i++ {
+		l.allow("gateway", agent.RoleProxy)
+	}
+
+	now = now.Add(ProxyRequestRefill)
+
+	if !l.allow("gateway", agent.RoleProxy) {
+		t.Error("a proxy's token did not come back after its refill interval")
 	}
 }
 
@@ -308,11 +336,11 @@ func TestRefilledBucketsAreSweptOnceTheMapIsFull(t *testing.T) {
 	l := newRequestLimiter(func() time.Time { return now })
 	l.maxBuckets = 4
 	for i := 0; i < 4; i++ {
-		l.allow(fmt.Sprintf("pod-%d", i))
+		l.allow(fmt.Sprintf("pod-%d", i), agent.RoleServer)
 	}
 	// Refill everything, then a fifth pod arrives.
 	now = now.Add(time.Duration(RequestBurst) * RequestRefill)
-	l.allow("pod-4")
+	l.allow("pod-4", agent.RoleServer)
 
 	if got := len(l.buckets); got != 1 {
 		t.Errorf("%d buckets after the sweep, want 1: the refilled ones are indistinguishable "+
