@@ -298,11 +298,15 @@ a compromised game server pod learns who is on the whole network. The namespace
 is the horizon, because the state is built from a List scoped to the pod's own
 authenticated namespace.
 
-**An agent may ask that a player be moved, and that is the whole of it.** No
-verb creates, deletes or resizes anything, and it cannot reach another network,
-and that is structural: a request names a player and a target and
-carries no namespace, and the operator resolves both inside the namespace the
-pod's own ServiceAccount token authenticated. There is no field to put another
+**An agent may act on its own network and nowhere else.** It may ask that a
+player be moved, that a server be retired or taken back into rotation, that a
+group's replica count be pinned for a while, and that an on-demand member be
+started, stopped, deleted or have its world restored. A proxy may also
+force-stop a server, run a command on servers, and pin a group below its
+minimum; a game server may not. None of it reaches another network, and that is
+structural: a request carries no namespace, and the operator resolves every
+name in it inside the namespace the pod's own ServiceAccount token
+authenticated. There is no field to put another
 network's name in, so it is not a guard a later edit can drop. A rate bounds the
 rest: eight requests back to back per pod, one token back per second, counted
 per pod so that a noisy one cannot spend another's budget.
