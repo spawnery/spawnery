@@ -67,7 +67,9 @@ class VoiceRelay(
                     val now = clock()
                     if (now - swept >= SWEEP_MILLIS) {
                         swept = now
-                        for (expired in bridges.expired()) close(expired)
+                        for (expired in bridges.expired { player, backend -> resolve(player) == Backend.At(backend) }) {
+                            close(expired)
+                        }
                     }
                 } catch (e: Exception) {
                     if (running) warn("spawnery: the voice relay's loop failed; it keeps running", e)

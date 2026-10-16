@@ -51,8 +51,16 @@ class BridgesTest {
         now += 14_000
         bridges.touch(player)
         now += 14_000
-        assertEquals(emptyList<UUID>(), bridges.expired())
+        assertEquals(emptyList<UUID>(), bridges.expired { _, _ -> false })
         now += 1_000
-        assertEquals(listOf(player), bridges.expired())
+        assertEquals(listOf(player), bridges.expired { _, _ -> false })
+    }
+
+    @Test
+    fun `a silent bridge stays while its player still routes to the same backend`() {
+        bridges.route(player, client, lobby)
+        now += 60_000
+        assertEquals(emptyList<UUID>(), bridges.expired { id, backend -> id == player && backend == lobby })
+        assertEquals(listOf(player), bridges.expired { _, backend -> backend == game })
     }
 }

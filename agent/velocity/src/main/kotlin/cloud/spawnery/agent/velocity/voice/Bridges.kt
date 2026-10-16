@@ -42,9 +42,16 @@ class Bridges(private val clock: () -> Long) {
         states[player]?.lastTraffic = clock()
     }
 
-    fun expired(): List<UUID> {
+    /**
+     * A silent bridge whose player still routes to its backend stays: SVC pins
+     * the address it authenticated, and a new source port leaves the client
+     * validating until its next secret.
+     */
+    fun expired(stillRoutes: (UUID, InetSocketAddress) -> Boolean): List<UUID> {
         val now = clock()
-        return states.filterValues { now - it.lastTraffic >= IDLE_MILLIS }.keys.toList()
+        return states
+            .filter { (player, state) -> now - state.lastTraffic >= IDLE_MILLIS && !stillRoutes(player, state.backend) }
+            .keys.toList()
     }
 
     fun remove(player: UUID) {
