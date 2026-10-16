@@ -15,6 +15,8 @@ import java.net.InetSocketAddress
 import java.nio.ByteBuffer
 import java.util.UUID
 import java.util.concurrent.CopyOnWriteArrayList
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicLong
 import java.util.concurrent.atomic.AtomicReference
 import kotlin.concurrent.thread
 
@@ -30,6 +32,21 @@ class VoiceRelayTest {
                 val p = DatagramPacket(buf, buf.size)
                 runCatching { socket.receive(p) }.onFailure { return@thread }
                 val reply = ByteBuffer.allocate(p.length + 4).putInt(socket.localPort).put(buf, 0, p.length).array()
+                socket.send(DatagramPacket(reply, reply.size, p.socketAddress))
+            }
+        }
+        return socket
+    }
+
+    /** A backend that answers every datagram with the source port it arrived from. */
+    private fun sourcePortBackend(): DatagramSocket {
+        val socket = DatagramSocket(0, InetAddress.getLoopbackAddress())
+        thread(isDaemon = true) {
+            val buf = ByteArray(2048)
+            while (!socket.isClosed) {
+                val p = DatagramPacket(buf, buf.size)
+                runCatching { socket.receive(p) }.onFailure { return@thread }
+                val reply = ByteBuffer.allocate(4).putInt(p.port).array()
                 socket.send(DatagramPacket(reply, reply.size, p.socketAddress))
             }
         }
@@ -87,6 +104,38 @@ class VoiceRelayTest {
             }
         }
         lobby.close(); game.close()
+    }
+
+    @Test
+    fun `a long silence keeps the source port the backend knows, until the player leaves`() {
+        val backend = sourcePortBackend()
+        val at = Backend.At(backend.localSocketAddress as InetSocketAddress)
+        val now = AtomicLong(0)
+        val present = AtomicBoolean(true)
+        // The relay sweeps once its one-second select times out with nothing to read.
+        fun sweep() = Thread.sleep(1_500)
+        VoiceRelay(
+            InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+            resolve = { if (present.get()) at else Backend.UnknownPlayer },
+            counters = VoiceCounters(), log = { _, _ -> }, clock = now::get,
+        ).use { relay ->
+            relay.start()
+            DatagramSocket().use { client ->
+                client.soTimeout = 2_000
+                val first = roundTrip(client, relay.localPort, frame(player, "auth"))!!.int
+
+                now.set(60_000)
+                sweep()
+                assertEquals(first, roundTrip(client, relay.localPort, frame(player, "check"))!!.int)
+
+                present.set(false)
+                now.addAndGet(60_000)
+                sweep()
+                present.set(true)
+                assertTrue(first != roundTrip(client, relay.localPort, frame(player, "rejoin"))!!.int)
+            }
+        }
+        backend.close()
     }
 
     @Test

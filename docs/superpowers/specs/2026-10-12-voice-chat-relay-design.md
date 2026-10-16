@@ -203,6 +203,15 @@ player as in SVC's proxy.
 - *Idle.* After 15 s without traffic in either direction the bridge is
   removed. That is longer than SVC's 10 s timeout, so a bridge never goes away
   under a connection the backend still considers alive.
+  *Amended 2026-10-16:* A silent bridge is removed only when its player no
+  longer resolves to the backend it leads to. SVC's backend pins the address
+  a player authenticated from and matches the connection check by that
+  address alone. A client that has authenticated but not yet validated never
+  authenticates again, so a bridge reopened on a new ephemeral port after a
+  stall of more than 15 s left the client validating until its next secret.
+  This happened on a production network on 2026-10-16, where UDP to the
+  proxies stalled for minutes. A bridge now lasts as long as its player stays
+  on that backend, at the cost of one socket per such player.
 
 **Rewriting the secret.** This is done by the proxy holding the game
 connection, the only one that sees the packet:
