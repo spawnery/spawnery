@@ -14,7 +14,7 @@ spec:
   networkRef:
     name: production
   type: Persistent
-  image: ghcr.io/spawnery/purpur:26.3-0.28.0
+  image: ghcr.io/spawnery/purpur:26.3-0.28.1
   maxPlayers: 20
   replicas: 2
   storage:
