@@ -31,6 +31,8 @@ type Retention struct {
 	Weekly  int32 `json:"weekly,omitempty"`
 	Monthly int32 `json:"monthly,omitempty"`
 	Yearly  int32 `json:"yearly,omitempty"`
+
+	MaxAgeDays int32 `json:"maxAgeDays,omitempty"`
 }
 
 // KeepsHistory: a single option of 1 keeps exactly the current generation.
@@ -69,6 +71,22 @@ func (r Retention) Select(points []Point) []bool {
 		keep[0] = true
 	}
 	return keep
+}
+
+// Expired marks each history point whose replacement, the next newer
+// point, was taken more than MaxAgeDays before now. Points are newest first
+// and points[0], the current generation, never expires.
+func (r Retention) Expired(points []Point, now time.Time) []bool {
+	expired := make([]bool, len(points))
+	if r.MaxAgeDays <= 0 || now.IsZero() {
+		return expired
+	}
+	maxAge := time.Duration(r.MaxAgeDays) * 24 * time.Hour
+	for i := 1; i < len(points); i++ {
+		replacedAt := points[i-1].Taken
+		expired[i] = !replacedAt.IsZero() && now.Sub(replacedAt) > maxAge
+	}
+	return expired
 }
 
 func markSelections(points []Point, keep, marked []bool, n int, id func(Point) string) {

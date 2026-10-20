@@ -17,6 +17,7 @@ limitations under the License.
 package worldsync
 
 import (
+	"slices"
 	"testing"
 	"time"
 )
@@ -169,5 +170,73 @@ func TestKeepsHistory(t *testing.T) {
 		if got := tc.r.KeepsHistory(); got != tc.want {
 			t.Errorf("%+v.KeepsHistory() = %v, want %v", tc.r, got, tc.want)
 		}
+	}
+}
+
+func expiredGenerations(ps []Point, expired []bool) []int64 {
+	var out []int64
+	for i, e := range expired {
+		if e {
+			out = append(out, ps[i].Generation)
+		}
+	}
+	return out
+}
+
+func TestRetentionExpired(t *testing.T) {
+	const now = "2026-10-20T12:00:00Z"
+	for _, tc := range []struct {
+		name   string
+		policy Retention
+		times  []string
+		want   []int64
+	}{
+		{
+			name:   "zero means no limit",
+			policy: Retention{Last: 10},
+			times:  []string{"2026-01-03T00:00:00Z", "2026-01-02T00:00:00Z", "2026-01-01T00:00:00Z"},
+		},
+		{
+			name:   "the current never expires, however old",
+			policy: Retention{MaxAgeDays: 1},
+			times:  []string{"2026-01-01T00:00:00Z"},
+		},
+		{
+			name:   "an entry expires once the generation that replaced it is older than the limit",
+			policy: Retention{MaxAgeDays: 30},
+			times:  []string{"2026-10-19T12:00:00Z", "2026-09-10T12:00:00Z", "2026-09-01T12:00:00Z", "2026-08-01T12:00:00Z"},
+			want:   []int64{2, 1},
+		},
+		{
+			name:   "an old entry replaced recently stays",
+			policy: Retention{MaxAgeDays: 7},
+			times:  []string{"2026-10-20T11:00:00Z", "2026-03-01T00:00:00Z"},
+		},
+		{
+			name:   "exactly the limit is not past it",
+			policy: Retention{MaxAgeDays: 1},
+			times:  []string{"2026-10-20T13:00:00Z", "2026-10-19T12:00:00Z", "2026-10-19T11:00:00Z"},
+		},
+		{
+			name:   "an entry replaced by a point without a time stays",
+			policy: Retention{MaxAgeDays: 1},
+			times:  []string{"0001-01-01T00:00:00Z", "2026-01-02T00:00:00Z", "2026-01-01T00:00:00Z"},
+			want:   []int64{1},
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			ps := pointsAt(t, tc.times...)
+			got := expiredGenerations(ps, tc.policy.Expired(ps, at(t, now)))
+			if !slices.Equal(got, tc.want) {
+				t.Fatalf("expired %v, want %v", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestNoPointExpiresWithoutAClock(t *testing.T) {
+	ps := pointsAt(t, "2026-01-02T00:00:00Z", "2026-01-01T00:00:00Z")
+	if got := expiredGenerations(ps, Retention{MaxAgeDays: 1}.Expired(ps, time.Time{})); got != nil {
+		t.Fatalf("expired %v at the zero time, want none", got)
 	}
 }

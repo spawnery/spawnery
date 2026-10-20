@@ -223,14 +223,35 @@ spec:
       daily: 7
       weekly: 4
       monthly: 3
+      maxAgeDays: 30  # and none replaced more than 30 days ago
 ```
 
 The options apply in the order `last`, `hourly`, `daily`, `weekly`,
 `monthly`, `yearly`. Each counts only periods that hold a generation, skips a
 period an earlier option already kept a generation from, and keeps the
 newest generation of each further period. Weeks are ISO weeks and every
-period is UTC. A member nobody plays makes no generations, so its history
-stays as it is.
+period is UTC. A member nobody plays makes no generations, so the counts
+leave its history as it is.
+
+`maxAgeDays` is a limit on top of the counts. An older generation goes once
+the generation that replaced it is more than that many days old, whatever
+the counts would keep; the current generation always stays. It measures from
+the replacement, not from the generation's own time: a state that a reset
+in game or a restore replaced stays a restore point for `maxAgeDays` after
+that. Unset, there is no limit; when set, it is at least 1.
+
+The counts only prune where a generation is written, so they never reach a
+world nobody starts again. A world that was large, was reset in game and
+then sat idle keeps its large generations for good under `last` alone.
+`maxAgeDays` covers that case: once an hour the operator lists each group
+that sets it, and for a world with a generation past the limit it takes the
+world's lease, prunes it by the group's whole policy and releases the lease
+again. It skips a world whose lease a node holds, which is a member that
+runs or is still uploading, and a world marked for deletion. A world whose
+current state comes from a restore keeps the state the restore replaced
+until its next upload, as without `maxAgeDays`. The objects this pass
+deletes count in `spawnery_world_aged_objects_total`. The pass starts an
+hour after the operator, and only the leader runs it.
 
 A kept generation costs what its upload cost: the region files that changed
 and one pack of the small files. On a pregenerated world of about 2.75 GB,
@@ -375,11 +396,13 @@ traffic, CPU and memory from the kubelet's cAdvisor series.
 - What an upload attempt that failed wrote stays in the bucket until the
   world's next sweep: every twelfth upload, and when a node releases the
   world.
-- A policy change does not prune worlds nobody plays.
+- A change to the counts does not prune worlds nobody plays, until one of
+  their generations passes `maxAgeDays`.
 - The history holds what the snapshots held. Play after the last snapshot
   before a crash is in no generation, and a deleted world cannot be
   restored.
 
 The design and its measurements are in
-`docs/superpowers/specs/2026-10-06-object-store-worlds-design.md` and
-`docs/superpowers/specs/2026-10-08-world-history-design.md`.
+`docs/superpowers/specs/2026-10-06-object-store-worlds-design.md`,
+`docs/superpowers/specs/2026-10-08-world-history-design.md` and
+`docs/superpowers/specs/2026-10-20-retention-max-age-design.md`.

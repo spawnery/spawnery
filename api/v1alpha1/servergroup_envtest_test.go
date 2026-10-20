@@ -27,6 +27,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
@@ -838,5 +839,19 @@ func TestRetentionOptionsDefaultToZero(t *testing.T) {
 	}
 	if got.Spec.Storage.Retention == nil || *got.Spec.Storage.Retention != (spawneryv1alpha1.RetentionSpec{Daily: 7}) {
 		t.Fatalf("retention = %+v, want daily 7 and every other option 0", got.Spec.Storage.Retention)
+	}
+}
+
+func TestRetentionRefusesAMaxAgeOfZero(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	g := objectStoreGroup(ns, "zero-max-age")
+	g.Spec.Storage.Retention = &spawneryv1alpha1.RetentionSpec{Last: 3, MaxAgeDays: 30}
+	if err := c.Create(ctx, g); err != nil {
+		t.Fatalf("maxAgeDays 30: %v", err)
+	}
+	patch := client.RawPatch(types.MergePatchType, []byte(`{"spec":{"storage":{"retention":{"maxAgeDays":0}}}}`))
+	if err := c.Patch(ctx, g, patch); err == nil || !strings.Contains(err.Error(), "should be greater than or equal to 1") {
+		t.Fatalf("maxAgeDays 0: err = %v, want a minimum of 1", err)
 	}
 }

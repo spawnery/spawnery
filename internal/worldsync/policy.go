@@ -97,3 +97,15 @@ func (p *Policies) Sync(ctx context.Context, namespace, group string, r Retentio
 	p.written[k] = r
 	return nil
 }
+
+func (p *Policies) aging() map[string]Retention {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	out := map[string]Retention{}
+	for group, r := range p.written {
+		if r.MaxAgeDays > 0 {
+			out[group] = r
+		}
+	}
+	return out
+}

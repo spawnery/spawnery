@@ -48,9 +48,17 @@ var (
 	prunedObjects = prometheus.NewCounter(prometheus.CounterOpts{
 		Name: "spawnery_worldsync_pruned_objects_total", Help: "Objects and packs that prunes deleted.",
 	})
+
+	agedObjects = prometheus.NewCounter(prometheus.CounterOpts{
+		Name: "spawnery_world_aged_objects_total", Help: "Objects and packs the operator deleted from world history past storage.retention.maxAgeDays.",
+	})
 )
 
 // Collectors are registered by the binary, not here, so tests need no registry.
 func Collectors() []prometheus.Collector {
 	return []prometheus.Collector{downloadSeconds, downloadFailures, uploadSeconds, retries, worlds, pendingUploads, leaseConflicts, orphans, prunedObjects}
+}
+
+func OperatorCollectors() []prometheus.Collector {
+	return []prometheus.Collector{agedObjects}
 }

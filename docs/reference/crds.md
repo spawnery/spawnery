@@ -173,6 +173,7 @@ ServerGroupSpec describes a group of Minecraft servers.
 <tr><td><code>storage.retention.daily</code></td><td>integer (int32) (&gt;= 0)</td><td align="center"></td><td></td><td>Daily keeps the newest generation of each of that many days.</td></tr>
 <tr><td><code>storage.retention.hourly</code></td><td>integer (int32) (&gt;= 0)</td><td align="center"></td><td></td><td>Hourly keeps the newest generation of each of that many hours.</td></tr>
 <tr><td><code>storage.retention.last</code></td><td>integer (int32) (&gt;= 0)</td><td align="center"></td><td></td><td>Last keeps the newest generations; the current one counts as one.</td></tr>
+<tr><td><code>storage.retention.maxAgeDays</code></td><td>integer (int32) (&gt;= 1)</td><td align="center"></td><td></td><td>MaxAgeDays drops an older generation, whatever the counts keep, once the generation that replaced it is older than that many days. The operator applies it hourly to worlds nobody plays. Unset, no limit.</td></tr>
 <tr><td><code>storage.retention.monthly</code></td><td>integer (int32) (&gt;= 0)</td><td align="center"></td><td></td><td>Monthly keeps the newest generation of each of that many months.</td></tr>
 <tr><td><code>storage.retention.weekly</code></td><td>integer (int32) (&gt;= 0)</td><td align="center"></td><td></td><td>Weekly keeps the newest generation of each of that many ISO weeks.</td></tr>
 <tr><td><code>storage.retention.yearly</code></td><td>integer (int32) (&gt;= 0)</td><td align="center"></td><td></td><td>Yearly keeps the newest generation of each of that many years.</td></tr>

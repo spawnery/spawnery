@@ -35,6 +35,7 @@ type PruneRequest struct {
 	Pin      int64
 	Cache    ObjectCache
 	Sweep    bool
+	Now      time.Time
 }
 
 // Prune runs under the world's lease, right after a manifest commit. The
@@ -56,8 +57,9 @@ func Prune(ctx context.Context, st Store, prefix string, req PruneRequest) (int,
 		points = append(points, e.Point)
 	}
 	keep := req.Policy.Select(points)
+	expired := req.Policy.Expired(points, req.Now)
 	for i, e := range older {
-		if keep[i+1] || e.Generation == req.Pin {
+		if (keep[i+1] && !expired[i+1]) || e.Generation == req.Pin {
 			kept = append(kept, e)
 		} else {
 			dropped = append(dropped, e)

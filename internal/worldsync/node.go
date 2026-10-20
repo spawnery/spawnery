@@ -1170,7 +1170,7 @@ func (n *Node) pruneAfter(ctx context.Context, world string, job *uploadJob, m M
 		return
 	}
 	deleted, err := Prune(ctx, n.cfg.Store, n.prefix(world), PruneRequest{
-		Current: m, Replaced: job.prev, Policy: job.policy, Cache: job.cache, Sweep: sweep,
+		Current: m, Replaced: job.prev, Policy: job.policy, Cache: job.cache, Sweep: sweep, Now: n.cfg.Clock(),
 	})
 	prunedObjects.Add(float64(deleted))
 	if err != nil {
@@ -1214,7 +1214,7 @@ func (n *Node) sweepAtRelease(ctx context.Context, s *worldState) {
 		s.kept = ObjectCache{}
 	}
 	deleted, err := Prune(ctx, n.cfg.Store, n.prefix(s.World), PruneRequest{
-		Current: m, Policy: s.policy, Cache: s.kept, Sweep: true,
+		Current: m, Policy: s.policy, Cache: s.kept, Sweep: true, Now: n.cfg.Clock(),
 	})
 	prunedObjects.Add(float64(deleted))
 	if err != nil {

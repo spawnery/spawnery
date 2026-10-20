@@ -61,6 +61,9 @@ var agentRegistry = func() *prometheus.Registry {
 	return r
 }()
 
+// The operator registers these only with --world-sync, so no import does.
+func init() { metrics.Registry.MustRegister(worldsync.OperatorCollectors()...) }
+
 // metricNamePrefix restricts the page to the operator's own metrics.
 // Nothing else is registered by the six packages this program imports today,
 // but the filter is here on purpose rather than as a defensive no-op: a

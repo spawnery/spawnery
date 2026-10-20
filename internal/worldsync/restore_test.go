@@ -438,3 +438,44 @@ func TestAskingAgainAfterTheMemberUploadedRestoresAgain(t *testing.T) {
 		t.Fatalf("restore after the member ran = %+v, %v; want generation %d from 1", again, err, stopped.Generation+1)
 	}
 }
+
+func TestARestoresReplacedStateStaysForTheAgeLimitAfterTheRestore(t *testing.T) {
+	st := NewMemStore(time.Now)
+	ctx := context.Background()
+	resetWorld(t, st)
+	policy := Retention{Last: 10, MaxAgeDays: 7}
+	restoredAt := time.Date(2026, 10, 20, 12, 0, 0, 0, time.UTC)
+	if _, err := RestoreWorld(ctx, st, prefix, 1, policy, restoredAt); err != nil {
+		t.Fatal(err)
+	}
+	if got := historyGenerations(t, st); !slices.Equal(got, []int64{4}) {
+		t.Fatalf("history after the restore = %v, want [4]: the replaced generation, the rest aged out", got)
+	}
+	if !stored(t, st, prefix+ObjectsDir+"large") || !stored(t, st, prefix+ObjectsDir+"built1") {
+		t.Fatalf("store = %v; the restored generation's objects must stay", st.Keys())
+	}
+
+	restored, _, err := ReadManifest(ctx, st, prefix)
+	if err != nil {
+		t.Fatal(err)
+	}
+	seedEntry(t, st, restored)
+	upload := manifestAt(restored.Generation+1, restoredAt.Add(24*time.Hour), ObjectsDir+"large", ObjectsDir+"built1")
+	seedCurrent(t, st, upload)
+	day := 24 * time.Hour
+	if _, err := Prune(ctx, st, prefix, PruneRequest{Current: upload, Policy: policy, Now: restoredAt.Add(7 * day)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := historyGenerations(t, st); !slices.Equal(got, []int64{5, 4}) {
+		t.Fatalf("history 7 days after the restore = %v, want [5 4]: the replaced state stays restorable", got)
+	}
+	if _, err := Prune(ctx, st, prefix, PruneRequest{Current: upload, Policy: policy, Now: restoredAt.Add(7*day + time.Minute)}); err != nil {
+		t.Fatal(err)
+	}
+	if got := historyGenerations(t, st); !slices.Equal(got, []int64{5}) {
+		t.Fatalf("history past 7 days after the restore = %v, want [5]", got)
+	}
+	if stored(t, st, prefix+ObjectsDir+"fresh") {
+		t.Fatalf("store = %v; the expired replaced state's object must go", st.Keys())
+	}
+}

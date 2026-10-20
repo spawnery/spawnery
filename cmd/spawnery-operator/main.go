@@ -37,6 +37,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	"sigs.k8s.io/controller-runtime/pkg/log/zap"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
+	ctrlmetrics "sigs.k8s.io/controller-runtime/pkg/metrics"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
@@ -406,10 +407,17 @@ func main() {
 		}
 		bucket := worldsync.BucketWorlds{Store: st, Base: base}
 		worlds, history = bucket, bucket
-		retention = &worldsync.Policies{Store: st, Base: base}
+		policies := &worldsync.Policies{Store: st, Base: base}
+		retention = policies
 		if err := mgr.Add(&worldsync.Sweeper{Store: st, Base: base, Interval: time.Minute,
 			StaleAfter: worldsync.StaleAfter, Log: ctrl.Log.WithName("worldsync")}); err != nil {
 			setupLog.Error(err, "add world deletion sweeper")
+			os.Exit(1)
+		}
+		ctrlmetrics.Registry.MustRegister(worldsync.OperatorCollectors()...)
+		if err := mgr.Add(&worldsync.Ager{Store: st, Base: base, Policies: policies, Interval: time.Hour,
+			StaleAfter: worldsync.StaleAfter, Clock: time.Now, Log: ctrl.Log.WithName("worldsync")}); err != nil {
+			setupLog.Error(err, "add world history aging")
 			os.Exit(1)
 		}
 	}
