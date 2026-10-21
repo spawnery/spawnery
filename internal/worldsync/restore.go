@@ -142,7 +142,7 @@ func RestoreWorld(ctx context.Context, st Store, prefix string, generation int64
 		return Restored{}, err
 	}
 	// Pinned so that the restore can be undone before the next start.
-	_, perr := Prune(ctx, st, prefix, PruneRequest{Current: next, Policy: policy, Pin: cur.Generation})
+	_, perr := Prune(ctx, st, prefix, PruneRequest{Current: next, Policy: policy, Pin: cur.Generation, Now: now})
 	return Restored{Generation: next.Generation, RestoredFrom: generation, RestoredTaken: from.Taken, PruneErr: perr}, nil
 }
 

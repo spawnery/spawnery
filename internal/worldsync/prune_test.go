@@ -314,3 +314,66 @@ func TestObjectsStayWhenADroppedEntryCannotBeDeleted(t *testing.T) {
 		t.Fatalf("objects after = %v, before = %v; none may go while a dropped entry is still listed", after, before)
 	}
 }
+
+func manifestAt(n int64, taken time.Time, objects ...string) Manifest {
+	m := manifestOf(n, objects...)
+	m.Taken = taken.UnixMilli()
+	return m
+}
+
+func augustDay(d int) time.Time { return time.Date(2026, 8, d, 12, 0, 0, 0, time.UTC) }
+
+// resetWorld seeds three generations of a large world as history and, as
+// current, the small world a reset in game left behind.
+func resetWorld(t *testing.T, st Store) Manifest {
+	t.Helper()
+	for n := int64(1); n <= 3; n++ {
+		seedEntry(t, st, manifestAt(n, augustDay(int(n)), ObjectsDir+"large", fmt.Sprintf("%sbuilt%d", ObjectsDir, n)))
+	}
+	cur := manifestAt(4, augustDay(4), ObjectsDir+"fresh")
+	seedCurrent(t, st, cur)
+	return cur
+}
+
+func TestAnIdleWorldAfterAResetLosesItsOldGenerationsOnceReplacedLongEnoughAgo(t *testing.T) {
+	st := NewMemStore(time.Now)
+	ctx := context.Background()
+	cur := resetWorld(t, st)
+	policy := Retention{Last: 10, MaxAgeDays: 30}
+
+	deleted, err := Prune(ctx, st, prefix, PruneRequest{Current: cur, Policy: policy, Now: augustDay(4).Add(20 * 24 * time.Hour)})
+	if err != nil || deleted != 0 {
+		t.Fatalf("20 days after the reset: deleted = %d, %v; want 0", deleted, err)
+	}
+	if got := historyGenerations(t, st); !slices.Equal(got, []int64{3, 2, 1}) {
+		t.Fatalf("20 days after the reset: history = %v, want [3 2 1]", got)
+	}
+
+	deleted, err = Prune(ctx, st, prefix, PruneRequest{Current: cur, Policy: policy, Now: augustDay(4).Add(31 * 24 * time.Hour)})
+	if err != nil || deleted != 4 {
+		t.Fatalf("31 days after the reset: deleted = %d, %v; want 4", deleted, err)
+	}
+	if got := historyGenerations(t, st); len(got) != 0 {
+		t.Fatalf("31 days after the reset: history = %v, want none although last: 10 keeps them", got)
+	}
+	if !stored(t, st, prefix+ObjectsDir+"fresh") || !stored(t, st, prefix+ManifestName) {
+		t.Fatalf("store = %v; the current generation must stay", st.Keys())
+	}
+}
+
+func TestAPinnedEntryOutlivesTheAgeLimit(t *testing.T) {
+	st := NewMemStore(time.Now)
+	cur := resetWorld(t, st)
+	_, err := Prune(context.Background(), st, prefix, PruneRequest{
+		Current: cur, Policy: Retention{Last: 10, MaxAgeDays: 30}, Pin: 2, Now: augustDay(4).Add(31 * 24 * time.Hour),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := historyGenerations(t, st); !slices.Equal(got, []int64{2}) {
+		t.Fatalf("history = %v, want the pinned 2 alone", got)
+	}
+	if !stored(t, st, prefix+ObjectsDir+"large") || !stored(t, st, prefix+ObjectsDir+"built2") {
+		t.Fatalf("store = %v; the pinned entry's objects must stay", st.Keys())
+	}
+}

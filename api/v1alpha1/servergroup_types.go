@@ -193,6 +193,12 @@ type RetentionSpec struct {
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	Yearly int32 `json:"yearly,omitempty"`
+	// MaxAgeDays drops an older generation, whatever the counts keep, once
+	// the generation that replaced it is older than that many days. The
+	// operator applies it hourly to worlds nobody plays. Unset, no limit.
+	// +kubebuilder:validation:Minimum=1
+	// +optional
+	MaxAgeDays int32 `json:"maxAgeDays,omitempty"`
 }
 
 // StorageSpec describes where a persistent or on-demand group keeps its

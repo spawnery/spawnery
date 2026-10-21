@@ -5356,6 +5356,14 @@ spec:
                         format: int32
                         minimum: 0
                         type: integer
+                      maxAgeDays:
+                        description: |-
+                          MaxAgeDays drops an older generation, whatever the counts keep, once
+                          the generation that replaced it is older than that many days. The
+                          operator applies it hourly to worlds nobody plays. Unset, no limit.
+                        format: int32
+                        minimum: 1
+                        type: integer
                       monthly:
                         description: Monthly keeps the newest generation of each of
                           that many months.
