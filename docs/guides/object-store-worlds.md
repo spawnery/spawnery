@@ -95,7 +95,7 @@ for ns in spawnery-system spawnery-worldsync; do
     --from-literal=AWS_ACCESS_KEY_ID="$KEY_ID" \
     --from-literal=AWS_SECRET_ACCESS_KEY="$SECRET"
 done
-helm upgrade spawnery oci://ghcr.io/spawnery/charts/spawnery --version 0.28.0 \
+helm upgrade spawnery oci://ghcr.io/spawnery/charts/spawnery --version 0.29.0 \
   --namespace spawnery-system --reuse-values -f worldsync-values.yaml
 ```
 
@@ -316,7 +316,7 @@ spec:
           type: RuntimeDefault
       containers:
         - name: import
-          image: ghcr.io/spawnery/spawnery-worldsync:0.28.0
+          image: ghcr.io/spawnery/spawnery-worldsync:0.29.0
           args:
             - import
             - --world=minecraft/private-servers/0b5c1c82-4c7f-4a6e-9d1b-2c1f2b9d5e10
