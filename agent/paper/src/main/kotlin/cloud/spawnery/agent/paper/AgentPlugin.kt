@@ -223,13 +223,16 @@ class AgentPlugin : JavaPlugin(), Listener {
 
                 server.pluginManager.registerEvents(this, this)
 
+                val platform = Platforms.detect(server, server.javaClass.classLoader)
+                logger.info("spawnery tick reports from ${platform.javaClass.name}")
+
                 // Bukkit.getOnlinePlayers() is not thread-safe, so the count is
                 // sampled on the global region thread.
                 server.globalRegionScheduler.runAtFixedRate(this, {
                     state.sample(Bukkit.getOnlinePlayers().size, Bukkit.getMaxPlayers())
                     registerLoginGateOnce()
-                    // Paper's own one-minute average; it caps at 20.
-                    state.sampleTicks(Bukkit.getTPS()[0], Bukkit.getAverageTickTime())
+                    val ticks = platform.ticks()
+                    state.sampleTicks(ticks.tps, ticks.mspt)
                     // Recomputed every tick rather than subscribing to joins,
                     // leaves and permission changes separately.
                     feed.tick()

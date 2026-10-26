@@ -181,7 +181,7 @@
           };
 
           agents = pkgs.callPackage ./nix/agents.nix {
-            inherit paper velocity imageVersion;
+            inherit paper velocity canvas imageVersion;
           };
 
           spawnery-operator = pkgs.buildGoModule {

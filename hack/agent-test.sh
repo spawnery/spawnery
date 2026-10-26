@@ -157,10 +157,17 @@ start_agent() {
 		"$image" >/dev/null
 }
 
+# log_has <container> <pattern> - captured, not piped: under pipefail, grep -q
+# exiting at the first match SIGPIPEs a `logs` still writing, and the pipeline
+# fails even though the line is there.
+log_has() {
+	grep -q -- "$2" <<<"$("$CONTAINER" logs "$1" 2>&1)"
+}
+
 # Dormant and hung look the same on the wire; only the container log tells them apart.
 explain_silence() {
 	local name="$1"
-	if "$CONTAINER" logs "$name" 2>&1 | grep -q 'spawnery agent dormant'; then
+	if log_has "$name" 'spawnery agent dormant'; then
 		echo "the agent went dormant rather than hanging - the endpoint, the CA or the token did not reach it:" >&2
 		"$CONTAINER" logs "$name" 2>&1 | grep -i 'spawnery' >&2 || true
 	fi
@@ -169,7 +176,7 @@ explain_silence() {
 require_api_installed() {
 	local name="$1" start=$SECONDS
 	# Waited for: the platform buffers its stdout, so `logs` lags the process.
-	until "$CONTAINER" logs "$name" 2>&1 | grep -q 'spawnery API installed'; do
+	until log_has "$name" 'spawnery API installed'; do
 		if [ -z "$("$CONTAINER" ps -q --filter "name=^${name}$")" ]; then
 			echo "the container exited before installing its plugin API" >&2
 			"$CONTAINER" logs "$name" >&2
@@ -199,7 +206,7 @@ console() {
 # first NetworkState arrives.
 require_cloud_list() {
 	local name="$1" start=$SECONDS
-	until "$CONTAINER" logs "$name" 2>&1 | grep -q "$SYNCED_GROUP ("; do
+	until log_has "$name" "$SYNCED_GROUP ("; do
 		if [ -z "$("$CONTAINER" ps -q --filter "name=^${name}$")" ]; then
 			echo "the container exited before answering a console command" >&2
 			"$CONTAINER" logs "$name" >&2
@@ -355,13 +362,25 @@ if [ "${AGENT_TEST_ONLY:-}" = voice ]; then
 	exit 0
 fi
 
+# Canvas reports the worst of its regions, and an idle server has none: the
+# forceload gives it one to read.
+CANVAS_BUILD="$("$CONTAINER" image inspect --format '{{ index .Config.Labels "cloud.spawnery.canvas-build" }}' "$IMAGE")"
+[ "$CANVAS_BUILD" = "<no value>" ] && CANVAS_BUILD=""
+CANVAS_FORCELOAD="forceload add 0 0 15 15"
+canvas_flags=()
+if [ -n "$CANVAS_BUILD" ]; then
+	echo "$IMAGE is Canvas build $CANVAS_BUILD"
+	canvas_flags=(--execute "$CANVAS_FORCELOAD")
+fi
+
 STUB_PID="$(start_stub "$EVENTS" "$WORK/stub.log" "passive" \
 	--dir "$WORK/agent" \
 	--san stubop \
 	--listen ":19443" \
 	--report-interval 1 \
 	--renew-after "$RENEW_AFTER" \
-	--hard-deadline 20)"
+	--hard-deadline 20 \
+	"${canvas_flags[@]}")"
 
 # -i on this container only: a pod runs with stdin closed, and this is the one
 # phase that drives the server console (Paper runs `java ... --nogui`).
@@ -473,6 +492,89 @@ alive() {
 		exit 1
 	fi
 }
+
+# tick_violations <events file> <after seq> - every player count after that
+# seq whose sample is missing or outside Paper's range, one per line.
+tick_violations() {
+	jq -rs --argjson after "$2" '
+		.[] | select(.kind == "player_count" and .seq > $after)
+		| select(.tps <= 0 or .tps > 20 or .mspt < 0)
+		| "seq \(.seq): tps \(.tps), mspt \(.mspt)"
+	' <"$1"
+}
+
+# tps is 0 only until the sampling timer's first run.
+echo "waiting for a player count that carries a tick sample..."
+start=$SECONDS
+until first_sample="$(jq -cs '[.[] | select(.kind == "player_count" and .tps > 0)] | first // empty | {tps, mspt}' <"$EVENTS" 2>/dev/null)" &&
+	[ -n "$first_sample" ]; do
+	alive "$NAME" "a tick sample"
+	if [ $((SECONDS - start)) -gt 30 ]; then
+		echo "no player count with a TPS above 0 within 30s" >&2
+		jq -c 'select(.kind == "player_count")' <"$EVENTS" >&2
+		exit 1
+	fi
+	sleep 1
+done
+if ! jq -e '.tps <= 20 and .mspt >= 0' <<<"$first_sample" >/dev/null; then
+	echo "the first tick sample is out of range: $first_sample; TPS is at most 20 and MSPT never negative" >&2
+	exit 1
+fi
+echo "the first tick sample is in range: $first_sample"
+
+# The gate for Canvas's tick reports: region tick data read from the global
+# region thread, once a region is alive.
+if [ -n "$CANVAS_BUILD" ]; then
+	start=$SECONDS
+	until log_has "$NAME" 'spawnery tick reports from .*\.CanvasPlatform'; do
+		alive "$NAME" "the platform's log line"
+		if [ $((SECONDS - start)) -gt 30 ]; then
+			echo "a Canvas server did not choose the Canvas platform for its tick reports" >&2
+			"$CONTAINER" logs "$NAME" 2>&1 | grep -i 'spawnery' >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
+	echo "the agent reads its tick reports from Canvas's regions"
+
+	await_event execute_outcome
+	# Retried until it parses: the stub's last line may be partial.
+	until outcome="$(jq -cs '[.[] | select(.kind == "execute_outcome")] | first' <"$EVENTS" 2>/dev/null)"; do
+		sleep 1
+	done
+	if [ "$(jq -r '.ok' <<<"$outcome")" != true ]; then
+		echo "'$CANVAS_FORCELOAD' failed, so no region is alive and the reports below would be the global tick's: $outcome" >&2
+		exit 1
+	fi
+	outcome_seq="$(jq -r '.seq' <<<"$outcome")"
+	echo "'$CANVAS_FORCELOAD': $(jq -c '.output' <<<"$outcome")"
+
+	CANVAS_REPORTS=10
+	start=$SECONDS
+	until [ "$(jq -rs --argjson after "$outcome_seq" '[.[] | select(.kind == "player_count" and .seq > $after)] | length' <"$EVENTS")" -ge "$CANVAS_REPORTS" ]; do
+		alive "$NAME" "player counts after the forceload"
+		if [ $((SECONDS - start)) -gt 60 ]; then
+			echo "fewer than $CANVAS_REPORTS player counts within 60s of the forceload" >&2
+			exit 1
+		fi
+		sleep 1
+	done
+	until bad="$(tick_violations "$EVENTS" "$outcome_seq" 2>/dev/null)"; do
+		sleep 1
+	done
+	if [ -n "$bad" ]; then
+		echo "with a region alive, tick samples left the range TPS in (0, 20] and MSPT >= 0:" >&2
+		printf '%s\n' "$bad" >&2
+		exit 1
+	fi
+	if log_has "$NAME" 'at cloud\.spawnery\.agent\.paper\.canvas\.'; then
+		echo "reading the regions' tick data threw:" >&2
+		"$CONTAINER" logs "$NAME" 2>&1 | grep -B 20 -A 5 'at cloud\.spawnery\.agent\.paper\.canvas\.' >&2
+		exit 1
+	fi
+	echo "with a region alive, every tick sample since stayed in range and nothing threw:" \
+		"$(jq -rs --argjson after "$outcome_seq" '[.[] | select(.kind == "player_count" and .seq > $after) | "\(.tps)/\(.mspt)"] | join(" ")' <"$EVENTS")"
+fi
 
 echo "waiting for a renewal..."
 start=$SECONDS
