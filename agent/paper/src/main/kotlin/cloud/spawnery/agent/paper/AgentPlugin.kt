@@ -66,7 +66,7 @@ class AgentPlugin : JavaPlugin(), Listener {
     private val role = ServerRole(state, mirror, connector, feed, events, ::execute)
 
     private fun execute(command: ExecuteCommand) {
-        server.scheduler.runTask(this, Runnable {
+        server.globalRegionScheduler.execute(this, Runnable {
             val outcome = runCommand(command) { line, feedback ->
                 server.dispatchCommand(server.createCommandSender { feedback(it) }, line)
             }
@@ -96,7 +96,7 @@ class AgentPlugin : JavaPlugin(), Listener {
         snapshotSeq = sync.nextSequence() - 1
         val millis = WorldSync.parseInterval(System.getenv(WorldSync.ENV_INTERVAL)) ?: DEFAULT_SNAPSHOT_MILLIS
         val ticks = millis / 50
-        server.scheduler.runTaskTimer(this, Runnable { snapshot(sync) }, ticks, ticks)
+        server.globalRegionScheduler.runAtFixedRate(this, { snapshot(sync) }, ticks, ticks)
     }
 
     private val regionWrites by lazy {
@@ -108,7 +108,7 @@ class AgentPlugin : JavaPlugin(), Listener {
     }
 
     /**
-     * Main thread: freeze saving and queue every chunk. Off it: wait for the
+     * Global region thread: freeze saving and queue every chunk. Off it: wait for the
      * queue, then ask. A server whose queue cannot be waited on saves with
      * flush, which waits on the main thread instead.
      */
@@ -138,7 +138,7 @@ class AgentPlugin : JavaPlugin(), Listener {
             logger.log(Level.WARNING, "spawnery world sync: could not save for a snapshot", t)
             return
         }
-        server.scheduler.runTaskAsynchronously(this, Runnable {
+        server.asyncScheduler.runNow(this) {
             val outcome: Any = try {
                 if (levels.isNotEmpty()) writes.await(levels)
                 sync.requestSnapshot(seq)
@@ -146,13 +146,13 @@ class AgentPlugin : JavaPlugin(), Listener {
             } catch (t: Throwable) {
                 t
             }
-            server.scheduler.runTask(this, Runnable {
+            server.globalRegionScheduler.execute(this, Runnable {
                 restore.run()
                 if (outcome != WorldSync.Outcome.Ready) {
                     logger.warning("spawnery world sync: snapshot $seq: $outcome")
                 }
             })
-        })
+        }
     }
 
     override fun onEnable() {
@@ -224,8 +224,8 @@ class AgentPlugin : JavaPlugin(), Listener {
                 server.pluginManager.registerEvents(this, this)
 
                 // Bukkit.getOnlinePlayers() is not thread-safe, so the count is
-                // sampled on the main thread.
-                server.scheduler.runTaskTimer(this, Runnable {
+                // sampled on the global region thread.
+                server.globalRegionScheduler.runAtFixedRate(this, {
                     state.sample(Bukkit.getOnlinePlayers().size, Bukkit.getMaxPlayers())
                     registerLoginGateOnce()
                     // Paper's own one-minute average; it caps at 20.
@@ -234,7 +234,7 @@ class AgentPlugin : JavaPlugin(), Listener {
                     // leaves and permission changes separately.
                     feed.tick()
                     reportInterest(feed.wanted(events.size()))
-                }, 0L, SAMPLE_TICKS)
+                }, 1L, SAMPLE_TICKS)
 
                 // The timer's first run comes after onEnable returns, and the
                 // operator asks for a report at once; unsampled, a fresh server

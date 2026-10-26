@@ -197,6 +197,11 @@ canvas-image-load: canvas-image
 canvas-image-test: canvas-image-load
 	CONTAINER=$(CONTAINER) IMAGE=$(CANVAS_IMAGE) AOT=0 hack/image-test.sh
 
+.PHONY: canvas-agent-test
+canvas-agent-test: canvas-image-load velocity-image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(CANVAS_IMAGE) VELOCITY_IMAGE=$(VELOCITY_IMAGE) \
+		STUBOP=$(STUBOP) VOICEPROBE=$(VOICEPROBE) hack/agent-test.sh
+
 .PHONY: images-26-2-load
 images-26-2-load:
 	nix build .#purpur-image-26-2 --out-link result-purpur-26-2
