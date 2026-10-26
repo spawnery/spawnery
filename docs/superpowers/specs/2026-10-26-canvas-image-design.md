@@ -176,14 +176,16 @@ The implementation confirms each of these on Canvas.
   today;
 - on Canvas (detected by `io.canvasmc.canvas.region.WorldRegionizer` being
   loadable), every live region of every world through
-  `computeForAllChunkRegions`, reporting the **lowest one-minute TPS** and
-  the **highest one-minute MSPT** over them. With no live region (an empty
+  `computeForAllChunkRegions`, reporting the **lowest TPS** and the
+  **highest MSPT** over them. With no live region (an empty
   server), the global tick's figures stand in, so the report is not zero.
 
 Lowest and highest rather than Canvas's mean: the network dashboard already
 summarises a group by its lowest TPS, and one region at 8 TPS is the one its
-players notice. The figures come from the same one-minute window as Paper's
-`getTPS()[0]`.
+players notice. The windows are Paper's: one minute for TPS, as
+`getTPS()[0]`, and five seconds for MSPT, as `getAverageTickTime()`
+(`getMSPTData5s()`), so a Purpur and a Canvas server report comparable
+numbers.
 
 The Canvas side compiles against the `canvas-api` jar inside the pinned
 Canvas bundle (`canvas.repo`'s `libraries/`), the way the Paper module
