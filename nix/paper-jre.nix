@@ -22,7 +22,8 @@
 # and check with `make image-test` and `make agent-test`. Two modules no
 # jdeps run can find: jdk.zipfs (Paperclip loads the zip provider through
 # ServiceLoader) and java.net.http (plugins use it, and java.* cannot come
-# from a plugin's classpath).
+# from a plugin's classpath). jdk.incubator.vector comes from Canvas's
+# classpath (canvas-api, joml); Purpur's needs none of it.
 { jre25_minimal }:
 
 jre25_minimal.override {
@@ -37,6 +38,7 @@ jre25_minimal.override {
     "java.security.jgss"
     "java.sql"
     "jdk.httpserver"
+    "jdk.incubator.vector"
     "jdk.jfr"
     "jdk.management"
     "jdk.security.auth"

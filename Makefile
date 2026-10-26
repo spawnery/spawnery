@@ -3,6 +3,7 @@ CONTAINER ?= docker
 # Recursive on purpose: the nix evals run only when image-test expands these.
 VELOCITY_IMAGE ?= $(shell nix eval --raw .#velocity-image.imageName):$(shell nix eval --raw .#velocity-image.imageTag)
 PURPUR_IMAGE ?= $(shell nix eval --raw .#purpur-image.imageName):$(shell nix eval --raw .#purpur-image.imageTag)
+CANVAS_IMAGE ?= $(shell nix eval --raw .#canvas-image.imageName):$(shell nix eval --raw .#canvas-image.imageTag)
 PURPUR_IMAGE_26_2 ?= $(shell nix eval --raw .#purpur-image-26-2.imageName):$(shell nix eval --raw .#purpur-image-26-2.imageTag)
 OPERATOR_IMAGE ?= $(shell nix eval --raw .#operator-image.imageName):$(shell nix eval --raw .#operator-image.imageTag)
 WORLDSYNC_IMAGE ?= $(shell nix eval --raw .#worldsync-image.imageName):$(shell nix eval --raw .#worldsync-image.imageTag)
@@ -184,6 +185,18 @@ purpur-image-load: purpur-image
 purpur-image-test: purpur-image-load
 	CONTAINER=$(CONTAINER) IMAGE=$(PURPUR_IMAGE) hack/image-test.sh
 
+.PHONY: canvas-image
+canvas-image:
+	nix build .#canvas-image --out-link result-canvas
+
+.PHONY: canvas-image-load
+canvas-image-load: canvas-image
+	$(CONTAINER) load < result-canvas
+
+.PHONY: canvas-image-test
+canvas-image-test: canvas-image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(CANVAS_IMAGE) AOT=0 hack/image-test.sh
+
 .PHONY: images-26-2-load
 images-26-2-load:
 	nix build .#purpur-image-26-2 --out-link result-purpur-26-2
@@ -236,6 +249,8 @@ image-repro:
 	nix build .#purpur-image --rebuild --no-link
 	nix build .#purpur-image-26-2 --no-link
 	nix build .#purpur-image-26-2 --rebuild --no-link
+	nix build .#canvas-image --no-link
+	nix build .#canvas-image --rebuild --no-link
 	nix build .#velocity-image --no-link
 	nix build .#velocity-image --rebuild --no-link
 	nix build .#operator-image --no-link
