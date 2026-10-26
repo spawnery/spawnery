@@ -28,7 +28,8 @@ limitations under the License.
 // stream without this stub's token, since an agent that stopped attaching
 // credentials would otherwise pass every other check. --voice-echo and
 // --voice-player stand in for a backend's voice chat server and a player on
-// it whom the proxy knows only from the NetworkState.
+// it whom the proxy knows only from the NetworkState. --execute sends a
+// backend console commands one at a time after its Ready.
 package main
 
 import (
@@ -116,6 +117,19 @@ func (n *names) Set(value string) error {
 	return nil
 }
 
+// commandLines collects the repeatable --execute flag.
+type commandLines []string
+
+func (c *commandLines) String() string { return strings.Join(*c, "; ") }
+
+func (c *commandLines) Set(value string) error {
+	if value == "" {
+		return fmt.Errorf("an empty command would run nothing")
+	}
+	*c = append(*c, value)
+	return nil
+}
+
 // run returns the process exit code: 0 on a clean stop, 1 on anything else.
 func run(args []string, stdout, stderr io.Writer, stop <-chan os.Signal) int {
 	fs := flag.NewFlagSet("spawnery-stubop", flag.ContinueOnError)
@@ -162,6 +176,11 @@ func run(args []string, stdout, stderr io.Writer, stop <-chan os.Signal) int {
 	voicePlayer := fs.String("voice-player", "",
 		"UUID of a player the NetworkState puts on "+syncedName+", so a proxy knows them "+
 			"only from its mirror; needs --voice-echo")
+	var execute commandLines
+	fs.Var(&execute, "execute",
+		"console command to send a backend; repeatable. The first goes out after the "+
+			"agent's Ready, each next one after the previous outcome, every command once "+
+			"per process")
 
 	if err := fs.Parse(args); err != nil {
 		return 1
@@ -257,6 +276,7 @@ func run(args []string, stdout, stderr io.Writer, stop <-chan os.Signal) int {
 		fullSyncAfter:  time.Duration(*fullSyncAfter) * time.Second,
 		setReadyAfter:  *setReadyAfter,
 		voice:          voice,
+		execute:        execute,
 		token:          material.Token,
 	}
 
@@ -504,7 +524,29 @@ type stub struct {
 	setReadyAfter time.Duration
 	voice         *voiceFixture
 
+	execute     []string
+	executeMu   sync.Mutex
+	executeNext int
+
 	token string
+}
+
+// nextCommand hands out each --execute command once per process, whichever
+// stream asks; the id is the command's position, counting from 1.
+func (s *stub) nextCommand() *agentpb.OperatorToServer {
+	s.executeMu.Lock()
+	defer s.executeMu.Unlock()
+	if s.executeNext >= len(s.execute) {
+		return nil
+	}
+	command := &agentpb.ExecuteCommand{
+		Id:      uint64(s.executeNext) + 1,
+		Command: s.execute[s.executeNext],
+	}
+	s.executeNext++
+	return &agentpb.OperatorToServer{
+		Message: &agentpb.OperatorToServer_ExecuteCommand{ExecuteCommand: command},
+	}
 }
 
 type voiceFixture struct {
@@ -858,6 +900,15 @@ func (s *stub) observeServer(of func(map[string]any) map[string]any, message *ag
 		s.hello(of, body.Hello)
 	case *agentpb.ServerMessage_Ready:
 		s.events.record("ready", of(map[string]any{}))
+		return s.nextCommand()
+	case *agentpb.ServerMessage_ExecuteOutcome:
+		s.events.record("execute_outcome", of(map[string]any{
+			"id":     body.ExecuteOutcome.GetId(),
+			"ok":     body.ExecuteOutcome.GetOk(),
+			"output": body.ExecuteOutcome.GetOutput(),
+			"error":  body.ExecuteOutcome.GetError(),
+		}))
+		return s.nextCommand()
 	case *agentpb.ServerMessage_PlayerCount:
 		s.playerCount(of, body.PlayerCount)
 	case *agentpb.ServerMessage_EventInterest:
@@ -948,6 +999,8 @@ func (s *stub) playerCount(of func(map[string]any) map[string]any, count *agentp
 	s.events.record("player_count", of(map[string]any{
 		"players": count.GetPlayers(),
 		"slots":   count.GetSlots(),
+		"tps":     count.GetTps(),
+		"mspt":    count.GetMspt(),
 	}))
 }
 
