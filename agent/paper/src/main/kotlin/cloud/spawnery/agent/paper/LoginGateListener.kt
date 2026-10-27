@@ -22,7 +22,7 @@ class LoginGateListener(
     private val group: String,
     private val mirror: NetworkMirror,
     private val state: ServerState,
-    private val pending: PendingSeats = PendingSeats(System::currentTimeMillis),
+    private val pending: PendingSeats = PendingSeats(),
     private val log: (String) -> Unit = {},
 ) : Listener {
     @EventHandler(priority = EventPriority.HIGH)

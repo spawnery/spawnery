@@ -8,7 +8,7 @@ const val PERMISSION_EVENTS: String = "spawnery.cloud.events"
 class Feed(
     private val audience: FeedAudience,
     private val levels: FeedLevels,
-    clock: () -> Long,
+    clock: () -> Long = ::monotonicMillis,
     windowMillis: Long = WINDOW_MILLIS,
     /** A lambda, because the format arrives with every resync and an edit must not wait for the next pod. */
     private val format: () -> String = { DEFAULT_FORMAT },

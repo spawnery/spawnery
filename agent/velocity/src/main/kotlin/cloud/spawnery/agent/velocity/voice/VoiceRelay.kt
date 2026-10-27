@@ -1,5 +1,6 @@
 package cloud.spawnery.agent.velocity.voice
 
+import cloud.spawnery.agent.monotonicMillis
 import java.io.IOException
 import java.net.Inet6Address
 import java.net.InetSocketAddress
@@ -26,7 +27,7 @@ class VoiceRelay(
     private val resolve: (UUID) -> Backend,
     private val counters: VoiceCounters,
     private val log: (String, Throwable?) -> Unit,
-    private val clock: () -> Long = System::currentTimeMillis,
+    private val clock: () -> Long = ::monotonicMillis,
 ) : AutoCloseable {
     private val selector = Selector.open()
     private val public = try {

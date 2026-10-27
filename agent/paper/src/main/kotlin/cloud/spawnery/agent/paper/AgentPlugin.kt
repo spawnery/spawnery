@@ -62,7 +62,7 @@ class AgentPlugin : JavaPlugin(), Listener {
         loop.send(ServerMessage.newBuilder().setCloudRequest(request).build())
     }
     private val feedLevels = FeedLevels(LuckPermsFeedLevels.storeIfPresent())
-    private val feed = Feed(PaperAudience, feedLevels, System::currentTimeMillis, format = mirror::feedFormat)
+    private val feed = Feed(PaperAudience, feedLevels, format = mirror::feedFormat)
     private val events = CloudEvents()
     private val role = ServerRole(state, mirror, connector, feed, events, ::execute)
 

@@ -1,5 +1,6 @@
 package cloud.spawnery.agent.velocity
 
+import cloud.spawnery.agent.monotonicMillis
 import com.velocitypowered.api.proxy.Player
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer
 import net.kyori.adventure.key.Key
@@ -31,7 +32,9 @@ class Transfers(
     private val warn: (String, Throwable?) -> Unit,
     /** The receiving proxy refuses a second login from one address within its login rate limit. */
     private val spacingMillis: Long = 0,
-    private val clock: () -> Long = System::currentTimeMillis,
+    private val clock: () -> Long = ::monotonicMillis,
+    /** The wall clock: it is the only one the proxies of a group share, and [myTurn]'s windows must line up across them. */
+    private val turnClock: () -> Long = System::currentTimeMillis,
 ) {
     private val waiting = ConcurrentHashMap<UUID, () -> Unit>()
     private val asked = ConcurrentHashMap.newKeySet<UUID>()
@@ -49,7 +52,7 @@ class Transfers(
         val host = player.virtualHost ?: return false
         val now = clock()
         val picture = picture()
-        if (cooling(player.address, now) || !myTurn(picture, now)) return false
+        if (cooling(player.address, now) || !myTurn(picture)) return false
         if (!policy.onSwitch(picture, player.uuid)) return false
         return send(player, host, target, "switch")
     }
@@ -68,7 +71,7 @@ class Transfers(
                 warn("spawnery: could not warn '${player.username}' of the coming transfer", e)
             }
         }
-        if (!myTurn(picture, now)) return
+        if (!myTurn(picture)) return
         val chosen = mutableSetOf<InetAddress>()
         val admit = { id: UUID ->
             val address = movable.getValue(id).address
@@ -142,12 +145,12 @@ class Transfers(
      * rate limit, and none of them knows the others' addresses. Each sends
      * only in its own window, with an empty window between any two.
      */
-    private fun myTurn(picture: TransferPolicy.Picture, now: Long): Boolean {
+    private fun myTurn(picture: TransferPolicy.Picture): Boolean {
         if (spacingMillis <= 0) return true
         val leaving = picture.proxies.filter { it.group() == picture.group && it.draining() }.map { it.name() }.sorted()
         val index = leaving.indexOf(picture.self)
         if (leaving.size <= 1 || index < 0) return true
-        return (now / spacingMillis) % (2L * leaving.size) == 2L * index
+        return (turnClock() / spacingMillis) % (2L * leaving.size) == 2L * index
     }
 
     private fun cooling(address: InetAddress?, now: Long): Boolean {

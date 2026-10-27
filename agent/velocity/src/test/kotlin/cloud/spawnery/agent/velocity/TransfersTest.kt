@@ -42,6 +42,7 @@ class TransfersTest {
         warn = { message, error -> warnings += message to error },
         spacingMillis = 3_500,
         clock = { seconds * 1000 },
+        turnClock = { seconds * 1000 },
     )
 
     private class FakeTraveller(
@@ -78,6 +79,34 @@ class TransfersTest {
         assertEquals(host, to)
         assertEquals(TransferCookie.Result.Valid("arena-1"), cookie.read(alice.uuid, bytes))
         assertEquals(listOf("spawnery: transferred 'alice' (switch) toward 'arena-1'"), infos)
+    }
+
+    @Test
+    fun `a wall clock stepped back does not hold an address past its spacing`() {
+        var monotonic = 0L
+        var wall = 1_000_000L
+        val alone = Transfers(
+            cookie = cookie,
+            policy = TransferPolicy(0L) { monotonic },
+            picture = { TransferPolicy.Picture("edge-1", "edge", leaving, emptySet(), setOf("edge-1", "edge-2")) },
+            registered = { it in registered },
+            info = {},
+            warn = { _, _ -> },
+            spacingMillis = 3_500,
+            clock = { monotonic },
+            turnClock = { wall },
+        )
+        val shared = InetAddress.getByName("198.51.100.9")
+        val alice = FakeTraveller("alice", "lobby-1", host, address = shared)
+        val bob = FakeTraveller("bob", "lobby-1", host, address = shared)
+        alone.pass(listOf(alice))
+        assertEquals(1, alice.sent.size)
+
+        wall = 0L
+        monotonic += 4_000
+        alone.pass(listOf(bob))
+
+        assertEquals(1, bob.sent.size, "the address was still cooling after the step")
     }
 
     @Test
@@ -326,6 +355,7 @@ class TransfersTest {
         warn = { _, _ -> },
         spacingMillis = 3_500,
         clock = { seconds * 1000 },
+        turnClock = { seconds * 1000 },
     )
 
     @Test
@@ -464,6 +494,7 @@ class TransfersTest {
             warn = { _, _ -> },
             spacingMillis = 3_500,
             clock = { seconds * 1000 },
+            turnClock = { seconds * 1000 },
         )
         val alice = FakeTraveller("alice", "lobby-1", host)
         val first = seconds

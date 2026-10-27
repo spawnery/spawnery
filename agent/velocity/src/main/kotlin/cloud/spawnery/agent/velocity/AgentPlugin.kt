@@ -206,7 +206,6 @@ class AgentPlugin @Inject constructor(
         val feed = Feed(
             VelocityAudience(proxy),
             feedLevels,
-            System::currentTimeMillis,
             format = mirror::feedFormat,
             groupKind = mirror::groupKind,
         )
@@ -373,7 +372,7 @@ class AgentPlugin @Inject constructor(
         val transfer = env.transfer ?: return
         val transfers = Transfers(
             cookie = TransferCookie(transfer.secret) { System.currentTimeMillis() / 1000 },
-            policy = TransferPolicy(transfer.forceAfterSeconds * 1000, transfer.forceGroups, System::currentTimeMillis),
+            policy = TransferPolicy(transfer.forceAfterSeconds * 1000, transfer.forceGroups),
             picture = {
                 TransferPolicy.Picture(
                     self.name(), self.group(), mirror.proxies(), mirror.closedDoors(), mirror.acceptingTransfers(),

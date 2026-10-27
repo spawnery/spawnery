@@ -1,5 +1,6 @@
 package cloud.spawnery.agent.velocity
 
+import cloud.spawnery.agent.monotonicMillis
 import cloud.spawnery.agent.api.ProxyInfo
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -9,7 +10,7 @@ class TransferPolicy(
     private val forceAfterMillis: Long,
     /** Empty forces in every group. */
     private val forceGroups: Set<String> = emptySet(),
-    private val clock: () -> Long,
+    private val clock: () -> Long = ::monotonicMillis,
 ) {
     data class Picture(
         val self: String,
@@ -23,20 +24,20 @@ class TransferPolicy(
     data class Occupant(val id: UUID, val server: String?)
     data class Warning(val id: UUID, val seconds: Long)
 
-    private val firstLeavingAt = AtomicLong(0)
+    private val firstLeavingAt = AtomicLong(NOT_LEAVING)
     private val tried = ConcurrentHashMap.newKeySet<UUID>()
     private val warned = ConcurrentHashMap.newKeySet<UUID>()
 
     fun leaving(picture: Picture): Boolean {
         val me = picture.proxies.firstOrNull { it.name() == picture.self } ?: return false
         if (!me.draining()) {
-            firstLeavingAt.set(0)
+            firstLeavingAt.set(NOT_LEAVING)
             tried.clear()
             warned.clear()
             return false
         }
         if (me.ready()) return false
-        firstLeavingAt.compareAndSet(0, clock())
+        firstLeavingAt.compareAndSet(NOT_LEAVING, clock())
         return true
     }
 
@@ -95,5 +96,10 @@ class TransferPolicy(
     private fun forceable(picture: Picture, server: String): Boolean {
         if (server in picture.closedDoors) return false
         return forceGroups.isEmpty() || picture.serverGroups[server] in forceGroups
+    }
+
+    private companion object {
+        /** A monotonic clock may read zero or below; this value it cannot reach. */
+        const val NOT_LEAVING = Long.MIN_VALUE
     }
 }
