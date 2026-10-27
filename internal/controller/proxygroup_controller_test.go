@@ -889,9 +889,12 @@ func TestAPodVanishingBetweenListAndPatchDoesNotFailTheReconcile(t *testing.T) {
 		t.Fatalf("proxy pods = %d, want 3", len(before))
 	}
 	sortPodsOldestFirst(before)
-	racing, other := before[0], before[2]
+	racing, kept, other := before[0], before[1], before[2]
 	// A player keeps the inspected pod around.
 	f.reportProxyPlayers(t, other, 1)
+	// Ready sorts last for the drain, so racing is picked over kept whether or
+	// not the three creates straddled a second of CreationTimestamp.
+	f.markProxyPodReady(t, &kept)
 
 	fired := false
 	r.Client = racingPodClient{Client: r.Client, racingPod: racing.Name, fired: &fired}
