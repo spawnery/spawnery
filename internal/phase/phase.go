@@ -121,6 +121,7 @@ type Inputs struct {
 
 	PodExists  bool
 	PodLost    bool
+	PodPending bool
 	PodRunning bool
 	// PodReady is the readiness probe (the SLP health check).
 	PodReady bool
@@ -273,6 +274,12 @@ func Decide(current Phase, in Inputs) Decision {
 			return Decision{
 				Next: Failed, DeletePod: true,
 				Reason: ReasonStoppingFailedPod, Message: "stopping the pod of a failed member, which holds its world; the object stays for diagnosis",
+			}
+		}
+		if in.PodExists && in.PodPending && !in.PodTerminal {
+			return Decision{
+				Next: Failed, DeletePod: true,
+				Reason: ReasonStoppingFailedPod, Message: "stopping the pending pod of a failed server, so it does not compete for room with its replacement; the object stays for diagnosis",
 			}
 		}
 		// Stop a pod that came up after its server was failed, so it does not run

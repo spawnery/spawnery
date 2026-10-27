@@ -595,6 +595,7 @@ func (r *ServerReconciler) collectInputs(
 	}
 
 	if podFound {
+		in.PodPending = pod.Status.Phase == corev1.PodPending
 		in.PodRunning = pod.Status.Phase == corev1.PodRunning
 		in.PodTerminal = podTerminal(pod)
 		for _, c := range pod.Status.Conditions {

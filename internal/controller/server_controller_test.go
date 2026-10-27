@@ -282,6 +282,29 @@ func TestAFailedServersLatePodStaysWhileItsGroupHasNoReadyServer(t *testing.T) {
 	}
 }
 
+func TestAFailedServersPendingPodIsStoppedWithoutAReadyServer(t *testing.T) {
+	f := newFixture(t)
+	f.createServer("lobby-pending")
+	f.reconcile("lobby-pending")
+	if pod, ok := f.pod("lobby-pending"); !ok || pod.Status.Phase != corev1.PodPending {
+		t.Fatalf("pod = %v (found %t), want a Pending pod", pod, ok)
+	}
+	f.clock.Advance(6 * time.Minute) // the fixture's deadline is 5 minutes
+	f.reconcile("lobby-pending")
+	if got := f.server("lobby-pending").Status.Phase; got != string(phase.Failed) {
+		t.Fatalf("phase = %q past the startup deadline, want Failed", got)
+	}
+
+	f.reconcile("lobby-pending")
+
+	if pod, ok := f.pod("lobby-pending"); ok && pod.DeletionTimestamp.IsZero() {
+		t.Error("a failed server keeps its pending pod, and with it the memory its replacement needs")
+	}
+	if got := f.server("lobby-pending").Status.Phase; got != string(phase.Failed) {
+		t.Errorf("phase = %q, want Failed: the object stays for diagnosis", got)
+	}
+}
+
 func TestAFailedMembersWaitingPodIsStopped(t *testing.T) {
 	f := newFixture(t)
 	srv := f.createServer("lobby-c0ffee")
