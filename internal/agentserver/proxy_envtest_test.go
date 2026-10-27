@@ -415,7 +415,7 @@ func TestAProxysVoiceCountersAndPluginFlagReachTheOperator(t *testing.T) {
 		t.Fatalf("the opening message never arrived: %v", err)
 	}
 
-	relayed := agentserver.VoicePackets.WithLabelValues("gateway", "relayed")
+	relayed := agentserver.VoicePackets.WithLabelValues(f.ns, "gateway", "relayed")
 	before := testutil.ToFloat64(relayed)
 	bogusBefore := testutil.CollectAndCount(agentserver.VoicePackets)
 

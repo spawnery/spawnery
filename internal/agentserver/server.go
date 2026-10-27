@@ -589,7 +589,7 @@ func (s *Server) handleProxy(
 	case *agentpb.ProxyMessage_VoiceCounters:
 		for reason, n := range s.opts.Agents.ReportVoiceTotals(id.PodUID, m.VoiceCounters.GetTotals()) {
 			if n > 0 {
-				VoicePackets.WithLabelValues(id.Group, reason).Add(float64(n))
+				VoicePackets.WithLabelValues(id.Namespace, id.Group, reason).Add(float64(n))
 			}
 		}
 	case *agentpb.ProxyMessage_EventInterest:

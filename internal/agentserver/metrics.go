@@ -92,9 +92,9 @@ var WorldRestores = prometheus.NewCounterVec(
 var VoicePackets = prometheus.NewCounterVec(
 	prometheus.CounterOpts{
 		Name: "spawnery_voice_packets_total",
-		Help: "Voice chat packets the proxies' relays handled, by proxy group and by what became of them.",
+		Help: "Voice chat packets the proxies' relays handled, by namespace and proxy group and by what became of them.",
 	},
-	[]string{"group", "reason"},
+	[]string{"namespace", "group", "reason"},
 )
 
 const (
