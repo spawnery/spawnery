@@ -505,13 +505,7 @@ class AgentPlugin @Inject constructor(
         }
     }
 
-    /**
-     * After every other plugin's handler, so a redirect one of them makes is
-     * checked too, and before [onServerPreConnect], which transfers toward
-     * the server this one settles on.
-     */
-    @Subscribe(priority = JOIN_RULE_PRIORITY)
-    fun onServerPreConnectJoinRule(event: ServerPreConnectEvent) {
+    private fun checkJoinRule(event: ServerPreConnectEvent) {
         if (!event.result.isAllowed) return
         val target = event.result.server.orElse(event.originalServer)
         val name = target.serverInfo.name
@@ -549,8 +543,18 @@ class AgentPlugin @Inject constructor(
             .build()
     }
 
+    /**
+     * One handler at Short.MIN_VALUE, below PostOrder.LAST (-32767): the join
+     * rule is checked after every other plugin's redirect, then the transfer
+     * decision sees the server the check settled on.
+     */
     @Subscribe(priority = Short.MIN_VALUE)
     fun onServerPreConnect(event: ServerPreConnectEvent) {
+        checkJoinRule(event)
+        decideTransfer(event)
+    }
+
+    private fun decideTransfer(event: ServerPreConnectEvent) {
         val transfers = transfers ?: return
         if (!event.result.isAllowed || event.player.currentServer.isEmpty) return
         val target = event.result.server.orElse(event.originalServer)
@@ -612,8 +616,6 @@ class AgentPlugin @Inject constructor(
 
         // Matching Paper's 20-tick sampling period.
         const val SAMPLE_SECONDS = 1L
-
-        const val JOIN_RULE_PRIORITY: Short = (Short.MIN_VALUE + 1).toShort()
 
         const val TRANSFER_PASS_SECONDS = 1L
         const val COOKIE_WAIT_MILLIS = 2_000L
