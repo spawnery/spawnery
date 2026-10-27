@@ -581,6 +581,35 @@ class CloudCommandTest {
     }
 
     @Test
+    fun `inherit drops the player's own level, and the group's counts again`() {
+        val store = StandInStore()
+        store.group[sourcePlayer!!] = "normal"
+        levels = FeedLevels(store)
+        run("cloud events verbose")
+        sent.clear()
+
+        run("cloud events inherit")
+
+        assertEquals(null, store.user[sourcePlayer!!])
+        assertEquals(FeedLevel.NORMAL, levels.level(sourcePlayer!!))
+        assertTrue(plain(sent.single()).contains("inherited: normal"), sent.single())
+    }
+
+    @Test
+    fun `an inherit that fails is reported, not claimed`() {
+        val store = StandInStore()
+        levels = FeedLevels(store)
+        run("cloud events verbose")
+        store.failWrites = true
+        sent.clear()
+
+        run("cloud events inherit")
+
+        assertTrue(sent.single().startsWith("<red>✘</red> "), sent.single())
+        assertEquals("verbose", store.user[sourcePlayer!!])
+    }
+
+    @Test
     fun `one player's level is not another's`() {
         val other = UUID.nameUUIDFromBytes("someone-else".toByteArray())
         run("cloud events off")

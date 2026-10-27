@@ -23,4 +23,10 @@ internal class StandInStore(var loaded: Boolean = true) : LevelStore {
         user[player] = value
         return CompletableFuture.completedFuture(Unit)
     }
+
+    override fun clear(player: UUID): CompletionStage<*> {
+        if (failWrites) return CompletableFuture.failedFuture<Unit>(IllegalStateException("storage is read-only"))
+        user.remove(player)
+        return CompletableFuture.completedFuture(Unit)
+    }
 }
