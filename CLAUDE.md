@@ -26,7 +26,7 @@ Single Go test:
 nix develop -c go test ./internal/controller/ -run TestName -count=1
 ```
 
-envtest-backed packages (`api/v1alpha1`, `internal/{agentserver,certs,controller,grpcauth,podspec,rbacaudit}`) each boot their own etcd + kube-apiserver. `internal/controller` alone takes ~85 s. On a small machine run several of them with `-p 1`, or the parallel API servers exhaust RAM.
+envtest-backed packages (`api/v1alpha1`, `cmd/spawnery-operator`, `internal/{agentserver,certs,controller,grpcauth,podspec,rbacaudit}`) each boot their own etcd + kube-apiserver. `internal/controller` alone takes ~85 s. On a small machine run several of them with `-p 1`, or the parallel API servers exhaust RAM.
 
 The e2e package carries `//go:build e2e`, so `go test ./...` never sees it. Run it through `make e2e`; `E2E_KEEP=1` keeps the cluster and prints its `KUBECONFIG`. Under rootless Podman it needs `systemd-run --scope --user --property=Delegate=yes -- nix develop -c env KIND_EXPERIMENTAL_PROVIDER=podman make e2e`.
 
