@@ -39,6 +39,23 @@ type Values struct {
 	VoiceRelay bool `yaml:"voiceRelay,omitempty" json:"voiceRelay,omitempty"`
 }
 
+// EnvTransfer is podspec.EnvTransferForceAfterSeconds. A proxy pod carries it
+// exactly when it was created with transfer on, and its agent and the
+// network picture both go by that.
+const EnvTransfer = "SPAWNERY_TRANSFER_FORCE_AFTER_SECONDS"
+
+// WithPodTransfers takes AcceptsTransfers from the pod's environment rather
+// than from config.yaml, which follows the group: a container that restarts
+// in the middle of a roll that turns transfer on or off would otherwise
+// start a Velocity that disagrees with its own agent. It reports whether the
+// two disagreed.
+func (v Values) WithPodTransfers(lookup func(string) (string, bool)) (Values, bool) {
+	_, onPod := lookup(EnvTransfer)
+	disagreed := onPod != v.AcceptsTransfers
+	v.AcceptsTransfers = onPod
+	return v, disagreed
+}
+
 // RequireMaxPlayers refuses a backend without its capacity: the upstream
 // default of 20 would have the operator plan against slots the server
 // cannot honour.

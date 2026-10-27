@@ -26,6 +26,7 @@ import (
 
 	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/prune"
+	"github.com/spawnery/spawnery/internal/render"
 	"github.com/spawnery/spawnery/internal/testenv"
 	"github.com/spawnery/spawnery/internal/voice"
 	"github.com/spawnery/spawnery/internal/worldsync"
@@ -187,5 +188,11 @@ func TestTheVoiceCounterReasonsAgreeWithTheVelocityAgent(t *testing.T) {
 			t.Fatalf("VoiceCounters.kt declares reasons %q, agent.VoiceReasons is %q: the operator "+
 				"discards a reason it does not know, so the counter would silently stop", got, want)
 		}
+	}
+}
+
+func TestTheRendererReadsTheTransferVariableThePodCarries(t *testing.T) {
+	if render.EnvTransfer != EnvTransferForceAfterSeconds {
+		t.Errorf("render.EnvTransfer = %q, podspec sets %q", render.EnvTransfer, EnvTransferForceAfterSeconds)
 	}
 }

@@ -80,6 +80,11 @@ func run(args []string, stderr io.Writer) int {
 	case "canvas":
 		files, err = render.Canvas(values, secret, overlay)
 	case "velocity":
+		var disagreed bool
+		if values, disagreed = values.WithPodTransfers(os.LookupEnv); disagreed {
+			_, _ = fmt.Fprintf(stderr, "spawnery-config: accepts-transfers = %t, following the pod; "+
+				"the group's config.yaml says %t\n", values.AcceptsTransfers, !values.AcceptsTransfers)
+		}
 		// Velocity's forwarding-secret-file takes the path, not the content.
 		files, err = render.Velocity(values, filepath.Join(*configDir, render.SecretFile), overlay)
 	}

@@ -292,3 +292,45 @@ func TestAnEmptyReplaceIsNoReplace(t *testing.T) {
 		t.Errorf("exit code is %d, want 1: an empty --replace must not exempt anything", code)
 	}
 }
+
+func renderVelocity(t *testing.T, values string) (string, string) {
+	t.Helper()
+	configDir := t.TempDir()
+	writeConfigDir(t, configDir, "s3cret")
+	if err := os.WriteFile(filepath.Join(configDir, render.ValuesFile), []byte(values), 0o644); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	out := t.TempDir()
+	var stderr bytes.Buffer
+	if code := run([]string{"--flavor", "velocity", "--config-dir", configDir, "--out", out}, &stderr); code != 0 {
+		t.Fatalf("exit code is %d, want 0; stderr: %s", code, stderr.String())
+	}
+	toml, err := os.ReadFile(filepath.Join(out, "velocity.toml"))
+	if err != nil {
+		t.Fatalf("velocity.toml: %v", err)
+	}
+	return string(toml), stderr.String()
+}
+
+// The pod's environment is what its agent reads; config.yaml follows the
+// group, which a roll has already changed when an old pod's container restarts.
+func TestVelocityAcceptsTransfersAsThePodWasCreated(t *testing.T) {
+	const values = "playerLimit: 500\nonlineMode: true\n"
+
+	t.Setenv(render.EnvTransfer, "120")
+	toml, stderr := renderVelocity(t, values)
+	if !strings.Contains(toml, "accepts-transfers = true") {
+		t.Errorf("a pod created with transfer on rendered %q", toml)
+	}
+	if !strings.Contains(stderr, "following the pod") {
+		t.Errorf("the disagreement went unreported; stderr: %q", stderr)
+	}
+
+	if err := os.Unsetenv(render.EnvTransfer); err != nil {
+		t.Fatalf("unset %s: %v", render.EnvTransfer, err)
+	}
+	toml, _ = renderVelocity(t, values+"acceptsTransfers: true\n")
+	if !strings.Contains(toml, "accepts-transfers = false") {
+		t.Errorf("a pod created with transfer off rendered %q", toml)
+	}
+}
