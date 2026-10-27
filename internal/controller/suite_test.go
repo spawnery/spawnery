@@ -434,6 +434,9 @@ func (f *fixture) ensureNode(t *testing.T, name string, unschedulable bool) *cor
 type nonBlockingRecorder struct {
 	mu     sync.Mutex
 	events []string
+	// regarding is "<reason> <name of the object it regards>", kept apart
+	// from events so drainEvents does not clear it.
+	regarding []string
 }
 
 func newRecorder() *nonBlockingRecorder { return &nonBlockingRecorder{} }
@@ -445,6 +448,22 @@ func (r *nonBlockingRecorder) Eventf(
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	r.events = append(r.events, fmt.Sprintf(eventtype+" "+reason+" "+note, args...))
+	if o, ok := regarding.(client.Object); ok {
+		r.regarding = append(r.regarding, reason+" "+o.GetName())
+	}
+}
+
+// regardingOf names the objects every event with reason regarded, in order.
+func (r *nonBlockingRecorder) regardingOf(reason string) []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var names []string
+	for _, e := range r.regarding {
+		if name, ok := strings.CutPrefix(e, reason+" "); ok {
+			names = append(names, name)
+		}
+	}
+	return names
 }
 
 func (r *nonBlockingRecorder) WithLogger(klog.Logger) events.EventRecorderLogger { return r }

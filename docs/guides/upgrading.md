@@ -79,7 +79,7 @@ players for the whole drain window. Then the pod is deleted with all of them
 on it, and one event is the only record:
 
 ```
-Warning  ProxyDrainTimeout  proxygroup/gateway  deleting proxy gateway-xxxx after 5m0s with 3 player(s) still connected
+Warning  ProxyDrainTimeout  pod/gateway-xxxx  deleting proxy gateway-xxxx after 5m0s with 3 player(s) still connected
 ```
 
 An older agent does what protobuf requires of an unknown field and ignores

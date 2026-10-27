@@ -70,6 +70,10 @@ const AnnotationRetireRequested = "spawnery.cloud/retire-requested"
 // AnnotationProxyReadySince dates a proxy's first pass of the ready gate, as RFC 3339.
 const AnnotationProxyReadySince = "spawnery.cloud/ready-since"
 
+// AnnotationProxyGoneAnnounced marks a proxy whose end the operator has
+// recorded, so a terminating pod is announced once.
+const AnnotationProxyGoneAnnounced = "spawnery.cloud/gone-announced"
+
 func ServerLabels(network, group, server string) map[string]string {
 	return map[string]string{
 		LabelManagedBy: ManagedByValue,
