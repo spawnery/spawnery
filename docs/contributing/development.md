@@ -131,12 +131,15 @@ script loads it into a local container store (`CONTAINER`, default `docker`),
 trains it with `hack/aot-train.sh` (two boots of the server) and pushes the
 result as `ghcr.io/spawnery/purpur-aot:<tag>` first: an operator running with
 `--aot-cache` mounts that image, and its servers do not start while it cannot
-be pulled. `DRY_RUN=1` trains too. A new package on ghcr.io starts private, so
-after the first release that publishes `purpur-aot`, set the package to public
-in the organisation's package settings.
+be pulled. `DRY_RUN=1` trains too. Canvas gets no startup cache.
 
-The same goes for `ghcr.io/spawnery/canvas`: the first publish creates a private
-package that has to be made public by hand. Canvas gets no startup cache.
+Every image carries `org.opencontainers.image.source` naming this repository,
+which links a new ghcr.io package to it, and the new package came out public:
+`ghcr.io/spawnery/canvas` was created by the v0.30.0 release and answered an
+anonymous manifest request for `26.3-0.30.0` with 200 right after it, as
+`purpur-aot` did for `26.3-0.30.0` (measured on 2026-10-27). If an anonymous
+pull of a new package ever answers 401, set it to public in the organisation's
+package settings.
 
 `make publish IMAGES=operator-image` publishes one image, the ordinary case:
 `flake.nix` keeps `operatorVersion` apart from `imageVersion`, so a reconciler
