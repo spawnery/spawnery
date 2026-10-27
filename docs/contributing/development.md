@@ -36,6 +36,9 @@ and are therefore part of no other target, not even `make all`: `agent-deps`,
 | `make agent-test` | Both real images against the stub operator in `cmd/spawnery-stubop` |
 | `make paper-pin` | Computes the Paper pin; `paper-pin-check` fails if `nix/paper.nix` is behind. `purpur-pin` does the same for Purpur, and `pin-bump.yml` runs both on Mondays and opens a pull request |
 | `make purpur-image` | The Purpur base image; `purpur-image-load`, `purpur-image-test` |
+| `make canvas-image` | The Canvas base image; `canvas-image-load`, `canvas-image-test` (the image checks without the startup cache) and `canvas-agent-test` (the agent phases against Canvas) |
+| `make canvas-pin` | Computes the Canvas pin; `canvas-pin-check` fails if `nix/canvas.nix` is behind. The weekly bump runs it after Paper and Purpur and takes a pin that fails its tests back out of the pull request |
+| `make e2e-worldsync-canvas` | The world-sync run on three kind nodes with the Canvas image; `e2e-tutorial-canvas` drives the tutorial path, including the login gate, on it |
 | `make velocity-image` | The Velocity image, same three steps scoped to it alone |
 | `make operator-image` | The operator's own image, same three steps |
 | `make image-repro` | Builds each image twice and fails if the bytes differ |
@@ -67,6 +70,9 @@ reaches Maven Central, and a Nix build must never depend on the network.
 player reports, the overlapping renewal and the bound on a session the operator
 never answers. For the Velocity image it also checks that its readiness port stays
 closed until a server list has arrived and opens once one does.
+
+`AGENT_TEST_ONLY=snapshot` runs the world-sync snapshot phase alone, beside
+`AGENT_TEST_ONLY=voice` for the voice phase.
 
 ## The images
 
@@ -128,6 +134,9 @@ result as `ghcr.io/spawnery/purpur-aot:<tag>` first: an operator running with
 be pulled. `DRY_RUN=1` trains too. A new package on ghcr.io starts private, so
 after the first release that publishes `purpur-aot`, set the package to public
 in the organisation's package settings.
+
+The same goes for `ghcr.io/spawnery/canvas`: the first publish creates a private
+package that has to be made public by hand. Canvas gets no startup cache.
 
 `make publish IMAGES=operator-image` publishes one image, the ordinary case:
 `flake.nix` keeps `operatorVersion` apart from `imageVersion`, so a reconciler

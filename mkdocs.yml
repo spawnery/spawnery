@@ -81,6 +81,7 @@ nav:
       - Private servers: guides/on-demand-servers.md
       - Plugins from a volume: guides/plugins-from-a-volume.md
       - Mounts and files: guides/mounts-and-files.md
+      - Canvas servers: guides/canvas.md
       - Group environment: guides/group-environment.md
       - Join permissions: guides/join-permission.md
       - Rotating the CA: guides/rotating-the-ca.md
