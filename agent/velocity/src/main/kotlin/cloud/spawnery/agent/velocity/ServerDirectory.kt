@@ -82,6 +82,9 @@ class ServerDirectory(
     fun groupOf(server: String): String? = backends[server.lowercase()]?.group
 
     @Synchronized
+    fun backendOf(server: String): Backend? = backends[server.lowercase()]
+
+    @Synchronized
     fun hostOf(server: String): String? =
         backends[server.lowercase()]?.let { parseAddress(it.address)?.hostString }
 

@@ -193,7 +193,7 @@ class AgentPlugin @Inject constructor(
             override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
         }
         val access = JoinPermissions(
-            rules = mirror::joinRule,
+            rules = proxyJoinRules(directory, mirror),
             network = self::network,
             log = ::warn,
             lookups = listOfNotNull(

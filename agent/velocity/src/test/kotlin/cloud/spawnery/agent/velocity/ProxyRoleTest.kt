@@ -8,7 +8,10 @@ import cloud.spawnery.agent.FeedAudience
 import cloud.spawnery.agent.FeedLevels
 import cloud.spawnery.agent.dormantConnector
 import cloud.spawnery.agent.pb.DrainPlayers
+import cloud.spawnery.agent.PermissionValue
 import cloud.spawnery.agent.pb.FullSync
+import cloud.spawnery.agent.pb.GroupState
+import cloud.spawnery.agent.pb.ServerJoinRule
 import cloud.spawnery.agent.pb.NetworkState
 import cloud.spawnery.agent.pb.OperatorToProxy
 import cloud.spawnery.agent.pb.ServerState as PbServerState
@@ -71,6 +74,41 @@ class ProxyRoleTest {
         feed = inertFeed(),
         events = CloudEvents(),
     )
+
+    private val nobodyHolds = listOf(PermissionLookup { _, _, _ -> PermissionValue.UNDEFINED })
+    private val newcomer = UUID.fromString("00000000-0000-0000-0000-0000000000aa")
+
+    @Test
+    fun `a proxy with no network picture refuses a rule-bearing group to a player without its node`() {
+        val vip = PbServer.newBuilder().setName("vip-1").setAddress("10.0.0.1:25565").setGroup("vip")
+            .setJoinRule(ServerJoinRule.newBuilder().setNode("network.vip"))
+            .build()
+        val lobby = PbServer.newBuilder().setName("lobby-1").setAddress("10.0.0.2:25565").setGroup("lobby")
+            .setJoinRule(ServerJoinRule.getDefaultInstance())
+            .build()
+        role.onMessage(fullSync(vip, lobby))
+        val access = JoinPermissions(proxyJoinRules(directory, mirror), { "tutorial" }, { _, _ -> }, nobodyHolds)
+
+        assertFalse(access.mayJoin(newcomer, "vip-1", "vip"))
+        assertTrue(access.mayJoin(newcomer, "lobby-1", "lobby"))
+    }
+
+    @Test
+    fun `a server registered without a rule goes by the group's rule in the network picture`() {
+        mirror.apply(
+            NetworkState.newBuilder()
+                .addGroups(GroupState.newBuilder().setName("vip").setJoinPermission("network.vip"))
+                .build(),
+        )
+        role.onMessage(
+            OperatorToProxy.newBuilder()
+                .setRegisterServer(RegisterServer.newBuilder().setServer(backend("vip-2", "10.0.0.3:25565", "vip")))
+                .build(),
+        )
+        val access = JoinPermissions(proxyJoinRules(directory, mirror), { "tutorial" }, { _, _ -> }, nobodyHolds)
+
+        assertFalse(access.mayJoin(newcomer, "vip-2", "vip"))
+    }
 
     @Test
     fun `hello carries the read timeout the proxy actually parsed`() {

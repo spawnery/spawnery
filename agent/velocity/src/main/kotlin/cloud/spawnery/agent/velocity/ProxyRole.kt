@@ -1,5 +1,6 @@
 package cloud.spawnery.agent.velocity
 
+import cloud.spawnery.agent.JoinRule
 import cloud.spawnery.agent.heapNow
 import cloud.spawnery.agent.AgentRole
 import cloud.spawnery.agent.CloudConnector
@@ -258,5 +259,12 @@ class ProxyRole(
      * unparsable one means.
      */
     private fun backend(server: PbServer): Backend =
-        Backend(name = server.name, address = server.address, group = server.group)
+        Backend(
+            name = server.name,
+            address = server.address,
+            group = server.group,
+            joinRule = server.joinRule.takeIf { server.hasJoinRule() && it.node.isNotEmpty() }
+                ?.let { JoinRule(it.node, it.denyOnly) },
+            ruleCarried = server.hasJoinRule(),
+        )
 }

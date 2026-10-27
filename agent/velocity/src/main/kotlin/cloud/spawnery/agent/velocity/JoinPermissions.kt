@@ -3,6 +3,7 @@ package cloud.spawnery.agent.velocity
 import cloud.spawnery.agent.JoinRule
 import cloud.spawnery.agent.JoinRules
 import cloud.spawnery.agent.LuckPermsContexts
+import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.PermissionValue
 import com.velocitypowered.api.permission.Tristate
 import com.velocitypowered.api.proxy.ProxyServer
@@ -21,8 +22,19 @@ fun interface JoinAccess {
     }
 }
 
+/**
+ * The rule the server's registration carried, so a proxy without a network
+ * picture still enforces it; else the group's in the picture, for an operator
+ * that sends none with its servers.
+ */
+fun proxyJoinRules(directory: ServerDirectory, mirror: NetworkMirror): (server: String, group: String) -> JoinRule? =
+    { server, group ->
+        val carried = directory.backendOf(server)
+        if (carried != null && carried.ruleCarried) carried.joinRule else mirror.joinRule(group)
+    }
+
 class JoinPermissions(
-    private val rules: (String) -> JoinRule?,
+    private val rules: (server: String, group: String) -> JoinRule?,
     private val network: () -> String,
     private val log: (String, Throwable?) -> Unit,
     private val lookups: List<PermissionLookup>,
@@ -30,7 +42,7 @@ class JoinPermissions(
     private val reported = ConcurrentHashMap.newKeySet<PermissionLookup>()
 
     override fun mayJoin(player: UUID, server: String, group: String): Boolean {
-        val rule = rules(group) ?: return true
+        val rule = rules(server, group) ?: return true
         val contexts = LuckPermsContexts.ofBackend(server, group, network())
         val value = lookups.firstNotNullOfOrNull { lookup ->
             runCatching { lookup.value(player, rule.node, contexts) }
