@@ -53,7 +53,6 @@ class AgentPlugin : JavaPlugin(), Listener {
     private val mirror = NetworkMirror()
 
     private var loginGate: LoginGateListener? = null
-    private var ticksFailed = false
 
     private val connector = CloudConnector(
         Requests(timeoutMillis = CloudConnector.TIMEOUT_MILLIS),
@@ -94,6 +93,9 @@ class AgentPlugin : JavaPlugin(), Listener {
     private var snapshotInFlight = false
 
     private val platform by lazy { Platforms.detect(this, server.javaClass.classLoader) }
+    private val tickSampler = TickSampler({ platform.ticks() }, state::sampleTicks) { e ->
+        logger.log(Level.WARNING, "spawnery could not read the tick rate; this is logged once", e)
+    }
 
     private fun startSnapshots() {
         val sync = worldSync ?: return
@@ -242,7 +244,7 @@ class AgentPlugin : JavaPlugin(), Listener {
                 server.globalRegionScheduler.runAtFixedRate(this, {
                     state.sample(Bukkit.getOnlinePlayers().size, Bukkit.getMaxPlayers())
                     registerLoginGateOnce()
-                    sampleTicks()
+                    tickSampler.sample()
                     // Recomputed every tick rather than subscribing to joins,
                     // leaves and permission changes separately.
                     feed.tick()
@@ -258,17 +260,6 @@ class AgentPlugin : JavaPlugin(), Listener {
                 logger.info("spawnery agent connecting to ${env.endpoint}")
                 startSnapshots()
             }
-        }
-    }
-
-    private fun sampleTicks() {
-        try {
-            val ticks = platform.ticks()
-            state.sampleTicks(ticks.tps, ticks.mspt)
-        } catch (e: Exception) {
-            if (ticksFailed) return
-            ticksFailed = true
-            logger.log(Level.WARNING, "spawnery could not read the tick rate; this is logged once", e)
         }
     }
 
