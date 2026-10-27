@@ -14,4 +14,13 @@ class SubscriptionOrderTest {
 
         assertEquals(Short.MIN_VALUE, subscribe.priority)
     }
+
+    @Test
+    fun `the join rule is checked after every other plugin's redirect, and before the switch decision`() {
+        val joinRule = AgentPlugin::class.java
+            .getMethod("onServerPreConnectJoinRule", ServerPreConnectEvent::class.java)
+            .getAnnotation(Subscribe::class.java)
+
+        assertEquals((Short.MIN_VALUE + 1).toShort(), joinRule.priority)
+    }
 }

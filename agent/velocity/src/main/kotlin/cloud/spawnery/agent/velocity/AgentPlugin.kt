@@ -505,7 +505,12 @@ class AgentPlugin @Inject constructor(
         }
     }
 
-    @Subscribe
+    /**
+     * After every other plugin's handler, so a redirect one of them makes is
+     * checked too, and before [onServerPreConnect], which transfers toward
+     * the server this one settles on.
+     */
+    @Subscribe(priority = JOIN_RULE_PRIORITY)
     fun onServerPreConnectJoinRule(event: ServerPreConnectEvent) {
         if (!event.result.isAllowed) return
         val target = event.result.server.orElse(event.originalServer)
@@ -607,6 +612,8 @@ class AgentPlugin @Inject constructor(
 
         // Matching Paper's 20-tick sampling period.
         const val SAMPLE_SECONDS = 1L
+
+        const val JOIN_RULE_PRIORITY: Short = (Short.MIN_VALUE + 1).toShort()
 
         const val TRANSFER_PASS_SECONDS = 1L
         const val COOKIE_WAIT_MILLIS = 2_000L
