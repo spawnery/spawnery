@@ -729,6 +729,10 @@ func (c *framedConn) readPacket() (int32, []byte, error) {
 		if _, err := io.ReadFull(zr, plain); err != nil {
 			return 0, nil, fmt.Errorf("inflate: %w", err)
 		}
+		var extra [1]byte
+		if n, _ := zr.Read(extra[:]); n > 0 {
+			return 0, nil, fmt.Errorf("inflate: the body runs past the declared length of %d", dataLen)
+		}
 		body = bytes.NewReader(plain)
 	}
 

@@ -1072,3 +1072,31 @@ func TestJoinAndHoldEndsAtATransferItDoesNotFollow(t *testing.T) {
 		t.Errorf("the target saw %d logins, want none", got)
 	}
 }
+
+func TestReadPacketRefusesBytesPastTheDeclaredDataLength(t *testing.T) {
+	body := append(mcproto.AppendVarInt(nil, 0x02), 'a', 'b', 'c', 'd')
+	var deflated bytes.Buffer
+	zw := zlib.NewWriter(&deflated)
+	if _, err := zw.Write(body); err != nil {
+		t.Fatal(err)
+	}
+	if err := zw.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	read := func(dataLen int) error {
+		inner := append(mcproto.AppendVarInt(nil, int32(dataLen)), deflated.Bytes()...)
+		frame := append(mcproto.AppendVarInt(nil, int32(len(inner))), inner...)
+		c := &framedConn{rw: bytes.NewBuffer(frame), threshold: 0}
+		_, _, err := c.readPacket()
+		return err
+	}
+
+	if err := read(len(body)); err != nil {
+		t.Fatalf("a body of exactly the declared length: %v", err)
+	}
+	err := read(len(body) - 1)
+	if err == nil || !strings.Contains(err.Error(), "past the declared") {
+		t.Errorf("a body one byte over the declared length: error %v, want it refused", err)
+	}
+}
