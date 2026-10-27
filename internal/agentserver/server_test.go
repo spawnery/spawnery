@@ -79,6 +79,8 @@ func (stubFleet) SetInterest(string, bool) {}
 
 func (stubFleet) SendState(context.Context, string) {}
 
+func (stubFleet) Delivered(context.Context, string, *agentpb.OperatorToProxy) {}
+
 // stream.Send observes no context and the hard deadline cannot reach a handler
 // before its loop, so returning is the only thing that ends a blocked Send.
 func TestTheOpeningSendsAreBounded(t *testing.T) {

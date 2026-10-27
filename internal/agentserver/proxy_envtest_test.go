@@ -33,6 +33,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/agentserver"
 	"github.com/spawnery/spawnery/internal/podspec"
@@ -230,6 +231,78 @@ func TestAProxyThatFallsBehindIsDisconnected(t *testing.T) {
 	case <-time.After(5 * time.Second):
 		t.Fatal("a proxy that fell behind was never disconnected")
 	}
+}
+
+// The same flood as above, of door changes instead of registrations: each
+// SendState is a whole picture, so the proxy needs only the newest and the
+// burst must not cut it. The roster stands in for the doors because it changes
+// the state without a Server object.
+func TestABurstOfStatePushesDoesNotCutAProxy(t *testing.T) {
+	f := newServerFixtureWithProxyOutbox(t, 2)
+	pod := f.proxyPod("gateway-ffff")
+	stream, done := dialProxy(t, f.ctx, f.addr, f.ca,
+		f.token(podspec.ProxyServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
+	defer done()
+
+	for {
+		msg, err := stream.Recv()
+		if err != nil {
+			t.Fatalf("Recv during setup: %v", err)
+		}
+		if msg.GetNetworkState() != nil {
+			break
+		}
+	}
+
+	push := func(player string) {
+		t.Helper()
+		if err := f.agents.ReportRoster(string(pod.UID), f.ns,
+			[]agent.RosterEntry{{UUID: player, Name: player}}); err != nil {
+			t.Fatalf("ReportRoster: %v", err)
+		}
+		f.proxies.SendState(f.ctx, f.ns)
+	}
+	// The stall: no Recv until the burst is over.
+	for i := 0; i < 40; i++ {
+		push(fmt.Sprintf("burst-%02d", i))
+	}
+
+	type received struct {
+		msg *agentpb.OperatorToProxy
+		err error
+	}
+	messages := make(chan received, 64)
+	go func() {
+		for {
+			msg, err := stream.Recv()
+			messages <- received{msg, err}
+			if err != nil {
+				return
+			}
+		}
+	}()
+	waitFor := func(player string) {
+		t.Helper()
+		deadline := time.After(5 * time.Second)
+		for {
+			select {
+			case r := <-messages:
+				if r.err != nil {
+					t.Fatalf("the stream ended waiting for %s: %v", player, r.err)
+				}
+				if players := r.msg.GetNetworkState().GetPlayers(); len(players) == 1 && players[0].GetUuid() == player {
+					return
+				}
+			case <-deadline:
+				t.Fatalf("no NetworkState carrying %s arrived", player)
+			}
+		}
+	}
+	waitFor("burst-39")
+
+	// After the burst has drained, a single change goes out at once again.
+	push("after")
+	waitFor("after")
 }
 
 // Asserts the code, not just the end: a deadline misreported as ResourceExhausted
