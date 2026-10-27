@@ -13,19 +13,19 @@ cd "$root"
 paper_mojang="$(sed -n 's|^    url = "\(https://piston-data.mojang.com/[^"]*\)";$|\1|p' nix/paper.nix)"
 [ -n "$paper_mojang" ] || { echo "cannot read the Mojang URL out of nix/paper.nix"; exit 1; }
 
+jar_path=job/Canvas/991/artifact/canvas-server/build/libs/canvas-build.991.jar
 mkjar() {
 	local name="$1" url="$2"
-	mkdir -p "$tmp/$name/META-INF"
+	mkdir -p "$tmp/$name-src/META-INF" "$(dirname "$tmp/$name/$jar_path")"
 	printf '%s\t%s\tmojang_26.3.jar\n' "$(printf x | sha256sum | cut -d' ' -f1)" "$url" \
-		>"$tmp/$name/META-INF/download-context"
-	(cd "$tmp/$name" && jar cf "$tmp/$name.jar" META-INF)
+		>"$tmp/$name-src/META-INF/download-context"
+	(cd "$tmp/$name-src" && jar cf "$tmp/$name/$jar_path" META-INF)
 }
 mkjar good "$paper_mojang"
 mkjar other "https://piston-data.mojang.com/v1/objects/0000000000000000000000000000000000000000/server.jar"
 
 listing() {
-	sed -E "s#https://jenkins\.canvasmc\.io/job/Canvas/[0-9]+/artifact/[^\"]*#file://$tmp/$1.jar#" \
-		"$fixture" >"$tmp/$1.json"
+	sed "s#https://jenkins\.canvasmc\.io/#file://$tmp/$1/#" "$fixture" >"$tmp/$1.json"
 	echo "file://$tmp/$1.json"
 }
 good_api="$(listing good)"
@@ -34,8 +34,9 @@ other_api="$(listing other)"
 nix_copy() {
 	sed -e 's/^  canvasBuild = ".*";$/  canvasBuild = "990";/' \
 		-e 's/^    hash = "sha256-.*";$/    hash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=";/' \
-		nix/canvas.nix >"$tmp/canvas.nix"
-	echo "$tmp/canvas.nix"
+		-e "s#^    url = \"https://jenkins\.canvasmc\.io/#    url = \"file://$tmp/$1/#" \
+		nix/canvas.nix >"$tmp/$1-canvas.nix"
+	echo "$tmp/$1-canvas.nix"
 }
 
 failures=0
@@ -58,7 +59,7 @@ expect() {
 	fi
 }
 
-nix_file="$(nix_copy)"
+nix_file="$(nix_copy good)"
 expect "the latest stable build of 26.3 is 991" 2 "does not name Canvas 26.3 build 991" -- \
 	CHECK=1 API="$good_api" NIX_FILE="$nix_file" "$pin" 26.3
 expect "without arguments it stays on the pinned version" 2 "Canvas 26.3 build 991" -- \
@@ -76,6 +77,8 @@ expect "a build the API does not list" 1 "no such build" -- \
 expect "a Minecraft version with no stable build" 1 "no successful stable build of Canvas 26.9" -- \
 	API="$good_api" NIX_FILE="$nix_file" "$pin" 26.9
 expect "a jar wanting another Mojang jar" 1 "different Mojang jar" -- \
+	API="$other_api" NIX_FILE="$(nix_copy other)" "$pin" 26.3
+expect "a download URL nix/canvas.nix does not fetch" 1 "not the one $nix_file fetches" -- \
 	API="$other_api" NIX_FILE="$nix_file" "$pin" 26.3
 expect "the pin is written" 0 "wrote $nix_file" -- \
 	API="$good_api" NIX_FILE="$nix_file" "$pin" 26.3
@@ -83,7 +86,7 @@ expect "and then the check agrees" 0 "already names Canvas 26.3 build 991" -- \
 	CHECK=1 API="$good_api" NIX_FILE="$nix_file" "$pin" 26.3
 
 if grep -q '^  canvasBuild = "991";$' "$nix_file" &&
-	grep -q "^    hash = \"$(nix --extra-experimental-features 'nix-command flakes' hash convert --hash-algo sha256 --to sri "$(sha256sum "$tmp/good.jar" | cut -d' ' -f1)")\";$" "$nix_file"; then
+	grep -q "^    hash = \"$(nix --extra-experimental-features 'nix-command flakes' hash convert --hash-algo sha256 --to sri "$(sha256sum "$tmp/good/$jar_path" | cut -d' ' -f1)")\";$" "$nix_file"; then
 	echo "ok   the file carries the build and the hash of the bytes received"
 else
 	echo "FAIL the file carries the build and the hash of the bytes received"

@@ -67,6 +67,15 @@ fi
 
 jar_url="$(jq -r '.downloadUrl' <<<"$meta")"
 [ -n "$jar_url" ] && [ "$jar_url" != "null" ] || fail "the API gave no download URL for build $build"
+url_template="$(sed -n 's|^    url = "\(.*\)";$|\1|p' "$NIX_FILE")"
+[ -n "$url_template" ] || fail "could not read the canvasJar URL out of $NIX_FILE"
+nix_url="${url_template//"\${canvasBuild}"/$build}"
+if [ "$jar_url" != "$nix_url" ]; then
+	echo "canvas-pin: the API's download URL is not the one $NIX_FILE fetches:" >&2
+	echo "  api: $jar_url" >&2
+	echo "  nix: $nix_url" >&2
+	fail "the hash would be of other bytes than the build fetches; change the URL in $NIX_FILE first"
+fi
 
 work="$(mktemp -d)"
 trap 'rm -rf "$work"' EXIT
