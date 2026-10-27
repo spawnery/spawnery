@@ -25,13 +25,14 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
-            # Nix 2.35 retries a connection error 5 times by default and no 4xx at
-            # all; when cache.nixos.org answers HTTP 416, fallback builds the path.
-            filetransfer-retry-attempts = 10
-            fallback = true
             # The default ten lines end inside Gradle's eight-line "Try:" block,
             # before the failing test's name.
             log-lines = 40
+
+      # Nix does not retry an HTTP 416 from cache.nixos.org; a fresh invocation
+      # fetches the path again from its start.
+      - name: Fetch the dev shell
+        run: for _ in 1 2 3; do nix develop -c true && exit 0; sleep 10; done; exit 1
       - name: make image-repro
         run: nix develop -c make image-repro
 
@@ -131,10 +132,11 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
-            # Nix 2.35 retries a connection error 5 times by default and no 4xx at
-            # all; when cache.nixos.org answers HTTP 416, fallback builds the path.
-            filetransfer-retry-attempts = 10
-            fallback = true
+
+      # Nix does not retry an HTTP 416 from cache.nixos.org; a fresh invocation
+      # fetches the path again from its start.
+      - name: Fetch the dev shell
+        run: for _ in 1 2 3; do nix develop -c true && exit 0; sleep 10; done; exit 1
       - name: make e2e-tutorial
         run: nix develop -c make e2e-tutorial
 
@@ -220,10 +222,11 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
-            # Nix 2.35 retries a connection error 5 times by default and no 4xx at
-            # all; when cache.nixos.org answers HTTP 416, fallback builds the path.
-            filetransfer-retry-attempts = 10
-            fallback = true
+
+      # Nix does not retry an HTTP 416 from cache.nixos.org; a fresh invocation
+      # fetches the path again from its start.
+      - name: Fetch the dev shell
+        run: for _ in 1 2 3; do nix develop -c true && exit 0; sleep 10; done; exit 1
       - name: make e2e-ondemand
         run: nix develop -c make e2e-ondemand
 
@@ -311,10 +314,11 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
-            # Nix 2.35 retries a connection error 5 times by default and no 4xx at
-            # all; when cache.nixos.org answers HTTP 416, fallback builds the path.
-            filetransfer-retry-attempts = 10
-            fallback = true
+
+      # Nix does not retry an HTTP 416 from cache.nixos.org; a fresh invocation
+      # fetches the path again from its start.
+      - name: Fetch the dev shell
+        run: for _ in 1 2 3; do nix develop -c true && exit 0; sleep 10; done; exit 1
       - name: make e2e-worldsync
         run: nix develop -c make e2e-worldsync
 
@@ -401,10 +405,11 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
-            # Nix 2.35 retries a connection error 5 times by default and no 4xx at
-            # all; when cache.nixos.org answers HTTP 416, fallback builds the path.
-            filetransfer-retry-attempts = 10
-            fallback = true
+
+      # Nix does not retry an HTTP 416 from cache.nixos.org; a fresh invocation
+      # fetches the path again from its start.
+      - name: Fetch the dev shell
+        run: for _ in 1 2 3; do nix develop -c true && exit 0; sleep 10; done; exit 1
       - name: make e2e-tutorial-canvas
         run: nix develop -c make e2e-tutorial-canvas
 
@@ -493,10 +498,11 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
-            # Nix 2.35 retries a connection error 5 times by default and no 4xx at
-            # all; when cache.nixos.org answers HTTP 416, fallback builds the path.
-            filetransfer-retry-attempts = 10
-            fallback = true
+
+      # Nix does not retry an HTTP 416 from cache.nixos.org; a fresh invocation
+      # fetches the path again from its start.
+      - name: Fetch the dev shell
+        run: for _ in 1 2 3; do nix develop -c true && exit 0; sleep 10; done; exit 1
       - name: make e2e-worldsync-canvas
         run: nix develop -c make e2e-worldsync-canvas
 
