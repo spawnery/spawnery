@@ -78,7 +78,8 @@ which routes the player around the group.
   [Private servers](on-demand-servers.md).
 - A group with a join rule registers a login listener on its Paper servers. As
   with `enforcePlayableSlots`, that listener turns off Paper's reconfiguration
-  API on those servers.
+  API for every login made while it is registered. The servers remove it when
+  the group drops the rule.
 - The operator does not know permissions. A plugin's `connect()` answers
   `ordered` even when the player is then refused.
 - Agents older than 0.18.0 ignore the rule, so the game images and the proxy
