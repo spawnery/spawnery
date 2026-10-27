@@ -1,16 +1,17 @@
 #!/usr/bin/env bash
-# Prints, as Markdown, the upstream commits between two Paper or Purpur
-# builds of one Minecraft version: every build after FROM up to and including
-# TO. pin-bump.yml puts it into the pull request it opens.
+# Prints, as Markdown, the upstream commits between two Paper, Purpur or
+# Canvas builds of one Minecraft version: every build after FROM up to and
+# including TO. pin-bump.yml puts it into the pull request it opens.
 #
 # Usage:
 #   hack/upstream-changes.sh paper 26.3 135 174
 #   hack/upstream-changes.sh purpur 26.3 2642 2647
+#   hack/upstream-changes.sh canvas 26.3 990 993
 set -euo pipefail
 
 fail() { echo "upstream-changes: $*" >&2; exit 1; }
 
-[ $# -eq 4 ] || fail "usage: $0 paper|purpur VERSION FROM TO"
+[ $# -eq 4 ] || fail "usage: $0 paper|purpur|canvas VERSION FROM TO"
 project="$1" version="$2" from="$3" to="$4"
 
 case "$project" in
@@ -31,5 +32,12 @@ purpur)
 				| join("\n"))'
 	done
 	;;
-*) fail "unknown project $project; paper or purpur" ;;
+canvas)
+	curl -fsSL "${API:-https://canvasmc.io/api/v2/builds?project=canvas}" |
+		jq -r --arg v "$version" --argjson from "$from" --argjson to "$to" '
+			.builds | map(select(.channelVersion == $v and .buildNumber > $from and .buildNumber <= $to))
+			| sort_by(.buildNumber) | .[]
+			| "- build \(.buildNumber): " + ([.commits[]? | .message | split("\n")[0]] | join("; "))'
+	;;
+*) fail "unknown project $project; paper, purpur or canvas" ;;
 esac

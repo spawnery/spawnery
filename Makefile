@@ -56,7 +56,7 @@ vet:
 .PHONY: test
 # -race unconditionally: a separate test-race target would go unrun. envtest
 # startup dominates the suite, so it costs about 20% rather than 2-10x.
-test: manifests generate fmt vet chart-lint toolchain-lint image-tag-lint docs-length-lint crd-docs-test chart-values-docs-test chart-worldsync-test metrics-docs-test image-version-bump-test
+test: manifests generate fmt vet chart-lint toolchain-lint image-tag-lint docs-length-lint crd-docs-test chart-values-docs-test chart-worldsync-test metrics-docs-test image-version-bump-test canvas-pin-test
 	go test -race ./... -coverprofile cover.out
 
 # protoc and protoc-gen-grpc-java against the Gradle pins; see flake.nix.
@@ -144,6 +144,18 @@ purpur-pin:
 .PHONY: purpur-pin-check
 purpur-pin-check:
 	CHECK=1 hack/purpur-pin.sh $(ARGS)
+
+.PHONY: canvas-pin
+canvas-pin:
+	hack/canvas-pin.sh $(ARGS)
+
+.PHONY: canvas-pin-check
+canvas-pin-check:
+	CHECK=1 hack/canvas-pin.sh $(ARGS)
+
+.PHONY: canvas-pin-test
+canvas-pin-test:
+	hack/canvas-pin-test.sh
 
 .PHONY: agent
 # `nix build` reads the git index: `git add` new files first, or the build

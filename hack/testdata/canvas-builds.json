@@ -1,0 +1,97 @@
+{
+  "project": "canvas",
+  "builds": [
+    {
+      "result": "SUCCESS",
+      "buildNumber": 995,
+      "url": "https://jenkins.canvasmc.io/job/Canvas/995/",
+      "downloadUrl": "https://jenkins.canvasmc.io/job/Canvas/995/artifact/canvas-server/build/libs/canvas-build.995.jar",
+      "channelVersion": "26.3",
+      "timestamp": 1793000000000,
+      "isExperimental": true,
+      "channelName": "experimental",
+      "commits": [
+        {
+          "message": "Update Upstream (Paper)",
+          "extraDescription": null,
+          "hash": "00000000000000000000000000000000000003e3",
+          "author": "someone"
+        }
+      ]
+    },
+    {
+      "result": "SUCCESS",
+      "buildNumber": 994,
+      "url": "https://jenkins.canvasmc.io/job/Canvas/994/",
+      "downloadUrl": "https://jenkins.canvasmc.io/job/Canvas/994/artifact/canvas-server/build/libs/canvas-build.994.jar",
+      "channelVersion": "26.3",
+      "timestamp": 1792999000000,
+      "isExperimental": false,
+      "channelName": "beta",
+      "commits": [
+        {
+          "message": "Update Upstream (Paper)",
+          "extraDescription": null,
+          "hash": "00000000000000000000000000000000000003e2",
+          "author": "someone"
+        }
+      ]
+    },
+    {
+      "result": "FAILURE",
+      "buildNumber": 993,
+      "url": "https://jenkins.canvasmc.io/job/Canvas/993/",
+      "downloadUrl": "https://jenkins.canvasmc.io/job/Canvas/993/artifact/canvas-server/build/libs/canvas-build.993.jar",
+      "channelVersion": "26.3",
+      "timestamp": 1792998000000,
+      "isExperimental": false,
+      "channelName": "stable",
+      "commits": [
+        {
+          "message": "Update Upstream (Paper)",
+          "extraDescription": null,
+          "hash": "00000000000000000000000000000000000003e1",
+          "author": "someone"
+        }
+      ]
+    },
+    {
+      "result": "SUCCESS",
+      "buildNumber": 992,
+      "url": "https://jenkins.canvasmc.io/job/Canvas/992/",
+      "downloadUrl": "https://jenkins.canvasmc.io/job/Canvas/992/artifact/canvas-server/build/libs/canvas-build.992.jar",
+      "channelVersion": "26.4",
+      "timestamp": 1792997000000,
+      "isExperimental": false,
+      "channelName": "stable",
+      "commits": [
+        {
+          "message": "Update Upstream (Paper)",
+          "extraDescription": null,
+          "hash": "00000000000000000000000000000000000003e0",
+          "author": "someone"
+        }
+      ]
+    },
+    {
+      "result": "SUCCESS",
+      "buildNumber": 991,
+      "url": "https://jenkins.canvasmc.io/job/Canvas/991/",
+      "downloadUrl": "https://jenkins.canvasmc.io/job/Canvas/991/artifact/canvas-server/build/libs/canvas-build.991.jar",
+      "channelVersion": "26.3",
+      "timestamp": 1792996000000,
+      "isExperimental": false,
+      "channelName": "stable",
+      "commits": [
+        {
+          "message": "Update Upstream (Paper)",
+          "extraDescription": null,
+          "hash": "00000000000000000000000000000000000003df",
+          "author": "someone"
+        }
+      ]
+    }
+  ],
+  "cached": false,
+  "jenkinsDown": false
+}

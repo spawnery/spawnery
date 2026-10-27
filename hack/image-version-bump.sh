@@ -3,7 +3,7 @@
 # tags and spawnery-api coordinates in the files hack/image-tag-pins-agree.sh
 # checks along with it, plus the e2e manifests that hack/e2e-{ondemand,worldsync}.sh
 # check themselves (the lint cannot: they pin a Velocity tag that must not
-# exist). pin-bump.yml runs it after a Paper or Purpur pin moved.
+# exist). pin-bump.yml runs it after a Paper, Purpur or Canvas pin moved.
 #
 # An imageVersion no v* tag names yet already belongs to the coming release
 # and stays. Otherwise it joins a release another bump has already numbered
@@ -70,7 +70,7 @@ while IFS= read -r manifest; do
 	file="$root/${manifest#"$here"/}"
 	[ -w "$file" ] || fail "cannot write $file"
 	sed -i -E \
-		-e "s#((purpur|velocity):[^[:space:]]*-)$old([^0-9.]|\$)#\1$next\3#g" \
+		-e "s#((purpur|canvas|velocity):[^[:space:]]*-)$old([^0-9.]|\$)#\1$next\3#g" \
 		-e "s#(cloud\.spawnery:spawnery-api:)$old([^0-9.]|\$)#\1$next\2#g" \
 		"$file"
 done < <("$here/hack/image-tag-pins-agree.sh" --list

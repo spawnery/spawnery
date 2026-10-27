@@ -19,7 +19,7 @@ concurrency:
 jobs:
   bump:
     runs-on: ubuntu-latest
-    timeout-minutes: 60
+    timeout-minutes: 90
     env:
       BRANCH: auto/upstream-pins
     steps:
@@ -52,33 +52,62 @@ jobs:
           git config user.name "${SLUG}[bot]"
           git config user.email "${id}+${SLUG}[bot]@users.noreply.github.com"
 
-      # Paper first: purpur-pin.sh refuses a Purpur build that wants another
-      # Mojang jar than nix/paper.nix pins. Both stay on the pinned Minecraft
-      # version; moving to a new one is not a weekly chore.
+      # Paper first: purpur-pin.sh and canvas-pin.sh refuse a build that wants
+      # another Mojang jar than nix/paper.nix pins. All three stay on the pinned
+      # Minecraft version; moving to a new one is not a weekly chore.
+      #
+      # A moved Canvas pin has to pass its image and agent tests before it
+      # joins; a build that fails is put back and named in the pull request, so
+      # it does not hold up the other two.
       - name: Move the pins
         id: pins
+        timeout-minutes: 30
         run: |
           set -euo pipefail
           pin() { sed -n "s/^  $1 = \"\(.*\)\";$/\1/p" "$2"; }
           paper_old="$(pin paperBuild nix/paper.nix)"
           purpur_old="$(pin purpurBuild nix/purpur.nix)"
+          canvas_old="$(pin canvasBuild nix/canvas.nix)"
           nix develop -c hack/paper-pin.sh
           nix develop -c hack/purpur-pin.sh
+          nix develop -c hack/canvas-pin.sh
+
+          canvas_failed=""
+          candidate="$(pin canvasBuild nix/canvas.nix)"
+          if [ "$candidate" != "$canvas_old" ]; then
+            if ! nix develop -c make canvas-image-test canvas-agent-test; then
+              git checkout nix/canvas.nix
+              canvas_failed="$candidate"
+              msg="Canvas build $canvas_failed failed its tests and is not in this bump"
+              echo "::warning::$msg"
+              echo "$msg" >>"$GITHUB_STEP_SUMMARY"
+            fi
+          fi
+
           paper_new="$(pin paperBuild nix/paper.nix)"
           purpur_new="$(pin purpurBuild nix/purpur.nix)"
+          canvas_new="$(pin canvasBuild nix/canvas.nix)"
           mc="$(pin paperVersion nix/paper.nix)"
+          canvas_mc="$(pin canvasVersion nix/canvas.nix)"
 
           summary=""
           [ "$paper_old" = "$paper_new" ] || summary="Paper $mc build $paper_new"
           if [ "$purpur_old" != "$purpur_new" ]; then
             summary="${summary:+$summary, }Purpur $mc build $purpur_new"
           fi
+          if [ "$canvas_old" != "$canvas_new" ]; then
+            summary="${summary:+$summary, }Canvas $canvas_mc build $canvas_new"
+          fi
           {
             echo "mc=$mc"
+            echo "canvas_mc=$canvas_mc"
             echo "paper_old=$paper_old"
             echo "paper_new=$paper_new"
             echo "purpur_old=$purpur_old"
             echo "purpur_new=$purpur_new"
+            echo "canvas_old=$canvas_old"
+            echo "canvas_new=$canvas_new"
+            echo "canvas_failed=$canvas_failed"
             echo "summary=$summary"
             echo "moved=$([ -n "$summary" ] && echo true || echo false)"
           } >>"$GITHUB_OUTPUT"
@@ -101,7 +130,7 @@ jobs:
         run: |
           set -euo pipefail
           git switch -c "$BRANCH"
-          git add nix/paper.nix nix/purpur.nix
+          git add nix/paper.nix nix/purpur.nix nix/canvas.nix
           git commit -q -m "fix(images): ${{ steps.pins.outputs.summary }}"
 
           nix develop -c hack/image-version-bump.sh
@@ -143,6 +172,10 @@ jobs:
           PAPER_NEW: ${{ steps.pins.outputs.paper_new }}
           PURPUR_OLD: ${{ steps.pins.outputs.purpur_old }}
           PURPUR_NEW: ${{ steps.pins.outputs.purpur_new }}
+          CANVAS_MC: ${{ steps.pins.outputs.canvas_mc }}
+          CANVAS_OLD: ${{ steps.pins.outputs.canvas_old }}
+          CANVAS_NEW: ${{ steps.pins.outputs.canvas_new }}
+          CANVAS_FAILED: ${{ steps.pins.outputs.canvas_failed }}
           VERSION: ${{ steps.commit.outputs.version }}
           OUTCOME: ${{ steps.test.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -164,20 +197,30 @@ jobs:
             echo "|---|---|---|"
             echo "| Paper | $PAPER_OLD | $PAPER_NEW |"
             echo "| Purpur | $PURPUR_OLD | $PURPUR_NEW |"
+            echo "| Canvas | $CANVAS_OLD | $CANVAS_NEW |"
             echo "| imageVersion | $(git show origin/master:flake.nix | sed -n 's/^[[:space:]]*imageVersion = "\([^"]*\)";/\1/p') | $VERSION |"
             echo
             echo "$verdict"
             echo
+            if [ "$CANVAS_OLD" != "$CANVAS_NEW" ]; then
+              echo "Canvas build $CANVAS_NEW passed \`make canvas-image-test canvas-agent-test\` before it joined this bump."
+              echo
+            fi
+            if [ -n "$CANVAS_FAILED" ]; then
+              echo "Canvas build $CANVAS_FAILED failed its tests and is not in this bump."
+              echo
+            fi
             echo "Nothing here runs the plugins a network installs on top. A build that breaks one of them shows up in its changelog below, not in the test."
             echo
             echo "After the merge, \`git tag -s v$VERSION\` once CI on master is green."
-            for p in paper purpur; do
+            for p in paper purpur canvas; do
               old_var="${p^^}_OLD"; new_var="${p^^}_NEW"
               [ "${!old_var}" != "${!new_var}" ] || continue
+              version="$MC"; [ "$p" != canvas ] || version="$CANVAS_MC"
               echo
-              echo "<details><summary>${p^} $MC, builds after ${!old_var} up to ${!new_var}</summary>"
+              echo "<details><summary>${p^} $version, builds after ${!old_var} up to ${!new_var}</summary>"
               echo
-              nix develop -c hack/upstream-changes.sh "$p" "$MC" "${!old_var}" "${!new_var}" ||
+              nix develop -c hack/upstream-changes.sh "$p" "$version" "${!old_var}" "${!new_var}" ||
                 echo "(the changelog could not be fetched)"
               echo
               echo "</details>"
