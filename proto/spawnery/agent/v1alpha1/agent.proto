@@ -789,6 +789,18 @@ message RegisteredServer {
   string name = 1;
   string address = 2;
   string group = 3;
+  // The group's join rule, carried with the server so that a proxy enforces it
+  // from the moment it can route there, before any NetworkState. Present with
+  // an empty node for a group without a rule; absent when the operator could
+  // not read the group, and from an operator older than this field, and the
+  // proxy then goes by its NetworkState.
+  ServerJoinRule join_rule = 4;
+}
+
+message ServerJoinRule {
+  // Resolved from spec.joinPermission, as in GroupState.join_permission.
+  string node = 1;
+  bool deny_only = 2;
 }
 
 // FullSync carries exactly the registered servers, so a reconnect during a

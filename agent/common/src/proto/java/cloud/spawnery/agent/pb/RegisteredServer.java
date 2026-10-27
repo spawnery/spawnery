@@ -51,6 +51,7 @@ private static final long serialVersionUID = 0L;
             cloud.spawnery.agent.pb.RegisteredServer.class, cloud.spawnery.agent.pb.RegisteredServer.Builder.class);
   }
 
+  private int bitField0_;
   public static final int NAME_FIELD_NUMBER = 1;
   @SuppressWarnings("serial")
   private volatile java.lang.Object name_ = "";
@@ -168,6 +169,56 @@ private static final long serialVersionUID = 0L;
     }
   }
 
+  public static final int JOIN_RULE_FIELD_NUMBER = 4;
+  private cloud.spawnery.agent.pb.ServerJoinRule joinRule_;
+  /**
+   * <pre>
+   * The group's join rule, carried with the server so that a proxy enforces it
+   * from the moment it can route there, before any NetworkState. Present with
+   * an empty node for a group without a rule; absent when the operator could
+   * not read the group, and from an operator older than this field, and the
+   * proxy then goes by its NetworkState.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
+   * @return Whether the joinRule field is set.
+   */
+  @java.lang.Override
+  public boolean hasJoinRule() {
+    return ((bitField0_ & 0x00000001) != 0);
+  }
+  /**
+   * <pre>
+   * The group's join rule, carried with the server so that a proxy enforces it
+   * from the moment it can route there, before any NetworkState. Present with
+   * an empty node for a group without a rule; absent when the operator could
+   * not read the group, and from an operator older than this field, and the
+   * proxy then goes by its NetworkState.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
+   * @return The joinRule.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.ServerJoinRule getJoinRule() {
+    return joinRule_ == null ? cloud.spawnery.agent.pb.ServerJoinRule.getDefaultInstance() : joinRule_;
+  }
+  /**
+   * <pre>
+   * The group's join rule, carried with the server so that a proxy enforces it
+   * from the moment it can route there, before any NetworkState. Present with
+   * an empty node for a group without a rule; absent when the operator could
+   * not read the group, and from an operator older than this field, and the
+   * proxy then goes by its NetworkState.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.ServerJoinRuleOrBuilder getJoinRuleOrBuilder() {
+    return joinRule_ == null ? cloud.spawnery.agent.pb.ServerJoinRule.getDefaultInstance() : joinRule_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -191,6 +242,9 @@ private static final long serialVersionUID = 0L;
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(group_)) {
       com.google.protobuf.GeneratedMessage.writeString(output, 3, group_);
     }
+    if (((bitField0_ & 0x00000001) != 0)) {
+      output.writeMessage(4, getJoinRule());
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -203,6 +257,10 @@ private static final long serialVersionUID = 0L;
     }
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(group_)) {
       size += com.google.protobuf.GeneratedMessage.computeStringSize(3, group_);
+    }
+    if (((bitField0_ & 0x00000001) != 0)) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(4, getJoinRule());
     }
     return size;
   }
@@ -234,6 +292,11 @@ private static final long serialVersionUID = 0L;
         .equals(other.getAddress())) return false;
     if (!getGroup()
         .equals(other.getGroup())) return false;
+    if (hasJoinRule() != other.hasJoinRule()) return false;
+    if (hasJoinRule()) {
+      if (!getJoinRule()
+          .equals(other.getJoinRule())) return false;
+    }
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -251,6 +314,10 @@ private static final long serialVersionUID = 0L;
     hash = (53 * hash) + getAddress().hashCode();
     hash = (37 * hash) + GROUP_FIELD_NUMBER;
     hash = (53 * hash) + getGroup().hashCode();
+    if (hasJoinRule()) {
+      hash = (37 * hash) + JOIN_RULE_FIELD_NUMBER;
+      hash = (53 * hash) + getJoinRule().hashCode();
+    }
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -370,13 +437,19 @@ private static final long serialVersionUID = 0L;
 
     // Construct using cloud.spawnery.agent.pb.RegisteredServer.newBuilder()
     private Builder() {
-
+      maybeForceBuilderInitialization();
     }
 
     private Builder(
         com.google.protobuf.GeneratedMessage.BuilderParent parent) {
       super(parent);
-
+      maybeForceBuilderInitialization();
+    }
+    private void maybeForceBuilderInitialization() {
+      if (com.google.protobuf.GeneratedMessage
+              .alwaysUseFieldBuilders) {
+        internalGetJoinRuleFieldBuilder();
+      }
     }
     @java.lang.Override
     public Builder clear() {
@@ -385,6 +458,11 @@ private static final long serialVersionUID = 0L;
       name_ = "";
       address_ = "";
       group_ = "";
+      joinRule_ = null;
+      if (joinRuleBuilder_ != null) {
+        joinRuleBuilder_.dispose();
+        joinRuleBuilder_ = null;
+      }
       return this;
     }
 
@@ -427,6 +505,14 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000004) != 0)) {
         result.group_ = group_;
       }
+      int to_bitField0_ = 0;
+      if (((from_bitField0_ & 0x00000008) != 0)) {
+        result.joinRule_ = joinRuleBuilder_ == null
+            ? joinRule_
+            : joinRuleBuilder_.build();
+        to_bitField0_ |= 0x00000001;
+      }
+      result.bitField0_ |= to_bitField0_;
     }
 
     @java.lang.Override
@@ -455,6 +541,9 @@ private static final long serialVersionUID = 0L;
         group_ = other.group_;
         bitField0_ |= 0x00000004;
         onChanged();
+      }
+      if (other.hasJoinRule()) {
+        mergeJoinRule(other.getJoinRule());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -497,6 +586,13 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000004;
               break;
             } // case 26
+            case 34: {
+              input.readMessage(
+                  internalGetJoinRuleFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              bitField0_ |= 0x00000008;
+              break;
+            } // case 34
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -728,6 +824,199 @@ private static final long serialVersionUID = 0L;
       bitField0_ |= 0x00000004;
       onChanged();
       return this;
+    }
+
+    private cloud.spawnery.agent.pb.ServerJoinRule joinRule_;
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.ServerJoinRule, cloud.spawnery.agent.pb.ServerJoinRule.Builder, cloud.spawnery.agent.pb.ServerJoinRuleOrBuilder> joinRuleBuilder_;
+    /**
+     * <pre>
+     * The group's join rule, carried with the server so that a proxy enforces it
+     * from the moment it can route there, before any NetworkState. Present with
+     * an empty node for a group without a rule; absent when the operator could
+     * not read the group, and from an operator older than this field, and the
+     * proxy then goes by its NetworkState.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
+     * @return Whether the joinRule field is set.
+     */
+    public boolean hasJoinRule() {
+      return ((bitField0_ & 0x00000008) != 0);
+    }
+    /**
+     * <pre>
+     * The group's join rule, carried with the server so that a proxy enforces it
+     * from the moment it can route there, before any NetworkState. Present with
+     * an empty node for a group without a rule; absent when the operator could
+     * not read the group, and from an operator older than this field, and the
+     * proxy then goes by its NetworkState.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
+     * @return The joinRule.
+     */
+    public cloud.spawnery.agent.pb.ServerJoinRule getJoinRule() {
+      if (joinRuleBuilder_ == null) {
+        return joinRule_ == null ? cloud.spawnery.agent.pb.ServerJoinRule.getDefaultInstance() : joinRule_;
+      } else {
+        return joinRuleBuilder_.getMessage();
+      }
+    }
+    /**
+     * <pre>
+     * The group's join rule, carried with the server so that a proxy enforces it
+     * from the moment it can route there, before any NetworkState. Present with
+     * an empty node for a group without a rule; absent when the operator could
+     * not read the group, and from an operator older than this field, and the
+     * proxy then goes by its NetworkState.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
+     */
+    public Builder setJoinRule(cloud.spawnery.agent.pb.ServerJoinRule value) {
+      if (joinRuleBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        joinRule_ = value;
+      } else {
+        joinRuleBuilder_.setMessage(value);
+      }
+      bitField0_ |= 0x00000008;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * The group's join rule, carried with the server so that a proxy enforces it
+     * from the moment it can route there, before any NetworkState. Present with
+     * an empty node for a group without a rule; absent when the operator could
+     * not read the group, and from an operator older than this field, and the
+     * proxy then goes by its NetworkState.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
+     */
+    public Builder setJoinRule(
+        cloud.spawnery.agent.pb.ServerJoinRule.Builder builderForValue) {
+      if (joinRuleBuilder_ == null) {
+        joinRule_ = builderForValue.build();
+      } else {
+        joinRuleBuilder_.setMessage(builderForValue.build());
+      }
+      bitField0_ |= 0x00000008;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * The group's join rule, carried with the server so that a proxy enforces it
+     * from the moment it can route there, before any NetworkState. Present with
+     * an empty node for a group without a rule; absent when the operator could
+     * not read the group, and from an operator older than this field, and the
+     * proxy then goes by its NetworkState.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
+     */
+    public Builder mergeJoinRule(cloud.spawnery.agent.pb.ServerJoinRule value) {
+      if (joinRuleBuilder_ == null) {
+        if (((bitField0_ & 0x00000008) != 0) &&
+          joinRule_ != null &&
+          joinRule_ != cloud.spawnery.agent.pb.ServerJoinRule.getDefaultInstance()) {
+          getJoinRuleBuilder().mergeFrom(value);
+        } else {
+          joinRule_ = value;
+        }
+      } else {
+        joinRuleBuilder_.mergeFrom(value);
+      }
+      if (joinRule_ != null) {
+        bitField0_ |= 0x00000008;
+        onChanged();
+      }
+      return this;
+    }
+    /**
+     * <pre>
+     * The group's join rule, carried with the server so that a proxy enforces it
+     * from the moment it can route there, before any NetworkState. Present with
+     * an empty node for a group without a rule; absent when the operator could
+     * not read the group, and from an operator older than this field, and the
+     * proxy then goes by its NetworkState.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
+     */
+    public Builder clearJoinRule() {
+      bitField0_ = (bitField0_ & ~0x00000008);
+      joinRule_ = null;
+      if (joinRuleBuilder_ != null) {
+        joinRuleBuilder_.dispose();
+        joinRuleBuilder_ = null;
+      }
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * The group's join rule, carried with the server so that a proxy enforces it
+     * from the moment it can route there, before any NetworkState. Present with
+     * an empty node for a group without a rule; absent when the operator could
+     * not read the group, and from an operator older than this field, and the
+     * proxy then goes by its NetworkState.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
+     */
+    public cloud.spawnery.agent.pb.ServerJoinRule.Builder getJoinRuleBuilder() {
+      bitField0_ |= 0x00000008;
+      onChanged();
+      return internalGetJoinRuleFieldBuilder().getBuilder();
+    }
+    /**
+     * <pre>
+     * The group's join rule, carried with the server so that a proxy enforces it
+     * from the moment it can route there, before any NetworkState. Present with
+     * an empty node for a group without a rule; absent when the operator could
+     * not read the group, and from an operator older than this field, and the
+     * proxy then goes by its NetworkState.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
+     */
+    public cloud.spawnery.agent.pb.ServerJoinRuleOrBuilder getJoinRuleOrBuilder() {
+      if (joinRuleBuilder_ != null) {
+        return joinRuleBuilder_.getMessageOrBuilder();
+      } else {
+        return joinRule_ == null ?
+            cloud.spawnery.agent.pb.ServerJoinRule.getDefaultInstance() : joinRule_;
+      }
+    }
+    /**
+     * <pre>
+     * The group's join rule, carried with the server so that a proxy enforces it
+     * from the moment it can route there, before any NetworkState. Present with
+     * an empty node for a group without a rule; absent when the operator could
+     * not read the group, and from an operator older than this field, and the
+     * proxy then goes by its NetworkState.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.ServerJoinRule, cloud.spawnery.agent.pb.ServerJoinRule.Builder, cloud.spawnery.agent.pb.ServerJoinRuleOrBuilder> 
+        internalGetJoinRuleFieldBuilder() {
+      if (joinRuleBuilder_ == null) {
+        joinRuleBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.ServerJoinRule, cloud.spawnery.agent.pb.ServerJoinRule.Builder, cloud.spawnery.agent.pb.ServerJoinRuleOrBuilder>(
+                getJoinRule(),
+                getParentForChildren(),
+                isClean());
+        joinRule_ = null;
+      }
+      return joinRuleBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.RegisteredServer)

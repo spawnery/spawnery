@@ -45,4 +45,43 @@ public interface RegisteredServerOrBuilder extends
    */
   com.google.protobuf.ByteString
       getGroupBytes();
+
+  /**
+   * <pre>
+   * The group's join rule, carried with the server so that a proxy enforces it
+   * from the moment it can route there, before any NetworkState. Present with
+   * an empty node for a group without a rule; absent when the operator could
+   * not read the group, and from an operator older than this field, and the
+   * proxy then goes by its NetworkState.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
+   * @return Whether the joinRule field is set.
+   */
+  boolean hasJoinRule();
+  /**
+   * <pre>
+   * The group's join rule, carried with the server so that a proxy enforces it
+   * from the moment it can route there, before any NetworkState. Present with
+   * an empty node for a group without a rule; absent when the operator could
+   * not read the group, and from an operator older than this field, and the
+   * proxy then goes by its NetworkState.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
+   * @return The joinRule.
+   */
+  cloud.spawnery.agent.pb.ServerJoinRule getJoinRule();
+  /**
+   * <pre>
+   * The group's join rule, carried with the server so that a proxy enforces it
+   * from the moment it can route there, before any NetworkState. Present with
+   * an empty node for a group without a rule; absent when the operator could
+   * not read the group, and from an operator older than this field, and the
+   * proxy then goes by its NetworkState.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
+   */
+  cloud.spawnery.agent.pb.ServerJoinRuleOrBuilder getJoinRuleOrBuilder();
 }

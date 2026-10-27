@@ -178,6 +178,7 @@ message spawnery.agent.v1alpha1.RegisterServer 1 server spawnery.agent.v1alpha1.
 message spawnery.agent.v1alpha1.RegisteredServer 1 name string
 message spawnery.agent.v1alpha1.RegisteredServer 2 address string
 message spawnery.agent.v1alpha1.RegisteredServer 3 group string
+message spawnery.agent.v1alpha1.RegisteredServer 4 join_rule spawnery.agent.v1alpha1.ServerJoinRule
 message spawnery.agent.v1alpha1.ReportInterval 1 seconds int32
 message spawnery.agent.v1alpha1.RequestError 1 reason spawnery.agent.v1alpha1.RequestError.Reason
 message spawnery.agent.v1alpha1.RequestError 2 message string
@@ -209,6 +210,8 @@ message spawnery.agent.v1alpha1.ScaleRequest 2 replicas int32
 message spawnery.agent.v1alpha1.ScaleRequest 3 duration_seconds int64
 message spawnery.agent.v1alpha1.ScaleResult 1 replicas int32
 message spawnery.agent.v1alpha1.ScaleResult 2 expires_at_unix int64
+message spawnery.agent.v1alpha1.ServerJoinRule 1 node string
+message spawnery.agent.v1alpha1.ServerJoinRule 2 deny_only bool
 message spawnery.agent.v1alpha1.ServerMessage 1 hello spawnery.agent.v1alpha1.Hello oneof message
 message spawnery.agent.v1alpha1.ServerMessage 2 ready spawnery.agent.v1alpha1.Ready oneof message
 message spawnery.agent.v1alpha1.ServerMessage 3 player_count spawnery.agent.v1alpha1.PlayerCount oneof message

@@ -188,7 +188,9 @@ func TestAProxyPlayerCountAgainstItsLimitIsAccepted(t *testing.T) {
 
 // proxyreg's tests prove the fan-out closes the outbox; this proves the closed outbox
 // ends the gRPC stream. The overflow is not flow control (forty small messages fit the
-// 64KB window) but Register enqueuing faster than the consumer can marshal and send.
+// 64KB window) but Deregister enqueuing faster than the consumer can marshal and send.
+// Not Register, which reads the server's group from the API server first, and
+// then the consumer keeps up.
 func TestAProxyThatFallsBehindIsDisconnected(t *testing.T) {
 	f := newServerFixtureWithProxyOutbox(t, 2)
 	pod := f.proxyPod("gateway-dddd")
@@ -209,8 +211,8 @@ func TestAProxyThatFallsBehindIsDisconnected(t *testing.T) {
 			Spec:       spawneryv1alpha1.ServerSpec{GroupRef: spawneryv1alpha1.ObjectRef{Name: "lobby"}},
 			Status:     spawneryv1alpha1.ServerStatus{Address: "10.0.0.9:25565"},
 		}
-		if err := f.proxies.Register(f.ctx, srv); err != nil {
-			t.Fatalf("Register %d: %v", i, err)
+		if err := f.proxies.Deregister(f.ctx, srv); err != nil {
+			t.Fatalf("Deregister %d: %v", i, err)
 		}
 	}
 

@@ -1101,3 +1101,67 @@ func TestTheVoiceConfigComesBeforeTheNetworkState(t *testing.T) {
 		t.Errorf("VoiceConfig at %d, NetworkState at %d; want both, the VoiceConfig first", voiceAt, stateAt)
 	}
 }
+
+func serverGroupWithRule(name string, rule *spawneryv1alpha1.JoinPermission) *spawneryv1alpha1.ServerGroup {
+	return &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec:       spawneryv1alpha1.ServerGroupSpec{JoinPermission: rule},
+	}
+}
+
+// A proxy that has no NetworkState yet must still know which servers carry a
+// rule; the registration and the FullSync carry it.
+func TestAServerReachesTheProxiesWithItsGroupsJoinRule(t *testing.T) {
+	vip := serverGroupWithRule("lobby", &spawneryv1alpha1.JoinPermission{
+		Node: "network.vip", Mode: spawneryv1alpha1.JoinPermissionDenyOnly,
+	})
+	synced := registered("lobby-aaaa", "10.0.0.1:25565")
+	f := newFleet(t, proxyGroup("lobby"), vip, synced)
+
+	outbox, leave, err := f.Join(context.Background(), ns, group, "uid-1")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+
+	rule := recv(t, outbox).GetFullSync().GetServers()[0].GetJoinRule()
+	if rule.GetNode() != "network.vip" || !rule.GetDenyOnly() {
+		t.Fatalf("the FullSync carried rule %+v", rule)
+	}
+
+	if err := f.Register(context.Background(), registered("lobby-bbbb", "10.0.0.2:25565")); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	rule = recv(t, outbox).GetRegisterServer().GetServer().GetJoinRule()
+	if rule.GetNode() != "network.vip" || !rule.GetDenyOnly() {
+		t.Fatalf("the registration carried rule %+v", rule)
+	}
+}
+
+func TestAGroupWithoutARuleSaysSoAndAMissingGroupSaysNothing(t *testing.T) {
+	f := newFleet(t, proxyGroup("lobby"), serverGroupWithRule("lobby", nil))
+
+	outbox, leave, err := f.Join(context.Background(), ns, group, "uid-1")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+	recv(t, outbox)
+
+	if err := f.Register(context.Background(), registered("lobby-cccc", "10.0.0.3:25565")); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	rule := recv(t, outbox).GetRegisterServer().GetServer().GetJoinRule()
+	if rule == nil || rule.GetNode() != "" {
+		t.Fatalf("a group without a rule should carry an empty one, got %+v", rule)
+	}
+
+	orphan := registered("arena-dddd", "10.0.0.4:25565")
+	orphan.Spec.GroupRef.Name = "arena"
+	if err := f.Register(context.Background(), orphan); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if rule := recv(t, outbox).GetRegisterServer().GetServer().GetJoinRule(); rule != nil {
+		t.Fatalf("a server whose group is gone should carry no rule, got %+v", rule)
+	}
+}
