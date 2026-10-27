@@ -101,9 +101,13 @@ jobs:
             nix develop -c make canvas-image-test canvas-agent-test || fail "$candidate"
           fi
 
+      # A failed Canvas pin would leave master's in the bump, and the force-push
+      # would drop the Canvas build the open pull request already carries. That
+      # one passed its tests when it joined, so it stays, untested this time.
       - name: Collect the pins
         id: pins
         env:
+          GH_TOKEN: ${{ steps.token.outputs.token }}
           PAPER_OLD: ${{ steps.base.outputs.paper_old }}
           PURPUR_OLD: ${{ steps.base.outputs.purpur_old }}
           CANVAS_OLD: ${{ steps.base.outputs.canvas_old }}
@@ -122,6 +126,21 @@ jobs:
             canvas_failed="the Canvas step ended with $CANVAS_OUTCOME before it finished"
             echo "::warning::Canvas is not in this bump: $canvas_failed"
             echo "Canvas is not in this bump: $canvas_failed" >>"$GITHUB_STEP_SUMMARY"
+          fi
+
+          canvas_carried=""
+          carried="$RUNNER_TEMP/carried-canvas.nix"
+          if [ -n "$canvas_failed" ] &&
+            [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')" ] &&
+            git fetch -q origin "$BRANCH" &&
+            git show FETCH_HEAD:nix/canvas.nix >"$carried"; then
+            build="$(pin canvasBuild "$carried")"
+            if [ "$(pin canvasVersion "$carried")" = "$(pin canvasVersion nix/canvas.nix)" ] &&
+              [[ "$build" =~ ^[0-9]+$ ]] && [ "$build" -gt "$canvas_old" ] && [ "$build" != "$canvas_failed" ]; then
+              cp "$carried" nix/canvas.nix
+              canvas_carried="$build"
+              echo "Canvas build $build stays, from the open pull request, where it passed its tests" >>"$GITHUB_STEP_SUMMARY"
+            fi
           fi
 
           paper_new="$(pin paperBuild nix/paper.nix)"
@@ -148,13 +167,15 @@ jobs:
             echo "canvas_old=$canvas_old"
             echo "canvas_new=$canvas_new"
             echo "canvas_failed=$canvas_failed"
+            echo "canvas_carried=$canvas_carried"
             echo "summary=$summary"
             echo "moved=$([ -n "$summary" ] && echo true || echo false)"
           } >>"$GITHUB_OUTPUT"
           echo "moved: ${summary:-nothing}"
 
-          if [ -z "$summary" ] && [ -n "$canvas_failed" ]; then
-            echo "::error::Canvas is not in this bump and nothing else moved: $canvas_failed"
+          # Nothing to push: the open pull request, if any, keeps what it has.
+          if [ -n "$canvas_failed" ] && [ "$paper_old" = "$paper_new" ] && [ "$purpur_old" = "$purpur_new" ]; then
+            echo "::error::this run's Canvas pin failed and nothing else moved: $canvas_failed"
             exit 1
           fi
 
@@ -223,6 +244,7 @@ jobs:
           CANVAS_OLD: ${{ steps.pins.outputs.canvas_old }}
           CANVAS_NEW: ${{ steps.pins.outputs.canvas_new }}
           CANVAS_FAILED: ${{ steps.pins.outputs.canvas_failed }}
+          CANVAS_CARRIED: ${{ steps.pins.outputs.canvas_carried }}
           VERSION: ${{ steps.commit.outputs.version }}
           OUTCOME: ${{ steps.test.outcome }}
           RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
@@ -249,12 +271,18 @@ jobs:
             echo
             echo "$verdict"
             echo
-            if [ "$CANVAS_OLD" != "$CANVAS_NEW" ]; then
+            if [ -n "$CANVAS_CARRIED" ]; then
+              echo "Canvas build $CANVAS_NEW comes from this pull request's previous run, where it passed \`make canvas-image-test canvas-agent-test\` before it joined. This run did not test it again."
+              echo
+            elif [ "$CANVAS_OLD" != "$CANVAS_NEW" ]; then
               echo "Canvas build $CANVAS_NEW passed \`make canvas-image-test canvas-agent-test\` before it joined this bump."
               echo
             fi
             if [[ "$CANVAS_FAILED" =~ ^[0-9]+$ ]]; then
               echo "Canvas build $CANVAS_FAILED failed its tests and is not in this bump."
+              echo
+            elif [ -n "$CANVAS_CARRIED" ]; then
+              echo "This run's Canvas pin is not in this bump: $CANVAS_FAILED."
               echo
             elif [ -n "$CANVAS_FAILED" ]; then
               echo "Canvas is not in this bump: $CANVAS_FAILED."
