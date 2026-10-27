@@ -402,9 +402,9 @@ SNAP_CONTROL=/data/.spawnery-worldsync
 SNAP_FORCELOAD="forceload add 1600 1600"
 SNAP_CHUNK_X=100
 SNAP_CHUNK_Z=100
+SNAP_REGION=/data/world/dimensions/minecraft/overworld/region
 SNAP_MARKER="data modify storage spawnery:agent_test marker set value 1b"
-# The forceload returns before the chunk exists; a request this soon after
-# the commands is answered without a copy.
+# The forceload returns before the chunk exists.
 SNAP_SETTLE=3
 
 # snap_volume <volume> [copied world] - a volume as spawnery-worldsync leaves
@@ -473,6 +473,22 @@ snap_outcomes_ok() {
 	done
 }
 
+# snap_chunk_on_disk <region dir> - whether its region file has an entry for
+# the marker chunk.
+snap_chunk_on_disk() {
+	python3 -I - "$1" "$SNAP_CHUNK_X" "$SNAP_CHUNK_Z" <<'PY'
+import os, struct, sys
+region_dir, x, z = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+path = os.path.join(region_dir, f"r.{x >> 5}.{z >> 5}.mca")
+if not os.path.exists(path):
+    sys.exit(1)
+with open(path, "rb") as f:
+    header = f.read(4096)
+entry = 4 * ((x & 31) + (z & 31) * 32)
+sys.exit(0 if len(header) >= entry + 4 and struct.unpack(">I", header[entry:entry + 4])[0] else 1)
+PY
+}
+
 # snap_mtime <container> <file> - empty while the file does not exist.
 snap_mtime() {
 	"$CONTAINER" exec "$1" stat -c %y "$2" 2>/dev/null || true
@@ -514,15 +530,20 @@ snapshot_phase() {
 		--renew-after 600 --hard-deadline 1200 \
 		--execute "$SNAP_FORCELOAD" --execute "$SNAP_MARKER")"
 	snap_volume "${SNAP_VOLUMES[1]}"
+	# The chunk must be generated and checked absent from disk before the
+	# copied snapshot saves it, so a request between the commands and that
+	# check is answered without a copy. A wider interval than the empty
+	# server's makes such a request rare.
 	start_agent "$copy" "${SNAP_VOLUMES[1]}" "$WORK/agent-snapshot" "$WORK/config" "stubop:19451" "$IMAGE" \
-		"${sync_env[@]}"
-	local done_at="" copied=""
+		-e SPAWNERY_WORLD_SYNC=1 -e SPAWNERY_WORLD_SYNC_INTERVAL=30s
+	local done_at="" checked="" pending="" copied=""
+	local region_file="$SNAP_REGION/r.$((SNAP_CHUNK_X >> 5)).$((SNAP_CHUNK_Z >> 5)).mca"
 	answered=""
 	start=$SECONDS
 	while [ -z "$copied" ]; do
 		alive "$copy" "the commands and a snapshot request after them"
 		if [ $((SECONDS - start)) -gt "$DEADLINE" ]; then
-			echo "no snapshot request ${SNAP_SETTLE}s after both commands within ${DEADLINE}s" >&2
+			echo "no snapshot request after both commands and the check within ${DEADLINE}s" >&2
 			jq -c 'select(.kind == "execute_outcome")' <"$events" >&2 || true
 			snap_explain "$copy"
 			exit 1
@@ -530,9 +551,23 @@ snapshot_phase() {
 		if [ -z "$done_at" ] && snap_outcomes_ok "$events" 2 '^Marked chunk' '^Modified storage'; then
 			done_at=$SECONDS
 		fi
+		if [ -n "$done_at" ] && [ -z "$checked" ] && [ $((SECONDS - done_at)) -ge "$SNAP_SETTLE" ]; then
+			# A request already written came after its writes, which this check sees.
+			pending="$(snap_request "$copy")"
+			rm -rf "$WORK/precheck"
+			mkdir -p "$WORK/precheck"
+			"$CONTAINER" cp "$copy:$region_file" "$WORK/precheck/" 2>/dev/null || true
+			if snap_chunk_on_disk "$WORK/precheck"; then
+				echo "chunk $SNAP_CHUNK_X $SNAP_CHUNK_Z was on disk ${SNAP_SETTLE}s after the forceload, before any snapshot meant to carry it" >&2
+				echo "an earlier snapshot or an autosave wrote it, so the copy could not show the snapshot's own save" >&2
+				snap_explain "$copy"
+				exit 1
+			fi
+			checked=$SECONDS
+		fi
 		seq="$(snap_request "$copy")"
 		if [ -n "$seq" ] && [ "$seq" != "$answered" ]; then
-			if [ -n "$done_at" ] && [ $((SECONDS - done_at)) -ge "$SNAP_SETTLE" ]; then
+			if [ -n "$checked" ] && [ "$seq" != "$pending" ]; then
 				rm -rf "$WORK/snapshot"
 				mkdir -p "$WORK/snapshot"
 				"$CONTAINER" cp "$copy:/data/world" "$WORK/snapshot/"
@@ -548,24 +583,12 @@ snapshot_phase() {
 		snap_warnings "$copy" >&2
 		exit 1
 	fi
-	local region_dir="$WORK/snapshot/world/dimensions/minecraft/overworld/region"
-	if ! python3 -I - "$region_dir" "$SNAP_CHUNK_X" "$SNAP_CHUNK_Z" <<'PY'; then
-import os, struct, sys
-region_dir, x, z = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
-path = os.path.join(region_dir, f"r.{x >> 5}.{z >> 5}.mca")
-if not os.path.exists(path):
-    sys.exit(f"{path} is not in the copy")
-with open(path, "rb") as f:
-    header = f.read(4096)
-entry = 4 * ((x & 31) + (z & 31) * 32)
-if struct.unpack(">I", header[entry:entry + 4])[0] == 0:
-    sys.exit(f"{path} has no entry for chunk {x} {z}")
-PY
-		echo "snapshot $copied lacks the chunk the forceload generated: the copy was taken before its region saved" >&2
-		ls -la "$region_dir" >&2 || true
+	if ! snap_chunk_on_disk "$WORK/snapshot/world/dimensions/minecraft/overworld/region"; then
+		echo "snapshot $copied lacks chunk $SNAP_CHUNK_X $SNAP_CHUNK_Z, absent from disk before it: the copy was taken before its region saved" >&2
+		ls -la "$WORK/snapshot/world/dimensions/minecraft/overworld/region" >&2 || true
 		exit 1
 	fi
-	echo "snapshot $copied holds chunk $SNAP_CHUNK_X $SNAP_CHUNK_Z, which only the snapshot's own save wrote"
+	echo "chunk $SNAP_CHUNK_X $SNAP_CHUNK_Z was not on disk $((SECONDS - checked))s before snapshot $copied, and the copy holds it"
 
 	# No shutdown save: only what the snapshot holds can reach the next server.
 	"$CONTAINER" kill "$copy" >/dev/null
@@ -612,7 +635,7 @@ PY
 	printf 'chunks:\n  auto-save-interval: 20\n' >"$config/overlay/paper-world-defaults.yml"
 	chmod 0755 "$config" "$config/overlay"
 	chmod 0644 "$config/config.yaml" "$config/forwarding.secret" "$config/overlay/paper-world-defaults.yml"
-	local file=/data/world/dimensions/minecraft/overworld/region/r.3.3.mca
+	local file="$SNAP_REGION/r.3.3.mca"
 	events="$WORK/events-snapshot-autosave.jsonl"
 	STUB9_PID="$(start_stub "$events" "$WORK/stub9.log" "autosave" \
 		--dir "$WORK/agent-snapshot" --san stubop --listen ":19451" --report-interval 5 \
