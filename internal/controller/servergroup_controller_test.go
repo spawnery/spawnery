@@ -17,6 +17,8 @@ limitations under the License.
 package controller
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"sort"
 	"strings"
@@ -3983,6 +3985,59 @@ func TestAGroupWithNoBoostReportsZero(t *testing.T) {
 	}
 	if got := group.Status.BoostedReplicas; got != 0 {
 		t.Errorf("status.boostedReplicas = %d, want 0", got)
+	}
+}
+
+type failingBoostList struct{ client.Client }
+
+func (c failingBoostList) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
+	if _, ok := list.(*spawneryv1alpha1.ScaleBoostList); ok {
+		return errors.New("boost list refused")
+	}
+	return c.Client.List(ctx, list, opts...)
+}
+
+// A pass that cannot read the boosts does not know them, so it must not
+// report them gone.
+func TestAFailedBoostListKeepsTheGroupsBoostAndPin(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	expires := metav1.NewTime(f.clock.now.Add(time.Hour))
+	for _, b := range []spawneryv1alpha1.ScaleBoost{
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "lobby-boost", Namespace: f.ns},
+			Spec: spawneryv1alpha1.ScaleBoostSpec{
+				GroupRef: spawneryv1alpha1.ObjectRef{Name: f.group.Name}, Replicas: 2, ExpiresAt: &expires,
+			},
+		},
+		{
+			ObjectMeta: metav1.ObjectMeta{Name: "lobby-pin", Namespace: f.ns},
+			Spec: spawneryv1alpha1.ScaleBoostSpec{
+				GroupRef: spawneryv1alpha1.ObjectRef{Name: f.group.Name}, Mode: spawneryv1alpha1.ScaleBoostExact,
+				Replicas: 1, ExpiresAt: &expires,
+			},
+		},
+	} {
+		if err := f.c.Create(f.ctx, &b); err != nil {
+			t.Fatalf("create %s: %v", b.Name, err)
+		}
+	}
+	f.reconcileGroup(t, r)
+
+	blind := groupReconciler(f)
+	blind.Client = failingBoostList{f.rc}
+	f.reconcileGroup(t, blind)
+
+	group := &spawneryv1alpha1.ServerGroup{}
+	if err := f.c.Get(f.ctx, types.NamespacedName{Name: f.group.Name, Namespace: f.ns}, group); err != nil {
+		t.Fatalf("get the group: %v", err)
+	}
+	if got := group.Status.BoostedReplicas; got != 2 {
+		t.Errorf("status.boostedReplicas = %d after a failed list, want the 2 read before", got)
+	}
+	if group.Status.PinnedReplicas == nil || *group.Status.PinnedReplicas != 1 || group.Status.PinnedUntil == nil {
+		t.Errorf("status pin = %v until %v after a failed list, want 1 until %v",
+			group.Status.PinnedReplicas, group.Status.PinnedUntil, expires)
 	}
 }
 

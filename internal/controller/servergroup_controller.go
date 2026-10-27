@@ -364,13 +364,16 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		drainingConditionBlocked(drainingNodes, blocked))
 
 	// A failed boost list sizes on the declared floor alone rather than failing
-	// the pass, so dead servers are still replaced.
+	// the pass, so dead servers are still replaced. The status keeps the last
+	// boosts and pin it read: this pass does not know them.
 	var boosts groupBoosts
+	boostsRead := false
 	boostList := &spawneryv1alpha1.ScaleBoostList{}
 	if err := r.List(ctx, boostList, client.InNamespace(group.Namespace)); err != nil {
 		log.FromContext(ctx).V(1).Info("could not read scale boosts; sizing on the declared floor alone",
 			"group", group.Name, "reason", err.Error())
 	} else {
+		boostsRead = true
 		mine := boostpkg.Of(boostList.Items, group)
 		now := r.Clock()
 		boosts.Add = boostpkg.Live(mine, group.Name, now)
@@ -562,11 +565,13 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 	group.Status.ReadyReplicas = totals.ReadyReplicas
 	group.Status.OnlinePlayers = totals.OnlinePlayers
 	group.Status.FreeSlots = totals.FreeSlots
-	group.Status.BoostedReplicas = boosts.Add
-	group.Status.PinnedReplicas, group.Status.PinnedUntil = nil, nil
-	if boosts.Pinned {
-		group.Status.PinnedReplicas = ptr.To(boosts.Pin.Replicas)
-		group.Status.PinnedUntil = boosts.Pin.ExpiresAt
+	if boostsRead {
+		group.Status.BoostedReplicas = boosts.Add
+		group.Status.PinnedReplicas, group.Status.PinnedUntil = nil, nil
+		if boosts.Pinned {
+			group.Status.PinnedReplicas = ptr.To(boosts.Pin.Replicas)
+			group.Status.PinnedUntil = boosts.Pin.ExpiresAt
+		}
 	}
 	group.Status.ObservedGeneration = group.Generation
 	group.Status.Phase = derivePhase(group, totals)
