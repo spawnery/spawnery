@@ -60,13 +60,14 @@ jobs:
           | commit | \`${GITHUB_SHA}\` |
           | last updated | $(date -u '+%Y-%m-%dT%H:%M:%SZ') |
 
-          This job builds \`.#purpur-image\`, \`.#velocity-image\`,
-          \`.#operator-image\` and \`.#agents\`, each twice, and compares. It is
-          the only job in this repository that builds the Purpur and Velocity
-          images at all — \`ci.yml\`'s \`e2e\` job builds
-          \`.#operator-image\` and nothing else — so a stale fixed-output hash
-          in \`nix/paper.nix\` or \`nix/velocity.nix\` is visible here and
-          nowhere else until \`hack/publish.sh\` meets it on a runner, after a
+          This job builds \`.#purpur-image\`, \`.#canvas-image\`,
+          \`.#velocity-image\`, \`.#operator-image\` and \`.#agents\`, each
+          twice, and compares. It is the only job in this repository that
+          rebuilds the Purpur, Canvas and Velocity images every night —
+          \`ci.yml\`'s \`e2e\` job builds \`.#operator-image\` and nothing
+          else — so an upstream jar that moved under a fixed-output hash in
+          \`nix/paper.nix\`, \`nix/canvas.nix\` or \`nix/velocity.nix\` is
+          visible here and nowhere else until \`hack/publish.sh\` meets it on a runner, after a
           tag has been pushed and the release has already been announced.
 
           **\`hack/require-no-red-nightly.sh\` refuses a release while this
@@ -348,6 +349,181 @@ jobs:
               --title "Nightly: an object-store world did not travel" \
               --label "${NIGHTLY_LABEL}" \
               --body-file /tmp/nightly-worldsync-body.md
+          fi
+
+      - name: Close the report if there is one
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+            --label "${NIGHTLY_LABEL}" --state open --json number --limit 1 \
+            --jq '.[0].number // empty' 2>/dev/null || true)"
+
+          if [ -z "${existing}" ]; then
+            exit 0
+          fi
+
+          gh issue close "${existing}" --repo "${GITHUB_REPOSITORY}" \
+            --comment "Closed by the nightly run that passed: ${RUN_URL}"
+          echo "::notice::closed ${GITHUB_REPOSITORY}#${existing}"
+
+  # The same tutorial path on the Canvas image. Its own label, so a Canvas
+  # failure is told apart from a Purpur one, and likewise gating no release.
+  tutorial-canvas-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    env:
+      NIGHTLY_LABEL: nightly-tutorial-canvas-red
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: make e2e-tutorial-canvas
+        run: nix develop -c make e2e-tutorial-canvas
+
+      - name: Report the failure where somebody will meet it
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          gh label create "${NIGHTLY_LABEL}" \
+            --color b60205 \
+            --description "The tutorial's end-to-end path on the Canvas image (hack/e2e-tutorial.sh with GAME=canvas) is failing. Closing this is how you say the cause is fixed." \
+            2>/dev/null || true
+
+          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+            --label "${NIGHTLY_LABEL}" --state open --json number --limit 1 \
+            --jq '.[0].number // empty')"
+
+          cat >/tmp/nightly-tutorial-canvas-body.md <<EOF
+          \`make e2e-tutorial-canvas\` failed on the nightly run.
+
+          | | |
+          |---|---|
+          | latest failing run | ${RUN_URL} |
+          | commit | \`${GITHUB_SHA}\` |
+          | last updated | $(date -u '+%Y-%m-%dT%H:%M:%SZ') |
+
+          This job builds and loads the real Canvas and Velocity images and
+          drives \`test/e2e/tutorial_test.go\`'s \`TestTutorialPath\` with the
+          tutorial's game image swapped for \`.#canvas-image\`: apply
+          \`docs/tutorial/network.yaml\`, wait for a Ready backend and an
+          addressable proxy, join with \`cmd/spawnery-join --hold\`, and check
+          the proxy's \`status.connectedPlayers\`. It is the only thing in this
+          repository that joins a player to a Canvas server, so a regression
+          here is invisible to \`ci.yml\`'s e2e job, which builds only
+          \`.#operator-image\`. If \`Nightly: the tutorial's path failed\` is
+          open as well, the cause is probably not Canvas.
+
+          Opened automatically by \`.github/workflows/nightly.yml\`.
+          EOF
+
+          if [ -n "${existing}" ]; then
+            gh issue edit "${existing}" --repo "${GITHUB_REPOSITORY}" \
+              --body-file /tmp/nightly-tutorial-canvas-body.md
+            echo "::notice::updated ${GITHUB_REPOSITORY}#${existing}, which was already open"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" \
+              --title "Nightly: the tutorial's path failed on Canvas" \
+              --label "${NIGHTLY_LABEL}" \
+              --body-file /tmp/nightly-tutorial-canvas-body.md
+          fi
+
+      - name: Close the report if there is one
+        if: success()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+            --label "${NIGHTLY_LABEL}" --state open --json number --limit 1 \
+            --jq '.[0].number // empty' 2>/dev/null || true)"
+
+          if [ -z "${existing}" ]; then
+            exit 0
+          fi
+
+          gh issue close "${existing}" --repo "${GITHUB_REPOSITORY}" \
+            --comment "Closed by the nightly run that passed: ${RUN_URL}"
+          echo "::notice::closed ${GITHUB_REPOSITORY}#${existing}"
+
+  # The object-store world path on the Canvas image. Its own label, so a Canvas
+  # failure is told apart from a Purpur one; it gates no release either.
+  worldsync-canvas-e2e:
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    env:
+      NIGHTLY_LABEL: nightly-worldsync-canvas-red
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Nix
+        uses: cachix/install-nix-action@v31
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+      - name: make e2e-worldsync-canvas
+        run: nix develop -c make e2e-worldsync-canvas
+
+      - name: Report the failure where somebody will meet it
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+        run: |
+          set -euo pipefail
+
+          gh label create "${NIGHTLY_LABEL}" \
+            --color b60205 \
+            --description "The object-store world end-to-end path on the Canvas image (hack/e2e-worldsync.sh with GAME=canvas) is failing. Closing this is how you say the cause is fixed." \
+            2>/dev/null || true
+
+          existing="$(gh issue list --repo "${GITHUB_REPOSITORY}" \
+            --label "${NIGHTLY_LABEL}" --state open --json number --limit 1 \
+            --jq '.[0].number // empty')"
+
+          cat >/tmp/nightly-worldsync-canvas-body.md <<EOF
+          \`make e2e-worldsync-canvas\` failed on the nightly run.
+
+          | | |
+          |---|---|
+          | latest failing run | ${RUN_URL} |
+          | commit | \`${GITHUB_SHA}\` |
+          | last updated | $(date -u '+%Y-%m-%dT%H:%M:%SZ') |
+
+          This job builds and loads the real Canvas image and the node agent,
+          starts MinIO, and drives \`test/e2e/worldsync_test.go\`'s
+          \`TestAnObjectStoreWorldTravelsBetweenNodes\`: start a private
+          server whose world lives in the object store, write a marker into
+          it, stop it, cordon its node, start it again on the other node and
+          find the marker, then delete the member and wait for its prefix to
+          empty. If
+          \`Nightly: an object-store world did not travel\` is open as well, the
+          cause is probably not Canvas.
+
+          Opened automatically by \`.github/workflows/nightly.yml\`.
+          EOF
+
+          if [ -n "${existing}" ]; then
+            gh issue edit "${existing}" --repo "${GITHUB_REPOSITORY}" \
+              --body-file /tmp/nightly-worldsync-canvas-body.md
+            echo "::notice::updated ${GITHUB_REPOSITORY}#${existing}, which was already open"
+          else
+            gh issue create --repo "${GITHUB_REPOSITORY}" \
+              --title "Nightly: an object-store world did not travel on Canvas" \
+              --label "${NIGHTLY_LABEL}" \
+              --body-file /tmp/nightly-worldsync-canvas-body.md
           fi
 
       - name: Close the report if there is one
