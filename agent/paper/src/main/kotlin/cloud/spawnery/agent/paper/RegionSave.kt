@@ -25,7 +25,9 @@ class RegionSave(private val region: String) : CompletableFuture<Void>() {
             return
         }
         try {
-            propagate().whenComplete { _, error ->
+            val taken = propagate()
+            refusal = null
+            taken.whenComplete { _, error ->
                 if (error == null) complete(null) else completeExceptionally(error)
             }
         } catch (e: IllegalStateException) {

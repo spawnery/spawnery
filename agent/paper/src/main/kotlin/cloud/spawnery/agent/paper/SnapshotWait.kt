@@ -15,7 +15,9 @@ import java.util.concurrent.atomic.AtomicInteger
 object SnapshotWait {
     /**
      * The off-thread half of a snapshot: the region saves, then [flush], then
-     * [copy] (the node agent's), all by the one [deadline] on [clock].
+     * [copy] (the node agent's), all by the one [deadline] on [clock]. No copy
+     * is asked for once the deadline has passed: the node agent would take it
+     * later, after autosave is back on.
      */
     fun freeze(
         saves: List<CompletableFuture<*>>,
@@ -23,14 +25,32 @@ object SnapshotWait {
         clock: () -> Long,
         flush: () -> Unit,
         copy: (timeoutMillis: Long) -> WorldSync.Outcome,
-    ): WorldSync.Outcome =
-        when (val saved = await(saves, left(deadline, clock))) {
-            WorldSync.Outcome.Ready -> {
-                flush()
-                copy(left(deadline, clock))
-            }
-            else -> WorldSync.Outcome.Failed("the regions did not save: $saved")
+    ): WorldSync.Outcome {
+        val saved = await(saves, left(deadline, clock))
+        if (saved != WorldSync.Outcome.Ready) return WorldSync.Outcome.Failed("the regions did not save: $saved")
+        if (!flushWithin(flush, left(deadline, clock))) {
+            return WorldSync.Outcome.Failed("the chunk system did not flush before the deadline")
         }
+        val left = left(deadline, clock)
+        if (left == 0L) return WorldSync.Outcome.Failed("no time left for the copy after the saves and the flush")
+        return copy(left)
+    }
+
+    // The flush cannot be interrupted, so one that overruns is left to finish
+    // on its own thread.
+    private fun flushWithin(flush: () -> Unit, timeoutMillis: Long): Boolean {
+        val done = CompletableFuture.runAsync(flush) { task ->
+            Thread(task, "spawnery-snapshot-flush").apply { isDaemon = true }.start()
+        }
+        return try {
+            done.get(timeoutMillis, TimeUnit.MILLISECONDS)
+            true
+        } catch (_: TimeoutException) {
+            false
+        } catch (e: ExecutionException) {
+            throw e.cause ?: e
+        }
+    }
 
     private fun left(deadline: Long, clock: () -> Long) = maxOf(0L, deadline - clock())
 
