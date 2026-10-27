@@ -36,7 +36,7 @@ says() {
 run "the tree agrees" 0 "$check"
 
 run  "a release moved the chart" 1 "$check" --chart-version 9.9.9
-says "it names the README" "README.md:" "$check" --chart-version 9.9.9
+says "it names the README" "$root/README.md:" "$check" --chart-version 9.9.9
 says "it names the getting-started page" "docs/getting-started/index.md:" \
   "$check" --chart-version 9.9.9
 says "it names the chart's README" "charts/spawnery/README.md:" \
