@@ -3,6 +3,24 @@
   "builds": [
     {
       "result": "SUCCESS",
+      "buildNumber": 996,
+      "url": "https://jenkins.canvasmc.io/job/Canvas/996/",
+      "downloadUrl": "https://jenkins.canvasmc.io/job/Canvas/996/artifact/canvas-server/build/libs/canvas-build.996.jar",
+      "channelVersion": "26.3",
+      "timestamp": 1793001000000,
+      "isExperimental": true,
+      "channelName": "stable",
+      "commits": [
+        {
+          "message": "Update Upstream (Paper)",
+          "extraDescription": null,
+          "hash": "00000000000000000000000000000000000003e4",
+          "author": "someone"
+        }
+      ]
+    },
+    {
+      "result": "SUCCESS",
       "buildNumber": 995,
       "url": "https://jenkins.canvasmc.io/job/Canvas/995/",
       "downloadUrl": "https://jenkins.canvasmc.io/job/Canvas/995/artifact/canvas-server/build/libs/canvas-build.995.jar",

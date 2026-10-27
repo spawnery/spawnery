@@ -68,6 +68,8 @@ expect "a build the API lists on another Minecraft version" 1 "is for 26.4, not 
 	API="$good_api" NIX_FILE="$nix_file" "$pin" 26.3 992
 expect "an experimental build" 1 "experimental" -- \
 	API="$good_api" NIX_FILE="$nix_file" "$pin" 26.3 995
+expect "an experimental build on the stable channel" 1 "build 996 is experimental" -- \
+	API="$good_api" NIX_FILE="$nix_file" "$pin" 26.3 996
 expect "a build on another channel" 1 "beta channel, not stable" -- \
 	API="$good_api" NIX_FILE="$nix_file" "$pin" 26.3 994
 expect "a failed build" 1 "is FAILURE, not SUCCESS" -- \
