@@ -31,8 +31,10 @@ kubectl -n spawnery-system get secret spawnery-agent-tls \
 - `spawnery.cloud/ca-rotation-since` is stamped when the wait for those
   namespaces ended; after the switch it reads as how long the outgoing CA has
   been waiting for a human.
-- `spawnery.cloud/ca-rotation-discarded` appears only if `ca.crt` or a
-  rotation slot was hand-edited into something that would not parse.
+- `spawnery.cloud/ca-rotation-discarded` appears only if a rotation slot was
+  hand-edited into something that would not parse, or `ca.crt` into more than
+  one PEM block. A `ca.crt` that does not parse leaves no record: the operator
+  logs that it is reissuing the bundle and issues a new CA.
 
 Nothing here happens quickly. On an idle cluster `start` can sit for up to
 an hour before it is picked up, and the switch follows roughly a quarter of an

@@ -180,7 +180,8 @@ public interface SpawneryApi {
      *
      * <p>The stage fails when the operator refuses: a group it does not have,
      * a group sized by a fixed replica count rather than by scaling, more than
-     * the ceiling leaves, or longer than it allows. Each says which.
+     * the ceiling leaves, a negative duration, or longer than it allows. Each
+     * says which.
      *
      * @param forHowLong how long the boost should run, or {@code null} for the
      *     operator's default.
@@ -213,8 +214,8 @@ public interface SpawneryApi {
      *
      * <p>The stage fails when the operator refuses: a group it does not have,
      * a group that is not ephemeral, more than {@code maxReplicas}, fewer
-     * than {@code minReplicas} from a caller that is not a proxy, or longer
-     * than seven days. Each says which.
+     * than {@code minReplicas} from a caller that is not a proxy, a negative
+     * duration, or longer than seven days. Each says which.
      *
      * @param forHowLong how long the pin holds, or {@code null} for the
      *     operator's default of an hour.
