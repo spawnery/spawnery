@@ -74,12 +74,16 @@ class AgentPlugin : JavaPlugin(), Listener {
     private val role = ServerRole(state, mirror, connector, feed, events, ::execute)
 
     private fun execute(command: ExecuteCommand) {
-        server.globalRegionScheduler.execute(this, Runnable {
-            val outcome = runCommand(command) { line, feedback ->
-                server.dispatchCommand(server.createCommandSender { feedback(it) }, line)
-            }
-            loop?.send(ServerMessage.newBuilder().setExecuteOutcome(outcome).build())
-        })
+        scheduleCommand(
+            command,
+            schedule = { server.globalRegionScheduler.execute(this, it) },
+            run = {
+                runCommand(command) { line, feedback ->
+                    server.dispatchCommand(server.createCommandSender { feedback(it) }, line)
+                }
+            },
+            answer = { loop?.send(ServerMessage.newBuilder().setExecuteOutcome(it).build()) },
+        )
     }
 
     /**
