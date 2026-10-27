@@ -27,6 +27,7 @@ class NetworkMirror {
         val acceptingTransfers: Set<String> = emptySet(),
         val joinRules: Map<String, JoinRule> = emptyMap(),
         val playersById: Map<UUID, CloudPlayer> = emptyMap(),
+        val groupNames: Set<String> = emptySet(),
     )
 
     // Swapped whole and never locked, so a read never mixes two states and never blocks.
@@ -87,6 +88,7 @@ class NetworkMirror {
             proxies = state.proxiesList.map {
                 ProxyInfo(it.name, it.group, it.ready, it.draining, it.players, it.node)
             },
+            groupNames = state.groupsList.mapTo(HashSet()) { it.name },
             players = players,
             playersById = HashMap<UUID, CloudPlayer>(players.size * 2).apply {
                 for (p in players) putIfAbsent(p.id(), p)
@@ -113,6 +115,9 @@ class NetworkMirror {
     fun acceptingTransfers(): Set<String> = snapshot.acceptingTransfers
 
     fun joinRule(group: String): JoinRule? = snapshot.joinRules[group]
+
+    /** Whether [joinRule]'s null means "no rule" rather than "not in the picture". */
+    fun knowsGroup(group: String): Boolean = group in snapshot.groupNames
 
     fun groupKind(name: String): Group.Kind =
         snapshot.groups.firstOrNull { it.name() == name }?.kind() ?: Group.Kind.UNKNOWN

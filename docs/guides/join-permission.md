@@ -80,12 +80,15 @@ which routes the player around the group.
   with `enforcePlayableSlots`, that listener turns off Paper's reconfiguration
   API for every login made while it is registered. The servers remove it when
   the group drops the rule.
-- A proxy learns a group's rule with the group's servers, so it enforces the
-  rule on every server it can route to, also while it has no picture of the
-  network yet or that picture could not be built. A player without the node is
-  refused with the message above. An operator of 0.30.0 or older sends the rule
-  only with that picture; a proxy without one then lets everybody through, and
-  only the backend refuses.
+- A proxy goes by the group's rule in its picture of the network. Until a
+  picture lists the group (none has arrived yet, or the group is new), the
+  proxy goes by the rule the operator sent with each of the group's servers,
+  so a player without the node is refused with the message above. While the
+  operator fails to build the picture, a proxy keeps the last one it got, and
+  rule edits stop reaching it until a build succeeds. An operator of 0.30.0 or
+  older sends no rule with its servers; a proxy whose picture does not list
+  their group yet (it never got one, or the group is new) turns everybody away
+  from them.
 - The operator does not know permissions. A plugin's `connect()` answers
   `ordered` even when the player is then refused.
 - Agents older than 0.18.0 ignore the rule, so the game images and the proxy

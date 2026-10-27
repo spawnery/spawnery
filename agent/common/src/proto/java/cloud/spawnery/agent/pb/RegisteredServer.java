@@ -173,11 +173,11 @@ private static final long serialVersionUID = 0L;
   private cloud.spawnery.agent.pb.ServerJoinRule joinRule_;
   /**
    * <pre>
-   * The group's join rule, carried with the server so that a proxy enforces it
-   * from the moment it can route there, before any NetworkState. Present with
-   * an empty node for a group without a rule; absent when the operator could
-   * not read the group, and from an operator older than this field, and the
-   * proxy then goes by its NetworkState.
+   * The group's join rule when the server was registered, for a proxy whose
+   * NetworkState does not list the group yet; once it does, the NetworkState's
+   * rule counts. Present with an empty node for a group without a rule; absent
+   * when the group no longer exists, and from an operator older than this
+   * field.
    * </pre>
    *
    * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
@@ -189,11 +189,11 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * The group's join rule, carried with the server so that a proxy enforces it
-   * from the moment it can route there, before any NetworkState. Present with
-   * an empty node for a group without a rule; absent when the operator could
-   * not read the group, and from an operator older than this field, and the
-   * proxy then goes by its NetworkState.
+   * The group's join rule when the server was registered, for a proxy whose
+   * NetworkState does not list the group yet; once it does, the NetworkState's
+   * rule counts. Present with an empty node for a group without a rule; absent
+   * when the group no longer exists, and from an operator older than this
+   * field.
    * </pre>
    *
    * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
@@ -205,11 +205,11 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * The group's join rule, carried with the server so that a proxy enforces it
-   * from the moment it can route there, before any NetworkState. Present with
-   * an empty node for a group without a rule; absent when the operator could
-   * not read the group, and from an operator older than this field, and the
-   * proxy then goes by its NetworkState.
+   * The group's join rule when the server was registered, for a proxy whose
+   * NetworkState does not list the group yet; once it does, the NetworkState's
+   * rule counts. Present with an empty node for a group without a rule; absent
+   * when the group no longer exists, and from an operator older than this
+   * field.
    * </pre>
    *
    * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
@@ -831,11 +831,11 @@ private static final long serialVersionUID = 0L;
         cloud.spawnery.agent.pb.ServerJoinRule, cloud.spawnery.agent.pb.ServerJoinRule.Builder, cloud.spawnery.agent.pb.ServerJoinRuleOrBuilder> joinRuleBuilder_;
     /**
      * <pre>
-     * The group's join rule, carried with the server so that a proxy enforces it
-     * from the moment it can route there, before any NetworkState. Present with
-     * an empty node for a group without a rule; absent when the operator could
-     * not read the group, and from an operator older than this field, and the
-     * proxy then goes by its NetworkState.
+     * The group's join rule when the server was registered, for a proxy whose
+     * NetworkState does not list the group yet; once it does, the NetworkState's
+     * rule counts. Present with an empty node for a group without a rule; absent
+     * when the group no longer exists, and from an operator older than this
+     * field.
      * </pre>
      *
      * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
@@ -846,11 +846,11 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The group's join rule, carried with the server so that a proxy enforces it
-     * from the moment it can route there, before any NetworkState. Present with
-     * an empty node for a group without a rule; absent when the operator could
-     * not read the group, and from an operator older than this field, and the
-     * proxy then goes by its NetworkState.
+     * The group's join rule when the server was registered, for a proxy whose
+     * NetworkState does not list the group yet; once it does, the NetworkState's
+     * rule counts. Present with an empty node for a group without a rule; absent
+     * when the group no longer exists, and from an operator older than this
+     * field.
      * </pre>
      *
      * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
@@ -865,11 +865,11 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The group's join rule, carried with the server so that a proxy enforces it
-     * from the moment it can route there, before any NetworkState. Present with
-     * an empty node for a group without a rule; absent when the operator could
-     * not read the group, and from an operator older than this field, and the
-     * proxy then goes by its NetworkState.
+     * The group's join rule when the server was registered, for a proxy whose
+     * NetworkState does not list the group yet; once it does, the NetworkState's
+     * rule counts. Present with an empty node for a group without a rule; absent
+     * when the group no longer exists, and from an operator older than this
+     * field.
      * </pre>
      *
      * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
@@ -889,11 +889,11 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The group's join rule, carried with the server so that a proxy enforces it
-     * from the moment it can route there, before any NetworkState. Present with
-     * an empty node for a group without a rule; absent when the operator could
-     * not read the group, and from an operator older than this field, and the
-     * proxy then goes by its NetworkState.
+     * The group's join rule when the server was registered, for a proxy whose
+     * NetworkState does not list the group yet; once it does, the NetworkState's
+     * rule counts. Present with an empty node for a group without a rule; absent
+     * when the group no longer exists, and from an operator older than this
+     * field.
      * </pre>
      *
      * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
@@ -911,11 +911,11 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The group's join rule, carried with the server so that a proxy enforces it
-     * from the moment it can route there, before any NetworkState. Present with
-     * an empty node for a group without a rule; absent when the operator could
-     * not read the group, and from an operator older than this field, and the
-     * proxy then goes by its NetworkState.
+     * The group's join rule when the server was registered, for a proxy whose
+     * NetworkState does not list the group yet; once it does, the NetworkState's
+     * rule counts. Present with an empty node for a group without a rule; absent
+     * when the group no longer exists, and from an operator older than this
+     * field.
      * </pre>
      *
      * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
@@ -940,11 +940,11 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The group's join rule, carried with the server so that a proxy enforces it
-     * from the moment it can route there, before any NetworkState. Present with
-     * an empty node for a group without a rule; absent when the operator could
-     * not read the group, and from an operator older than this field, and the
-     * proxy then goes by its NetworkState.
+     * The group's join rule when the server was registered, for a proxy whose
+     * NetworkState does not list the group yet; once it does, the NetworkState's
+     * rule counts. Present with an empty node for a group without a rule; absent
+     * when the group no longer exists, and from an operator older than this
+     * field.
      * </pre>
      *
      * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
@@ -961,11 +961,11 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The group's join rule, carried with the server so that a proxy enforces it
-     * from the moment it can route there, before any NetworkState. Present with
-     * an empty node for a group without a rule; absent when the operator could
-     * not read the group, and from an operator older than this field, and the
-     * proxy then goes by its NetworkState.
+     * The group's join rule when the server was registered, for a proxy whose
+     * NetworkState does not list the group yet; once it does, the NetworkState's
+     * rule counts. Present with an empty node for a group without a rule; absent
+     * when the group no longer exists, and from an operator older than this
+     * field.
      * </pre>
      *
      * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
@@ -977,11 +977,11 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The group's join rule, carried with the server so that a proxy enforces it
-     * from the moment it can route there, before any NetworkState. Present with
-     * an empty node for a group without a rule; absent when the operator could
-     * not read the group, and from an operator older than this field, and the
-     * proxy then goes by its NetworkState.
+     * The group's join rule when the server was registered, for a proxy whose
+     * NetworkState does not list the group yet; once it does, the NetworkState's
+     * rule counts. Present with an empty node for a group without a rule; absent
+     * when the group no longer exists, and from an operator older than this
+     * field.
      * </pre>
      *
      * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>
@@ -996,11 +996,11 @@ private static final long serialVersionUID = 0L;
     }
     /**
      * <pre>
-     * The group's join rule, carried with the server so that a proxy enforces it
-     * from the moment it can route there, before any NetworkState. Present with
-     * an empty node for a group without a rule; absent when the operator could
-     * not read the group, and from an operator older than this field, and the
-     * proxy then goes by its NetworkState.
+     * The group's join rule when the server was registered, for a proxy whose
+     * NetworkState does not list the group yet; once it does, the NetworkState's
+     * rule counts. Present with an empty node for a group without a rule; absent
+     * when the group no longer exists, and from an operator older than this
+     * field.
      * </pre>
      *
      * <code>.spawnery.agent.v1alpha1.ServerJoinRule join_rule = 4;</code>

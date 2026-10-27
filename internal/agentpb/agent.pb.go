@@ -4998,11 +4998,11 @@ type RegisteredServer struct {
 	Name    string                 `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	Address string                 `protobuf:"bytes,2,opt,name=address,proto3" json:"address,omitempty"`
 	Group   string                 `protobuf:"bytes,3,opt,name=group,proto3" json:"group,omitempty"`
-	// The group's join rule, carried with the server so that a proxy enforces it
-	// from the moment it can route there, before any NetworkState. Present with
-	// an empty node for a group without a rule; absent when the operator could
-	// not read the group, and from an operator older than this field, and the
-	// proxy then goes by its NetworkState.
+	// The group's join rule when the server was registered, for a proxy whose
+	// NetworkState does not list the group yet; once it does, the NetworkState's
+	// rule counts. Present with an empty node for a group without a rule; absent
+	// when the group no longer exists, and from an operator older than this
+	// field.
 	JoinRule      *ServerJoinRule `protobuf:"bytes,4,opt,name=join_rule,json=joinRule,proto3" json:"join_rule,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache

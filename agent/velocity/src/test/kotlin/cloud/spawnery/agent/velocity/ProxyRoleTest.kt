@@ -110,6 +110,63 @@ class ProxyRoleTest {
         assertFalse(access.mayJoin(newcomer, "vip-2", "vip"))
     }
 
+    private fun carrying(name: String, group: String, node: String?): PbServer {
+        val b = PbServer.newBuilder().setName(name).setAddress("10.0.0.9:25565").setGroup(group)
+        if (node != null) b.setJoinRule(ServerJoinRule.newBuilder().setNode(node))
+        return b.build()
+    }
+
+    private fun picture(vararg groups: Pair<String, String>): NetworkState =
+        NetworkState.newBuilder().apply {
+            for ((name, node) in groups) addGroups(GroupState.newBuilder().setName(name).setJoinPermission(node))
+        }.build()
+
+    private fun accessHolding(vararg nodes: String) =
+        JoinPermissions(proxyJoinRules(directory, mirror), { "tutorial" }, { _, _ -> }, listOf(
+            PermissionLookup { _, node, _ -> if (node in nodes) PermissionValue.TRUE else PermissionValue.UNDEFINED },
+        ))
+
+    @Test
+    fun `a rule removed after registration lets players in once the picture says so`() {
+        role.onMessage(fullSync(carrying("vip-1", "vip", "network.vip")))
+        mirror.apply(picture("vip" to ""))
+
+        assertTrue(accessHolding().mayJoin(newcomer, "vip-1", "vip"))
+    }
+
+    @Test
+    fun `a rule added after registration is enforced once the picture says so`() {
+        role.onMessage(fullSync(carrying("lobby-1", "lobby", "")))
+        mirror.apply(picture("lobby" to "network.lobby"))
+
+        assertFalse(accessHolding().mayJoin(newcomer, "lobby-1", "lobby"))
+    }
+
+    @Test
+    fun `a node changed after registration is the one asked once the picture says so`() {
+        role.onMessage(fullSync(carrying("vip-1", "vip", "network.vip")))
+        mirror.apply(picture("vip" to "network.gold"))
+
+        assertTrue(accessHolding("network.gold").mayJoin(newcomer, "vip-1", "vip"))
+        assertFalse(accessHolding("network.vip").mayJoin(newcomer, "vip-1", "vip"))
+    }
+
+    @Test
+    fun `a group the picture does not list yet goes by the rule its server carried`() {
+        mirror.apply(picture("lobby" to ""))
+        role.onMessage(fullSync(carrying("vip-1", "vip", "network.vip")))
+
+        assertFalse(accessHolding().mayJoin(newcomer, "vip-1", "vip"))
+        assertTrue(accessHolding("network.vip").mayJoin(newcomer, "vip-1", "vip"))
+    }
+
+    @Test
+    fun `with neither a picture of its group nor a carried rule, a server is refused`() {
+        role.onMessage(fullSync(carrying("vip-1", "vip", null)))
+
+        assertFalse(accessHolding("network.vip").mayJoin(newcomer, "vip-1", "vip"))
+    }
+
     @Test
     fun `hello carries the read timeout the proxy actually parsed`() {
         val hello = role.hello("test-version").hello

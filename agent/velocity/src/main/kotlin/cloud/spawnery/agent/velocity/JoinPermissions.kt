@@ -22,19 +22,31 @@ fun interface JoinAccess {
     }
 }
 
-/**
- * The rule the server's registration carried, so a proxy without a network
- * picture still enforces it; else the group's in the picture, for an operator
- * that sends none with its servers.
- */
-fun proxyJoinRules(directory: ServerDirectory, mirror: NetworkMirror): (server: String, group: String) -> JoinRule? =
+sealed interface JoinRuleLookup {
+    data object Open : JoinRuleLookup
+
+    data class Rule(val rule: JoinRule) : JoinRuleLookup
+
+    /** Nothing says whether the group has a rule; the player is refused. */
+    data object Unknown : JoinRuleLookup
+
+    companion object {
+        fun of(rule: JoinRule?): JoinRuleLookup = rule?.let(::Rule) ?: Open
+    }
+}
+
+fun proxyJoinRules(directory: ServerDirectory, mirror: NetworkMirror): (server: String, group: String) -> JoinRuleLookup =
     { server, group ->
         val carried = directory.backendOf(server)
-        if (carried != null && carried.ruleCarried) carried.joinRule else mirror.joinRule(group)
+        when {
+            mirror.knowsGroup(group) -> JoinRuleLookup.of(mirror.joinRule(group))
+            carried != null && carried.ruleCarried -> JoinRuleLookup.of(carried.joinRule)
+            else -> JoinRuleLookup.Unknown
+        }
     }
 
 class JoinPermissions(
-    private val rules: (server: String, group: String) -> JoinRule?,
+    private val rules: (server: String, group: String) -> JoinRuleLookup,
     private val network: () -> String,
     private val log: (String, Throwable?) -> Unit,
     private val lookups: List<PermissionLookup>,
@@ -42,7 +54,11 @@ class JoinPermissions(
     private val reported = ConcurrentHashMap.newKeySet<PermissionLookup>()
 
     override fun mayJoin(player: UUID, server: String, group: String): Boolean {
-        val rule = rules(server, group) ?: return true
+        val rule = when (val lookup = rules(server, group)) {
+            JoinRuleLookup.Open -> return true
+            JoinRuleLookup.Unknown -> return false
+            is JoinRuleLookup.Rule -> lookup.rule
+        }
         val contexts = LuckPermsContexts.ofBackend(server, group, network())
         val value = lookups.firstNotNullOfOrNull { lookup ->
             runCatching { lookup.value(player, rule.node, contexts) }
