@@ -42,6 +42,23 @@ var paperOverlayKeys = []string{
 	"paper-world-defaults.yml",
 }
 
+// declaredTrees are the key trees a flavour's overlays are checked against.
+type declaredTrees struct {
+	global        *keyNode
+	worldDefaults *keyNode
+}
+
+var (
+	paperTrees  = declaredTrees{global: paperDeclared, worldDefaults: paperWorldDefaultsDeclared}
+	canvasTrees = declaredTrees{global: canvasDeclared, worldDefaults: canvasWorldDefaultsDeclared}
+)
+
+// Canvas renders the files a Canvas server reads: Paper's, checked against
+// Canvas's own key trees.
+func Canvas(v Values, secret string, overlay map[string]string) (map[string][]byte, error) {
+	return renderPaperFiles(canvasTrees, v, secret, overlay)
+}
+
 // Paper renders the files a Paper server reads. Four server.properties keys
 // are critical and no overlay can move them: server-port (the probe dials
 // 25565), online-mode=false (the proxy authenticates; on, modern forwarding
@@ -50,6 +67,10 @@ var paperOverlayKeys = []string{
 // refuses every join without a Mojang-signed chat session, which
 // online-mode=false never has).
 func Paper(v Values, secret string, overlay map[string]string) (map[string][]byte, error) {
+	return renderPaperFiles(paperTrees, v, secret, overlay)
+}
+
+func renderPaperFiles(trees declaredTrees, v Values, secret string, overlay map[string]string) (map[string][]byte, error) {
 	if err := v.RequireMaxPlayers(); err != nil {
 		return nil, err
 	}
@@ -90,7 +111,7 @@ func Paper(v Values, secret string, overlay map[string]string) (map[string][]byt
 		},
 	)
 
-	global, err := paperGlobal(secret, overlay["paper-global.yml"])
+	global, err := paperGlobal(trees.global, secret, overlay["paper-global.yml"])
 	if err != nil {
 		return nil, err
 	}
@@ -102,7 +123,7 @@ func Paper(v Values, secret string, overlay map[string]string) (map[string][]byt
 
 	// Only when the overlay names it; see PaperFiles.
 	if raw, ok := overlay["paper-world-defaults.yml"]; ok {
-		doc, err := paperWorldDefaults(raw)
+		doc, err := paperWorldDefaults(trees.worldDefaults, raw)
 		if err != nil {
 			return nil, err
 		}
@@ -115,7 +136,7 @@ func Paper(v Values, secret string, overlay map[string]string) (map[string][]byt
 // paperWorldDefaults returns the overlay itself, checked for undeclared keys
 // (Paper keeps a stray key and writes it back, looking applied) and
 // re-marshalled so that a non-mapping document is refused here.
-func paperWorldDefaults(overlay string) (string, error) {
+func paperWorldDefaults(declared *keyNode, overlay string) (string, error) {
 	if strings.TrimSpace(overlay) == "" {
 		// An empty overlay means "leave this file alone".
 		return "", nil
@@ -131,7 +152,7 @@ func paperWorldDefaults(overlay string) (string, error) {
 		return "", fmt.Errorf("paper-world-defaults.yml: overlay parses to nothing; " +
 			"write the keys you mean, or drop the key to leave the file to the server")
 	}
-	if err := checkDeclaredKeys(paperWorldDefaultsDeclared, doc, "paper-world-defaults.yml"); err != nil {
+	if err := checkDeclaredKeys(declared, doc, "paper-world-defaults.yml"); err != nil {
 		return "", err
 	}
 
@@ -170,7 +191,7 @@ func valueOr(s *string, fallback string) string {
 // detach them from their inventories. A wrong-shaped overlay is refused
 // rather than treated as absent. Base, overlay, critical is applied by hand
 // because Layer is flat; keep the order the same as Layer's.
-func paperGlobal(secret, overlay string) (string, error) {
+func paperGlobal(declared *keyNode, secret, overlay string) (string, error) {
 	doc := map[string]any{}
 	if strings.TrimSpace(overlay) != "" {
 		if err := yaml.Unmarshal([]byte(overlay), &doc); err != nil {
@@ -182,7 +203,7 @@ func paperGlobal(secret, overlay string) (string, error) {
 			doc = map[string]any{}
 		}
 		// Before the shape checks, so a key Paper does not read is reported as such.
-		if err := checkDeclaredKeys(paperDeclared, doc, "paper-global.yml"); err != nil {
+		if err := checkDeclaredKeys(declared, doc, "paper-global.yml"); err != nil {
 			return "", err
 		}
 	}

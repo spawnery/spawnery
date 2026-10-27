@@ -126,6 +126,16 @@ func TestEntrypointInvokesSpawneryConfigWithThePaperFlavor(t *testing.T) {
 	}
 }
 
+func TestEntrypointPassesTheConfiguredFlavorToSpawneryConfig(t *testing.T) {
+	out, err := runEntrypoint(t, t.TempDir(), 0, "SPAWNERY_CONFIG_FLAVOR=canvas")
+	if err != nil {
+		t.Fatalf("entrypoint: %v\n%s", err, out)
+	}
+	if !strings.Contains(out, "SPAWNERY_CONFIG_ARGV: --flavor canvas") {
+		t.Errorf("spawnery-config was not invoked with --flavor canvas; got: %s", out)
+	}
+}
+
 func TestEntrypointStartsTheServerFlatFromTheLaunchFiles(t *testing.T) {
 	home := filepath.Join(t.TempDir(), "opt", "purpur")
 	classpath := writeLaunchFiles(t, home)

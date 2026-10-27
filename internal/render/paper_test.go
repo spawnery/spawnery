@@ -82,6 +82,23 @@ func TestPaperEnablesVelocityForwarding(t *testing.T) {
 // jdk25_headless because the dev shell's JDK is older than Paper requires.
 const paperGlobalDefault = defaultsDir + "/paper-global.default.yml"
 
+// canvasGlobalDefault is Canvas's own config/paper-global.yml from a first start
+// of the bare jar, outside the image; canvas-paper-world-defaults.default.yml
+// beside it is the world defaults of the same run. The entrypoint renders
+// paper-global.yml before the server starts, so a file taken from the image
+// would be Canvas's defaults merged into ours. A Canvas bump has to
+// regenerate both with:
+//
+//	REPO=$(nix build .#canvas-repo --no-link --print-out-paths)
+//	JAR=$(nix derivation show .#canvas-repo | grep -o '/nix/store/[^"\\]*canvas-build[^"\\]*\.jar' | head -1)
+//	JAVA=$(nix build nixpkgs#jdk25_headless --no-link --print-out-paths)/bin/java
+//	mkdir /tmp/canvas-defaults && cd /tmp/canvas-defaults && echo eula=true >eula.txt
+//	"$JAVA" -Xmx1g -DbundlerRepoDir="$REPO" -jar "$JAR" --nogui
+//	# wait for Done (, then stop the server
+//	cp config/paper-global.yml "$OLDPWD"/internal/render/defaults/canvas-paper-global.default.yml
+//	cp config/paper-world-defaults.yml "$OLDPWD"/internal/render/defaults/canvas-paper-world-defaults.default.yml
+const canvasGlobalDefault = defaultsDir + "/canvas-paper-global.default.yml"
+
 // Paper ignores an undeclared key and writes it back out, so only a
 // comparison against Paper's own defaults catches a misspelling such as
 // secret-key, which leaves Velocity forwarding disabled.

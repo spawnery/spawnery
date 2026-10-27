@@ -91,7 +91,7 @@ fi
 
 printf 'eula=true\n' >eula.txt
 
-spawnery-config --flavor paper
+spawnery-config --flavor "${SPAWNERY_CONFIG_FLAVOR:-paper}"
 
 # The source mounts are read-only, so the copies arrive read-only, and servers
 # rewrite these files. writable DIR makes what this user owns under DIR
