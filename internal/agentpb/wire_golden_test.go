@@ -68,8 +68,8 @@ func TestTheWireFormatMatchesTheGolden(t *testing.T) {
 		t.Errorf("in agent.proto, not in the golden: %s", line)
 	}
 	if len(gone) > 0 {
-		t.Log("A field or value that moved, changed type or vanished breaks every agent built " +
-			"against the old numbers. Reserve a removed number rather than reuse it.")
+		t.Log("If a number or a type changed or a field vanished, every agent built against the " +
+			"golden breaks; reserve a removed number rather than reuse it. A rename alone is wire-compatible.")
 	}
 	if t.Failed() {
 		t.Logf("If the change is meant: go test ./internal/agentpb -run %s -update, and commit the golden.", t.Name())

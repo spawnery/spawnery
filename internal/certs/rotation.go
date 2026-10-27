@@ -126,9 +126,9 @@ func (s *Store) AdvanceRotation(ctx context.Context, current *Bundle) (*Bundle, 
 }
 
 // repairOrDiscardSlots puts ca.crt and every rotation slot an agent could not
-// parse back into a state it can, records what it did, and ends the rotation when a slot
-// it had to throw away is the one the current phase depends on. A nil bundle
-// means nothing was wrong.
+// parse back into a state it can, records what it did, and ends the rotation
+// when a slot it had to throw away is the one the current phase depends on. A
+// nil bundle means nothing was wrong.
 //
 // A slot whose first PEM block is a certificate is truncated to it: parseCA
 // already signs with that block, so nothing is lost. Otherwise parseCA fails
