@@ -18,6 +18,7 @@ package proxyreg_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -28,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
@@ -1163,5 +1165,40 @@ func TestAGroupWithoutARuleSaysSoAndAMissingGroupSaysNothing(t *testing.T) {
 	}
 	if rule := recv(t, outbox).GetRegisterServer().GetServer().GetJoinRule(); rule != nil {
 		t.Fatalf("a server whose group is gone should carry no rule, got %+v", rule)
+	}
+}
+
+// A registration that cannot read its group's rule must not reach the
+// proxies without it.
+func TestARegistrationWhoseGroupCannotBeReadFailsAndSendsNothing(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	refused := errors.New("the cache is not synced")
+	reader := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(proxyGroup("lobby"), serverGroupWithRule("lobby", &spawneryv1alpha1.JoinPermission{Node: "network.vip"})).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*spawneryv1alpha1.ServerGroup); ok {
+					return refused
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	f := proxyreg.New(proxyreg.Options{Reader: reader})
+	outbox, leave, err := f.Join(context.Background(), ns, group, "uid-1")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+	recv(t, outbox)
+
+	if err := f.Register(context.Background(), registered("lobby-eeee", "10.0.0.5:25565")); !errors.Is(err, refused) {
+		t.Fatalf("Register = %v, want the read error", err)
+	}
+	if got := drain(t, outbox); len(got) != 0 {
+		t.Fatalf("the proxy was sent %v for a registration that failed", got)
 	}
 }

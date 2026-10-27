@@ -449,12 +449,15 @@ func (f *Fleet) stateMessage(ctx context.Context, namespace string) *agentpb.Ope
 	}
 }
 
-// Register implements controller.Registrar. With no proxy connected it is a
-// no-op: a Network without a ProxyGroup is legitimate.
+// Register implements controller.Registrar. With no proxy connected in the
+// namespace it is a no-op: a Network without a ProxyGroup is legitimate.
 //
 // A group that cannot be read fails the registration, to be retried, rather
 // than reaching the proxies without its join rule.
 func (f *Fleet) Register(ctx context.Context, srv *spawneryv1alpha1.Server) error {
+	if !f.connected(srv.Namespace) {
+		return nil
+	}
 	group := &spawneryv1alpha1.ServerGroup{}
 	key := types.NamespacedName{Namespace: srv.Namespace, Name: srv.Spec.GroupRef.Name}
 	if err := f.opts.Reader.Get(ctx, key, group); err != nil {
@@ -472,6 +475,17 @@ func (f *Fleet) Register(ctx context.Context, srv *spawneryv1alpha1.Server) erro
 		}
 	})
 	return nil
+}
+
+func (f *Fleet) connected(namespace string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, s := range f.sessions {
+		if s.namespace == namespace {
+			return true
+		}
+	}
+	return false
 }
 
 // Deregister implements controller.Registrar.
