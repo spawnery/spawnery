@@ -13,6 +13,27 @@ import java.util.concurrent.atomic.AtomicInteger
  * from the region threads.
  */
 object SnapshotWait {
+    /**
+     * The off-thread half of a snapshot: the region saves, then [flush], then
+     * [copy] (the node agent's), all by the one [deadline] on [clock].
+     */
+    fun freeze(
+        saves: List<CompletableFuture<*>>,
+        deadline: Long,
+        clock: () -> Long,
+        flush: () -> Unit,
+        copy: (timeoutMillis: Long) -> WorldSync.Outcome,
+    ): WorldSync.Outcome =
+        when (val saved = await(saves, left(deadline, clock))) {
+            WorldSync.Outcome.Ready -> {
+                flush()
+                copy(left(deadline, clock))
+            }
+            else -> WorldSync.Outcome.Failed("the regions did not save: $saved")
+        }
+
+    private fun left(deadline: Long, clock: () -> Long) = maxOf(0L, deadline - clock())
+
     fun await(saves: List<CompletableFuture<*>>, timeoutMillis: Long): WorldSync.Outcome {
         if (saves.isEmpty()) return WorldSync.Outcome.Ready
         val all = CompletableFuture<Unit>()
@@ -32,7 +53,12 @@ object SnapshotWait {
             val cause = e.cause.let { if (it is CompletionException) it.cause ?: it else it } ?: e
             WorldSync.Outcome.Failed(cause.message ?: cause.javaClass.name)
         } catch (_: TimeoutException) {
-            WorldSync.Outcome.TimedOut
+            val refusal = saves.firstNotNullOfOrNull { save -> (save as? RegionSave)?.takeUnless { it.isDone }?.refusal }
+            if (refusal == null) {
+                WorldSync.Outcome.TimedOut
+            } else {
+                WorldSync.Outcome.Failed("timed out after $timeoutMillis ms, still refused: $refusal")
+            }
         } finally {
             // Stops CanvasPlatform offering a ticket to a region that never takes it.
             saves.forEach { it.cancel(false) }

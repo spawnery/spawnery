@@ -122,6 +122,7 @@ class AgentPlugin : JavaPlugin(), Listener {
     private fun snapshot(sync: WorldSync) {
         if (snapshotInFlight) return
         snapshotInFlight = true
+        val deadline = monotonicMillis() + SNAPSHOT_WAIT_MILLIS
         val autosave = server.worlds.associateWith { it.isAutoSave }
         val restore = Runnable {
             autosave.forEach { (world, on) -> world.isAutoSave = on }
@@ -149,14 +150,16 @@ class AgentPlugin : JavaPlugin(), Listener {
         }
         server.asyncScheduler.runNow(this) {
             val outcome: Any = try {
-                when (val saved = SnapshotWait.await(saves, SNAPSHOT_WAIT_MILLIS)) {
-                    WorldSync.Outcome.Ready -> {
-                        if (levels.isNotEmpty()) writes.await(levels)
+                SnapshotWait.freeze(
+                    saves,
+                    deadline,
+                    ::monotonicMillis,
+                    flush = { if (levels.isNotEmpty()) writes.await(levels) },
+                    copy = { left ->
                         sync.requestSnapshot(seq)
-                        sync.awaitSnapshot(seq, SNAPSHOT_WAIT_MILLIS)
-                    }
-                    else -> "the regions did not save: $saved"
-                }
+                        sync.awaitSnapshot(seq, left)
+                    },
+                )
             } catch (t: Throwable) {
                 t
             }
@@ -321,3 +324,5 @@ class AgentPlugin : JavaPlugin(), Listener {
         const val DEFAULT_SNAPSHOT_MILLIS = 5 * 60 * 1000L
     }
 }
+
+private fun monotonicMillis() = System.nanoTime() / 1_000_000
