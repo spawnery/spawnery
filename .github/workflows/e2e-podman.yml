@@ -66,7 +66,8 @@ jobs:
       - name: make e2e under rootless podman
         run: |
           set -euo pipefail
-          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export XDG_RUNTIME_DIR
           export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
           systemd-run --scope --user --property=Delegate=yes -- \
             nix develop -c env KIND_EXPERIMENTAL_PROVIDER=podman make e2e
