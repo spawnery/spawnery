@@ -26,6 +26,7 @@ class NetworkMirror {
         val closedDoors: Set<String> = emptySet(),
         val acceptingTransfers: Set<String> = emptySet(),
         val joinRules: Map<String, JoinRule> = emptyMap(),
+        val playersById: Map<UUID, CloudPlayer> = emptyMap(),
     )
 
     // Swapped whole and never locked, so a read never mixes two states and never blocks.
@@ -33,6 +34,14 @@ class NetworkMirror {
     private var snapshot = Snapshot(emptyList(), emptyList(), emptyList(), emptyList(), "")
 
     fun apply(state: NetworkState) {
+        val players = state.playersList.mapNotNull { entry ->
+            val id = runCatching { UUID.fromString(entry.uuid) }.getOrNull() ?: return@mapNotNull null
+            CloudPlayer(
+                id,
+                entry.name,
+                if (entry.server.isEmpty()) Optional.empty() else Optional.of(entry.server),
+            )
+        }
         snapshot = Snapshot(
             feedFormat = state.feedFormat,
             admissions = state.groupsList.associate { it.name to GroupAdmission(it.playableSlots, it.enforcePlayableSlots) },
@@ -78,13 +87,9 @@ class NetworkMirror {
             proxies = state.proxiesList.map {
                 ProxyInfo(it.name, it.group, it.ready, it.draining, it.players, it.node)
             },
-            players = state.playersList.mapNotNull { entry ->
-                val id = runCatching { UUID.fromString(entry.uuid) }.getOrNull() ?: return@mapNotNull null
-                CloudPlayer(
-                    id,
-                    entry.name,
-                    if (entry.server.isEmpty()) Optional.empty() else Optional.of(entry.server),
-                )
+            players = players,
+            playersById = HashMap<UUID, CloudPlayer>(players.size * 2).apply {
+                for (p in players) putIfAbsent(p.id(), p)
             },
         )
     }
@@ -95,6 +100,9 @@ class NetworkMirror {
     fun proxies(): List<ProxyInfo> = snapshot.proxies
 
     fun players(): List<CloudPlayer> = snapshot.players
+
+    /** The first entry with [id], as a scan of [players] would find it. */
+    fun player(id: UUID): CloudPlayer? = snapshot.playersById[id]
 
     fun feedFormat(): String = snapshot.feedFormat
 

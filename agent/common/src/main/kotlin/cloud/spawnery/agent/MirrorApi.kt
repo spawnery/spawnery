@@ -54,7 +54,7 @@ class MirrorApi(
     override fun players(): List<CloudPlayer> = mirror.players()
 
     override fun player(id: UUID): Optional<CloudPlayer> =
-        Optional.ofNullable(mirror.players().firstOrNull { it.id() == id })
+        Optional.ofNullable(mirror.player(id))
 
     override fun arrivedByTransfer(player: UUID): Boolean = transfers?.arrived(player) ?: false
 

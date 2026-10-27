@@ -345,7 +345,7 @@ class AgentPlugin @Inject constructor(
 
     private fun resolveVoice(player: UUID): VoiceBackend {
         val server = proxy.getPlayer(player).flatMap { it.currentServer }.map { it.serverInfo.name }.orElse(null)
-            ?: mirror.players().firstOrNull { it.id() == player }?.server()?.orElse(null)
+            ?: mirror.player(player)?.server()?.orElse(null)
             ?: return VoiceBackend.UnknownPlayer
         val host = directory?.hostOf(server) ?: return VoiceBackend.UnknownServer
         val port = voice?.backendPort() ?: return VoiceBackend.UnknownServer

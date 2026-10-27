@@ -249,6 +249,20 @@ class NetworkMirrorTest {
     }
 
     @Test
+    fun `a player is found by id as the first entry carrying it, and an id not in the roster is nobody`() {
+        val other = "00000000-0000-4000-8000-00000000000b"
+        val mirror = NetworkMirror()
+        mirror.apply(state(players = listOf(someUuid to "alice", other to "bob", someUuid to "alice-again")))
+
+        assertEquals("alice", mirror.player(UUID.fromString(someUuid))?.name())
+        assertEquals("bob", mirror.player(UUID.fromString(other))?.name())
+        assertEquals(null, mirror.player(UUID.fromString("00000000-0000-4000-8000-00000000000c")))
+
+        mirror.apply(state())
+        assertEquals(null, mirror.player(UUID.fromString(someUuid)))
+    }
+
+    @Test
     fun `a player on no backend carries an empty Optional`() {
         val mirror = NetworkMirror()
         mirror.apply(state(players = listOf(someUuid to "alice"), playerServer = ""))
