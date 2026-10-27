@@ -134,12 +134,13 @@ result as `ghcr.io/spawnery/purpur-aot:<tag>` first: an operator running with
 be pulled. `DRY_RUN=1` trains too. Canvas gets no startup cache.
 
 Every image carries `org.opencontainers.image.source` naming this repository,
-which links a new ghcr.io package to it, and the new package came out public:
-`ghcr.io/spawnery/canvas` was created by the v0.30.0 release and answered an
-anonymous manifest request for `26.3-0.30.0` with 200 right after it, as
-`purpur-aot` did for `26.3-0.30.0` (measured on 2026-10-27). If an anonymous
-pull of a new package ever answers 401, set it to public in the organisation's
-package settings.
+which links a new ghcr.io package to it. `ghcr.io/spawnery/canvas` was created
+by the v0.30.0 release at 06:45 UTC on 2026-10-27 and answered an anonymous
+manifest request for `26.3-0.30.0` with 200 at 07:29 UTC. `purpur-aot`, created
+on 2026-10-06, answered the same request for `26.3-0.30.0` with 200 on
+2026-10-27; its visibility right after creation was not measured. If an
+anonymous pull of a new package answers 401, set it to public in the
+organisation's package settings.
 
 `make publish IMAGES=operator-image` publishes one image, the ordinary case:
 `flake.nix` keeps `operatorVersion` apart from `imageVersion`, so a reconciler
