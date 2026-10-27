@@ -6,7 +6,8 @@
 # rotation's two-certificate bundle, a voice relay routing a player it only
 # knows from the mirror. Each phase is described where it starts.
 #
-# AGENT_TEST_ONLY=voice runs the voice phase alone.
+# AGENT_TEST_ONLY=voice runs the voice phase alone, AGENT_TEST_ONLY=snapshot
+# the snapshot phase.
 set -euo pipefail
 
 CONTAINER="${CONTAINER:-docker}"
@@ -52,6 +53,12 @@ NAME7="spawnery-agent-test-deaf-$$"
 VOLUME7="spawnery-agent-test-deaf-$$"
 NAME8="spawnery-agent-test-voice-$$"
 VOLUME8="spawnery-agent-test-voice-$$"
+SNAP_NAMES=()
+SNAP_VOLUMES=()
+for part in empty copy restore autosave; do
+	SNAP_NAMES+=("spawnery-agent-test-snapshot-$part-$$")
+	SNAP_VOLUMES+=("spawnery-agent-test-snapshot-$part-$$")
+done
 WORK="$(mktemp -d)"
 EVENTS="$WORK/events.jsonl"
 EVENTS2="$WORK/events-supersede.jsonl"
@@ -69,6 +76,7 @@ STUB5_PID=""
 STUB6_PID=""
 STUB7_PID=""
 STUB8_PID=""
+STUB9_PID=""
 
 cleanup() {
 	[ -n "$STUB_PID" ] && kill "$STUB_PID" 2>/dev/null || true
@@ -79,10 +87,11 @@ cleanup() {
 	[ -n "$STUB6_PID" ] && kill "$STUB6_PID" 2>/dev/null || true
 	[ -n "$STUB7_PID" ] && kill "$STUB7_PID" 2>/dev/null || true
 	[ -n "$STUB8_PID" ] && kill "$STUB8_PID" 2>/dev/null || true
+	[ -n "$STUB9_PID" ] && kill "$STUB9_PID" 2>/dev/null || true
 	"$CONTAINER" rm -f "$NAME" "$NAME2" "$NAME3" "$NAME4" "$NAME5" "$NAME6" "$NAME7" "$NAME8" \
-		>/dev/null 2>&1 || true
+		"${SNAP_NAMES[@]}" >/dev/null 2>&1 || true
 	"$CONTAINER" volume rm -f "$VOLUME" "$VOLUME2" "$VOLUME3" "$VOLUME4" "$VOLUME5" "$VOLUME6" \
-		"$VOLUME7" "$VOLUME8" >/dev/null 2>&1 || true
+		"$VOLUME7" "$VOLUME8" "${SNAP_VOLUMES[@]}" >/dev/null 2>&1 || true
 	rm -rf "$WORK"
 }
 # INT and TERM too: an untrapped SIGINT exits without running the handler.
@@ -142,7 +151,8 @@ start_stub() {
 start_agent() {
 	local name="$1" volume="$2" agent_dir="$3" config_dir="$4" endpoint="$5" image="$6"
 	shift 6
-	"$CONTAINER" volume create "$volume" >/dev/null
+	# The snapshot phase prepares its volumes before the server starts.
+	"$CONTAINER" volume inspect "$volume" >/dev/null 2>&1 || "$CONTAINER" volume create "$volume" >/dev/null
 	"$CONTAINER" run -d -i --name "$name" \
 		--add-host stubop:host-gateway \
 		--read-only --tmpfs /tmp:rw,exec,size=256m \
@@ -271,6 +281,20 @@ port_open() {
 	"$CONTAINER" exec "$1" bash -c "exec 3<>/dev/tcp/127.0.0.1/$2" >/dev/null 2>&1
 }
 
+# alive <container> <what> - fail at once rather than time out on a dead container.
+alive() {
+	local name="$1" waiting_for="$2"
+	if [ -z "$("$CONTAINER" ps -q --filter "name=^${name}$")" ]; then
+		echo "the container exited while waiting for $waiting_for" >&2
+		"$CONTAINER" logs "$name" >&2
+		cat "$WORK"/stub*.log >&2 || true
+		exit 1
+	fi
+}
+
+CANVAS_BUILD="$("$CONTAINER" image inspect --format '{{ index .Config.Labels "cloud.spawnery.canvas-build" }}' "$IMAGE")"
+[ "$CANVAS_BUILD" = "<no value>" ] && CANVAS_BUILD=""
+
 # ---------------------------------------------------------------------------
 # Phase eight: a voice relay routing a player it only knows from the mirror.
 #
@@ -362,10 +386,297 @@ if [ "${AGENT_TEST_ONLY:-}" = voice ]; then
 	exit 0
 fi
 
+# ---------------------------------------------------------------------------
+# Phase nine: a world snapshot holds what the regions held.
+#
+# The script answers the agent's snapshot requests through the control files
+# the way spawnery-worldsync does, and copies the world out for one of them.
+# Canvas runs no command naming a position on the global region thread, where
+# ExecuteCommand runs, so the change the copy must hold is a chunk a forceload
+# generated, which only a save writes. A command storage marker, global data,
+# is read back by a server started on the copy. Defined here so
+# AGENT_TEST_ONLY=snapshot can run it before phase one.
+SNAP_CONTROL=/data/.spawnery-worldsync
+# Far from spawn, so nothing generated or saved it at startup: chunk 100 100,
+# in r.3.3.mca.
+SNAP_FORCELOAD="forceload add 1600 1600"
+SNAP_CHUNK_X=100
+SNAP_CHUNK_Z=100
+SNAP_MARKER="data modify storage spawnery:agent_test marker set value 1b"
+# The forceload returns before the chunk exists; a request this soon after
+# the commands is answered without a copy.
+SNAP_SETTLE=3
+
+# snap_volume <volume> [copied world] - a volume as spawnery-worldsync leaves
+# it before the server starts: the ready file, and the world it restored.
+snap_volume() {
+	local mounts=(-v "$1:/data") script="mkdir -p $SNAP_CONTROL && touch $SNAP_CONTROL/ready"
+	if [ -n "${2:-}" ]; then
+		mounts+=(-v "$2:/restore:ro")
+		script="$script && cp -R /restore/world /data/world"
+	fi
+	"$CONTAINER" volume create "$1" >/dev/null
+	"$CONTAINER" run --rm "${mounts[@]}" --entrypoint /bin/bash "$IMAGE" -c "$script"
+}
+
+# snap_request <container> - the sequence the agent asks for, empty before the first.
+snap_request() {
+	"$CONTAINER" exec "$1" cat "$SNAP_CONTROL/snapshot.request" 2>/dev/null || true
+}
+
+snap_answer() {
+	"$CONTAINER" exec "$1" bash -c \
+		"printf '%s' '$2' >$SNAP_CONTROL/snapshot.done.tmp && mv $SNAP_CONTROL/snapshot.done.tmp $SNAP_CONTROL/snapshot.done"
+}
+
+# snap_await_request <container> <not this seq> - prints the first other sequence.
+snap_await_request() {
+	local name="$1" previous="$2" start=$SECONDS seq
+	until seq="$(snap_request "$name")" && [ -n "$seq" ] && [ "$seq" != "$previous" ]; do
+		alive "$name" "a snapshot request"
+		if [ $((SECONDS - start)) -gt "$DEADLINE" ]; then
+			echo "no snapshot request after '$previous' within ${DEADLINE}s" >&2
+			snap_explain "$name"
+			exit 1
+		fi
+		sleep 0.2
+	done
+	printf '%s\n' "$seq"
+}
+
+# The warning names the exception only on the line after it.
+snap_explain() {
+	grep -A 1 'spawnery world sync' <<<"$("$CONTAINER" logs "$1" 2>&1)" | tail -20 >&2 || true
+}
+
+snap_warnings() {
+	grep 'spawnery world sync: \(snapshot\|could not\)' <<<"$("$CONTAINER" logs "$1" 2>&1)" || true
+}
+
+# snap_outcomes_ok <events file> <count> <output pattern...> - true once that
+# many outcomes arrived, each ok with its output matching; exits on a failure.
+# ok alone says the command ran, not that it did anything.
+snap_outcomes_ok() {
+	local events="$1" count="$2"
+	shift 2
+	local outcomes
+	outcomes="$(jq -cs '[.[] | select(.kind == "execute_outcome")] | sort_by(.id)' <"$events" 2>/dev/null)" || return 1
+	[ "$(jq length <<<"$outcomes")" -ge "$count" ] || return 1
+	local i=0 pattern
+	for pattern in "$@"; do
+		if ! jq -e --argjson i "$i" --arg p "$pattern" '.[$i] | .ok and any(.output[]?; test($p))' <<<"$outcomes" >/dev/null; then
+			echo "command $((i + 1)) did not do what the phase needs (output should match '$pattern'):" >&2
+			jq -c --argjson i "$i" '.[$i]' <<<"$outcomes" >&2
+			exit 1
+		fi
+		i=$((i + 1))
+	done
+}
+
+# snap_mtime <container> <file> - empty while the file does not exist.
+snap_mtime() {
+	"$CONTAINER" exec "$1" stat -c %y "$2" 2>/dev/null || true
+}
+
+snapshot_phase() {
+	local empty="${SNAP_NAMES[0]}" copy="${SNAP_NAMES[1]}" restore="${SNAP_NAMES[2]}" autosave="${SNAP_NAMES[3]}"
+	local sync_env=(-e SPAWNERY_WORLD_SYNC=1 -e SPAWNERY_WORLD_SYNC_INTERVAL=10s)
+	local events seq first answered start
+
+	echo
+	echo "snapshots of an empty server..."
+	mkdir -p "$WORK/agent-snapshot"
+	chmod 0755 "$WORK/agent-snapshot"
+	events="$WORK/events-snapshot-empty.jsonl"
+	STUB9_PID="$(start_stub "$events" "$WORK/stub9.log" "snapshot" \
+		--dir "$WORK/agent-snapshot" --san stubop --listen ":19451" --report-interval 5 \
+		--renew-after 600 --hard-deadline 1200)"
+	snap_volume "${SNAP_VOLUMES[0]}"
+	start_agent "$empty" "${SNAP_VOLUMES[0]}" "$WORK/agent-snapshot" "$WORK/config" "stubop:19451" "$IMAGE" \
+		"${sync_env[@]}"
+	first="$(snap_await_request "$empty" "")"
+	snap_answer "$empty" "$first"
+	seq="$(snap_await_request "$empty" "$first")"
+	if [ -n "$(snap_warnings "$empty")" ]; then
+		echo "a snapshot of a server with no live region failed:" >&2
+		snap_warnings "$empty" >&2
+		exit 1
+	fi
+	echo "snapshot $first of an empty server was asked for and answered, and $seq followed without a warning"
+	"$CONTAINER" rm -f "$empty" >/dev/null
+	kill "$STUB9_PID" 2>/dev/null || true
+	STUB9_PID=""
+
+	echo "a snapshot after a forceload and a storage write..."
+	events="$WORK/events-snapshot-copy.jsonl"
+	STUB9_PID="$(start_stub "$events" "$WORK/stub9.log" "snapshot" \
+		--dir "$WORK/agent-snapshot" --san stubop --listen ":19451" --report-interval 5 \
+		--renew-after 600 --hard-deadline 1200 \
+		--execute "$SNAP_FORCELOAD" --execute "$SNAP_MARKER")"
+	snap_volume "${SNAP_VOLUMES[1]}"
+	start_agent "$copy" "${SNAP_VOLUMES[1]}" "$WORK/agent-snapshot" "$WORK/config" "stubop:19451" "$IMAGE" \
+		"${sync_env[@]}"
+	local done_at="" copied=""
+	answered=""
+	start=$SECONDS
+	while [ -z "$copied" ]; do
+		alive "$copy" "the commands and a snapshot request after them"
+		if [ $((SECONDS - start)) -gt "$DEADLINE" ]; then
+			echo "no snapshot request ${SNAP_SETTLE}s after both commands within ${DEADLINE}s" >&2
+			jq -c 'select(.kind == "execute_outcome")' <"$events" >&2 || true
+			snap_explain "$copy"
+			exit 1
+		fi
+		if [ -z "$done_at" ] && snap_outcomes_ok "$events" 2 '^Marked chunk' '^Modified storage'; then
+			done_at=$SECONDS
+		fi
+		seq="$(snap_request "$copy")"
+		if [ -n "$seq" ] && [ "$seq" != "$answered" ]; then
+			if [ -n "$done_at" ] && [ $((SECONDS - done_at)) -ge "$SNAP_SETTLE" ]; then
+				rm -rf "$WORK/snapshot"
+				mkdir -p "$WORK/snapshot"
+				"$CONTAINER" cp "$copy:/data/world" "$WORK/snapshot/"
+				copied="$seq"
+			fi
+			snap_answer "$copy" "$seq"
+			answered="$seq"
+		fi
+		sleep 0.2
+	done
+	if [ -n "$(snap_warnings "$copy")" ]; then
+		echo "a snapshot failed before the copied one:" >&2
+		snap_warnings "$copy" >&2
+		exit 1
+	fi
+	local region_dir="$WORK/snapshot/world/dimensions/minecraft/overworld/region"
+	if ! python3 -I - "$region_dir" "$SNAP_CHUNK_X" "$SNAP_CHUNK_Z" <<'PY'; then
+import os, struct, sys
+region_dir, x, z = sys.argv[1], int(sys.argv[2]), int(sys.argv[3])
+path = os.path.join(region_dir, f"r.{x >> 5}.{z >> 5}.mca")
+if not os.path.exists(path):
+    sys.exit(f"{path} is not in the copy")
+with open(path, "rb") as f:
+    header = f.read(4096)
+entry = 4 * ((x & 31) + (z & 31) * 32)
+if struct.unpack(">I", header[entry:entry + 4])[0] == 0:
+    sys.exit(f"{path} has no entry for chunk {x} {z}")
+PY
+		echo "snapshot $copied lacks the chunk the forceload generated: the copy was taken before its region saved" >&2
+		ls -la "$region_dir" >&2 || true
+		exit 1
+	fi
+	echo "snapshot $copied holds chunk $SNAP_CHUNK_X $SNAP_CHUNK_Z, which only the snapshot's own save wrote"
+
+	# No shutdown save: only what the snapshot holds can reach the next server.
+	"$CONTAINER" kill "$copy" >/dev/null
+	kill "$STUB9_PID" 2>/dev/null || true
+	STUB9_PID=""
+
+	echo "a server started on the copy..."
+	chmod -R a+rX "$WORK/snapshot"
+	events="$WORK/events-snapshot-restore.jsonl"
+	STUB9_PID="$(start_stub "$events" "$WORK/stub9.log" "snapshot" \
+		--dir "$WORK/agent-snapshot" --san stubop --listen ":19451" --report-interval 5 \
+		--renew-after 600 --hard-deadline 1200 \
+		--execute "data get storage spawnery:agent_test marker")"
+	snap_volume "${SNAP_VOLUMES[2]}" "$WORK/snapshot"
+	start_agent "$restore" "${SNAP_VOLUMES[2]}" "$WORK/agent-snapshot" "$WORK/config" "stubop:19451" "$IMAGE" \
+		-e SPAWNERY_WORLD_SYNC=1
+	start=$SECONDS
+	until snap_outcomes_ok "$events" 1 'has the following contents: 1b$'; do
+		alive "$restore" "the restored server's commands"
+		if [ $((SECONDS - start)) -gt "$DEADLINE" ]; then
+			echo "the restored server did not answer within ${DEADLINE}s" >&2
+			jq -c 'select(.kind == "execute_outcome")' <"$events" >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
+	echo "a server started on the copy reads the marker written before the snapshot"
+	"$CONTAINER" rm -f "$restore" >/dev/null
+	kill "$STUB9_PID" 2>/dev/null || true
+	STUB9_PID=""
+
+	if [ -z "$CANVAS_BUILD" ]; then
+		return
+	fi
+
+	# The freeze is World.setAutoSave(false); save-off sets the same per-level
+	# flag. On the copy, whose r.3.3.mca exists, a forceload after save-off
+	# generates a chunk in that file which only an autosave would write, every
+	# second at this interval.
+	echo "whether save-off stops Canvas's region autosave..."
+	local config="$WORK/config-autosave"
+	mkdir -p "$config/overlay"
+	cp "$WORK/config/config.yaml" "$WORK/config/forwarding.secret" "$config/"
+	printf 'chunks:\n  auto-save-interval: 20\n' >"$config/overlay/paper-world-defaults.yml"
+	chmod 0755 "$config" "$config/overlay"
+	chmod 0644 "$config/config.yaml" "$config/forwarding.secret" "$config/overlay/paper-world-defaults.yml"
+	local file=/data/world/dimensions/minecraft/overworld/region/r.3.3.mca
+	events="$WORK/events-snapshot-autosave.jsonl"
+	STUB9_PID="$(start_stub "$events" "$WORK/stub9.log" "autosave" \
+		--dir "$WORK/agent-snapshot" --san stubop --listen ":19451" --report-interval 5 \
+		--renew-after 600 --hard-deadline 1200 \
+		--execute "save-off" --execute "forceload add 1760 1760")"
+	snap_volume "${SNAP_VOLUMES[3]}" "$WORK/snapshot"
+	start_agent "$autosave" "${SNAP_VOLUMES[3]}" "$WORK/agent-snapshot" "$config" "stubop:19451" "$IMAGE"
+	start=$SECONDS
+	until snap_outcomes_ok "$events" 2 'saving is now disabled' '^Marked chunk' &&
+		[ -n "$(snap_mtime "$autosave" "$file")" ]; do
+		alive "$autosave" "the commands and $file"
+		if [ $((SECONDS - start)) -gt "$DEADLINE" ]; then
+			echo "the autosave check's commands or its region file did not arrive within ${DEADLINE}s" >&2
+			jq -c 'select(.kind == "execute_outcome")' <"$events" >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
+	# An autosave started before save-off may still be writing.
+	sleep "$SNAP_SETTLE"
+	local before after
+	before="$(snap_mtime "$autosave" "$file")"
+	start=$SECONDS
+	while [ $((SECONDS - start)) -lt 5 ]; do
+		after="$(snap_mtime "$autosave" "$file")"
+		if [ "$after" != "$before" ]; then
+			echo "GATE: save-off did not stop Canvas's region autosave: $file changed from $before to $after" >&2
+			echo "the snapshot's freeze is setAutoSave(false), the same flag; a region saving during the copy is what it exists to prevent" >&2
+			exit 1
+		fi
+		sleep 0.5
+	done
+	start=$SECONDS
+	until log_has "$autosave" 'Automatic saving is now enabled'; do
+		alive "$autosave" "save-on"
+		if [ $((SECONDS - start)) -gt 60 ]; then
+			echo "save-on typed into the console was never acknowledged" >&2
+			exit 1
+		fi
+		console "$autosave" "save-on"
+		sleep 1
+	done
+	start=$SECONDS
+	until [ "$(snap_mtime "$autosave" "$file")" != "$before" ]; do
+		if [ $((SECONDS - start)) -gt 5 ]; then
+			echo "$file did not change within 5s of save-on either, so its standing still under save-off proves nothing" >&2
+			exit 1
+		fi
+		sleep 0.5
+	done
+	echo "under save-off $file stood still for 5s; after save-on it changed within $((SECONDS - start))s"
+	"$CONTAINER" rm -f "$autosave" >/dev/null
+	kill "$STUB9_PID" 2>/dev/null || true
+	STUB9_PID=""
+}
+
+if [ "${AGENT_TEST_ONLY:-}" = snapshot ]; then
+	snapshot_phase
+	echo "agent-test: ok (snapshot phase only)"
+	exit 0
+fi
+
 # Canvas reports the worst of its regions, and an idle server has none: the
 # forceload gives it one to read.
-CANVAS_BUILD="$("$CONTAINER" image inspect --format '{{ index .Config.Labels "cloud.spawnery.canvas-build" }}' "$IMAGE")"
-[ "$CANVAS_BUILD" = "<no value>" ] && CANVAS_BUILD=""
 CANVAS_FORCELOAD="forceload add 0 0 15 15"
 canvas_flags=()
 if [ -n "$CANVAS_BUILD" ]; then
@@ -481,17 +792,6 @@ if [ "$first_slots" != "100" ]; then
 	exit 1
 fi
 echo "the first player count already carries the enforced maximum"
-
-# alive <container> <what> - fail at once rather than time out on a dead container.
-alive() {
-	local name="$1" waiting_for="$2"
-	if [ -z "$("$CONTAINER" ps -q --filter "name=^${name}$")" ]; then
-		echo "the container exited while waiting for $waiting_for" >&2
-		"$CONTAINER" logs "$name" >&2
-		cat "$WORK"/stub*.log >&2 || true
-		exit 1
-	fi
-}
 
 # tick_violations <events file> <after seq> - every player count after that
 # seq whose sample is missing or outside Paper's range, one per line.
@@ -1219,5 +1519,9 @@ kill "$STUB7_PID" 2>/dev/null || true
 STUB7_PID=""
 
 voice_phase
+
+# ---------------------------------------------------------------------------
+# Phase nine is snapshot_phase, defined before phase one.
+snapshot_phase
 
 echo "agent-test: ok"

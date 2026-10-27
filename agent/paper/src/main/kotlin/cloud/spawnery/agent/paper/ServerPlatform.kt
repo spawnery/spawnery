@@ -1,6 +1,7 @@
 package cloud.spawnery.agent.paper
 
 import org.bukkit.Server
+import org.bukkit.plugin.Plugin
 import java.util.concurrent.CompletableFuture
 
 data class TickSample(val tps: Double, val mspt: Double)
@@ -24,14 +25,14 @@ object Platforms {
     const val CANVAS_IMPL = "cloud.spawnery.agent.paper.canvas.CanvasPlatform"
 
     /** [loader] is the server's; the Canvas implementation is loaded from the agent's own. */
-    fun detect(server: Server, loader: ClassLoader): ServerPlatform {
+    fun detect(plugin: Plugin, loader: ClassLoader): ServerPlatform {
         try {
             Class.forName(CANVAS_MARKER, false, loader)
         } catch (_: ClassNotFoundException) {
-            return PaperPlatform(server)
+            return PaperPlatform(plugin.server)
         }
         return Class.forName(CANVAS_IMPL, true, Platforms::class.java.classLoader)
-            .getConstructor(Server::class.java)
-            .newInstance(server) as ServerPlatform
+            .getConstructor(Plugin::class.java)
+            .newInstance(plugin) as ServerPlatform
     }
 }

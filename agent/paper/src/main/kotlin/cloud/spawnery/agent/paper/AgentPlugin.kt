@@ -32,6 +32,7 @@ import org.bukkit.event.server.ServerLoadEvent
 import org.bukkit.plugin.java.JavaPlugin
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -91,6 +92,8 @@ class AgentPlugin : JavaPlugin(), Listener {
     private var snapshotSeq = 0L
     private var snapshotInFlight = false
 
+    private val platform by lazy { Platforms.detect(this, server.javaClass.classLoader) }
+
     private fun startSnapshots() {
         val sync = worldSync ?: return
         snapshotSeq = sync.nextSequence() - 1
@@ -108,9 +111,10 @@ class AgentPlugin : JavaPlugin(), Listener {
     }
 
     /**
-     * Global region thread: freeze saving and queue every chunk. Off it: wait for the
-     * queue, then ask. A server whose queue cannot be waited on saves with
-     * flush, which waits on the main thread instead.
+     * Global region thread: freeze saving and start every save. Off it: wait
+     * for the saves and their writes, then ask. A server whose write queue
+     * cannot be waited on saves with flush, which waits on the global region
+     * thread instead.
      */
     private fun snapshot(sync: WorldSync) {
         if (snapshotInFlight) return
@@ -123,6 +127,7 @@ class AgentPlugin : JavaPlugin(), Listener {
         val writes = regionWrites
         val seq: Long
         val levels: List<Any>
+        val saves: List<CompletableFuture<*>>
         try {
             autosave.keys.forEach { it.isAutoSave = false }
             if (writes.available) {
@@ -132,6 +137,7 @@ class AgentPlugin : JavaPlugin(), Listener {
                 server.dispatchCommand(server.consoleSender, "save-all flush")
                 levels = emptyList()
             }
+            saves = platform.saveRegions()
             seq = ++snapshotSeq
         } catch (t: Throwable) {
             restore.run()
@@ -140,9 +146,14 @@ class AgentPlugin : JavaPlugin(), Listener {
         }
         server.asyncScheduler.runNow(this) {
             val outcome: Any = try {
-                if (levels.isNotEmpty()) writes.await(levels)
-                sync.requestSnapshot(seq)
-                sync.awaitSnapshot(seq, SNAPSHOT_WAIT_MILLIS)
+                when (val saved = SnapshotWait.await(saves, SNAPSHOT_WAIT_MILLIS)) {
+                    WorldSync.Outcome.Ready -> {
+                        if (levels.isNotEmpty()) writes.await(levels)
+                        sync.requestSnapshot(seq)
+                        sync.awaitSnapshot(seq, SNAPSHOT_WAIT_MILLIS)
+                    }
+                    else -> "the regions did not save: $saved"
+                }
             } catch (t: Throwable) {
                 t
             }
@@ -223,7 +234,6 @@ class AgentPlugin : JavaPlugin(), Listener {
 
                 server.pluginManager.registerEvents(this, this)
 
-                val platform = Platforms.detect(server, server.javaClass.classLoader)
                 logger.info("spawnery tick reports from ${platform.javaClass.name}")
 
                 // Bukkit.getOnlinePlayers() is not thread-safe, so the count is
