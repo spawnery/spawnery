@@ -53,8 +53,9 @@ import (
 	"github.com/spawnery/spawnery/internal/slp"
 )
 
-// Packet ids. The login and configuration ids are the same across every
-// protocol version Velocity 3.5.1 accepts.
+// Packet ids. The login ids hold from 1.20.2 (protocol 764), the first version
+// with Login Acknowledged. The configuration ids hold from 1.20.5 (766): in
+// 1.20.2 to 1.20.4 Disconnect is 0x01 and the keep alives are 0x03.
 const (
 	// Serverbound.
 	idHandshake         = 0x00

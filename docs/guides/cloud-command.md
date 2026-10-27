@@ -80,7 +80,10 @@ config afterwards and the servers have to restart before they stop filling it
 in.
 
 Nothing has to be switched on. The contexts appear when LuckPerms is installed
-and nothing happens when it is not.
+and enabled, and nothing happens when it is not. If LuckPerms is installed but
+fails to enable, the pod logs the failure and runs without contexts. A
+LuckPerms reload drops the contexts, and they stay gone until the pod
+restarts.
 
 ## What each branch does
 

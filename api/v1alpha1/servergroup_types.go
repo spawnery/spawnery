@@ -380,7 +380,7 @@ type ServerGroupSpec struct {
 	// +optional
 	Scheduling *Scheduling `json:"scheduling,omitempty"`
 
-	// Mounts are extra ConfigMap and Secret mounts.
+	// Mounts are extra ConfigMap, Secret and PersistentVolumeClaim mounts.
 	// +optional
 	// +listType=map
 	// +listMapKey=name
@@ -434,8 +434,8 @@ type ServerGroupSpec struct {
 
 	// ConfigOverlay names a ConfigMap whose keys are configuration files to
 	// merge over the rendered defaults — "server.properties",
-	// "paper-global.yml", "paper-world-defaults.yml" or "velocity.toml", in
-	// the target's own dialect.
+	// "paper-global.yml" or "paper-world-defaults.yml", in the target's own
+	// dialect. Any other key is refused.
 	//
 	// paper-world-defaults.yml is written only when an overlay names it, and
 	// this is its only route: a mount under /data/config keeps the server
@@ -444,11 +444,10 @@ type ServerGroupSpec struct {
 	// It outranks the rendered defaults and is outranked by the operationally
 	// critical fields.
 	//
-	// A key the receiving program does not declare is refused, since Paper and
-	// Velocity silently ignore it. The declared keys come from each program's
-	// captured default configuration, so a Paper or Velocity bump can refuse a
-	// new key until that capture is updated. server.properties keys are not
-	// checked.
+	// A key Paper does not declare is refused, since Paper silently ignores
+	// it. The declared keys come from its captured default configuration, so a
+	// Paper bump can refuse a new key until that capture is updated.
+	// server.properties keys are not checked.
 	// +optional
 	ConfigOverlay *ObjectRef `json:"configOverlay,omitempty"`
 

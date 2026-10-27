@@ -131,4 +131,5 @@ every Pod, Service and ConfigMap it created. Persistent worlds are the
 deliberate exception: every `PersistentVolumeClaim` carries no owner reference at all, precisely so
 a world outlives its `Server`, its group, and an operator who deletes the
 wrong object. Reclaiming an orphaned claim afterwards is a manual `kubectl`
-act; see [Known issues](../reference/known-issues.md).
+act; see [Claims, and why they outlive their
+servers](../guides/persistent-worlds.md#claims-and-why-they-outlive-their-servers).

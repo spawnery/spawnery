@@ -38,9 +38,9 @@ import (
 // encoding with the code under test would pass on a framing that is consistent
 // and wrong on the wire.
 
-// configurationDisconnectNBT is the payload Velocity 3.5.1 sent when it could
-// not route a player: a nameless root compound holding color=red and text=<the
-// message>. Kept verbatim from a real proxy.
+// configurationDisconnectNBT is the payload captured from Velocity 3.5.1 when
+// it could not route a player: a nameless root compound holding color=red and
+// text=<the message>. Kept verbatim from a real proxy.
 var configurationDisconnectNBT = []byte{
 	0x0a,
 	0x08, 0x00, 0x05, 'c', 'o', 'l', 'o', 'r', 0x00, 0x03, 'r', 'e', 'd',

@@ -35,7 +35,7 @@ const (
 	LabelOccupied = "spawnery.cloud/occupied"
 	// LabelPodHash digests the whole rendered pod rather than chosen spec fields,
 	// so a new field cannot be forgotten. The cost: changing the rendering code
-	// rolls the fleet on operator upgrade (docs/reference/known-issues.md).
+	// rolls the fleet on operator upgrade (docs/guides/upgrading.md).
 	LabelPodHash = "spawnery.cloud/pod-hash"
 	// LabelForwardingHash is the ForwardingHash of the secret as it stood when the
 	// pod was created; Velocity and Paper read the file only at startup. A pod

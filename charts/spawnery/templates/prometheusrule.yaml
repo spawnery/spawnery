@@ -33,9 +33,9 @@ spec:
               the middle that waits for a person, so start it with time in
               hand. Annotate the operator's TLS secret with
               spawnery.cloud/rotate-ca=start and follow
-              docs/reference/known-issues.md's "On the agent channel" section. Note that
-              a start annotation can sit unread for up to an hour on an idle
-              cluster, because the operator only re-reads it on its slow tick.
+              docs/guides/rotating-the-ca.md. Note that a start annotation can
+              sit unread for up to an hour on an idle cluster, because the
+              operator only re-reads it on its slow tick.
 
         # Renewal happens at a third of the lifetime left, so this fires only
         # when renewal has stopped working.
