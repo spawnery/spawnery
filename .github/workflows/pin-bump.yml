@@ -85,8 +85,8 @@ jobs:
           fail() {
             git checkout nix/canvas.nix
             echo "canvas_failed=$1" >>"$GITHUB_OUTPUT"
-            echo "::warning::Canvas is not in this bump: $1"
-            echo "Canvas is not in this bump: $1" >>"$GITHUB_STEP_SUMMARY"
+            echo "::warning::This run's Canvas pin is not in this bump: $1"
+            echo "This run's Canvas pin is not in this bump: $1" >>"$GITHUB_STEP_SUMMARY"
             exit 0
           }
           err="$RUNNER_TEMP/canvas-pin.err"
@@ -124,8 +124,8 @@ jobs:
           if [ "$CANVAS_OUTCOME" != success ]; then
             git checkout nix/canvas.nix
             canvas_failed="the Canvas step ended with $CANVAS_OUTCOME before it finished"
-            echo "::warning::Canvas is not in this bump: $canvas_failed"
-            echo "Canvas is not in this bump: $canvas_failed" >>"$GITHUB_STEP_SUMMARY"
+            echo "::warning::This run's Canvas pin is not in this bump: $canvas_failed"
+            echo "This run's Canvas pin is not in this bump: $canvas_failed" >>"$GITHUB_STEP_SUMMARY"
           fi
 
           canvas_carried=""
@@ -134,12 +134,27 @@ jobs:
             [ -n "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[0].number // empty')" ] &&
             git fetch -q origin "$BRANCH" &&
             git show FETCH_HEAD:nix/canvas.nix >"$carried"; then
+            # Only the build and its hash come over, written as
+            # hack/canvas-pin.sh writes them, so master's other lines stay.
+            url() { sed -n 's|^    url = "\(.*\)";$|\1|p' "$1"; }
+            jar_hash() { sed -n 's|^    hash = "\(sha256-.*\)";$|\1|p' "$1"; }
             build="$(pin canvasBuild "$carried")"
+            hash="$(jar_hash "$carried")"
             if [ "$(pin canvasVersion "$carried")" = "$(pin canvasVersion nix/canvas.nix)" ] &&
+              [ "$(url "$carried")" = "$(url nix/canvas.nix)" ] &&
+              [ "$(jar_hash nix/canvas.nix | wc -l)" = 1 ] && [[ "$hash" =~ ^sha256-[A-Za-z0-9+/=]+$ ]] &&
               [[ "$build" =~ ^[0-9]+$ ]] && [ "$build" -gt "$canvas_old" ] && [ "$build" != "$canvas_failed" ]; then
-              cp "$carried" nix/canvas.nix
-              canvas_carried="$build"
-              echo "Canvas build $build stays, from the open pull request, where it passed its tests" >>"$GITHUB_STEP_SUMMARY"
+              sed -i \
+                -e "s|^  canvasBuild = \".*\";$|  canvasBuild = \"$build\";|" \
+                -e "s|^    hash = \"sha256-.*\";$|    hash = \"$hash\";|" \
+                nix/canvas.nix
+              if [ "$(pin canvasBuild nix/canvas.nix)" = "$build" ] && [ "$(jar_hash nix/canvas.nix)" = "$hash" ]; then
+                canvas_carried="$build"
+                echo "Canvas build $build stays, from the open pull request, where it passed its tests" >>"$GITHUB_STEP_SUMMARY"
+              else
+                git checkout nix/canvas.nix
+                echo "::warning::could not carry Canvas build $build over; master's pin stays"
+              fi
             fi
           fi
 
@@ -272,7 +287,7 @@ jobs:
             echo "$verdict"
             echo
             if [ -n "$CANVAS_CARRIED" ]; then
-              echo "Canvas build $CANVAS_NEW comes from this pull request's previous run, where it passed \`make canvas-image-test canvas-agent-test\` before it joined. This run did not test it again."
+              echo "Canvas build $CANVAS_NEW passed \`make canvas-image-test canvas-agent-test\` when it joined this bump in an earlier run. This run did not test it again."
               echo
             elif [ "$CANVAS_OLD" != "$CANVAS_NEW" ]; then
               echo "Canvas build $CANVAS_NEW passed \`make canvas-image-test canvas-agent-test\` before it joined this bump."
