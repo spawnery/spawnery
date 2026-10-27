@@ -7,9 +7,11 @@ import io.canvasmc.canvas.region.RegionTickData.Frame
 import io.canvasmc.canvas.region.WorldRegionizer.ChunkRegion
 import org.bukkit.plugin.Plugin
 import java.util.concurrent.CompletableFuture
+import java.util.logging.Level
 
 class CanvasPlatform(private val plugin: Plugin) : ServerPlatform {
     private val server get() = plugin.server
+    private var skipNoted = false
 
     override fun ticks(): TickSample {
         val regions = mutableListOf<TickSample>()
@@ -19,7 +21,11 @@ class CanvasPlatform(private val plugin: Plugin) : ServerPlatform {
             // NullPointerException: it has no tick report to read.
             try {
                 regions += TickSample(data.getTPS(Frame._1_MINUTE), data.getMSPT(Frame._5_SECONDS))
-            } catch (_: NullPointerException) {
+            } catch (e: NullPointerException) {
+                if (!skipNoted) {
+                    skipNoted = true
+                    plugin.logger.log(Level.INFO, "spawnery skips regions with no tick report yet; this is logged once", e)
+                }
             }
         }
         // On the global region thread these answer for the global tick.
