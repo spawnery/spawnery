@@ -19,7 +19,7 @@ concurrency:
 jobs:
   bump:
     runs-on: ubuntu-latest
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       BRANCH: auto/upstream-pins
     steps:
@@ -153,8 +153,15 @@ jobs:
           } >>"$GITHUB_OUTPUT"
           echo "moved: ${summary:-nothing}"
 
+          if [ -z "$summary" ] && [ -n "$canvas_failed" ]; then
+            echo "::error::Canvas is not in this bump and nothing else moved: $canvas_failed"
+            exit 1
+          fi
+
+      # A failed Canvas pin is put back, so a pull request that moved only
+      # Canvas looks caught up with although master is not.
       - name: Close a pull request master has caught up with
-        if: steps.pins.outputs.moved == 'false'
+        if: steps.pins.outputs.moved == 'false' && steps.pins.outputs.canvas_failed == ''
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}
         run: |
