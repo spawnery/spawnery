@@ -388,7 +388,7 @@ class AgentPlugin @Inject constructor(
         )
         this.transfers = transfers
         transferPass = proxy.scheduler
-            .buildTask(this, Runnable { transfers.pass(proxy.allPlayers.map { VelocityTraveller(it, ::warn) }) })
+            .buildTask(this, Runnable { transfers.pass(proxy.allPlayers.map { VelocityTraveller(it) }) })
             .repeat(TRANSFER_PASS_SECONDS, TimeUnit.SECONDS)
             .schedule()
     }
@@ -549,7 +549,7 @@ class AgentPlugin @Inject constructor(
         val transfers = transfers ?: return
         if (!event.result.isAllowed || event.player.currentServer.isEmpty) return
         val target = event.result.server.orElse(event.originalServer)
-        if (transfers.onSwitch(VelocityTraveller(event.player, ::warn), target.serverInfo.name)) {
+        if (transfers.onSwitch(VelocityTraveller(event.player), target.serverInfo.name)) {
             event.result = ServerPreConnectEvent.ServerResult.denied()
         }
     }

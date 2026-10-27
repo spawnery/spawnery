@@ -8,6 +8,7 @@ import net.kyori.adventure.text.Component
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 
 interface Traveller {
@@ -19,8 +20,12 @@ interface Traveller {
 
     fun tell(message: Component)
 
-    /** Stores [cookie] on the client and sends it to [to]; throws when the client cannot be transferred. */
-    fun transfer(cookie: ByteArray, to: InetSocketAddress)
+    /**
+     * Stores [cookie] on the client and sends it to [to]. Throws when the
+     * transfer cannot be queued; the future fails when it was queued and then
+     * could not be sent.
+     */
+    fun transfer(cookie: ByteArray, to: InetSocketAddress): CompletableFuture<Unit>
 }
 
 class Transfers(
@@ -84,15 +89,24 @@ class Transfers(
     }
 
     private fun send(player: Traveller, host: InetSocketAddress, target: String, reason: String): Boolean {
-        try {
+        val what = "'${player.username}' ($reason) toward '$target'"
+        val sent = try {
             player.transfer(cookie.write(player.uuid, target), host)
         } catch (e: Exception) {
-            warn("spawnery: could not transfer '${player.username}' ($reason) toward '$target'; leaving them here", e)
+            warn("spawnery: could not transfer $what; leaving them here", e)
             return false
         }
         leaving += player.uuid
         player.address?.let { lastSentFrom[it] = clock() }
-        info("spawnery: transferred '${player.username}' ($reason) toward '$target'")
+        if (!sent.isDone) info("spawnery: queued the transfer of $what")
+        sent.whenComplete { _, failure ->
+            if (failure == null) {
+                info("spawnery: transferred $what")
+            } else {
+                leaving -= player.uuid
+                warn("spawnery: could not transfer $what after queueing it; leaving them here", failure)
+            }
+        }
         return true
     }
 
@@ -165,10 +179,7 @@ class Transfers(
 
 internal val TRANSFER_COOKIE_KEY: Key = Key.key(TransferCookie.KEY)
 
-internal class VelocityTraveller(
-    private val player: Player,
-    private val warn: (String, Throwable?) -> Unit,
-) : Traveller {
+internal class VelocityTraveller(private val player: Player) : Traveller {
     override val uuid: UUID get() = player.uniqueId
     override val username: String get() = player.username
     override val currentServer: String? get() = player.currentServer.map { it.serverInfo.name }.orElse(null)
@@ -177,17 +188,21 @@ internal class VelocityTraveller(
 
     override fun tell(message: Component) = player.sendMessage(message)
 
-    override fun transfer(cookie: ByteArray, to: InetSocketAddress) {
+    override fun transfer(cookie: ByteArray, to: InetSocketAddress): CompletableFuture<Unit> {
         player.storeCookie(TRANSFER_COOKIE_KEY, cookie)
         // storeCookie writes its packet from a task on the connection's event
         // loop; queued behind it, the transfer cannot overtake the cookie.
-        val loop = (player as? ConnectedPlayer)?.connection?.eventLoop() ?: return player.transferToHost(to)
+        val loop = (player as? ConnectedPlayer)?.connection?.eventLoop()
+            ?: return CompletableFuture.completedFuture(player.transferToHost(to))
+        val sent = CompletableFuture<Unit>()
         loop.execute {
             try {
                 player.transferToHost(to)
+                sent.complete(Unit)
             } catch (e: Exception) {
-                warn("spawnery: could not transfer '${player.username}' toward $to", e)
+                sent.completeExceptionally(e)
             }
         }
+        return sent
     }
 }
