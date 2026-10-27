@@ -86,40 +86,57 @@ class LuckPermsContextsTest {
         }
         val said = mutableListOf<String>()
 
-        LuckPermsContexts.registerIfPresent(backend(), said::add)
+        LuckPermsContexts.registerIfPresent(backend(), said::add, said::add)
 
         assertTrue(said.isEmpty(), "it spoke without LuckPerms: $said")
     }
 
     @Test
-    fun `a registration that throws is reported through log, not left to propagate`() {
-        val said = mutableListOf<String>()
+    fun `a LuckPerms that is present but not loaded is a warning, not a failed enable`() {
+        val info = mutableListOf<String>()
+        val warned = mutableListOf<String>()
         val failure = IllegalStateException("LuckPerms API is not loaded.")
 
-        LuckPermsContexts.registerSurviving(said::add) { throw failure }
-
-        assertEquals(1, said.size, "expected exactly one message, got: $said")
-        assertTrue(
-            said.single().contains(failure.message!!),
-            "the reported message does not mention the failure: ${said.single()}",
+        LuckPermsContexts.registerIfPresent(
+            backend(), info::add, warned::add,
+            present = { true },
+            registration = { _, _ -> throw failure },
         )
+
+        assertEquals(emptyList(), info)
+        assertTrue(warned.single().contains(failure.message!!), "the warning does not name the failure: $warned")
     }
 
     @Test
-    fun `the probed class name matches an import`() {
-        val source = File("src/main/kotlin/cloud/spawnery/agent/LuckPermsContexts.kt").readText()
+    fun `the real registration, failing for want of LuckPerms' classes, is survived too`() {
+        val warned = mutableListOf<String>()
 
-        val probed = Regex("""Class\.forName\("([^"]+)"\)""").find(source)?.groupValues?.get(1)
-        assertTrue(probed != null, "no Class.forName(\"...\") literal found in $source")
+        LuckPermsContexts.registerIfPresent(backend(), {}, warned::add, present = { true })
 
-        val imports = Regex("""^import (net\.luckperms\.\S+)$""", RegexOption.MULTILINE)
-            .findAll(source)
-            .map { it.groupValues[1] }
-            .toList()
+        assertTrue(warned.single().contains("NoClassDefFoundError"), "expected the missing class: $warned")
+    }
 
-        assertTrue(
-            probed in imports,
-            "Class.forName probes \"$probed\", which none of these imports name: $imports",
-        )
+    @Test
+    fun `every probed class name matches an import of its file`() {
+        val sources = File("src/main/kotlin/cloud/spawnery/agent").listFiles()!!
+            .filter { it.extension == "kt" && "Class.forName" in it.readText() }
+        assertTrue(sources.size >= 3, "expected the three LuckPerms probes, found ${sources.map { it.name }}")
+
+        for (file in sources) {
+            val source = file.readText()
+            val probed = Regex("""Class\.forName\("([^"]+)"\)""").findAll(source).map { it.groupValues[1] }.toList()
+            assertEquals(
+                source.split("Class.forName").size - 1,
+                probed.size,
+                "${file.name} has a Class.forName this test cannot read as a literal",
+            )
+            val imports = Regex("""^import (\S+)$""", RegexOption.MULTILINE)
+                .findAll(source)
+                .map { it.groupValues[1] }
+                .toSet()
+            for (name in probed) {
+                assertTrue(name in imports, "${file.name} probes \"$name\", which none of its imports name: $imports")
+            }
+        }
     }
 }

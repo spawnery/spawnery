@@ -45,27 +45,34 @@ object LuckPermsContexts {
         if (value.isNotBlank()) this[key] = value
     }
 
-    /** Probed rather than caught: a NoClassDefFoundError out of `onEnable` makes Paper disable the agent. */
-    fun registerIfPresent(self: Self, log: (String) -> Unit) {
+    /**
+     * Probed rather than caught: a NoClassDefFoundError out of `onEnable` makes
+     * Paper disable the agent. The probe proves only that the jar is there;
+     * [LuckPermsProvider.get] still throws while LuckPerms' own enable has not
+     * finished or has failed, and the agent's session must outlive that.
+     */
+    fun registerIfPresent(
+        self: Self,
+        info: (String) -> Unit,
+        warn: (String) -> Unit,
+        present: () -> Boolean = ::luckPermsPresent,
+        registration: (Self, (String) -> Unit) -> Unit = ::register,
+    ) {
+        if (!present()) return
         try {
-            Class.forName("net.luckperms.api.LuckPermsProvider")
-        } catch (_: ClassNotFoundException) {
-            return
+            registration(self, info)
+        } catch (e: Throwable) {
+            warn("spawnery LuckPerms contexts: registration failed, continuing without them: $e")
         }
-        registerSurviving(log) { register(self, log) }
     }
 
-    /**
-     * [LuckPermsProvider.get] throws while LuckPerms' own enable has not finished
-     * or has failed, and the agent's session must outlive that.
-     */
-    internal fun registerSurviving(log: (String) -> Unit, registration: () -> Unit) {
+    private fun luckPermsPresent(): Boolean =
         try {
-            registration()
-        } catch (e: Throwable) {
-            log("spawnery LuckPerms contexts: registration failed, continuing without them: $e")
+            Class.forName("net.luckperms.api.LuckPermsProvider")
+            true
+        } catch (_: ClassNotFoundException) {
+            false
         }
-    }
 
     private fun register(self: Self, log: (String) -> Unit) {
         val luckPerms = LuckPermsProvider.get()

@@ -204,7 +204,7 @@ class AgentPlugin : JavaPlugin(), Listener {
                 logger.info(
                     "spawnery API installed for network ${self.network()} group ${self.group()}",
                 )
-                LuckPermsContexts.registerIfPresent(self, logger::info)
+                LuckPermsContexts.registerIfPresent(self, logger::info, logger::warning)
 
                 scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
                     Thread(runnable, "spawnery-agent").apply { isDaemon = true }

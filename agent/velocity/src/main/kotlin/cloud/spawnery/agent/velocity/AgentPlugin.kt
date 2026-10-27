@@ -219,7 +219,7 @@ class AgentPlugin @Inject constructor(
             },
         )
         Spawnery.install(api)
-        LuckPermsContexts.registerIfPresent(self, logger::info)
+        LuckPermsContexts.registerIfPresent(self, logger::info, logger::warn)
         // Not the deprecated one-argument register(), which files the command
         // under no plugin.
         val proxyCommands = ProxyCommands<CommandSource>(connector) { source -> (source as? Player)?.username ?: "console" }
