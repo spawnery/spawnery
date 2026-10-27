@@ -307,8 +307,16 @@ func TestNetworkCountsChangeoversInFlightAndWaiting(t *testing.T) {
 	if err := f.c.Status().Update(f.ctx, begun); err != nil {
 		t.Fatalf("set lobby's changeover to Begun: %v", err)
 	}
+	waitingFor := func(condType, reason string) []metav1.Condition {
+		return []metav1.Condition{{
+			Type: condType, Status: metav1.ConditionTrue, Reason: reason, Message: "-",
+			LastTransitionTime: metav1.Now(),
+		}}
+	}
 	waiting := f.createEphemeralGroupLike(t, "arena")
 	waiting.Status.Changeover = spawneryv1alpha1.ChangeoverWaiting
+	waiting.Status.Conditions = waitingFor(spawneryv1alpha1.ConditionProgressing,
+		spawneryv1alpha1.ReasonWaitingForChangeoverBudget)
 	if err := f.c.Status().Update(f.ctx, waiting); err != nil {
 		t.Fatalf("set arena's changeover to Waiting: %v", err)
 	}
@@ -317,14 +325,29 @@ func TestNetworkCountsChangeoversInFlightAndWaiting(t *testing.T) {
 	if err := f.c.Status().Update(f.ctx, persistent); err != nil {
 		t.Fatalf("set world's changeover to Begun: %v", err)
 	}
+	gated := f.createPersistentGroup(t, "build", 2)
+	gated.Status.Changeover = spawneryv1alpha1.ChangeoverWaiting
+	gated.Status.Conditions = waitingFor(spawneryv1alpha1.ConditionProgressing,
+		spawneryv1alpha1.ReasonServersStarting)
+	if err := f.c.Status().Update(f.ctx, gated); err != nil {
+		t.Fatalf("set build's changeover to Waiting: %v", err)
+	}
+	proxies := f.createProxyGroup("edge")
+	proxies.Status.Changeover = spawneryv1alpha1.ChangeoverWaiting
+	proxies.Status.Conditions = waitingFor(spawneryv1alpha1.ConditionChangingOver,
+		spawneryv1alpha1.ReasonWaitingForEarlierStage)
+	if err := f.c.Status().Update(f.ctx, proxies); err != nil {
+		t.Fatalf("set edge's changeover to Waiting: %v", err)
+	}
 
 	f.reconcileNetwork(t, r, "production")
 
 	if got := testutil.ToFloat64(ChangeoversInFlight.WithLabelValues(f.ns, "production")); got != 1 {
 		t.Errorf("ChangeoversInFlight = %v, want 1: a persistent group holds no place", got)
 	}
-	if got := testutil.ToFloat64(ChangeoversWaiting.WithLabelValues(f.ns, "production")); got != 1 {
-		t.Errorf("ChangeoversWaiting = %v, want 1", got)
+	if got := testutil.ToFloat64(ChangeoversWaiting.WithLabelValues(f.ns, "production")); got != 2 {
+		t.Errorf("ChangeoversWaiting = %v, want 2: arena and edge wait for the budget or a stage, "+
+			"build only for its own starting ordinal", got)
 	}
 }
 
