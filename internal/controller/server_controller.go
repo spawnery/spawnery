@@ -596,6 +596,7 @@ func (r *ServerReconciler) collectInputs(
 
 	if podFound {
 		in.PodPending = pod.Status.Phase == corev1.PodPending
+		in.PodUnschedulable = unschedulableMessage(pod)
 		in.PodRunning = pod.Status.Phase == corev1.PodRunning
 		in.PodTerminal = podTerminal(pod)
 		for _, c := range pod.Status.Conditions {
@@ -733,6 +734,18 @@ func podTerminal(pod *corev1.Pod) bool {
 	return pod.Status.Phase == corev1.PodFailed ||
 		pod.Status.Phase == corev1.PodSucceeded ||
 		crashLooping(pod)
+}
+
+func unschedulableMessage(pod *corev1.Pod) string {
+	for _, c := range pod.Status.Conditions {
+		if c.Type == corev1.PodScheduled && c.Status == corev1.ConditionFalse {
+			if c.Message == "" {
+				return c.Reason
+			}
+			return c.Message
+		}
+	}
+	return ""
 }
 
 // crashLooping reports whether the Minecraft container is stuck restarting.
@@ -878,6 +891,10 @@ func (r *ServerReconciler) applyDecision(
 			"deleted pod %s: %s", pod.Name, d.Message)
 	}
 
+	if d.Reason == phase.ReasonPodUnschedulable && !readyReasonIs(srv, phase.ReasonPodUnschedulable) {
+		r.Recorder.Eventf(srv, nil, corev1.EventTypeWarning, phase.ReasonPodUnschedulable, actionSyncStatus,
+			"%s", eventNote("pod %s: %s", pod.Name, d.Message))
+	}
 	meta.SetStatusCondition(&srv.Status.Conditions, metav1.Condition{
 		Type:    spawneryv1alpha1.ConditionReady,
 		Status:  conditionStatus(d.Next == phase.Ready),
@@ -945,6 +962,11 @@ func (r *ServerReconciler) syncOccupiedLabel(
 		delete(patched.Labels, podspec.LabelOccupied)
 	}
 	return r.Patch(ctx, patched, client.MergeFrom(pod))
+}
+
+func readyReasonIs(srv *spawneryv1alpha1.Server, reason string) bool {
+	c := meta.FindStatusCondition(srv.Status.Conditions, spawneryv1alpha1.ConditionReady)
+	return c != nil && c.Reason == reason
 }
 
 func conditionStatus(ok bool) metav1.ConditionStatus {

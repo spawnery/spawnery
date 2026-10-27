@@ -5840,7 +5840,11 @@ spec:
                 description: Address is the pod IP and port the proxies connect to.
                 type: string
               conditions:
-                description: Conditions follow the standard Kubernetes condition contract.
+                description: |-
+                  Conditions follow the standard Kubernetes condition contract. While the
+                  scheduler cannot place the server's pod, Ready is False with reason
+                  PodUnschedulable and the scheduler's message; the group's Progressing
+                  condition names the server.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.
