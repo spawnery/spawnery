@@ -25,6 +25,10 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+            # Nix 2.35 retries a connection error 5 times by default and no 4xx at
+            # all; when cache.nixos.org answers HTTP 416, fallback builds the path.
+            filetransfer-retry-attempts = 10
+            fallback = true
             # The default ten lines end inside Gradle's eight-line "Try:" block,
             # before the failing test's name.
             log-lines = 40
@@ -127,6 +131,10 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+            # Nix 2.35 retries a connection error 5 times by default and no 4xx at
+            # all; when cache.nixos.org answers HTTP 416, fallback builds the path.
+            filetransfer-retry-attempts = 10
+            fallback = true
       - name: make e2e-tutorial
         run: nix develop -c make e2e-tutorial
 
@@ -212,6 +220,10 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+            # Nix 2.35 retries a connection error 5 times by default and no 4xx at
+            # all; when cache.nixos.org answers HTTP 416, fallback builds the path.
+            filetransfer-retry-attempts = 10
+            fallback = true
       - name: make e2e-ondemand
         run: nix develop -c make e2e-ondemand
 
@@ -299,6 +311,10 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+            # Nix 2.35 retries a connection error 5 times by default and no 4xx at
+            # all; when cache.nixos.org answers HTTP 416, fallback builds the path.
+            filetransfer-retry-attempts = 10
+            fallback = true
       - name: make e2e-worldsync
         run: nix develop -c make e2e-worldsync
 
@@ -385,6 +401,10 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+            # Nix 2.35 retries a connection error 5 times by default and no 4xx at
+            # all; when cache.nixos.org answers HTTP 416, fallback builds the path.
+            filetransfer-retry-attempts = 10
+            fallback = true
       - name: make e2e-tutorial-canvas
         run: nix develop -c make e2e-tutorial-canvas
 
@@ -473,6 +493,10 @@ jobs:
         with:
           extra_nix_config: |
             experimental-features = nix-command flakes
+            # Nix 2.35 retries a connection error 5 times by default and no 4xx at
+            # all; when cache.nixos.org answers HTTP 416, fallback builds the path.
+            filetransfer-retry-attempts = 10
+            fallback = true
       - name: make e2e-worldsync-canvas
         run: nix develop -c make e2e-worldsync-canvas
 
