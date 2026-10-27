@@ -55,33 +55,73 @@ jobs:
       # Paper first: purpur-pin.sh and canvas-pin.sh refuse a build that wants
       # another Mojang jar than nix/paper.nix pins. All three stay on the pinned
       # Minecraft version; moving to a new one is not a weekly chore.
-      #
-      # A moved Canvas pin has to pass its image and agent tests before it
-      # joins; a build that fails is put back and named in the pull request, so
-      # it does not hold up the other two.
-      - name: Move the pins
-        id: pins
-        timeout-minutes: 30
+      - name: Move the Paper and Purpur pins
+        id: base
+        timeout-minutes: 10
         run: |
           set -euo pipefail
           pin() { sed -n "s/^  $1 = \"\(.*\)\";$/\1/p" "$2"; }
-          paper_old="$(pin paperBuild nix/paper.nix)"
-          purpur_old="$(pin purpurBuild nix/purpur.nix)"
-          canvas_old="$(pin canvasBuild nix/canvas.nix)"
+          {
+            echo "paper_old=$(pin paperBuild nix/paper.nix)"
+            echo "purpur_old=$(pin purpurBuild nix/purpur.nix)"
+            echo "canvas_old=$(pin canvasBuild nix/canvas.nix)"
+          } >>"$GITHUB_OUTPUT"
           nix develop -c hack/paper-pin.sh
           nix develop -c hack/purpur-pin.sh
-          nix develop -c hack/canvas-pin.sh
 
-          canvas_failed=""
+      # Canvas is tried apart from the other two: a refusal, an outage or a
+      # slow test must not stop the Paper and Purpur bump. A moved pin has to
+      # pass its image and agent tests before it joins; whatever goes wrong,
+      # nix/canvas.nix is put back and canvas_failed says why.
+      - name: Try the Canvas pin
+        id: canvas
+        continue-on-error: true
+        timeout-minutes: 30
+        env:
+          CANVAS_OLD: ${{ steps.base.outputs.canvas_old }}
+        run: |
+          set -euo pipefail
+          pin() { sed -n "s/^  $1 = \"\(.*\)\";$/\1/p" "$2"; }
+          fail() {
+            git checkout nix/canvas.nix
+            echo "canvas_failed=$1" >>"$GITHUB_OUTPUT"
+            echo "::warning::Canvas is not in this bump: $1"
+            echo "Canvas is not in this bump: $1" >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          }
+          err="$RUNNER_TEMP/canvas-pin.err"
+          if ! nix develop -c hack/canvas-pin.sh 2>"$err"; then
+            cat "$err" >&2
+            line="$(grep -m1 '^canvas-pin:' "$err" || head -n1 "$err")"
+            fail "pin refused: ${line#canvas-pin: }"
+          fi
+          cat "$err" >&2
           candidate="$(pin canvasBuild nix/canvas.nix)"
-          if [ "$candidate" != "$canvas_old" ]; then
-            if ! nix develop -c make canvas-image-test canvas-agent-test; then
-              git checkout nix/canvas.nix
-              canvas_failed="$candidate"
-              msg="Canvas build $canvas_failed failed its tests and is not in this bump"
-              echo "::warning::$msg"
-              echo "$msg" >>"$GITHUB_STEP_SUMMARY"
-            fi
+          if [ "$candidate" != "$CANVAS_OLD" ]; then
+            nix develop -c make canvas-image-test canvas-agent-test || fail "$candidate"
+          fi
+
+      - name: Collect the pins
+        id: pins
+        env:
+          PAPER_OLD: ${{ steps.base.outputs.paper_old }}
+          PURPUR_OLD: ${{ steps.base.outputs.purpur_old }}
+          CANVAS_OLD: ${{ steps.base.outputs.canvas_old }}
+          CANVAS_FAILED: ${{ steps.canvas.outputs.canvas_failed }}
+          CANVAS_OUTCOME: ${{ steps.canvas.outcome }}
+        run: |
+          set -euo pipefail
+          pin() { sed -n "s/^  $1 = \"\(.*\)\";$/\1/p" "$2"; }
+          paper_old="$PAPER_OLD"
+          purpur_old="$PURPUR_OLD"
+          canvas_old="$CANVAS_OLD"
+          canvas_failed="$CANVAS_FAILED"
+
+          if [ "$CANVAS_OUTCOME" != success ]; then
+            git checkout nix/canvas.nix
+            canvas_failed="the Canvas step ended with $CANVAS_OUTCOME before it finished"
+            echo "::warning::Canvas is not in this bump: $canvas_failed"
+            echo "Canvas is not in this bump: $canvas_failed" >>"$GITHUB_STEP_SUMMARY"
           fi
 
           paper_new="$(pin paperBuild nix/paper.nix)"
@@ -206,8 +246,11 @@ jobs:
               echo "Canvas build $CANVAS_NEW passed \`make canvas-image-test canvas-agent-test\` before it joined this bump."
               echo
             fi
-            if [ -n "$CANVAS_FAILED" ]; then
+            if [[ "$CANVAS_FAILED" =~ ^[0-9]+$ ]]; then
               echo "Canvas build $CANVAS_FAILED failed its tests and is not in this bump."
+              echo
+            elif [ -n "$CANVAS_FAILED" ]; then
+              echo "Canvas is not in this bump: $CANVAS_FAILED."
               echo
             fi
             echo "Nothing here runs the plugins a network installs on top. A build that breaks one of them shows up in its changelog below, not in the test."
