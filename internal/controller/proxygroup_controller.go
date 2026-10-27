@@ -956,9 +956,9 @@ func (r *ProxyGroupReconciler) markGoneAnnounced(ctx context.Context, pod *corev
 }
 
 // announceLost records ProxyStopped, once, for a proxy that announced its
-// start and is going away without this reconciler having deleted it: an
-// eviction, a lost node, a kubectl delete. A pod gone before any pass saw it
-// terminating is not announced.
+// start and is being deleted by someone other than this reconciler. A pod gone
+// before any pass saw it terminating is not announced, and neither is a
+// kubelet eviction, which fails the pod without deleting it.
 func (r *ProxyGroupReconciler) announceLost(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) error {
 	list := &corev1.PodList{}
 	labels := podspec.ProxyLabels(group.Spec.NetworkRef.Name, group.Name)
