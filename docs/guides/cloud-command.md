@@ -227,8 +227,8 @@ With LuckPerms the level is the player's meta value `spawnery-feed`, read with
 inheritance, so `/lp group admin meta set spawnery-feed normal` covers every
 admin who has not chosen their own. It survives a roll and a change of proxy
 when the proxies share LuckPerms storage. With a LuckPerms messaging service
-the other servers pick up a change at once; without one, at the player's next
-login there. Without
+the other servers reload the player when the service delivers the update;
+without one, at the player's next login there. Without
 LuckPerms the proxy keeps the level in memory until it restarts.
 
 ## Both sides, one command
