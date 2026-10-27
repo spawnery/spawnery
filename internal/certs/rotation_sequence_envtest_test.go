@@ -947,6 +947,69 @@ func TestAMultiBlockIncomingCAIsTruncatedAndTheRotationCarriesOn(t *testing.T) {
 	}
 }
 
+// ca.crt gets the same repair. parseCA and Validate read only its first
+// block, so a surplus block would otherwise pass every check and be
+// published to every agent.
+func TestAMultiBlockSigningCAIsTruncated(t *testing.T) {
+	for name, surplus := range map[string]func(*testing.T) []byte{
+		"a second certificate": func(t *testing.T) []byte {
+			extra, _, err := certs.IssueCA(time.Now())
+			if err != nil {
+				t.Fatalf("IssueCA for the second block: %v", err)
+			}
+			return extra
+		},
+		"a block that does not decode": func(*testing.T) []byte { return unparseableSlot },
+	} {
+		t.Run(name, func(t *testing.T) {
+			s, _, ctx, ns := newStore(t)
+			b, err := s.Ensure(ctx)
+			if err != nil {
+				t.Fatalf("Ensure: %v", err)
+			}
+			original := b.CACertPEM
+			rec := events.NewFakeRecorder(8)
+			s.Recorder = rec
+
+			breakSlot(t, ctx, s, ns, "ca.crt", slices.Concat(original, surplus(t)))
+
+			// The order Provider runs them in.
+			again, err := s.Ensure(ctx)
+			if err != nil {
+				t.Fatalf("Ensure over a multi-block ca.crt: %v", err)
+			}
+			after, inFlight, err := s.AdvanceRotation(ctx, again)
+			if err != nil {
+				t.Fatalf("AdvanceRotation over a multi-block ca.crt: %v", err)
+			}
+			if inFlight {
+				t.Error("repairing ca.crt on an idle secret reported a rotation in flight")
+			}
+
+			secret := secretOf(t, ctx, s, ns)
+			if !bytes.Equal(secret.Data["ca.crt"], original) {
+				t.Fatalf("ca.crt = %d bytes, want the %d of its first block alone",
+					len(secret.Data["ca.crt"]), len(original))
+			}
+			if !bytes.Equal(after.PublishedCA(), original) {
+				t.Errorf("the published bundle is %d bytes, want the %d of the signing CA alone: "+
+					"the surplus block reaches every agent's trust store", len(after.PublishedCA()), len(original))
+			}
+			if !bytes.Equal(secret.Data["ca.key"], b.CAKeyPEM) || !bytes.Equal(secret.Data["tls.crt"], b.ServingCertPEM) {
+				t.Error("the repair changed the CA key or the serving certificate; nothing but the surplus had to go")
+			}
+			got := secret.Annotations[certs.AnnotationRotationDiscarded]
+			if !strings.Contains(got, "ca.crt") || !strings.Contains(got, "truncated to that block") {
+				t.Errorf("the record = %q, want it to name ca.crt and say it was truncated", got)
+			}
+			note := expectEvent(t, rec, corev1.EventTypeWarning, certs.ReasonRotationSlotTruncated)
+			if !strings.Contains(note, "ca.crt") {
+				t.Errorf("event = %q, want it to name ca.crt", note)
+			}
+		})
+	}
+}
+
 // Repairing ca-next while distributing tears the window up, so the gate runs
 // again against the bytes that were kept; otherwise the switch could promote
 // a CA no namespace ever received.

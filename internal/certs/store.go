@@ -37,6 +37,8 @@ const (
 	// RenewCheckInterval is generous against a 90-day serving certificate.
 	RenewCheckInterval = time.Hour
 
+	keyCACert         = "ca.crt"
+	keyCAKey          = "ca.key"
 	keyNextCACert     = "ca-next.crt"
 	keyNextCAKey      = "ca-next.key"
 	keyPreviousCACert = "ca-previous.crt"
@@ -86,8 +88,8 @@ func (s *Store) Ensure(ctx context.Context) (*Bundle, error) {
 	}
 
 	bundle := &Bundle{
-		CACertPEM:         secret.Data["ca.crt"],
-		CAKeyPEM:          secret.Data["ca.key"],
+		CACertPEM:         secret.Data[keyCACert],
+		CAKeyPEM:          secret.Data[keyCAKey],
 		ServingCertPEM:    secret.Data["tls.crt"],
 		ServingKeyPEM:     secret.Data["tls.key"],
 		NextCACertPEM:     secret.Data[keyNextCACert],
@@ -141,8 +143,8 @@ func (s *Store) reissueOrIssue(now time.Time, broken *Bundle) (*Bundle, error) {
 
 func (s *Store) secretFor(b *Bundle) *corev1.Secret {
 	data := map[string][]byte{
-		"ca.crt":  b.CACertPEM,
-		"ca.key":  b.CAKeyPEM,
+		keyCACert: b.CACertPEM,
+		keyCAKey:  b.CAKeyPEM,
 		"tls.crt": b.ServingCertPEM,
 		"tls.key": b.ServingKeyPEM,
 	}
