@@ -90,7 +90,7 @@ const paperGlobalDefault = defaultsDir + "/paper-global.default.yml"
 // regenerate both with:
 //
 //	REPO=$(nix build .#canvas-repo --no-link --print-out-paths)
-//	JAR=$(nix derivation show .#canvas-repo | grep -o '/nix/store/[^"\\]*canvas-build[^"\\]*\.jar' | head -1)
+//	JAR=$(nix build .#canvas-jar --no-link --print-out-paths)
 //	JAVA=$(nix build nixpkgs#jdk25_headless --no-link --print-out-paths)/bin/java
 //	mkdir /tmp/canvas-defaults && cd /tmp/canvas-defaults && echo eula=true >eula.txt
 //	"$JAVA" -Xmx1g -DbundlerRepoDir="$REPO" -jar "$JAR" --nogui
