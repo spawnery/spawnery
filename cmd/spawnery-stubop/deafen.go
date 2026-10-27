@@ -30,7 +30,18 @@ import (
 // agent's TCP never gives up either: only OperatorChannel's keepalive can end
 // the wait, which is what this exercises. One inbound frame already parked in
 // a Read may still be processed after it begins.
-type deafness struct{ on atomic.Bool }
+type deafness struct {
+	on atomic.Bool
+	// quit ends every deaf Read at a stop. grpc's handshake deadline reaches
+	// the socket, not a Read parked here, so a handshake begun after the
+	// deafening would otherwise hold Server.Stop forever.
+	quit     chan struct{}
+	quitOnce sync.Once
+}
+
+func newDeafness() *deafness { return &deafness{quit: make(chan struct{})} }
+
+func (d *deafness) release() { d.quitOnce.Do(func() { close(d.quit) }) }
 
 func (d *deafness) listener(inner net.Listener) net.Listener {
 	return &deafListener{Listener: inner, deafness: d}
@@ -60,7 +71,10 @@ type deafConn struct {
 // would break the stream, which the agent already handles.
 func (c *deafConn) Read(p []byte) (int, error) {
 	if c.deafness.on.Load() {
-		<-c.closed
+		select {
+		case <-c.closed:
+		case <-c.deafness.quit:
+		}
 		return 0, net.ErrClosed
 	}
 	return c.Conn.Read(p)
