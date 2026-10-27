@@ -274,7 +274,7 @@ func TestTutorialLoginGate(t *testing.T) {
 		return list.Items, err
 	}
 	// Velocity refuses a login from an address that logged in within its
-	// login-ratelimit (3000 ms by default); every join here is from 127.0.0.1.
+	// login-ratelimit (3000 ms by default); every join here comes from the same address.
 	var lastJoin time.Time
 	pace := func() {
 		time.Sleep(time.Until(lastJoin.Add(3500 * time.Millisecond)))
@@ -304,9 +304,10 @@ func TestTutorialLoginGate(t *testing.T) {
 		t.Fatalf("gate_refused joined %s beside a held seat with one playable (err %v), want a refusal "+
 			"with \"This round is full.\":\n%s", server, err, out)
 	}
-	if !regexp.MustCompile(`Disconnecting gate_refused .*This round is full\.`).MatchString(serverLog()) {
-		t.Errorf("%s's log does not show its own refusal of gate_refused", server)
-	}
+	refused := regexp.MustCompile(`Disconnecting gate_refused .*This round is full\.`)
+	eventuallyIn(t, tutorialOperatorNamespace, 10*time.Second, server+"'s log to show its own refusal of gate_refused", func() (bool, string) {
+		return refused.MatchString(serverLog()), "not in the server's log yet"
+	})
 
 	held.stop()
 	left := regexp.MustCompile(`gate_held (\(.*\) )?lost connection`)

@@ -313,10 +313,16 @@ func eventuallyStable(t *testing.T, deadline, hold time.Duration, what string, c
 
 var purpurImageLine = regexp.MustCompile(`(?m)^([ \t]*image: )ghcr\.io/spawnery/purpur:\S+$`)
 
-func withGameImage(manifest []byte) []byte {
+func withGameImage(t *testing.T, rel string, manifest []byte) []byte {
+	t.Helper()
 	image := os.Getenv("SPAWNERY_E2E_GAME_IMAGE")
 	if image == "" {
 		return manifest
+	}
+	named := bytes.Count(manifest, []byte("ghcr.io/spawnery/purpur:"))
+	if swapped := len(purpurImageLine.FindAll(manifest, -1)); swapped < named {
+		t.Fatalf("%s names ghcr.io/spawnery/purpur: %d time(s), but only %d line(s) match the image swap; "+
+			"SPAWNERY_E2E_GAME_IMAGE=%s would leave the rest on Purpur", rel, named, swapped, image)
 	}
 	return purpurImageLine.ReplaceAll(manifest, []byte("${1}"+image))
 }
@@ -332,7 +338,7 @@ func applyManifest(t *testing.T, rel string, opts ...client.CreateOption) {
 		t.Fatalf("read %s: %v", rel, err)
 	}
 
-	docs := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(withGameImage(raw))))
+	docs := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(withGameImage(t, rel, raw))))
 	for {
 		doc, err := docs.Read()
 		if errors.Is(err, io.EOF) {
