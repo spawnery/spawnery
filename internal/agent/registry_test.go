@@ -986,19 +986,53 @@ func TestPlayableSlotsNeedsALiveStream(t *testing.T) {
 func TestVoiceTotalsBecomeIncrements(t *testing.T) {
 	r, _ := newTestRegistry()
 	r.Connect("pod-a", RoleProxy)
-	got := r.ReportVoiceTotals("pod-a", map[string]int64{"relayed": 10, "not_svc": 2})
-	if got["relayed"] != 10 || got["not_svc"] != 2 {
-		t.Fatalf("first report = %v", got)
-	}
-	got = r.ReportVoiceTotals("pod-a", map[string]int64{"relayed": 15, "not_svc": 2})
+	r.ReportVoiceTotals("pod-a", map[string]int64{"relayed": 10, "not_svc": 2})
+	got := r.ReportVoiceTotals("pod-a", map[string]int64{"relayed": 15, "not_svc": 2})
 	if got["relayed"] != 5 || got["not_svc"] != 0 {
 		t.Fatalf("second report = %v; want relayed 5, not_svc 0", got)
+	}
+}
+
+// The registry is empty after an operator restart, while the proxies keep
+// counting from their own start.
+func TestTheFirstVoiceReportSetsTheBaselineRatherThanCounting(t *testing.T) {
+	r, _ := newTestRegistry()
+	r.Connect("pod-a", RoleProxy)
+
+	got := r.ReportVoiceTotals("pod-a", map[string]int64{"relayed": 1_000_000, "ping": 40})
+	for reason, n := range got {
+		if n != 0 {
+			t.Errorf("first report added %d to %s; a proxy's lifetime total is not an increment", n, reason)
+		}
+	}
+
+	got = r.ReportVoiceTotals("pod-a", map[string]int64{"relayed": 1_000_007, "ping": 40, "unknown_player": 3})
+	if got["relayed"] != 7 || got["ping"] != 0 {
+		t.Errorf("second report = %v; want relayed 7, ping 0", got)
+	}
+	if got["unknown_player"] != 3 {
+		t.Errorf("unknown_player = %d, want 3: a reason the first report left out had a "+
+			"baseline of zero, not none", got["unknown_player"])
+	}
+}
+
+func TestAReconnectKeepsTheVoiceBaseline(t *testing.T) {
+	r, _ := newTestRegistry()
+	r.Connect("pod-a", RoleProxy)
+	r.ReportVoiceTotals("pod-a", map[string]int64{"relayed": 10})
+	r.ReportVoiceTotals("pod-a", map[string]int64{"relayed": 12})
+	r.Disconnect("pod-a")
+	r.Connect("pod-a", RoleProxy)
+
+	if got := r.ReportVoiceTotals("pod-a", map[string]int64{"relayed": 20}); got["relayed"] != 8 {
+		t.Errorf("after a reconnect = %v; want relayed 8, counted from the baseline before it", got)
 	}
 }
 
 func TestADecreasingVoiceTotalIsARestartNotANegativeIncrement(t *testing.T) {
 	r, _ := newTestRegistry()
 	r.Connect("pod-a", RoleProxy)
+	r.ReportVoiceTotals("pod-a", map[string]int64{"relayed": 90})
 	r.ReportVoiceTotals("pod-a", map[string]int64{"relayed": 100})
 	got := r.ReportVoiceTotals("pod-a", map[string]int64{"relayed": 7})
 	if got["relayed"] != 7 {
@@ -1009,6 +1043,7 @@ func TestADecreasingVoiceTotalIsARestartNotANegativeIncrement(t *testing.T) {
 func TestUnknownVoiceReasonsAreDropped(t *testing.T) {
 	r, _ := newTestRegistry()
 	r.Connect("pod-a", RoleProxy)
+	r.ReportVoiceTotals("pod-a", map[string]int64{})
 	got := r.ReportVoiceTotals("pod-a", map[string]int64{"anything-a-plugin-says": 1, "relayed": 1})
 	if _, ok := got["anything-a-plugin-says"]; ok || got["relayed"] != 1 {
 		t.Fatalf("got %v; an agent must not mint metric label values", got)

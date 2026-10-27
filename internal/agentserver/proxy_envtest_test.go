@@ -421,8 +421,13 @@ func TestAProxysVoiceCountersAndPluginFlagReachTheOperator(t *testing.T) {
 
 	for _, msg := range []*agentpb.ProxyMessage{
 		{Message: &agentpb.ProxyMessage_Hello{Hello: &agentpb.Hello{Version: "test", VoicePluginLoaded: true}}},
+		// What the proxy relayed before this operator started: a baseline, not
+		// an increment.
 		{Message: &agentpb.ProxyMessage_VoiceCounters{VoiceCounters: &agentpb.VoiceCounters{
-			Totals: map[string]int64{"relayed": 3, "bogus": 9},
+			Totals: map[string]int64{"relayed": 500, "bogus": 9},
+		}}},
+		{Message: &agentpb.ProxyMessage_VoiceCounters{VoiceCounters: &agentpb.VoiceCounters{
+			Totals: map[string]int64{"relayed": 503, "bogus": 10},
 		}}},
 	} {
 		if err := stream.Send(msg); err != nil {
@@ -431,11 +436,15 @@ func TestAProxysVoiceCountersAndPluginFlagReachTheOperator(t *testing.T) {
 	}
 
 	deadline := time.Now().Add(10 * time.Second)
-	for testutil.ToFloat64(relayed)-before != 3 {
+	for testutil.ToFloat64(relayed)-before < 3 {
 		if time.Now().After(deadline) {
 			t.Fatalf("relayed rose by %v, want 3", testutil.ToFloat64(relayed)-before)
 		}
 		time.Sleep(50 * time.Millisecond)
+	}
+	if rose := testutil.ToFloat64(relayed) - before; rose != 3 {
+		t.Errorf("relayed rose by %v, want 3: the first report is the proxy's lifetime "+
+			"total and sets the baseline", rose)
 	}
 	if !f.agents.Lookup(string(pod.UID)).VoicePluginLoaded {
 		t.Error("the Hello's voice plugin flag is not in the registry")
