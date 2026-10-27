@@ -158,6 +158,10 @@
             env.CGO_ENABLED = 0;
           };
 
+          luckperms-standin = pkgs.callPackage ./nix/luckperms-standin.nix {
+            inherit paper;
+          };
+
           # Test-only and in no image: an image carrying a tool that logs in as an
           # arbitrary player would hand an attacker one.
           spawnery-join = pkgs.buildGoModule {
@@ -226,7 +230,7 @@
           canvas-jar = canvas.canvasJar;
           velocity-jar = velocity.jar;
 
-          inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents spawnery-operator spawnery-worldsync mermaid-js docs-fonts agent-api-javadoc docs-site;
+          inherit spawnery-slp spawnery-stubop spawnery-join luckperms-standin spawnery-config agents spawnery-operator spawnery-worldsync mermaid-js docs-fonts agent-api-javadoc docs-site;
         } // pkgs.lib.optionalAttrs (pkgs.stdenv.hostPlatform.system == "x86_64-linux") {
           # buildLayeredImage does not cross-compile but labels its output amd64,
           # so the images exist only where that label is true.

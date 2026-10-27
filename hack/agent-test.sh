@@ -15,6 +15,9 @@ IMAGE="${IMAGE:?IMAGE must be set}"
 VELOCITY_IMAGE="${VELOCITY_IMAGE:?VELOCITY_IMAGE must be set}"
 STUBOP="${STUBOP:?STUBOP must be set}"
 VOICEPROBE="${VOICEPROBE:?VOICEPROBE must be set}"
+# nix build .#luckperms-standin: a LuckPerms jar per platform that is present
+# and never loaded, the state a namespace's cold start leaves LuckPerms in.
+LPSTANDIN="${LPSTANDIN:?LPSTANDIN must be set}"
 DEADLINE="${DEADLINE:-240}"
 
 # Shared by every phase's stub but the proxy-sync one, so the stream-rate
@@ -184,6 +187,23 @@ start_agent() {
 		-e SPAWNERY_OPERATOR_ENDPOINT="$endpoint" \
 		"$@" \
 		"$image" >/dev/null
+}
+
+# require_luckperms_survived <container> - the backend greeted and the proxy
+# opened its gate already; this says the LuckPerms jar was really there, so
+# the registration ran into LuckPermsProvider.get() and the agent lived on.
+require_luckperms_survived() {
+	local name="$1" start=$SECONDS
+	until log_has "$name" 'spawnery LuckPerms contexts: registration failed, continuing without them'; do
+		alive "$name" "the LuckPerms registration warning"
+		if [ $((SECONDS - start)) -gt 30 ]; then
+			echo "no LuckPerms registration warning, so the stand-in was not seen and the survival above proves nothing:" >&2
+			"$CONTAINER" logs "$name" 2>&1 | grep -i 'luckperms' >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
+	echo "LuckPerms present but not loaded: the agent warned and carried on"
 }
 
 # log_has <container> <pattern> - captured, not piped: under pipefail, grep -q
@@ -744,6 +764,7 @@ STUB_PID="$(start_stub "$EVENTS" "$WORK/stub.log" "passive" \
 mkdir -p "$WORK/agent/plugins/ProbePlugin"
 printf 'not a jar\n' >"$WORK/agent/plugins/probe-plugin.jar"
 printf 'probe: true\n' >"$WORK/agent/plugins/ProbePlugin/config.yml"
+cp "$LPSTANDIN/luckperms-standin-paper.jar" "$WORK/agent/plugins/"
 
 start_agent "$NAME" "$VOLUME" "$WORK/agent" "$WORK/config" "stubop:19443" "$IMAGE" -i
 
@@ -751,6 +772,7 @@ echo "waiting up to ${DEADLINE}s for the agent to greet..."
 await_event hello
 require_api_installed "$NAME"
 echo "the agent connected"
+require_luckperms_survived "$NAME"
 
 require_cloud_list "$NAME"
 
@@ -1144,8 +1166,9 @@ SET_READY_AFTER=60s
 
 # renew-after 180 keeps one stream for the whole phase, so the FullSync and the
 # SetReady are one schedule on it.
-mkdir -p "$WORK/agent-proxy"
-chmod 0755 "$WORK/agent-proxy"
+mkdir -p "$WORK/agent-proxy/plugins"
+chmod 0755 "$WORK/agent-proxy" "$WORK/agent-proxy/plugins"
+cp "$LPSTANDIN/luckperms-standin-velocity.jar" "$WORK/agent-proxy/plugins/"
 STUB4_PID="$(start_stub "$EVENTS4" "$WORK/stub4.log" "proxy" \
 	--dir "$WORK/agent-proxy" \
 	--san stubop \
@@ -1277,6 +1300,7 @@ until port_open "$NAME4" 8081; do
 	sleep 1
 done
 echo "the ready gate opened $((SECONDS - start))s after the first FullSync"
+require_luckperms_survived "$NAME4"
 
 # The other arm: a withdrawal already out when the gate opened would let the
 # check below pass without observing the close.

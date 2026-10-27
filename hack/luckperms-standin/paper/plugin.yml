@@ -1,0 +1,4 @@
+name: LuckPerms
+version: '0.0.0-standin'
+main: cloud.spawnery.standin.StandIn
+api-version: '26.2'
