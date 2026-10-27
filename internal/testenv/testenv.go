@@ -27,8 +27,10 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -128,7 +130,9 @@ func Client(t *testing.T) (client.Client, context.Context) {
 }
 
 // Namespace creates a unique namespace for one test, so network and group names
-// never collide across tests.
+// never collide across tests. Spawnery objects left in it are deleted,
+// finalizers and all, when the test ends: envtest never removes the
+// namespace, and the orphan sweep and NetworkMetrics list cluster-wide.
 func Namespace(t *testing.T, ctx context.Context, c client.Client) string {
 	t.Helper()
 	ns := &corev1.Namespace{
@@ -137,7 +141,50 @@ func Namespace(t *testing.T, ctx context.Context, c client.Client) string {
 	if err := c.Create(ctx, ns); err != nil {
 		t.Fatalf("create namespace: %v", err)
 	}
+	t.Cleanup(func() { deleteSpawneryObjects(t, ns.Name) })
 	return ns.Name
+}
+
+func deleteSpawneryObjects(t *testing.T, ns string) {
+	t.Helper()
+	c, err := client.New(Config(t), client.Options{Scheme: Scheme(t)})
+	if err != nil {
+		t.Errorf("clean namespace %s: %v", ns, err)
+		return
+	}
+	ctx := context.Background()
+	for _, list := range []client.ObjectList{
+		&spawneryv1alpha1.ServerList{},
+		&spawneryv1alpha1.ScaleBoostList{},
+		&spawneryv1alpha1.ServerGroupList{},
+		&spawneryv1alpha1.ProxyGroupList{},
+		&spawneryv1alpha1.NetworkList{},
+	} {
+		if err := c.List(ctx, list, client.InNamespace(ns)); err != nil {
+			t.Errorf("clean namespace %s: list %T: %v", ns, list, err)
+			continue
+		}
+		items, err := meta.ExtractList(list)
+		if err != nil {
+			t.Errorf("clean namespace %s: %v", ns, err)
+			continue
+		}
+		for _, item := range items {
+			obj, ok := item.(client.Object)
+			if !ok {
+				continue
+			}
+			if len(obj.GetFinalizers()) > 0 {
+				patch := client.RawPatch(types.MergePatchType, []byte(`{"metadata":{"finalizers":null}}`))
+				if err := c.Patch(ctx, obj, patch); err != nil && !apierrors.IsNotFound(err) {
+					t.Errorf("clean namespace %s: release %s: %v", ns, obj.GetName(), err)
+				}
+			}
+			if err := c.Delete(ctx, obj); err != nil && !apierrors.IsNotFound(err) {
+				t.Errorf("clean namespace %s: delete %s: %v", ns, obj.GetName(), err)
+			}
+		}
+	}
 }
 
 // Stop tears the control plane down. Call it from TestMain of every test
