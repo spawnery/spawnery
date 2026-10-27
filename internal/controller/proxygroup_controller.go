@@ -887,7 +887,8 @@ func reportChangingOver(group *spawneryv1alpha1.ProxyGroup, pods []corev1.Pod, w
 				"being replaced; if every group in the cluster says this at "+
 				"once, an operator upgrade changed the pod render rather than anyone "+
 				"editing a spec", stale, len(pods))
-		if wait.Message != "" {
+		if wait.Reason != "" {
+			cond.Reason = wait.Reason
 			cond.Message = wait.Message
 		}
 	}

@@ -470,7 +470,7 @@ func TestChangeoverBudgetHoldsAProxyGroupBehindAServerGroup(t *testing.T) {
 		t.Fatalf("gateway status.changeover = %q, want Waiting", g.Status.Changeover)
 	}
 	if c := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionChangingOver); c == nil ||
-		c.Status != metav1.ConditionTrue ||
+		c.Status != metav1.ConditionTrue || c.Reason != spawneryv1alpha1.ReasonWaitingForChangeoverBudget ||
 		c.Message != "waiting for a changeover place; changing over: lobby" {
 		t.Fatalf("gateway ChangingOver = %+v, want True naming lobby", c)
 	}
@@ -874,7 +874,8 @@ func TestAProxyStageGatesWithTheBudgetUnset(t *testing.T) {
 		t.Fatalf("gateway status.changeover = %q, want Waiting", g.Status.Changeover)
 	}
 	if c := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionChangingOver); c == nil ||
-		c.Status != metav1.ConditionTrue || c.Message != "waiting for stage 0: lobby" {
+		c.Status != metav1.ConditionTrue || c.Reason != spawneryv1alpha1.ReasonWaitingForEarlierStage ||
+		c.Message != "waiting for stage 0: lobby" {
 		t.Fatalf("gateway ChangingOver = %+v, want True waiting for stage 0: lobby", c)
 	}
 
