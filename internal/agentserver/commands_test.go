@@ -166,6 +166,54 @@ func TestSevenDaysExactlyIsAllowed(t *testing.T) {
 	}
 }
 
+func askBoost(s *Server, group string, replicas int32, seconds int64) *agentpb.CloudResponse {
+	return s.answerCloudRequest(context.Background(), logr.Discard(), serverCaller, &agentpb.CloudRequest{
+		Id: 1, Request: &agentpb.CloudRequest_Boost{Boost: &agentpb.BoostRequest{
+			Group: group, Replicas: replicas, DurationSeconds: seconds,
+		}},
+	})
+}
+
+// time.Duration(seconds) * time.Second wraps for anything past about 292
+// years, so these must be refused before that multiplication, not after.
+func TestABoostDurationOutOfRangeIsRefusedNotDefaulted(t *testing.T) {
+	for name, c := range map[string]struct {
+		seconds int64
+		says    string
+	}{
+		"one second past the bound": {int64(BoostMaxDuration/time.Second) + 1, "12h0m0s"},
+		"seconds that overflow":     {1 << 62, "12h0m0s"},
+		"wraps to exactly zero":     {1 << 55, "12h0m0s"},
+		"the largest int64":         {math.MaxInt64, "12h0m0s"},
+		"negative seconds":          {-1, "negative"},
+		"negative that wraps":       {-9223372037, "negative"},
+		"the smallest int64":        {math.MinInt64, "negative"},
+	} {
+		s, c2, _ := commandFixture(t, scalableGroup("lobby", 1, 5))
+		got := askBoost(s, "lobby", 1, c.seconds)
+		if e := got.GetError(); e.GetReason() != agentpb.RequestError_REFUSED || !strings.Contains(e.GetMessage(), c.says) {
+			t.Errorf("%s (%d): answer = %+v, want REFUSED mentioning %q", name, c.seconds, got.GetResult(), c.says)
+		}
+		var list spawneryv1alpha1.ScaleBoostList
+		if err := c2.List(context.Background(), &list, client.InNamespace("ns")); err != nil {
+			t.Fatalf("list: %v", err)
+		}
+		if len(list.Items) != 0 {
+			t.Errorf("%s: a refused boost created %d objects", name, len(list.Items))
+		}
+	}
+}
+
+func TestABoostOfZeroSecondsTakesTheDefaultAndTheBoundItselfIsAllowed(t *testing.T) {
+	s, _, _ := commandFixture(t, scalableGroup("lobby", 1, 5))
+	if got := askBoost(s, "lobby", 1, 0).GetBoost(); got.GetExpiresAtUnix() != commandNow.Add(BoostDefaultDuration).Unix() {
+		t.Errorf("zero seconds: %+v, want the default %s", got, BoostDefaultDuration)
+	}
+	if got := askBoost(s, "lobby", 1, int64(BoostMaxDuration/time.Second)).GetBoost(); got.GetExpiresAtUnix() != commandNow.Add(BoostMaxDuration).Unix() {
+		t.Errorf("exactly the bound: %+v, want a boost of %s", got, BoostMaxDuration)
+	}
+}
+
 func askForceStop(s *Server, id grpcauth.Identity, server string) *agentpb.CloudResponse {
 	return s.answerCloudRequest(context.Background(), logr.Discard(), id, &agentpb.CloudRequest{
 		Id: 2, Request: &agentpb.CloudRequest_ForceStop{ForceStop: &agentpb.ForceStopRequest{Server: server, Issuer: "alice"}},
