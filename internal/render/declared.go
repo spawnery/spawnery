@@ -37,6 +37,12 @@ var paperDefaultConfig []byte
 //go:embed defaults/paper-world-defaults.default.yml
 var paperWorldDefaultsDefaultConfig []byte
 
+//go:embed defaults/canvas-paper-global.default.yml
+var canvasDefaultConfig []byte
+
+//go:embed defaults/canvas-paper-world-defaults.default.yml
+var canvasWorldDefaultsDefaultConfig []byte
+
 //go:embed defaults/velocity.default.toml
 var velocityDefaultConfig []byte
 
@@ -91,6 +97,10 @@ var (
 	// serves both images.
 	paperWorldDefaultsDeclared = mustKeyTree(
 		paperWorldDefaultsDefaultConfig, unmarshalYAML, paperWorldDefaultsFreeForm,
+		"paper-world-defaults.yml")
+	canvasDeclared              = mustKeyTree(canvasDefaultConfig, unmarshalYAML, paperFreeForm, "paper-global.yml")
+	canvasWorldDefaultsDeclared = mustKeyTree(
+		canvasWorldDefaultsDefaultConfig, unmarshalYAML, paperWorldDefaultsFreeForm,
 		"paper-world-defaults.yml")
 	velocityDeclared        = mustKeyTree(velocityDefaultConfig, unmarshalTOML, velocityFreeForm, "velocity.toml")
 	paperPropertiesDeclared = mustKeyTree(

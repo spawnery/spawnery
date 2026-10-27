@@ -3,6 +3,7 @@ CONTAINER ?= docker
 # Recursive on purpose: the nix evals run only when image-test expands these.
 VELOCITY_IMAGE ?= $(shell nix eval --raw .#velocity-image.imageName):$(shell nix eval --raw .#velocity-image.imageTag)
 PURPUR_IMAGE ?= $(shell nix eval --raw .#purpur-image.imageName):$(shell nix eval --raw .#purpur-image.imageTag)
+CANVAS_IMAGE ?= $(shell nix eval --raw .#canvas-image.imageName):$(shell nix eval --raw .#canvas-image.imageTag)
 PURPUR_IMAGE_26_2 ?= $(shell nix eval --raw .#purpur-image-26-2.imageName):$(shell nix eval --raw .#purpur-image-26-2.imageTag)
 OPERATOR_IMAGE ?= $(shell nix eval --raw .#operator-image.imageName):$(shell nix eval --raw .#operator-image.imageTag)
 WORLDSYNC_IMAGE ?= $(shell nix eval --raw .#worldsync-image.imageName):$(shell nix eval --raw .#worldsync-image.imageTag)
@@ -55,7 +56,7 @@ vet:
 .PHONY: test
 # -race unconditionally: a separate test-race target would go unrun. envtest
 # startup dominates the suite, so it costs about 20% rather than 2-10x.
-test: manifests generate fmt vet chart-lint toolchain-lint image-tag-lint docs-length-lint crd-docs-test chart-values-docs-test chart-worldsync-test metrics-docs-test image-version-bump-test
+test: manifests generate fmt vet chart-lint toolchain-lint image-tag-lint docs-length-lint crd-docs-test chart-values-docs-test chart-worldsync-test metrics-docs-test image-version-bump-test canvas-pin-test
 	go test -race ./... -coverprofile cover.out
 
 # protoc and protoc-gen-grpc-java against the Gradle pins; see flake.nix.
@@ -144,6 +145,18 @@ purpur-pin:
 purpur-pin-check:
 	CHECK=1 hack/purpur-pin.sh $(ARGS)
 
+.PHONY: canvas-pin
+canvas-pin:
+	hack/canvas-pin.sh $(ARGS)
+
+.PHONY: canvas-pin-check
+canvas-pin-check:
+	CHECK=1 hack/canvas-pin.sh $(ARGS)
+
+.PHONY: canvas-pin-test
+canvas-pin-test:
+	hack/canvas-pin-test.sh
+
 .PHONY: agent
 # `nix build` reads the git index: `git add` new files first, or the build
 # fails naming a symbol that is plainly in the file.
@@ -183,6 +196,23 @@ purpur-image-load: purpur-image
 .PHONY: purpur-image-test
 purpur-image-test: purpur-image-load
 	CONTAINER=$(CONTAINER) IMAGE=$(PURPUR_IMAGE) hack/image-test.sh
+
+.PHONY: canvas-image
+canvas-image:
+	nix build .#canvas-image --out-link result-canvas
+
+.PHONY: canvas-image-load
+canvas-image-load: canvas-image
+	$(CONTAINER) load < result-canvas
+
+.PHONY: canvas-image-test
+canvas-image-test: canvas-image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(CANVAS_IMAGE) AOT=0 hack/image-test.sh
+
+.PHONY: canvas-agent-test
+canvas-agent-test: canvas-image-load velocity-image-load
+	CONTAINER=$(CONTAINER) IMAGE=$(CANVAS_IMAGE) VELOCITY_IMAGE=$(VELOCITY_IMAGE) \
+		STUBOP=$(STUBOP) VOICEPROBE=$(VOICEPROBE) hack/agent-test.sh
 
 .PHONY: images-26-2-load
 images-26-2-load:
@@ -236,6 +266,8 @@ image-repro:
 	nix build .#purpur-image --rebuild --no-link
 	nix build .#purpur-image-26-2 --no-link
 	nix build .#purpur-image-26-2 --rebuild --no-link
+	nix build .#canvas-image --no-link
+	nix build .#canvas-image --rebuild --no-link
 	nix build .#velocity-image --no-link
 	nix build .#velocity-image --rebuild --no-link
 	nix build .#operator-image --no-link
@@ -294,6 +326,10 @@ e2e: manifests
 e2e-tutorial: manifests
 	hack/e2e-tutorial.sh
 
+.PHONY: e2e-tutorial-canvas
+e2e-tutorial-canvas: manifests
+	GAME=canvas hack/e2e-tutorial.sh
+
 # Loads a real game image; nightly.yml runs it.
 .PHONY: e2e-ondemand
 e2e-ondemand: manifests
@@ -303,6 +339,10 @@ e2e-ondemand: manifests
 .PHONY: e2e-worldsync
 e2e-worldsync: manifests
 	hack/e2e-worldsync.sh
+
+.PHONY: e2e-worldsync-canvas
+e2e-worldsync-canvas: manifests
+	GAME=canvas hack/e2e-worldsync.sh
 
 # mkdocs --strict is the only link checker. Out of `test`; ci.yml runs it in
 # its own job.

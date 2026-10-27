@@ -19,7 +19,7 @@ case "$FLAVOUR" in
 paper)
 	# Every hand-written source set, shipped or not. Listed rather than
 	# discovered, so a moved or vanished directory fails.
-	SRC_DIRS=(common/src/main common/src/test paper/src/main paper/src/test)
+	SRC_DIRS=(common/src/main common/src/test paper/src/main paper/src/canvas paper/src/test)
 	DESCRIPTOR="paper-plugin.yml"
 	DESCRIPTOR_VERSION='^version:'
 	PLATFORM="Paper"
@@ -115,6 +115,12 @@ grep -q '^cloud/spawnery/agent/shaded/io/grpc/stub/ClientCallStreamObserver.clas
 # rewritten with the relocated provider names.
 grep -q '^META-INF/services/cloud.spawnery.agent.shaded.io.grpc.ManagedChannelProvider$' <<<"$entries" ||
 	fail "the relocated ManagedChannelProvider service file is missing"
+
+# Loaded by name on Canvas only, so nothing else fails on Purpur without it.
+if [ "$FLAVOUR" = paper ]; then
+	grep -q '^cloud/spawnery/agent/paper/canvas/CanvasPlatform.class$' <<<"$entries" ||
+		fail "the Canvas source set is missing from the jar"
+fi
 
 # The descriptor's version is what the agent reports as Hello.version, so an
 # unexpanded ${version} must fail here.

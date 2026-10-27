@@ -32,6 +32,7 @@ func TestEveryFreeFormExampleHasTheSameShape(t *testing.T) {
 		freeForm []freeFormPath
 	}{
 		{"paper-global.yml", paperDefaultConfig, unmarshalYAML, paperFreeForm},
+		{"canvas paper-global.yml", canvasDefaultConfig, unmarshalYAML, paperFreeForm},
 		{"velocity.toml", velocityDefaultConfig, unmarshalTOML, velocityFreeForm},
 	} {
 		t.Run(tc.what, func(t *testing.T) {
@@ -79,6 +80,7 @@ func TestEveryFreeFormPathExists(t *testing.T) {
 		freeForm []freeFormPath
 	}{
 		{"paper-global.yml", paperDeclared, paperFreeForm},
+		{"canvas paper-global.yml", canvasDeclared, paperFreeForm},
 		{"velocity.toml", velocityDeclared, velocityFreeForm},
 	} {
 		for _, free := range tc.freeForm {

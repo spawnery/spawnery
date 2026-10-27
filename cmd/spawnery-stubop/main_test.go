@@ -293,14 +293,21 @@ const voicePlayer = "0f8fad5b-d9cb-469f-a165-70867728950e"
 // serves AgentService on; it is stopped when the test ends.
 func serving(t *testing.T, args ...string) (dir, addr string) {
 	t.Helper()
+	dir, addr, _ = servingWithEvents(t, args...)
+	return dir, addr
+}
+
+// servingWithEvents is serving plus the event trace the stub writes.
+func servingWithEvents(t *testing.T, args ...string) (dir, addr string, events *lockedBuffer) {
+	t.Helper()
 	dir = t.TempDir()
 	stop := make(chan os.Signal, 1)
-	var stdout, stderr lockedBuffer
+	stdout, stderr := &lockedBuffer{}, &lockedBuffer{}
 	var code int
 	exited := make(chan struct{})
 	go func() {
 		defer close(exited)
-		code = run(append([]string{"--dir", dir, "--listen", "127.0.0.1:0"}, args...), &stdout, &stderr, stop)
+		code = run(append([]string{"--dir", dir, "--listen", "127.0.0.1:0"}, args...), stdout, stderr, stop)
 	}()
 	t.Cleanup(func() {
 		stop <- syscall.SIGTERM
@@ -316,7 +323,7 @@ func serving(t *testing.T, args ...string) (dir, addr string) {
 		}
 		if _, rest, ok := strings.Cut(stderr.String(), "serving AgentService on "); ok {
 			addr, _, _ = strings.Cut(rest, " ")
-			return dir, addr
+			return dir, addr, stdout
 		}
 		if time.Now().After(deadline) {
 			t.Fatalf("the stub never started serving: %s", stderr.String())
@@ -362,6 +369,132 @@ func proxyStream(t *testing.T, dir, addr string, want func(*agentpb.OperatorToPr
 		got = append(got, message)
 		if want(message) {
 			return got
+		}
+	}
+}
+
+// serverStream opens a ServerSession against a stub started by serving.
+func serverStream(t *testing.T, dir, addr string) grpc.BidiStreamingClient[agentpb.ServerMessage, agentpb.OperatorToServer] {
+	t.Helper()
+	ca, err := os.ReadFile(filepath.Join(dir, "ca.crt"))
+	if err != nil {
+		t.Fatalf("ca.crt: %v", err)
+	}
+	pool := x509.NewCertPool()
+	if !pool.AppendCertsFromPEM(ca) {
+		t.Fatal("ca.crt holds no certificate")
+	}
+	conn, err := grpc.NewClient(addr, grpc.WithTransportCredentials(credentials.NewTLS(&tls.Config{
+		RootCAs:    pool,
+		ServerName: "stubop",
+		MinVersion: tls.VersionTLS13,
+	})))
+	if err != nil {
+		t.Fatalf("dial: %v", err)
+	}
+	t.Cleanup(func() { _ = conn.Close() })
+
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	t.Cleanup(cancel)
+	stream, err := agentpb.NewAgentServiceClient(conn).ServerSession(ctx)
+	if err != nil {
+		t.Fatalf("ServerSession: %v", err)
+	}
+	return stream
+}
+
+// receiveServer forwards what the stub sends on stream until it ends.
+func receiveServer(stream grpc.BidiStreamingClient[agentpb.ServerMessage, agentpb.OperatorToServer]) <-chan *agentpb.OperatorToServer {
+	received := make(chan *agentpb.OperatorToServer, 16)
+	go func() {
+		defer close(received)
+		for {
+			message, err := stream.Recv()
+			if err != nil {
+				return
+			}
+			received <- message
+		}
+	}()
+	return received
+}
+
+func TestExecuteSendsCommandsInOrderAfterReady(t *testing.T) {
+	dir, addr, events := servingWithEvents(t, "--execute", "a", "--execute", "b")
+	stream := serverStream(t, dir, addr)
+	received := receiveServer(stream)
+
+	// ReportInterval, SessionDeadline and NetworkState open the stream.
+	for i := 0; i < 3; i++ {
+		select {
+		case m := <-received:
+			if m.GetExecuteCommand() != nil {
+				t.Fatalf("a command arrived before Ready: %v", m)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("opening message %d never arrived", i)
+		}
+	}
+	select {
+	case m := <-received:
+		t.Fatalf("the stub sent %v before Ready", m)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	next := func(want *agentpb.ExecuteCommand) {
+		t.Helper()
+		select {
+		case m := <-received:
+			got := m.GetExecuteCommand()
+			if got.GetId() != want.GetId() || got.GetCommand() != want.GetCommand() {
+				t.Fatalf("received %v, want %v", m, want)
+			}
+		case <-time.After(5 * time.Second):
+			t.Fatalf("%v never arrived", want)
+		}
+	}
+
+	if err := stream.Send(&agentpb.ServerMessage{Message: &agentpb.ServerMessage_Ready{Ready: &agentpb.Ready{}}}); err != nil {
+		t.Fatalf("send Ready: %v", err)
+	}
+	next(&agentpb.ExecuteCommand{Id: 1, Command: "a"})
+
+	select {
+	case m := <-received:
+		t.Fatalf("the stub sent %v before the first outcome", m)
+	case <-time.After(200 * time.Millisecond):
+	}
+
+	if err := stream.Send(&agentpb.ServerMessage{Message: &agentpb.ServerMessage_ExecuteOutcome{
+		ExecuteOutcome: &agentpb.ExecuteOutcome{Id: 1, Ok: true},
+	}}); err != nil {
+		t.Fatalf("send ExecuteOutcome: %v", err)
+	}
+	next(&agentpb.ExecuteCommand{Id: 2, Command: "b"})
+
+	deadline := time.Now().Add(5 * time.Second)
+	for !strings.Contains(events.String(), `"kind":"execute_outcome"`) {
+		if time.Now().After(deadline) {
+			t.Fatalf("no execute_outcome event:\n%s", events.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for _, want := range []string{`"id":1`, `"ok":true`} {
+		if !strings.Contains(events.String(), want) {
+			t.Errorf("the events lack %s:\n%s", want, events.String())
+		}
+	}
+}
+
+func TestPlayerCountRecordsTicks(t *testing.T) {
+	var out lockedBuffer
+	served := &stub{events: newRecorder(&out)}
+	served.observeServer(func(f map[string]any) map[string]any { return f }, &agentpb.ServerMessage{
+		Message: &agentpb.ServerMessage_PlayerCount{PlayerCount: &agentpb.PlayerCount{Tps: 19.5, Mspt: 12.25}},
+	})
+	for _, want := range []string{`"tps":19.5`, `"mspt":12.25`} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the player_count event lacks %s:\n%s", want, out.String())
 		}
 	}
 }

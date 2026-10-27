@@ -57,6 +57,26 @@ run  "a tag left on the previous Minecraft version" 1 \
 says "it names the upstream version" "upstream version 26.2" \
   "$check" --image-version 0.2.34 --purpur-version 26.3 --manifest "$tmp/old-minecraft.yaml"
 
+cat > "$tmp/canvas-ok.yaml" <<'EOF'
+image: ghcr.io/spawnery/canvas:26.3-0.2.34
+EOF
+run "a Canvas tag on the current versions" 0 \
+  "$check" --image-version 0.2.34 --canvas-version 26.3 --manifest "$tmp/canvas-ok.yaml"
+
+cat > "$tmp/canvas-stale.yaml" <<'EOF'
+image: ghcr.io/spawnery/canvas:26.2-0.2.34
+EOF
+run  "a Canvas tag left on the previous Minecraft version" 1 \
+  "$check" --image-version 0.2.34 --canvas-version 26.3 --manifest "$tmp/canvas-stale.yaml"
+says "it names the upstream version" "upstream version 26.2" \
+  "$check" --image-version 0.2.34 --canvas-version 26.3 --manifest "$tmp/canvas-stale.yaml"
+
+cat > "$tmp/canvas-behind.yaml" <<'EOF'
+image: ghcr.io/spawnery/canvas:26.3-0.2.15
+EOF
+run  "a Canvas tag behind imageVersion" 1 \
+  "$check" --image-version 0.2.34 --canvas-version 26.3 --manifest "$tmp/canvas-behind.yaml"
+
 cat > "$tmp/velocity-shape.yaml" <<'EOF'
 image: ghcr.io/spawnery/velocity:3.5.1-0.2.34
 EOF

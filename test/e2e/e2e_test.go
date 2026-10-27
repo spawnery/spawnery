@@ -9,11 +9,13 @@ package e2e
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"regexp"
 	"strings"
 	"testing"
 	"time"
@@ -309,19 +311,34 @@ func eventuallyStable(t *testing.T, deadline, hold time.Duration, what string, c
 	t.Fatalf("timed out after %s waiting for %s to hold for %s; last seen: %s", deadline, what, hold, last)
 }
 
+var purpurImageLine = regexp.MustCompile(`(?m)^([ \t]*image: )ghcr\.io/spawnery/purpur:\S+$`)
+
+func withGameImage(t *testing.T, rel string, manifest []byte) []byte {
+	t.Helper()
+	image := os.Getenv("SPAWNERY_E2E_GAME_IMAGE")
+	if image == "" {
+		return manifest
+	}
+	named := bytes.Count(manifest, []byte("ghcr.io/spawnery/purpur:"))
+	if swapped := len(purpurImageLine.FindAll(manifest, -1)); swapped < named {
+		t.Fatalf("%s names ghcr.io/spawnery/purpur: %d time(s), but only %d line(s) match the image swap; "+
+			"SPAWNERY_E2E_GAME_IMAGE=%s would leave the rest on Purpur", rel, named, swapped, image)
+	}
+	return purpurImageLine.ReplaceAll(manifest, []byte("${1}"+image))
+}
+
 // applyManifest creates every document of a multi-document manifest, tolerating
 // objects that are already there. Pass client.DryRunAll to check that a
 // manifest is *accepted* without creating anything.
 func applyManifest(t *testing.T, rel string, opts ...client.CreateOption) {
 	t.Helper()
 
-	f, err := os.Open(repoRoot + "/" + rel)
+	raw, err := os.ReadFile(repoRoot + "/" + rel)
 	if err != nil {
-		t.Fatalf("open %s: %v", rel, err)
+		t.Fatalf("read %s: %v", rel, err)
 	}
-	defer func() { _ = f.Close() }()
 
-	docs := utilyaml.NewYAMLReader(bufio.NewReader(f))
+	docs := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(withGameImage(t, rel, raw))))
 	for {
 		doc, err := docs.Read()
 		if errors.Is(err, io.EOF) {

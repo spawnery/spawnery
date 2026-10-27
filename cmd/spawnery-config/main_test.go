@@ -47,8 +47,10 @@ func TestRunRejectsAnUnknownFlavor(t *testing.T) {
 		t.Errorf("exit code is %d, want 2 for a usage error", code)
 	}
 	msg := stderr.String()
-	if !strings.Contains(msg, "paper") || !strings.Contains(msg, "velocity") {
-		t.Errorf("stderr = %q, want it to name both valid flavours", msg)
+	for _, flavor := range []string{"paper", "canvas", "velocity"} {
+		if !strings.Contains(msg, flavor) {
+			t.Errorf("stderr = %q, want it to name the flavour %s", msg, flavor)
+		}
 	}
 }
 
@@ -91,6 +93,38 @@ func TestRunRendersPaperToOut(t *testing.T) {
 	}
 	if !strings.Contains(string(global), "s3cret") {
 		t.Errorf("paper-global.yml = %q, want it to carry the secret's content", global)
+	}
+}
+
+func TestRunRendersCanvasWithItsOwnKeys(t *testing.T) {
+	configDir := t.TempDir()
+	writeConfigDir(t, configDir, "s3cret")
+	overlayDir := filepath.Join(configDir, render.OverlayDir)
+	if err := os.Mkdir(overlayDir, 0o755); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(overlayDir, "paper-global.yml"),
+		[]byte("threaded-regions:\n  threads: 4\n"), 0o644); err != nil {
+		t.Fatalf("fixture: %v", err)
+	}
+
+	for flavor, wantCode := range map[string]int{"canvas": 0, "paper": 1} {
+		out := t.TempDir()
+		var stderr bytes.Buffer
+		code := run([]string{"--flavor", flavor, "--config-dir", configDir, "--out", out}, &stderr)
+		if code != wantCode {
+			t.Errorf("--flavor %s: exit code is %d, want %d; stderr: %s", flavor, code, wantCode, stderr.String())
+		}
+		if flavor != "canvas" {
+			continue
+		}
+		global, err := os.ReadFile(filepath.Join(out, "config", "paper-global.yml"))
+		if err != nil {
+			t.Fatalf("config/paper-global.yml: %v", err)
+		}
+		if !strings.Contains(string(global), "threads: 4") {
+			t.Errorf("paper-global.yml = %q, want threaded-regions.threads", global)
+		}
 	}
 }
 

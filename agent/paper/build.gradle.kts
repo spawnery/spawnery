@@ -27,10 +27,24 @@ val paperLibraries = fileTree("paper-repo/libraries") {
     exclude("**/protobuf-java-*.jar")
 }
 
+// Canvas's API jar carries its own copy of the Bukkit and Paper API, so the
+// Canvas code compiles in a source set that never sees paperLibraries. By hand:
+//
+//   ln -sfn "$(nix build .#canvas-repo --no-link --print-out-paths)" agent/paper/canvas-repo
+val canvasLibraries = fileTree("canvas-repo/libraries") {
+    include("**/*.jar")
+    exclude("**/protobuf-java-*.jar")
+}
+
+val canvas: SourceSet by sourceSets.creating
+
 dependencies {
     implementation(project(":common"))
 
     compileOnly(paperLibraries)
+
+    "canvasCompileOnly"(canvasLibraries)
+    "canvasCompileOnly"(sourceSets.main.get().output)
 
     testImplementation(kotlin("test"))
     // The BOM versions junit-platform-launcher, which junit-jupiter does not.
@@ -101,6 +115,7 @@ tasks.jar {
 
 tasks.shadowJar {
     archiveClassifier.set("")
+    from(canvas.output)
 
     // Everything is relocated, not just what conflicts with Paper today.
     // hack/agent-jar-check.sh fails the build on any class outside

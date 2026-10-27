@@ -95,6 +95,10 @@ that names one keeps running it until its `spec.image` is edited; the [release
 notes](docs/archive/release-notes.md#0215-purpur-is-the-backend-image-and-paper-is-deprecated)
 carry what moving costs.
 
+`ghcr.io/spawnery/canvas` runs a group on [Canvas](https://canvasmc.io), a Folia
+fork whose worlds tick on several threads; the
+[guide](https://docs.spawnery.cloud/guides/canvas/) lists what changes.
+
 Whatever is open right now is in
 [`docs/reference/known-issues.md`](docs/reference/known-issues.md). An entry
 is deleted when it closes, so an empty file means nothing is open. How it got

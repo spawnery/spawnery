@@ -2,12 +2,14 @@
 #
 # Each platform's jar is installed under its own flavour directory. The
 # platform APIs come not from Maven but from the pinned Paper and Velocity
-# builds, so neither plugin can drift from the thing that loads it.
+# builds, so neither plugin can drift from the thing that loads it. The Paper
+# agent's Canvas code compiles against the pinned Canvas build the same way.
 { lib
 , stdenv
 , gradle
 , paper
 , velocity
+, canvas
 , unzip
 , jdk25_headless
 , imageVersion
@@ -30,6 +32,7 @@ stdenv.mkDerivation (finalAttrs: {
   # Inside the subprojects: their build files resolve these paths relative to themselves.
   postPatch = ''
     ln -sfn ${paper.repo} paper/paper-repo
+    ln -sfn ${canvas.repo} paper/canvas-repo
     # :common takes Brigadier from the same repository; see its build file.
     ln -sfn ${paper.repo} common/paper-repo
     ln -sfn ${velocity.jar} velocity/velocity.jar

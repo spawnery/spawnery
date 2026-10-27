@@ -27,11 +27,12 @@ tree() {
 	while IFS= read -r manifest; do
 		rel="${manifest#"$here"/}"
 		mkdir -p "$tmp/tree/$(dirname "$rel")"
-		sed -E -e "s#((purpur|velocity):[^[:space:]]*-)[0-9]+\.[0-9]+\.[0-9]+#\1$1#g" \
+		sed -E -e "s#((purpur|canvas|velocity):[^[:space:]]*-)[0-9]+\.[0-9]+\.[0-9]+#\1$1#g" \
 			-e "s#(cloud\.spawnery:spawnery-api:)[0-9]+\.[0-9]+\.[0-9]+#\1$1#g" \
 			"$manifest" >"$tmp/tree/$rel"
 	done < <("$here/hack/image-tag-pins-agree.sh" --list
 		printf '%s\n' "$here/test/e2e/manifests/ondemand.yaml" "$here/test/e2e/manifests/worldsync.yaml")
+	printf 'image: ghcr.io/spawnery/canvas:26.3-%s\n' "$1" >>"$tmp/tree/docs/tutorial/network.yaml"
 }
 
 image_of() { sed -n 's/^[[:space:]]*imageVersion = "\([^"]*\)";/\1/p' "$tmp/tree/flake.nix"; }
@@ -55,7 +56,8 @@ if grep -rqE 'purpur:26\.3-0\.26\.2' "$tmp/tree/docs/tutorial/network.yaml" &&
 	grep -qF 'spawnery-api:0.26.2' "$tmp/tree/agent/api/README.md" &&
 	grep -qF 'purpur:26.3-0.26.2' "$tmp/tree/test/e2e/manifests/worldsync.yaml" &&
 	grep -qF 'velocity:e2e-no-such-tag' "$tmp/tree/test/e2e/manifests/worldsync.yaml" &&
-	! grep -rqE '(purpur|velocity):[^[:space:]]*-0\.26\.1|spawnery-api:0\.26\.1' "$tmp/tree/docs" "$tmp/tree/config" "$tmp/tree/agent" "$tmp/tree/test"; then
+	grep -qF 'canvas:26.3-0.26.2' "$tmp/tree/docs/tutorial/network.yaml" &&
+	! grep -rqE '(purpur|canvas|velocity):[^[:space:]]*-0\.26\.1|spawnery-api:0\.26\.1' "$tmp/tree/docs" "$tmp/tree/config" "$tmp/tree/agent" "$tmp/tree/test"; then
 	ok "the image tags and the api coordinate move with it"
 else
 	bad "the image tags and the api coordinate move with it" "$(grep -rnE '0\.26\.[12]' "$tmp/tree/docs" "$tmp/tree/config" "$tmp/tree/agent" | head)"

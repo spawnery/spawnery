@@ -53,9 +53,9 @@ const (
 // ran on, starts it again and reads the marker on the other node. Then it
 // deletes the member and waits for the world's prefix to empty.
 //
-// The game image is the real Purpur image, whose agent waits in the Paper
-// bootstrapper for the world the node agent hands it; this run is the first
-// to show that wait ending in a server that is Ready.
+// The game image is the real Purpur or Canvas image, whose agent waits in the
+// Paper bootstrapper for the world the node agent hands it; this run is the
+// first to show that wait ending in a server that is Ready.
 func TestAnObjectStoreWorldTravelsBetweenNodes(t *testing.T) {
 	if os.Getenv(worldSyncGate) != "1" {
 		t.Skipf("set %s=1 to run the object-store path; hack/e2e-worldsync.sh does, "+

@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
 # The world-sync run: one private server whose world lives in an object store
 # (MinIO on kind), started, stopped, resumed on another node and deleted over
-# a real agent session, with the real Purpur image. Not part of `make e2e`: it
-# needs three kind nodes and a real game image. Runs nightly.
+# a real agent session, with the real Purpur image, or Canvas's under
+# GAME=canvas. Not part of `make e2e`: it needs three kind nodes and a real
+# game image. Runs nightly.
 #
 # Under rootless podman:
 #
@@ -16,6 +17,7 @@ set -euo pipefail
 CLUSTER="${CLUSTER:-spawnery-e2e-worldsync}"
 E2E_KEEP="${E2E_KEEP:-0}"
 DEADLINE="${DEADLINE:-300}"
+GAME="${GAME:-purpur}"
 WORLDSYNC_NAMESPACE=worldsync-e2e
 GAME_NAMESPACE=minecraft-ws
 
@@ -64,22 +66,25 @@ cleanup() {
 trap cleanup EXIT
 
 nix build .#operator-image --out-link result-operator
-nix build .#purpur-image --out-link result-purpur
+nix build ".#${GAME}-image" --out-link "result-${GAME}"
 nix build .#worldsync-image --out-link result-worldsync
 
 operator_repo="$(nix eval --raw '.#operator-image.imageName')"
 operator_tag="$(nix eval --raw '.#operator-image.imageTag')"
 purpur_repo="$(nix eval --raw '.#purpur-image.imageName')"
 purpur_tag="$(nix eval --raw '.#purpur-image.imageTag')"
+game_repo="$(nix eval --raw ".#${GAME}-image.imageName")"
+game_tag="$(nix eval --raw ".#${GAME}-image.imageTag")"
 worldsync_repo="$(nix eval --raw '.#worldsync-image.imageName')"
 worldsync_tag="$(nix eval --raw '.#worldsync-image.imageTag')"
 
 manifest=test/e2e/manifests/worldsync.yaml
 if ! grep -q "image: ${purpur_repo}:${purpur_tag}$" "$manifest"; then
-	echo "$manifest does not name ${purpur_repo}:${purpur_tag}, which is the image this run" >&2
-	echo "builds and loads. Nothing else puts a game image on the node, so the private server" >&2
-	echo "would sit in ErrImagePull and never reach Ready. imageVersion in flake.nix has" >&2
-	echo "probably moved; the manifest's tag has to move with it." >&2
+	echo "$manifest does not name ${purpur_repo}:${purpur_tag}, the line test/e2e swaps for" >&2
+	echo "${game_repo}:${game_tag}, which is the image this run builds and loads. Nothing else" >&2
+	echo "puts a game image on the node, so the private server would sit in ErrImagePull and" >&2
+	echo "never reach Ready. imageVersion in flake.nix has probably moved; the manifest's tag" >&2
+	echo "has to move with it." >&2
 	exit 1
 fi
 
@@ -93,13 +98,13 @@ archive() {
 	fi
 }
 archive result-operator "$workdir/operator.tar"
-archive result-purpur "$workdir/purpur.tar"
+archive "result-${GAME}" "$workdir/game.tar"
 archive result-worldsync "$workdir/worldsync.tar"
 
 created_cluster=1
 kind create cluster --name "$CLUSTER" --config test/e2e/worldsync-kind.yaml --wait 120s
 kind load image-archive "$workdir/operator.tar" --name "$CLUSTER"
-kind load image-archive "$workdir/purpur.tar" --name "$CLUSTER"
+kind load image-archive "$workdir/game.tar" --name "$CLUSTER"
 kind load image-archive "$workdir/worldsync.tar" --name "$CLUSTER"
 
 kubectl create namespace "$OPERATOR_NAMESPACE"
@@ -155,5 +160,5 @@ kubectl -n "$OPERATOR_NAMESPACE" rollout status deployment/spawnery-operator --t
 kubectl -n "$WORLDSYNC_NAMESPACE" rollout status daemonset/spawnery-worldsync --timeout="${DEADLINE}s"
 
 # 60m: a real world is generated once and downloaded to a second node.
-SPAWNERY_E2E_WORLDSYNC=1 go test -tags e2e -count=1 -v -timeout 60m \
+SPAWNERY_E2E_WORLDSYNC=1 SPAWNERY_E2E_GAME_IMAGE="${game_repo}:${game_tag}" go test -tags e2e -count=1 -v -timeout 60m \
 	-run TestAnObjectStoreWorld ./test/e2e/...

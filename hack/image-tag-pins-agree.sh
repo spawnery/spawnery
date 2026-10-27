@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Refuses a Purpur/Velocity image tag whose imageVersion, or whose upstream
+# Refuses a Purpur/Canvas/Velocity image tag whose imageVersion, or whose upstream
 # version, has drifted from what flake.nix currently builds.
 #
 # Images are tagged "${upstreamVersion}-${imageVersion}" and the manifests
@@ -13,7 +13,8 @@
 #
 # Usage:
 #   hack/image-tag-pins-agree.sh [--flake FILE] [--image-version VERSION]
-#                                 [--purpur-version V] [--velocity-version V]
+#                                 [--purpur-version V] [--canvas-version V]
+#                                 [--velocity-version V]
 #                                 [--manifest FILE]...
 #   hack/image-tag-pins-agree.sh --list
 #
@@ -28,6 +29,7 @@ root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 flake="$root/flake.nix"
 image_version=""
 purpur_version=""
+canvas_version=""
 velocity_version=""
 manifests=()
 list_only=0
@@ -37,6 +39,7 @@ while [ $# -gt 0 ]; do
     --flake) flake="$2"; shift 2 ;;
     --image-version) image_version="$2"; shift 2 ;;
     --purpur-version) purpur_version="$2"; shift 2 ;;
+    --canvas-version) canvas_version="$2"; shift 2 ;;
     --velocity-version) velocity_version="$2"; shift 2 ;;
     --manifest) manifests+=("$2"); shift 2 ;;
     --list) list_only=1; shift ;;
@@ -56,6 +59,7 @@ if [ "${#manifests[@]}" -eq 0 ]; then
     "$root/docs/guides/object-store-worlds.md"
     "$root/docs/guides/scaling-and-boosts.md"
     "$root/docs/guides/scheduling.md"
+    "$root/docs/guides/canvas.md"
     "$root/docs/plugin-api/index.md"
     "$root/agent/api/README.md"
   )
@@ -77,6 +81,10 @@ if [ -z "$purpur_version" ]; then
   purpur_version="$(sed -n 's/^[[:space:]]*purpurVersion = "\([^"]*\)";/\1/p' "$root/nix/purpur.nix")"
   [ -n "$purpur_version" ] || fail "cannot read purpurVersion out of nix/purpur.nix"
 fi
+if [ -z "$canvas_version" ]; then
+  canvas_version="$(sed -n 's/^[[:space:]]*canvasVersion = "\([^"]*\)";/\1/p' "$root/nix/canvas.nix")"
+  [ -n "$canvas_version" ] || fail "cannot read canvasVersion out of nix/canvas.nix"
+fi
 if [ -z "$velocity_version" ]; then
   velocity_version="$(sed -n 's/^[[:space:]]*velocityVersion = "\([^"]*\)";/\1/p' "$root/nix/velocity.nix")"
   [ -n "$velocity_version" ] || fail "cannot read velocityVersion out of nix/velocity.nix"
@@ -97,6 +105,7 @@ for manifest in "${manifests[@]}"; do
     fi
     case "$ref" in
       */purpur:*) want_upstream="$purpur_version" ;;
+      */canvas:*) want_upstream="$canvas_version" ;;
       *) want_upstream="$velocity_version" ;;
     esac
     if [ "${tag%-*}" != "$want_upstream" ]; then
@@ -104,7 +113,7 @@ for manifest in "${manifests[@]}"; do
         "flake.nix currently builds $want_upstream" >&2
       bad=1
     fi
-  done < <(grep -oE 'ghcr\.io/spawnery/(purpur|velocity):[^[:space:]]+' "$manifest" || true)
+  done < <(grep -oE 'ghcr\.io/spawnery/(purpur|canvas|velocity):[^[:space:]]+' "$manifest" || true)
 
   # The Maven coordinate is imageVersion undivided (nix/agents.nix -PagentVersion).
   while IFS= read -r ref; do
@@ -119,10 +128,10 @@ for manifest in "${manifests[@]}"; do
 done
 
 [ "$found_any" -eq 1 ] ||
-  fail "none of the given manifests name a ghcr.io/spawnery/{purpur,velocity} image; this check would pass vacuously"
+  fail "none of the given manifests name a ghcr.io/spawnery/{purpur,canvas,velocity} image; this check would pass vacuously"
 
 if [ "$bad" -ne 0 ]; then
-  echo "image-tag-pins-agree: move the tags above to purpur:$purpur_version-$image_version" \
-    "and velocity:$velocity_version-$image_version." >&2
+  echo "image-tag-pins-agree: move the tags above to purpur:$purpur_version-$image_version," \
+    "canvas:$canvas_version-$image_version and velocity:$velocity_version-$image_version." >&2
   exit 1
 fi

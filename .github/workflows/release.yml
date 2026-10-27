@@ -70,19 +70,21 @@ jobs:
           fi
           tag="${GITHUB_REF_NAME#v}"
           echo "tag                       ${GITHUB_REF_NAME} (${tag})"
-          echo "flake.nix imageVersion    ${agent}   (purpur, velocity)"
+          echo "flake.nix imageVersion    ${agent}   (purpur, canvas, velocity)"
           echo "flake.nix operatorVersion ${operator}   (operator)"
           echo "Chart.yaml version        ${chart}   (chart)"
           echo "what this tag publishes:"
           purpur_tag="$(nix eval --raw .#purpur-image.imageTag)"
+          canvas_tag="$(nix eval --raw .#canvas-image.imageTag)"
           velocity_tag="$(nix eval --raw .#velocity-image.imageTag)"
           operator_tag="$(nix eval --raw .#operator-image.imageTag)"
           echo "  purpur    ${purpur_tag}"
+          echo "  canvas    ${canvas_tag}"
           echo "  velocity  ${velocity_tag}"
           echo "  operator  ${operator_tag}"
           echo "  worldsync $(nix eval --raw .#worldsync-image.imageTag)"
           echo "  chart     ${chart}"
-          for pair in "purpur:${purpur_tag}" "velocity:${velocity_tag}"; do
+          for pair in "purpur:${purpur_tag}" "canvas:${canvas_tag}" "velocity:${velocity_tag}"; do
             case "${pair#*:}" in
               *-"${agent}") ;;
               *)
@@ -171,7 +173,7 @@ jobs:
           fi
           published=0
           operator_published=false
-          for image in purpur-image purpur-image-26-2 velocity-image worldsync-image operator-image; do
+          for image in purpur-image purpur-image-26-2 canvas-image velocity-image worldsync-image operator-image; do
             status=0
             nix develop -c env DRY_RUN="$dry_run" WRITE_DIGEST=1 \
               ./hack/publish.sh "$image" || status=$?

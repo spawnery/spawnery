@@ -32,6 +32,7 @@ import org.bukkit.event.server.ServerLoadEvent
 import org.bukkit.plugin.java.JavaPlugin
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
@@ -52,6 +53,7 @@ class AgentPlugin : JavaPlugin(), Listener {
     private val mirror = NetworkMirror()
 
     private var loginGate: LoginGateListener? = null
+    private var ticksFailed = false
 
     private val connector = CloudConnector(
         Requests(timeoutMillis = CloudConnector.TIMEOUT_MILLIS),
@@ -66,7 +68,7 @@ class AgentPlugin : JavaPlugin(), Listener {
     private val role = ServerRole(state, mirror, connector, feed, events, ::execute)
 
     private fun execute(command: ExecuteCommand) {
-        server.scheduler.runTask(this, Runnable {
+        server.globalRegionScheduler.execute(this, Runnable {
             val outcome = runCommand(command) { line, feedback ->
                 server.dispatchCommand(server.createCommandSender { feedback(it) }, line)
             }
@@ -91,12 +93,14 @@ class AgentPlugin : JavaPlugin(), Listener {
     private var snapshotSeq = 0L
     private var snapshotInFlight = false
 
+    private val platform by lazy { Platforms.detect(this, server.javaClass.classLoader) }
+
     private fun startSnapshots() {
         val sync = worldSync ?: return
         snapshotSeq = sync.nextSequence() - 1
         val millis = WorldSync.parseInterval(System.getenv(WorldSync.ENV_INTERVAL)) ?: DEFAULT_SNAPSHOT_MILLIS
         val ticks = millis / 50
-        server.scheduler.runTaskTimer(this, Runnable { snapshot(sync) }, ticks, ticks)
+        server.globalRegionScheduler.runAtFixedRate(this, { snapshot(sync) }, ticks, ticks)
     }
 
     private val regionWrites by lazy {
@@ -108,9 +112,10 @@ class AgentPlugin : JavaPlugin(), Listener {
     }
 
     /**
-     * Main thread: freeze saving and queue every chunk. Off it: wait for the
-     * queue, then ask. A server whose queue cannot be waited on saves with
-     * flush, which waits on the main thread instead.
+     * Global region thread: freeze saving and start every save. Off it: wait
+     * for the saves and their writes, then ask. A server whose write queue
+     * cannot be waited on saves with flush, which waits on the global region
+     * thread instead.
      */
     private fun snapshot(sync: WorldSync) {
         if (snapshotInFlight) return
@@ -123,6 +128,7 @@ class AgentPlugin : JavaPlugin(), Listener {
         val writes = regionWrites
         val seq: Long
         val levels: List<Any>
+        val saves: List<CompletableFuture<*>>
         try {
             autosave.keys.forEach { it.isAutoSave = false }
             if (writes.available) {
@@ -132,27 +138,33 @@ class AgentPlugin : JavaPlugin(), Listener {
                 server.dispatchCommand(server.consoleSender, "save-all flush")
                 levels = emptyList()
             }
+            saves = platform.saveRegions()
             seq = ++snapshotSeq
         } catch (t: Throwable) {
             restore.run()
             logger.log(Level.WARNING, "spawnery world sync: could not save for a snapshot", t)
             return
         }
-        server.scheduler.runTaskAsynchronously(this, Runnable {
+        server.asyncScheduler.runNow(this) {
             val outcome: Any = try {
-                if (levels.isNotEmpty()) writes.await(levels)
-                sync.requestSnapshot(seq)
-                sync.awaitSnapshot(seq, SNAPSHOT_WAIT_MILLIS)
+                when (val saved = SnapshotWait.await(saves, SNAPSHOT_WAIT_MILLIS)) {
+                    WorldSync.Outcome.Ready -> {
+                        if (levels.isNotEmpty()) writes.await(levels)
+                        sync.requestSnapshot(seq)
+                        sync.awaitSnapshot(seq, SNAPSHOT_WAIT_MILLIS)
+                    }
+                    else -> "the regions did not save: $saved"
+                }
             } catch (t: Throwable) {
                 t
             }
-            server.scheduler.runTask(this, Runnable {
+            server.globalRegionScheduler.execute(this, Runnable {
                 restore.run()
                 if (outcome != WorldSync.Outcome.Ready) {
                     logger.warning("spawnery world sync: snapshot $seq: $outcome")
                 }
             })
-        })
+        }
     }
 
     override fun onEnable() {
@@ -223,18 +235,19 @@ class AgentPlugin : JavaPlugin(), Listener {
 
                 server.pluginManager.registerEvents(this, this)
 
+                logger.info("spawnery tick reports from ${platform.javaClass.name}")
+
                 // Bukkit.getOnlinePlayers() is not thread-safe, so the count is
-                // sampled on the main thread.
-                server.scheduler.runTaskTimer(this, Runnable {
+                // sampled on the global region thread.
+                server.globalRegionScheduler.runAtFixedRate(this, {
                     state.sample(Bukkit.getOnlinePlayers().size, Bukkit.getMaxPlayers())
                     registerLoginGateOnce()
-                    // Paper's own one-minute average; it caps at 20.
-                    state.sampleTicks(Bukkit.getTPS()[0], Bukkit.getAverageTickTime())
+                    sampleTicks()
                     // Recomputed every tick rather than subscribing to joins,
                     // leaves and permission changes separately.
                     feed.tick()
                     reportInterest(feed.wanted(events.size()))
-                }, 0L, SAMPLE_TICKS)
+                }, 1L, SAMPLE_TICKS)
 
                 // The timer's first run comes after onEnable returns, and the
                 // operator asks for a report at once; unsampled, a fresh server
@@ -245,6 +258,17 @@ class AgentPlugin : JavaPlugin(), Listener {
                 logger.info("spawnery agent connecting to ${env.endpoint}")
                 startSnapshots()
             }
+        }
+    }
+
+    private fun sampleTicks() {
+        try {
+            val ticks = platform.ticks()
+            state.sampleTicks(ticks.tps, ticks.mspt)
+        } catch (e: Exception) {
+            if (ticksFailed) return
+            ticksFailed = true
+            logger.log(Level.WARNING, "spawnery could not read the tick rate; this is logged once", e)
         }
     }
 

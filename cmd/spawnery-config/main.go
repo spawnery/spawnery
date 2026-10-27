@@ -52,7 +52,7 @@ func run(args []string, stderr io.Writer) int {
 	fs := flag.NewFlagSet("spawnery-config", flag.ContinueOnError)
 	fs.SetOutput(stderr)
 
-	flavor := fs.String("flavor", "", `which server this renders for: "paper" or "velocity"`)
+	flavor := fs.String("flavor", "", `which server this renders for: "paper", "canvas" or "velocity"`)
 	configDir := fs.String("config-dir", render.ConfigDir, "directory the operator's rendered configuration is mounted at")
 	out := fs.String("out", "/data", "directory to write the rendered files under")
 
@@ -60,8 +60,8 @@ func run(args []string, stderr io.Writer) int {
 		return 2
 	}
 
-	if *flavor != "paper" && *flavor != "velocity" {
-		_, _ = fmt.Fprintf(stderr, "spawnery-config: --flavor must be \"paper\" or \"velocity\", got %q\n", *flavor)
+	if *flavor != "paper" && *flavor != "canvas" && *flavor != "velocity" {
+		_, _ = fmt.Fprintf(stderr, "spawnery-config: --flavor must be \"paper\", \"canvas\" or \"velocity\", got %q\n", *flavor)
 		return 2
 	}
 
@@ -77,6 +77,8 @@ func run(args []string, stderr io.Writer) int {
 		// Paper has no file reference for the forwarding secret, so it is
 		// the content that must reach paper-global.yml.
 		files, err = render.Paper(values, secret, overlay)
+	case "canvas":
+		files, err = render.Canvas(values, secret, overlay)
 	case "velocity":
 		// Velocity's forwarding-secret-file takes the path, not the content.
 		files, err = render.Velocity(values, filepath.Join(*configDir, render.SecretFile), overlay)

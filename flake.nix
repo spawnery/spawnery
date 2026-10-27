@@ -105,6 +105,10 @@
             inherit (paper) mojangJar;
           };
 
+          canvas = pkgs.callPackage ./nix/canvas.nix {
+            inherit (paper) mojangJar;
+          };
+
           # The previous Minecraft version, built beside the current one so a
           # network can move on its own schedule.
           paper-26-2 = pkgs.callPackage ./nix/paper-26.2.nix { };
@@ -177,7 +181,7 @@
           };
 
           agents = pkgs.callPackage ./nix/agents.nix {
-            inherit paper velocity imageVersion;
+            inherit paper velocity canvas imageVersion;
           };
 
           spawnery-operator = pkgs.buildGoModule {
@@ -216,6 +220,7 @@
           # above paperGlobalDefault in internal/render/paper_test.go.
           paper-repo = paper.repo;
           purpur-repo = purpur.repo;
+          canvas-repo = canvas.repo;
           paper-jar = paper.paperJar;
           velocity-jar = velocity.jar;
 
@@ -225,6 +230,10 @@
           # so the images exist only where that label is true.
           purpur-image = pkgs.callPackage ./nix/purpur-image.nix {
             inherit purpur spawnery-slp spawnery-config agents imageVersion oci-common paper-jre;
+          };
+
+          canvas-image = pkgs.callPackage ./nix/canvas-image.nix {
+            inherit canvas spawnery-slp spawnery-config agents imageVersion oci-common paper-jre;
           };
 
           # The same image over the 26.2 pins and the same agent jar: its
