@@ -126,7 +126,8 @@ type SizeDecision struct {
 	// start. Wanted is 0 then, as it is when nothing is short.
 	ColdStartBlocked bool
 	// ChangeoverWaiting is a cold start or a stale takedown withheld by the
-	// network's changeover budget or an earlier stage.
+	// network's changeover budget or an earlier stage. Create can be above 0
+	// with it: player demand is still answered.
 	ChangeoverWaiting bool
 	// FloorHeld is true when a changeover retirement was declined only
 	// because it would leave fewer than MinAvailable joinable servers.

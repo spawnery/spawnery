@@ -119,12 +119,29 @@ func TestAdmitChangeovers(t *testing.T) {
 			map[string]bool{"ServerGroup/a": true, "ServerGroup/b": true},
 		},
 		{
-			"a group with no changeover state is never in the result, with or without a cap",
+			"a group with no changeover state is never in the result without a cap",
 			[]ChangeoverView{
 				{Kind: "ServerGroup", Name: "idle", State: spawneryv1alpha1.ChangeoverNone},
 			},
 			0,
 			map[string]bool{},
+		},
+		{
+			"a group with no changeover state is never in the result under a cap",
+			[]ChangeoverView{
+				{Kind: "ServerGroup", Name: "idle", State: spawneryv1alpha1.ChangeoverNone},
+			},
+			1,
+			map[string]bool{},
+		},
+		{
+			"two waiting groups of the same name are admitted by kind",
+			[]ChangeoverView{
+				{Kind: "ServerGroup", Name: "gateway", State: spawneryv1alpha1.ChangeoverWaiting},
+				{Kind: "ProxyGroup", Name: "gateway", State: spawneryv1alpha1.ChangeoverWaiting},
+			},
+			1,
+			map[string]bool{"ProxyGroup/gateway": true},
 		},
 		{
 			"a later stage waits for an earlier one in flight, budget unset",

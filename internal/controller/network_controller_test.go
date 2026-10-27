@@ -340,14 +340,38 @@ func TestNetworkCountsChangeoversInFlightAndWaiting(t *testing.T) {
 		t.Fatalf("set edge's changeover to Waiting: %v", err)
 	}
 
+	relay := f.createProxyGroup("relay", func(g *spawneryv1alpha1.ProxyGroup) {
+		g.Spec.Expose.NodePort = &spawneryv1alpha1.NodePortSpec{Port: 30002}
+	})
+	relay.Status.Changeover = spawneryv1alpha1.ChangeoverBegun
+	if err := f.c.Status().Update(f.ctx, relay); err != nil {
+		t.Fatalf("set relay's changeover to Begun: %v", err)
+	}
+	failing := f.createEphemeralGroupLike(t, "duels")
+	failing.Status.Changeover = spawneryv1alpha1.ChangeoverBegun
+	failing.Status.Conditions = waitingFor(spawneryv1alpha1.ConditionBackingOff, spawneryv1alpha1.ReasonCrashLoopBackoff)
+	if err := f.c.Status().Update(f.ctx, failing); err != nil {
+		t.Fatalf("set duels' changeover to Begun: %v", err)
+	}
+
 	f.reconcileNetwork(t, r, "production")
 
-	if got := testutil.ToFloat64(ChangeoversInFlight.WithLabelValues(f.ns, "production")); got != 1 {
-		t.Errorf("ChangeoversInFlight = %v, want 1: a persistent group holds no place", got)
+	if got := testutil.ToFloat64(ChangeoversInFlight.WithLabelValues(f.ns, "production")); got != 2 {
+		t.Errorf("ChangeoversInFlight = %v, want 2 (lobby, relay): a persistent group holds no place, "+
+			"and a failing one gives its place up", got)
 	}
 	if got := testutil.ToFloat64(ChangeoversWaiting.WithLabelValues(f.ns, "production")); got != 2 {
 		t.Errorf("ChangeoversWaiting = %v, want 2: arena and edge wait for the budget or a stage, "+
 			"build only for its own starting ordinal", got)
+	}
+
+	if err := f.c.Delete(f.ctx, f.network); err != nil {
+		t.Fatalf("delete Network: %v", err)
+	}
+	f.reconcileNetwork(t, r, "production")
+	if ChangeoversInFlight.DeleteLabelValues(f.ns, "production") ||
+		ChangeoversWaiting.DeleteLabelValues(f.ns, "production") {
+		t.Error("the changeover gauges still carry a series for the deleted Network")
 	}
 }
 

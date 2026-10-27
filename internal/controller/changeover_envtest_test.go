@@ -24,6 +24,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
@@ -79,6 +80,44 @@ func TestChangeoverBudgetHoldsTheSecondGroup(t *testing.T) {
 	}
 	if got := f.serverGroup(t, "lobby").Status.Changeover; got != spawneryv1alpha1.ChangeoverBegun {
 		t.Fatalf("lobby status.changeover = %q, want Begun", got)
+	}
+}
+
+func TestARefusedWaitingGroupAnswersDemandAndBegins(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.setChangeoverBudget(t, 1)
+	f.createEphemeralGroupLike(t, "arena")
+	for _, name := range []string{"arena", "lobby"} {
+		f.reconcileNamedGroup(t, r, name)
+		f.readyAllServersOf(t, name)
+	}
+	f.setImage(t, "arena", nextImage)
+	f.setImage(t, "lobby", nextImage)
+	f.reconcileNamedGroup(t, r, "arena")
+	f.reconcileNamedGroup(t, r, "lobby")
+	if got := f.serverGroup(t, "lobby").Status.Changeover; got != spawneryv1alpha1.ChangeoverWaiting {
+		t.Fatalf("lobby status.changeover = %q, want Waiting behind arena", got)
+	}
+
+	names := f.serverNamesOfGroup(t, "lobby")
+	if len(names) != 1 {
+		t.Fatalf("lobby has %d servers, want 1", len(names))
+	}
+	pod, ok := f.pod(names[0])
+	if !ok {
+		t.Fatalf("pod of %s not found", names[0])
+	}
+	if err := f.agents.ReportPlayers(string(pod.UID), 80, 100); err != nil {
+		t.Fatalf("ReportPlayers: %v", err)
+	}
+	f.reconcileNamedGroup(t, r, "lobby")
+
+	if n := len(f.serverNamesOfGroup(t, "lobby")); n != 2 {
+		t.Fatalf("lobby has %d servers, want 2: 20 free slots under spareSlots 40 are answered while waiting", n)
+	}
+	if got := f.serverGroup(t, "lobby").Status.Changeover; got != spawneryv1alpha1.ChangeoverBegun {
+		t.Fatalf("lobby status.changeover = %q, want Begun: the server it built is of the new spec", got)
 	}
 }
 
@@ -508,6 +547,40 @@ func TestChangeoverBudgetUnsetDoesNotRefuseADegradedProxyGroup(t *testing.T) {
 	}
 }
 
+func TestADegradedProxyGroupUnderABudgetHoldsNoPlace(t *testing.T) {
+	f := newFixture(t)
+	gr := groupReconciler(f)
+	pr := proxyGroupReconciler(f)
+	f.setChangeoverBudget(t, 1)
+	f.reconcileNamedGroup(t, gr, "lobby")
+	f.readyAllServersOf(t, "lobby")
+	f.readyProxyGroup(t, pr, "gateway")
+
+	f.setProxyImage(t, "gateway", nextProxyImage)
+	f.reconcileProxyGroup(pr, "gateway")
+	g := f.proxyGroup("gateway")
+	if g.Status.Changeover != spawneryv1alpha1.ChangeoverBegun {
+		t.Fatalf("gateway status.changeover = %q, want Begun", g.Status.Changeover)
+	}
+	meta.SetStatusCondition(&g.Status.Conditions, metav1.Condition{
+		Type: spawneryv1alpha1.ConditionDegraded, Status: metav1.ConditionTrue,
+		Reason: spawneryv1alpha1.ReasonProxyPodUnschedulable, Message: "test",
+	})
+	if err := f.c.Status().Update(f.ctx, g); err != nil {
+		t.Fatalf("update gateway status: %v", err)
+	}
+
+	f.setImage(t, "lobby", nextImage)
+	f.reconcileNamedGroup(t, gr, "lobby")
+
+	if n := len(f.serverNamesOfGroup(t, "lobby")); n != 2 {
+		t.Fatalf("lobby has %d servers, want 2: a degraded gateway holds no place", n)
+	}
+	if got := f.serverGroup(t, "lobby").Status.Changeover; got != spawneryv1alpha1.ChangeoverBegun {
+		t.Fatalf("lobby status.changeover = %q, want Begun", got)
+	}
+}
+
 // The freed place does not wait for the stale pod to actually be gone.
 func TestChangeoverBudgetFreedOnceTheLastStaleProxyIsLeaving(t *testing.T) {
 	for _, leaving := range []string{"draining", "terminating"} {
@@ -923,7 +996,9 @@ func (f *fixture) deletePod(t *testing.T, name string, hold bool) {
 		t.Cleanup(func() {
 			if p, _ := f.pod(name); p != nil {
 				p.Finalizers = nil
-				_ = f.c.Update(context.Background(), p)
+				if err := f.c.Update(context.Background(), p); err != nil && !apierrors.IsNotFound(err) {
+					t.Errorf("release pod %s from its test finalizer: %v", name, err)
+				}
 			}
 		})
 	}
