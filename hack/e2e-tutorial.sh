@@ -11,7 +11,7 @@ E2E_KEEP="${E2E_KEEP:-0}"
 DEADLINE="${DEADLINE:-300}"
 GAME="${GAME:-purpur}"
 # E2E_RUN narrows -run, for proving one test bites.
-E2E_RUN="${E2E_RUN:-TestTutorialPath|TestTutorialPlayableSlots|TestTutorialChangeoverStages|TestTutorialTransferOnDrain|TestTutorialJoinPermission|TestTutorialCloudCommands}"
+E2E_RUN="${E2E_RUN:-TestTutorialPath|TestTutorialPlayableSlots|TestTutorialLoginGate|TestTutorialChangeoverStages|TestTutorialTransferOnDrain|TestTutorialJoinPermission|TestTutorialCloudCommands}"
 
 # The chart's default, so this run installs exactly what README.md documents.
 OPERATOR_NAMESPACE=spawnery-system

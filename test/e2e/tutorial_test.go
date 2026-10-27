@@ -200,6 +200,125 @@ func TestTutorialPlayableSlots(t *testing.T) {
 	})
 }
 
+// TestTutorialLoginGate runs after TestTutorialPlayableSlots on the same
+// network: with one enforced playable seat on a single lobby server, a held
+// join takes the seat, a second join is refused at login, and once the first
+// leaves a third is admitted.
+func TestTutorialLoginGate(t *testing.T) {
+	if os.Getenv("SPAWNERY_E2E_TUTORIAL") != "1" {
+		t.Skip("set SPAWNERY_E2E_TUTORIAL=1; hack/e2e-tutorial.sh does this nightly")
+	}
+	joinPath, err := exec.LookPath("spawnery-join")
+	if err != nil {
+		t.Fatalf("spawnery-join not on PATH (%v); the dev shell carries it, run this through nix develop", err)
+	}
+
+	key := client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialServerGroup}
+	var g spawneryv1alpha1.ServerGroup
+	if err := k8s.Get(ctx, key, &g); err != nil {
+		t.Fatalf("get ServerGroup: %v", err)
+	}
+	restore := g.DeepCopy()
+	patch := client.MergeFrom(g.DeepCopy())
+	g.Spec.PlayableSlots = ptr.To[int32](1)
+	g.Spec.EnforcePlayableSlots = true
+	g.Spec.Scaling = &spawneryv1alpha1.ScalingSpec{MinReplicas: 1, MaxReplicas: 1, SpareSlots: 0}
+	if err := k8s.Patch(ctx, &g, patch); err != nil {
+		t.Fatalf("patch ServerGroup: %v", err)
+	}
+	t.Cleanup(func() {
+		var now spawneryv1alpha1.ServerGroup
+		if err := k8s.Get(ctx, key, &now); err != nil {
+			return
+		}
+		back := client.MergeFrom(now.DeepCopy())
+		now.Spec.PlayableSlots = restore.Spec.PlayableSlots
+		now.Spec.EnforcePlayableSlots = restore.Spec.EnforcePlayableSlots
+		now.Spec.Scaling = restore.Spec.Scaling
+		_ = k8s.Patch(ctx, &now, back)
+	})
+
+	var server, pod string
+	eventuallyIn(t, tutorialOperatorNamespace, 3*time.Minute, "one Ready lobby server with one playable seat", func() (bool, string) {
+		var list spawneryv1alpha1.ServerList
+		if err := k8s.List(ctx, &list, client.InNamespace(tutorialNamespace)); err != nil {
+			return false, err.Error()
+		}
+		var lobby []spawneryv1alpha1.Server
+		seen := ""
+		for _, s := range list.Items {
+			if s.Spec.GroupRef.Name == tutorialServerGroup {
+				lobby = append(lobby, s)
+				seen += fmt.Sprintf(" %s=%s playable %d;", s.Name, s.Status.Phase, s.Status.PlayableSlots)
+			}
+		}
+		if len(lobby) != 1 || lobby[0].Status.Phase != string(phase.Ready) || lobby[0].Status.PlayableSlots != 1 {
+			return false, "servers:" + seen
+		}
+		server, pod = lobby[0].Name, lobby[0].Status.PodName
+		return true, ""
+	})
+
+	serverLog := func() string {
+		log, _ := readPodLog(tutorialNamespace, pod, &corev1.PodLogOptions{Container: podspec.ContainerName})
+		return log
+	}
+	eventuallyIn(t, tutorialOperatorNamespace, time.Minute, server+" to register its login check", func() (bool, string) {
+		return strings.Contains(serverLog(), "login check registered"), "not in the server's log yet"
+	})
+
+	gatewayPods := func() ([]corev1.Pod, error) {
+		var list corev1.PodList
+		err := k8s.List(ctx, &list, client.InNamespace(tutorialNamespace),
+			client.MatchingLabels{podspec.LabelGroup: tutorialProxyGroup, podspec.LabelRole: podspec.RoleProxy})
+		return list.Items, err
+	}
+	// Velocity refuses a login from an address that logged in within its
+	// login-ratelimit (3000 ms by default); every join here is from 127.0.0.1.
+	var lastJoin time.Time
+	pace := func() {
+		time.Sleep(time.Until(lastJoin.Add(3500 * time.Millisecond)))
+		lastJoin = time.Now()
+	}
+	join := func(username string) (string, error) {
+		pace()
+		out, err := exec.Command(joinPath,
+			"--host", "127.0.0.1",
+			"--port", strconv.Itoa(tutorialJoinPort),
+			"--username", username,
+			"--timeout", "40s",
+			"--hold", "3s",
+		).CombinedOutput()
+		return string(out), err
+	}
+
+	pace()
+	held := startHeldJoin(t, joinPath, "gate_held", 90*time.Second)
+	t.Cleanup(held.stop)
+	if _, on := whereIs(t, held, gatewayPods); on != server {
+		t.Fatalf("gate_held landed on %s, want %s", on, server)
+	}
+
+	out, err := join("gate_refused")
+	if err == nil || !strings.Contains(out, "This round is full.") {
+		t.Fatalf("gate_refused joined %s beside a held seat with one playable (err %v), want a refusal "+
+			"with \"This round is full.\":\n%s", server, err, out)
+	}
+	if !regexp.MustCompile(`Disconnecting gate_refused .*This round is full\.`).MatchString(serverLog()) {
+		t.Errorf("%s's log does not show its own refusal of gate_refused", server)
+	}
+
+	held.stop()
+	left := regexp.MustCompile(`gate_held (\(.*\) )?lost connection`)
+	eventuallyIn(t, tutorialOperatorNamespace, 30*time.Second, "gate_held to leave "+server, func() (bool, string) {
+		return left.MatchString(serverLog()), "not in the server's log yet"
+	})
+
+	if out, err := join("gate_admitted"); err != nil {
+		t.Fatalf("gate_admitted was not admitted to %s after the held seat left (%v):\n%s", server, err, out)
+	}
+}
+
 // TestTutorialChangeoverStages puts the gateway a stage ahead of the lobby
 // and changes both: the lobby's first new server may only come once the
 // gateway's new proxy stands.
