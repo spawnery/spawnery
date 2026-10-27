@@ -20,9 +20,12 @@ import (
 	"context"
 	"slices"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
+	"github.com/go-logr/logr"
+	"github.com/go-logr/logr/funcr"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
@@ -30,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/config"
 	"sigs.k8s.io/controller-runtime/pkg/manager"
@@ -313,16 +317,34 @@ func TestManagerReconcilesEndToEnd(t *testing.T) {
 	c, setupCtx := testenv.Client(t)
 	ns := testenv.Namespace(t, setupCtx, c)
 
+	// Stands for what the other tests in this binary leave behind.
+	foreign := &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "left-behind", Namespace: testenv.Namespace(t, setupCtx, c)},
+		Spec: spawneryv1alpha1.NetworkSpec{
+			ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "velocity-forwarding-secret"},
+		},
+	}
+	if err := c.Create(setupCtx, foreign); err != nil {
+		t.Fatalf("create foreign network: %v", err)
+	}
+	t.Cleanup(func() { _ = c.Delete(setupCtx, foreign) })
+
 	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	clock := &testClock{now: start}
 
+	logs := &managerLog{}
 	mgr, err := ctrl.NewManager(testenv.Config(t), manager.Options{
 		Scheme:                  testenv.Scheme(t),
+		Logger:                  logs.logger(),
 		Metrics:                 metricsserver.Options{BindAddress: "0"},
 		HealthProbeBindAddress:  "0",
 		LeaderElection:          true,
 		LeaderElectionNamespace: ns,
 		LeaderElectionID:        "spawnery-e2e-test",
+		// The other tests in this binary leave their groups behind, and a
+		// cluster-wide manager would reconcile them, re-creating their
+		// Services and the node ports later tests ask for.
+		Cache: cache.Options{DefaultNamespaces: map[string]cache.Config{ns: {}}},
 		// controller-runtime's name-collision check is process-global; this
 		// manager has its own metrics, so the collision cannot happen.
 		Controller: config.Controller{SkipNameValidation: ptr.To(true)},
@@ -383,9 +405,10 @@ func TestManagerReconcilesEndToEnd(t *testing.T) {
 
 	// The group controller only sizes against an accepted Network and would
 	// otherwise fall back to its 30s retry.
+	created := time.Now()
+	var got spawneryv1alpha1.Network
 	networkAccepted := false
 	for i := 0; i < 40; i++ {
-		var got spawneryv1alpha1.Network
 		if err := c.Get(setupCtx, types.NamespacedName{Name: network.Name, Namespace: ns}, &got); err != nil {
 			t.Fatalf("get network: %v", err)
 		}
@@ -396,8 +419,11 @@ func TestManagerReconcilesEndToEnd(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 	}
 	if !networkAccepted {
+		t.Logf("network status: %+v", got.Status)
+		t.Logf("manager log:\n%s", logs.String())
 		t.Fatal("running manager never accepted the network, gave up after 20s")
 	}
+	t.Logf("network accepted %s after its create", time.Since(created).Round(time.Millisecond))
 
 	group := &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: "lobby", Namespace: ns},
@@ -426,6 +452,7 @@ func TestManagerReconcilesEndToEnd(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 	}
 	if !found {
+		t.Logf("manager log:\n%s", logs.String())
 		t.Fatalf("running manager never created a Server for the group, got %d after 30s", len(servers.Items))
 	}
 	srv := servers.Items[0]
@@ -444,6 +471,35 @@ func TestManagerReconcilesEndToEnd(t *testing.T) {
 		time.Sleep(500 * time.Millisecond)
 	}
 	if !podFound {
+		t.Logf("manager log:\n%s", logs.String())
 		t.Fatal("running manager never created a pod for the server, gave up after 30s")
 	}
+
+	if err := c.Get(setupCtx, client.ObjectKeyFromObject(foreign), foreign); err != nil {
+		t.Fatalf("get foreign network: %v", err)
+	}
+	if len(foreign.Status.Conditions) != 0 {
+		t.Errorf("the manager reconciled a network outside its namespace: %+v", foreign.Status.Conditions)
+	}
+}
+
+// managerLog keeps everything the manager and its reconcilers log, down to
+// controller-runtime's per-reconcile V(5) lines.
+type managerLog struct {
+	mu    sync.Mutex
+	lines []string
+}
+
+func (l *managerLog) logger() logr.Logger {
+	return funcr.New(func(prefix, args string) {
+		l.mu.Lock()
+		defer l.mu.Unlock()
+		l.lines = append(l.lines, time.Now().Format("15:04:05.000")+" "+prefix+" "+args)
+	}, funcr.Options{Verbosity: 5})
+}
+
+func (l *managerLog) String() string {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+	return strings.Join(l.lines, "\n")
 }

@@ -54,6 +54,11 @@ func TestSampleManifestIsAcceptedByTheAPIServer(t *testing.T) {
 		count++
 		if err := c.Create(ctx, &obj); err != nil {
 			t.Errorf("create %s %s/%s: %v", obj.GetKind(), obj.GetNamespace(), obj.GetName(), err)
+			continue
+		}
+		// The Namespace stays: envtest never finishes deleting one.
+		if obj.GetNamespace() != "" {
+			t.Cleanup(func() { _ = c.Delete(ctx, &obj) })
 		}
 	}
 	if count != 5 {
