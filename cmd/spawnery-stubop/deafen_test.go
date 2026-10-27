@@ -34,7 +34,7 @@ func TestADeafenedStubStillStopsOnSIGTERM(t *testing.T) {
 	stdout, stderr := &lockedBuffer{}, &lockedBuffer{}
 	exited := make(chan int, 1)
 	go func() {
-		exited <- run([]string{"--dir", dir, "--listen", "127.0.0.1:0", "--deafen-after", "300ms"}, stdout, stderr, stop)
+		exited <- run([]string{"--dir", dir, "--listen", "127.0.0.1:0", "--deafen-after", "1s"}, stdout, stderr, stop)
 	}()
 
 	var addr string
