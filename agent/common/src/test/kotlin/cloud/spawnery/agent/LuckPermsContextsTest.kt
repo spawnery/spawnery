@@ -79,6 +79,20 @@ class LuckPermsContextsTest {
     }
 
     @Test
+    fun `a proxy asks with the contexts the target backend registers itself`() {
+        val target = backend(pod = "vip-x1", inGroup = "vip", inNetwork = "tutorial")
+
+        assertEquals(
+            LuckPermsContexts.of(target, LuckPermsContexts.UNCONFIGURED),
+            LuckPermsContexts.ofBackend("vip-x1", "vip", "tutorial"),
+        )
+        assertEquals(
+            mapOf("server" to "vip-x1", "group" to "vip", "environment" to "paper"),
+            LuckPermsContexts.ofBackend("vip-x1", "vip", ""),
+        )
+    }
+
+    @Test
     fun `a pod without LuckPerms is silence and not a crash`() {
         // Proves the absent path only while LuckPerms is off the test classpath.
         assertFailsWith<ClassNotFoundException> {

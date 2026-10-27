@@ -2,6 +2,7 @@ package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.JoinRule
 import cloud.spawnery.agent.JoinRules
+import cloud.spawnery.agent.LuckPermsContexts
 import cloud.spawnery.agent.PermissionValue
 import com.velocitypowered.api.permission.Tristate
 import com.velocitypowered.api.proxy.ProxyServer
@@ -30,7 +31,7 @@ class JoinPermissions(
 
     override fun mayJoin(player: UUID, server: String, group: String): Boolean {
         val rule = rules(group) ?: return true
-        val contexts = JoinRules.contexts(server, group, network())
+        val contexts = LuckPermsContexts.ofBackend(server, group, network())
         val value = lookups.firstNotNullOfOrNull { lookup ->
             runCatching { lookup.value(player, rule.node, contexts) }
                 .onFailure {

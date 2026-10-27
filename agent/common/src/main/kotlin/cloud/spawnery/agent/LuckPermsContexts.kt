@@ -28,16 +28,33 @@ object LuckPermsContexts {
     /** What LuckPerms reports when nobody has configured a server name. */
     const val UNCONFIGURED = "global"
 
+    fun of(self: Self, luckPermsServerName: String): Map<String, String> =
+        // The API, not the jar: Purpur reports `paper`, so a grant survives a swap.
+        of(self.name(), self.group(), self.network(), if (self is ProxySelf) "velocity" else "paper", luckPermsServerName)
+
+    /**
+     * What the backend [server] registers, for a proxy asking LuckPerms on its
+     * behalf. The proxy cannot see the backend's LuckPerms server name, so it
+     * takes it as unconfigured.
+     */
+    fun ofBackend(server: String, group: String, network: String): Map<String, String> =
+        of(server, group, network, "paper", UNCONFIGURED)
+
     /** `server` is LuckPerms' own key, so it is filled in only while LuckPerms has none configured. */
-    fun of(self: Self, luckPermsServerName: String): Map<String, String> {
+    private fun of(
+        server: String,
+        group: String,
+        network: String,
+        environment: String,
+        luckPermsServerName: String,
+    ): Map<String, String> {
         val contexts = LinkedHashMap<String, String>()
         if (luckPermsServerName == UNCONFIGURED) {
-            contexts.putIfCarried("server", self.name())
+            contexts.putIfCarried("server", server)
         }
-        contexts.putIfCarried("group", self.group())
-        contexts.putIfCarried("network", self.network())
-        // The API, not the jar: Purpur reports `paper`, so a grant survives a swap.
-        contexts["environment"] = if (self is ProxySelf) "velocity" else "paper"
+        contexts.putIfCarried("group", group)
+        contexts.putIfCarried("network", network)
+        contexts["environment"] = environment
         return contexts
     }
 
