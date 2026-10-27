@@ -273,15 +273,10 @@ func TestTutorialLoginGate(t *testing.T) {
 			client.MatchingLabels{podspec.LabelGroup: tutorialProxyGroup, podspec.LabelRole: podspec.RoleProxy})
 		return list.Items, err
 	}
-	// Velocity refuses a login from an address that logged in within its
-	// login-ratelimit (3000 ms by default); every join here comes from the same address.
-	var lastJoin time.Time
-	pace := func() {
-		time.Sleep(time.Until(lastJoin.Add(3500 * time.Millisecond)))
-		lastJoin = time.Now()
-	}
+	var logins loginPacer
 	join := func(username string) (string, error) {
-		pace()
+		logins.wait()
+		defer logins.landed()
 		out, err := exec.Command(joinPath,
 			"--host", "127.0.0.1",
 			"--port", strconv.Itoa(tutorialJoinPort),
@@ -292,12 +287,13 @@ func TestTutorialLoginGate(t *testing.T) {
 		return string(out), err
 	}
 
-	pace()
+	logins.wait()
 	held := startHeldJoin(t, joinPath, "gate_held", 90*time.Second)
 	t.Cleanup(held.stop)
 	if _, on := whereIs(t, held, gatewayPods); on != server {
 		t.Fatalf("gate_held landed on %s, want %s", on, server)
 	}
+	logins.landed()
 
 	out, err := join("gate_refused")
 	if err == nil || !strings.Contains(out, "This round is full.") {
@@ -630,19 +626,18 @@ func TestTutorialTransferOnDrain(t *testing.T) {
 			j.stop()
 		}
 	})
-	// Velocity's login-ratelimit default: one login per address every 3000 ms,
-	// and every join here reaches the proxies from the same node address.
-	var lastJoin time.Time
-	join := func(username string, hold time.Duration) *heldJoin {
-		time.Sleep(time.Until(lastJoin.Add(3500 * time.Millisecond)))
-		lastJoin = time.Now()
-		j := startHeldJoin(t, joinPath, username, hold)
+	var logins loginPacer
+	join := func(username string, hold time.Duration) (j *heldJoin, started time.Time, pod, server string) {
+		logins.wait()
+		j = startHeldJoin(t, joinPath, username, hold)
+		started = time.Now()
 		joins = append(joins, j)
-		return j
+		pod, server = whereIs(t, j, proxyPods)
+		logins.landed()
+		return j, started, pod, server
 	}
 
-	filler := join(base+"f", 10*time.Minute)
-	fillerPod, fillerServer := whereIs(t, filler, proxyPods)
+	filler, _, fillerPod, fillerServer := join(base+"f", 10*time.Minute)
 	t.Logf("filler %s: proxy %s, backend %s", filler.username, fillerPod, fillerServer)
 
 	leave := func(j *heldJoin, pod string) {
@@ -662,9 +657,7 @@ func TestTutorialTransferOnDrain(t *testing.T) {
 	var playerPod, playerServer string
 	var holdEnd time.Time
 	for attempt := 1; attempt <= 12 && player == nil; attempt++ {
-		j := join(fmt.Sprintf("%sp%d", base, attempt), hold)
-		started := time.Now()
-		pod, server := whereIs(t, j, proxyPods)
+		j, started, pod, server := join(fmt.Sprintf("%sp%d", base, attempt), hold)
 		t.Logf("attempt %d, %s: proxy %s, backend %s", attempt, j.username, pod, server)
 		if pod == fillerPod && server != fillerServer {
 			player, playerPod, playerServer, holdEnd = j, pod, server, started.Add(hold)
@@ -1084,6 +1077,15 @@ func TestTutorialCloudCommands(t *testing.T) {
 		return ran && output, fmt.Sprintf("ran=%v output=%v", ran, output)
 	})
 }
+
+// loginPacer keeps joins more than Velocity's login-ratelimit apart (3000 ms
+// per address; every join comes from the one node address). Velocity times
+// the login, which trails the join's start by its ping and dial, so the gap
+// runs from the previous join's arrival on a backend, or its end.
+type loginPacer struct{ last time.Time }
+
+func (p *loginPacer) wait()   { time.Sleep(time.Until(p.last.Add(3500 * time.Millisecond))) }
+func (p *loginPacer) landed() { p.last = time.Now() }
 
 type heldJoin struct {
 	username string
