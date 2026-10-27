@@ -4,8 +4,9 @@
 worlds are cut into regions that tick on several threads. Spawnery publishes
 it as `ghcr.io/spawnery/canvas`, beside the Purpur image. A group uses it by
 naming the image. The pod contract, the agent, the join permission and world
-sync are the same as on Purpur. Everything below was measured on 2026-10-26
-and 2026-10-27 with Canvas 26.3 build 991 on the development VM.
+sync are the same as on Purpur. What follows was measured on the development
+VM on 2026-10-26 and 2026-10-27 with Canvas 26.3 build 991, or read from
+Canvas's committed defaults and source.
 
 ```yaml
 apiVersion: spawnery.cloud/v1alpha1
@@ -37,7 +38,7 @@ Could not load plugin 'Example' as it is not marked as supporting Folia!
 ```
 
 The flag is the plugin author's statement that the plugin schedules through
-the region schedulers. Canvas does not check it. A plugin written for Paper
+the region schedulers. A plugin written for Paper
 and Purpur usually makes no such statement and does not run on Canvas. The
 spawnery agent declares it, and so can a plugin of yours that uses
 `GlobalRegionScheduler`, `RegionScheduler` and `AsyncScheduler` instead of

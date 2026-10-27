@@ -29,9 +29,9 @@ swapped (throwaway branch, not kept).
 without it. JVM start to `Done`: 7.8 s and 8.1 s, no AOT cache.
 
 **The unchanged agent.** Canvas loaded the server and never loaded the
-agent. There was no line in the log saying so: a plugin without
-`folia-supported: true` is skipped without a message, and `hack/agent-test.sh`
-timed out waiting for a hello.
+agent. Canvas skips a plugin without `folia-supported: true` and logs
+`Could not load plugin '<name>' as it is not marked as supporting Folia!`;
+`hack/agent-test.sh` timed out waiting for a hello.
 
 **With the plugin flag and Paper's region schedulers** (`GlobalRegionScheduler`
 for what ran on the main thread, `AsyncScheduler` for
