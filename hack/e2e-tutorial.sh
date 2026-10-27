@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 # The tutorial's own path with the real Purpur and Velocity images and a real join.
+# GAME=canvas runs it on Canvas's image instead of Purpur's.
 #
 # Not part of `make e2e`: the real images would put 724 MB into a fresh kind
 # node on every push. Runs nightly instead (.github/workflows/nightly.yml).
@@ -8,6 +9,7 @@ set -euo pipefail
 CLUSTER="${CLUSTER:-spawnery-e2e-tutorial}"
 E2E_KEEP="${E2E_KEEP:-0}"
 DEADLINE="${DEADLINE:-300}"
+GAME="${GAME:-purpur}"
 # E2E_RUN narrows -run, for proving one test bites.
 E2E_RUN="${E2E_RUN:-TestTutorialPath|TestTutorialPlayableSlots|TestTutorialChangeoverStages|TestTutorialTransferOnDrain|TestTutorialJoinPermission|TestTutorialCloudCommands}"
 
@@ -59,8 +61,19 @@ cleanup() {
 trap cleanup EXIT
 
 nix build .#operator-image --out-link result-operator
-nix build .#purpur-image --out-link result-purpur
+nix build ".#${GAME}-image" --out-link "result-${GAME}"
 nix build .#velocity-image --out-link result-velocity
+
+purpur_image="$(nix eval --raw '.#purpur-image.imageName'):$(nix eval --raw '.#purpur-image.imageTag')"
+game_image="$(nix eval --raw ".#${GAME}-image.imageName"):$(nix eval --raw ".#${GAME}-image.imageTag")"
+
+manifest=docs/tutorial/network.yaml
+if ! grep -q "image: ${purpur_image}$" "$manifest"; then
+	echo "$manifest does not name ${purpur_image}, the line this run swaps for ${game_image}," >&2
+	echo "which is the image it builds and loads. imageVersion in flake.nix has probably moved;" >&2
+	echo "the manifest's tag has to move with it." >&2
+	exit 1
+fi
 
 # dockerTools emits a gzipped archive; `kind load image-archive` wants a plain tar.
 archive() {
@@ -72,13 +85,13 @@ archive() {
 	fi
 }
 archive result-operator "$workdir/operator.tar"
-archive result-purpur "$workdir/purpur.tar"
+archive "result-${GAME}" "$workdir/game.tar"
 archive result-velocity "$workdir/velocity.tar"
 
 created_cluster=1
 kind create cluster --name "$CLUSTER" --config docs/tutorial/kind-config.yaml --wait 120s
 kind load image-archive "$workdir/operator.tar" --name "$CLUSTER"
-kind load image-archive "$workdir/purpur.tar" --name "$CLUSTER"
+kind load image-archive "$workdir/game.tar" --name "$CLUSTER"
 kind load image-archive "$workdir/velocity.tar" --name "$CLUSTER"
 
 # README's Install command, unmodified: image.tag already tracks operatorVersion.
@@ -87,6 +100,6 @@ helm install spawnery charts/spawnery --namespace "$OPERATOR_NAMESPACE" --create
 kubectl -n "$OPERATOR_NAMESPACE" rollout status deployment/spawnery-operator --timeout="${DEADLINE}s"
 
 # The reader's single-stream apply, which the Go test's per-document create does not exercise.
-kubectl apply -f docs/tutorial/network.yaml
+sed "s|image: ${purpur_image}\$|image: ${game_image}|" "$manifest" | kubectl apply -f -
 
-SPAWNERY_E2E_TUTORIAL=1 go test -tags e2e -count=1 -v -timeout 28m -run "$E2E_RUN" ./test/e2e/...
+SPAWNERY_E2E_TUTORIAL=1 SPAWNERY_E2E_GAME_IMAGE="$game_image" go test -tags e2e -count=1 -v -timeout 28m -run "$E2E_RUN" ./test/e2e/...
