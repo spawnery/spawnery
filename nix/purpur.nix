@@ -16,6 +16,10 @@ rec {
   purpurJar = fetchurl {
     url = "https://api.purpurmc.org/v2/purpur/${purpurVersion}/${purpurBuild}/download";
     hash = "sha256-oi2Gu5k0kaLU/nfsp3wkdUHxcgzhn2jHrwiBxEO5h44=";
+    # A stalled transfer from this host does not fail by itself. 10 KiB/s is the
+    # rate at which the 55 MB jar still fits in a 90 minute CI job; fetchurl's
+    # --retry resumes after curl gives up.
+    curlOptsList = [ "--speed-limit" "10240" "--speed-time" "30" ];
   };
 
   # Paper's Mojang jar: same Minecraft version, same object. paperclip verifies
