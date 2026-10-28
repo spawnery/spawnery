@@ -194,7 +194,8 @@ on any server, with no allowlist, and on most servers that includes `op`.
 
 **`/cloud events`** sets how much of the cloud event feed this player sees in
 chat. Without a word it shows the player's current level. `on` means `minimal`,
-which is the default, and `off` shows nothing.
+which is the default, and `off` shows nothing. `inherit` drops the player's own
+level, so the one their LuckPerms groups set, or the default, counts again.
 
 | Event | `minimal` | `normal` | `verbose` |
 |---|---|---|---|
@@ -214,12 +215,20 @@ group and the first six characters of its key (`challenge-3f2b1c`). Hovering
 over a name shows it in full, and clicking it puts `/cloud info <name>` in the
 chat box.
 
+The agent decides how each event shows, from the operator's event reasons. An
+agent older than its operator shows a reason it does not know only at
+`verbose`. An operator older than 0.20.0 records no `ServerStopped`, so
+servers get no `[-]` line, and one of 0.30.0 or older gives none for a proxy
+that went away outside a drain either. The feed is not replayed: an event
+recorded while an agent's stream to the operator is down, or while the
+operator restarts, does not reach that agent's chat.
+
 With LuckPerms the level is the player's meta value `spawnery-feed`, read with
 inheritance, so `/lp group admin meta set spawnery-feed normal` covers every
 admin who has not chosen their own. It survives a roll and a change of proxy
-when the proxies share LuckPerms storage, because LuckPerms loads a player's
-data from storage at login, so the level follows the player from their next
-login on any proxy. Without
+when the proxies share LuckPerms storage. With a LuckPerms messaging service
+the other servers reload the player when the service delivers the update;
+without one, at the player's next login there. Without
 LuckPerms the proxy keeps the level in memory until it restarts.
 
 ## Both sides, one command

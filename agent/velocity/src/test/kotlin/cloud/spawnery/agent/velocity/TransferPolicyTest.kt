@@ -111,6 +111,22 @@ class TransferPolicyTest {
     }
 
     @Test
+    fun `a clock that reads zero when the proxy starts leaving still counts from there`() {
+        val p = policy(forceAfterMillis = 1_000L)
+        now = 0L
+        assertTrue(p.leaving(picture(leavingAlone)))
+
+        now = 999L
+        assertEquals(emptyList(), p.forced(picture(leavingAlone), listOf(TransferPolicy.Occupant(alice, "lobby-1"))))
+        now = 1_000L
+
+        assertEquals(
+            listOf(alice to "lobby-1"),
+            p.forced(picture(leavingAlone), listOf(TransferPolicy.Occupant(alice, "lobby-1"))),
+        )
+    }
+
+    @Test
     fun `a peer whose Velocity refuses transfers is nowhere to land`() {
         val p = policy(forceAfterMillis = 0L)
         val pic = picture(leavingAlone, accepting = setOf("edge-1"))

@@ -12,17 +12,16 @@ import org.bukkit.event.player.PlayerLoginEvent
 import org.bukkit.event.player.PlayerQuitEvent
 
 /**
- * Registered once the group enforces playable slots or has a join rule. A
- * PlayerLoginEvent listener makes Paper refuse its reconfiguration API
- * server-wide. PlayerLoginEvent is deprecated, but the only login event that
- * has the player's permissions.
+ * Registered while the group enforces playable slots or has a join rule; see
+ * [LoginGateSwitch]. PlayerLoginEvent is deprecated, but the only login event
+ * that has the player's permissions.
  */
 @Suppress("DEPRECATION")
 class LoginGateListener(
     private val group: String,
     private val mirror: NetworkMirror,
     private val state: ServerState,
-    private val pending: PendingSeats = PendingSeats(System::currentTimeMillis),
+    private val pending: PendingSeats = PendingSeats(),
     private val log: (String) -> Unit = {},
 ) : Listener {
     @EventHandler(priority = EventPriority.HIGH)

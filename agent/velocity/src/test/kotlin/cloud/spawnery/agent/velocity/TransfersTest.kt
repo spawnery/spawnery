@@ -7,6 +7,7 @@ import net.kyori.adventure.text.TranslatableComponent
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
 import kotlin.test.assertNull
@@ -42,6 +43,7 @@ class TransfersTest {
         warn = { message, error -> warnings += message to error },
         spacingMillis = 3_500,
         clock = { seconds * 1000 },
+        turnClock = { seconds * 1000 },
     )
 
     private class FakeTraveller(
@@ -61,9 +63,13 @@ class TransfersTest {
             told += message
         }
 
-        override fun transfer(cookie: ByteArray, to: InetSocketAddress) {
+        /** Set to hand back a transfer that is queued and not yet sent. */
+        var queued: CompletableFuture<Unit>? = null
+
+        override fun transfer(cookie: ByteArray, to: InetSocketAddress): CompletableFuture<Unit> {
             failWith?.let { throw it }
             sent += cookie to to
+            return queued ?: CompletableFuture.completedFuture(Unit)
         }
     }
 
@@ -78,6 +84,63 @@ class TransfersTest {
         assertEquals(host, to)
         assertEquals(TransferCookie.Result.Valid("arena-1"), cookie.read(alice.uuid, bytes))
         assertEquals(listOf("spawnery: transferred 'alice' (switch) toward 'arena-1'"), infos)
+    }
+
+    @Test
+    fun `a queued transfer is logged as queued, and as transferred only once it went out`() {
+        val alice = FakeTraveller("alice", "lobby-1", host)
+        val queued = CompletableFuture<Unit>()
+        alice.queued = queued
+
+        assertTrue(transfers.onSwitch(alice, "arena-1"))
+        assertEquals(listOf("spawnery: queued the transfer of 'alice' (switch) toward 'arena-1'"), infos)
+
+        queued.complete(Unit)
+        assertEquals("spawnery: transferred 'alice' (switch) toward 'arena-1'", infos.last())
+        assertTrue(warnings.isEmpty())
+    }
+
+    @Test
+    fun `a queued transfer that fails is a warning, never a transfer, and the player is not leaving`() {
+        val alice = FakeTraveller("alice", "lobby-1", host)
+        val queued = CompletableFuture<Unit>()
+        alice.queued = queued
+        transfers.onSwitch(alice, "arena-1")
+        assertTrue(transfers.leavingByTransfer(alice.uuid))
+
+        queued.completeExceptionally(IllegalStateException("connection closed"))
+
+        assertTrue(infos.none { it.startsWith("spawnery: transferred") }, "logged as transferred: $infos")
+        assertEquals("connection closed", warnings.single().second?.message)
+        assertFalse(transfers.leavingByTransfer(alice.uuid))
+    }
+
+    @Test
+    fun `a wall clock stepped back does not hold an address past its spacing`() {
+        var monotonic = 0L
+        var wall = 1_000_000L
+        val alone = Transfers(
+            cookie = cookie,
+            policy = TransferPolicy(0L) { monotonic },
+            picture = { TransferPolicy.Picture("edge-1", "edge", leaving, emptySet(), setOf("edge-1", "edge-2")) },
+            registered = { it in registered },
+            info = {},
+            warn = { _, _ -> },
+            spacingMillis = 3_500,
+            clock = { monotonic },
+            turnClock = { wall },
+        )
+        val shared = InetAddress.getByName("198.51.100.9")
+        val alice = FakeTraveller("alice", "lobby-1", host, address = shared)
+        val bob = FakeTraveller("bob", "lobby-1", host, address = shared)
+        alone.pass(listOf(alice))
+        assertEquals(1, alice.sent.size)
+
+        wall = 0L
+        monotonic += 4_000
+        alone.pass(listOf(bob))
+
+        assertEquals(1, bob.sent.size, "the address was still cooling after the step")
     }
 
     @Test
@@ -326,6 +389,7 @@ class TransfersTest {
         warn = { _, _ -> },
         spacingMillis = 3_500,
         clock = { seconds * 1000 },
+        turnClock = { seconds * 1000 },
     )
 
     @Test
@@ -464,6 +528,7 @@ class TransfersTest {
             warn = { _, _ -> },
             spacingMillis = 3_500,
             clock = { seconds * 1000 },
+            turnClock = { seconds * 1000 },
         )
         val alice = FakeTraveller("alice", "lobby-1", host)
         val first = seconds

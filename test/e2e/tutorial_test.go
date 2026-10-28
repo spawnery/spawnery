@@ -1019,19 +1019,21 @@ func TestTutorialCloudCommands(t *testing.T) {
 	})
 
 	// With it, say runs on every lobby server, and list's output comes back.
-	setExecute := func(on bool) {
+	setCommands := func(commands *spawneryv1alpha1.NetworkCommands) *spawneryv1alpha1.NetworkCommands {
 		var n spawneryv1alpha1.Network
 		if err := k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: "tutorial"}, &n); err != nil {
 			t.Fatalf("get Network: %v", err)
 		}
+		before := n.Spec.Commands.DeepCopy()
 		patch := client.MergeFrom(n.DeepCopy())
-		n.Spec.Commands = &spawneryv1alpha1.NetworkCommands{Execute: on}
+		n.Spec.Commands = commands
 		if err := k8s.Patch(ctx, &n, patch); err != nil {
 			t.Fatalf("patch Network: %v", err)
 		}
+		return before
 	}
-	setExecute(true)
-	t.Cleanup(func() { setExecute(false) })
+	before := setCommands(&spawneryv1alpha1.NetworkCommands{Execute: true})
+	t.Cleanup(func() { setCommands(before) })
 
 	var floor spawneryv1alpha1.ServerGroup
 	if err := k8s.Get(ctx, groupKey, &floor); err != nil {

@@ -2,6 +2,8 @@ package cloud.spawnery.agent.velocity
 
 import cloud.spawnery.agent.JoinRule
 import cloud.spawnery.agent.JoinRules
+import cloud.spawnery.agent.LuckPermsContexts
+import cloud.spawnery.agent.NetworkMirror
 import cloud.spawnery.agent.PermissionValue
 import com.velocitypowered.api.permission.Tristate
 import com.velocitypowered.api.proxy.ProxyServer
@@ -20,8 +22,31 @@ fun interface JoinAccess {
     }
 }
 
+sealed interface JoinRuleLookup {
+    data object Open : JoinRuleLookup
+
+    data class Rule(val rule: JoinRule) : JoinRuleLookup
+
+    /** Nothing says whether the group has a rule; the player is refused. */
+    data object Unknown : JoinRuleLookup
+
+    companion object {
+        fun of(rule: JoinRule?): JoinRuleLookup = rule?.let(::Rule) ?: Open
+    }
+}
+
+fun proxyJoinRules(directory: ServerDirectory, mirror: NetworkMirror): (server: String, group: String) -> JoinRuleLookup =
+    { server, group ->
+        val carried = directory.backendOf(server)
+        when {
+            mirror.knowsGroup(group) -> JoinRuleLookup.of(mirror.joinRule(group))
+            carried != null && carried.ruleCarried -> JoinRuleLookup.of(carried.joinRule)
+            else -> JoinRuleLookup.Unknown
+        }
+    }
+
 class JoinPermissions(
-    private val rules: (String) -> JoinRule?,
+    private val rules: (server: String, group: String) -> JoinRuleLookup,
     private val network: () -> String,
     private val log: (String, Throwable?) -> Unit,
     private val lookups: List<PermissionLookup>,
@@ -29,8 +54,12 @@ class JoinPermissions(
     private val reported = ConcurrentHashMap.newKeySet<PermissionLookup>()
 
     override fun mayJoin(player: UUID, server: String, group: String): Boolean {
-        val rule = rules(group) ?: return true
-        val contexts = JoinRules.contexts(server, group, network())
+        val rule = when (val lookup = rules(server, group)) {
+            JoinRuleLookup.Open -> return true
+            JoinRuleLookup.Unknown -> return false
+            is JoinRuleLookup.Rule -> lookup.rule
+        }
+        val contexts = LuckPermsContexts.ofBackend(server, group, network())
         val value = lookups.firstNotNullOfOrNull { lookup ->
             runCatching { lookup.value(player, rule.node, contexts) }
                 .onFailure {

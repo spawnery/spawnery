@@ -1,5 +1,6 @@
 package cloud.spawnery.agent.paper
 
+import cloud.spawnery.agent.monotonicMillis
 import java.nio.file.Files
 import java.nio.file.Path
 import java.nio.file.StandardCopyOption
@@ -7,7 +8,7 @@ import java.nio.file.StandardCopyOption
 /** The game server's side of the files spawnery-worldsync leaves in /data/.spawnery-worldsync. */
 class WorldSync(
     private val controlDir: Path,
-    private val clock: () -> Long = System::currentTimeMillis,
+    private val clock: () -> Long = ::monotonicMillis,
     private val sleep: (Long) -> Unit = Thread::sleep,
 ) {
     sealed interface Outcome {

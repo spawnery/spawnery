@@ -1,5 +1,6 @@
 package cloud.spawnery.agent.paper
 
+import cloud.spawnery.agent.monotonicMillis
 import io.papermc.paper.plugin.bootstrap.BootstrapContext
 import io.papermc.paper.plugin.bootstrap.PluginBootstrap
 import java.nio.file.Path
@@ -13,10 +14,10 @@ class WorldSyncBootstrap : PluginBootstrap {
     override fun bootstrap(context: BootstrapContext) {
         if (System.getenv(WorldSync.ENV_ENABLED) != "1") return
         val sync = WorldSync(Path.of(System.getProperty("user.dir"), WorldSync.CONTROL_DIR))
-        val started = System.currentTimeMillis()
+        val started = monotonicMillis()
         when (val outcome = sync.awaitReady(WAIT_MILLIS)) {
             WorldSync.Outcome.Ready ->
-                context.logger.info("spawnery world sync: world ready after {} ms", System.currentTimeMillis() - started)
+                context.logger.info("spawnery world sync: world ready after {} ms", monotonicMillis() - started)
             is WorldSync.Outcome.Failed -> abort(context, "the world could not be downloaded: ${outcome.reason}")
             WorldSync.Outcome.TimedOut -> abort(context, "no world after ${WAIT_MILLIS / 1000} s")
         }

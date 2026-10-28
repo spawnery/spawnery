@@ -18,6 +18,7 @@ package proxyreg_test
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"strings"
 	"testing"
@@ -28,6 +29,7 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
@@ -1099,5 +1101,104 @@ func TestTheVoiceConfigComesBeforeTheNetworkState(t *testing.T) {
 	}
 	if voiceAt < 0 || stateAt < 0 || voiceAt > stateAt {
 		t.Errorf("VoiceConfig at %d, NetworkState at %d; want both, the VoiceConfig first", voiceAt, stateAt)
+	}
+}
+
+func serverGroupWithRule(name string, rule *spawneryv1alpha1.JoinPermission) *spawneryv1alpha1.ServerGroup {
+	return &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns},
+		Spec:       spawneryv1alpha1.ServerGroupSpec{JoinPermission: rule},
+	}
+}
+
+// A proxy that has no NetworkState yet must still know which servers carry a
+// rule; the registration and the FullSync carry it.
+func TestAServerReachesTheProxiesWithItsGroupsJoinRule(t *testing.T) {
+	vip := serverGroupWithRule("lobby", &spawneryv1alpha1.JoinPermission{
+		Node: "network.vip", Mode: spawneryv1alpha1.JoinPermissionDenyOnly,
+	})
+	synced := registered("lobby-aaaa", "10.0.0.1:25565")
+	f := newFleet(t, proxyGroup("lobby"), vip, synced)
+
+	outbox, leave, err := f.Join(context.Background(), ns, group, "uid-1")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+
+	rule := recv(t, outbox).GetFullSync().GetServers()[0].GetJoinRule()
+	if rule.GetNode() != "network.vip" || !rule.GetDenyOnly() {
+		t.Fatalf("the FullSync carried rule %+v", rule)
+	}
+
+	if err := f.Register(context.Background(), registered("lobby-bbbb", "10.0.0.2:25565")); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	rule = recv(t, outbox).GetRegisterServer().GetServer().GetJoinRule()
+	if rule.GetNode() != "network.vip" || !rule.GetDenyOnly() {
+		t.Fatalf("the registration carried rule %+v", rule)
+	}
+}
+
+func TestAGroupWithoutARuleSaysSoAndAMissingGroupSaysNothing(t *testing.T) {
+	f := newFleet(t, proxyGroup("lobby"), serverGroupWithRule("lobby", nil))
+
+	outbox, leave, err := f.Join(context.Background(), ns, group, "uid-1")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+	recv(t, outbox)
+
+	if err := f.Register(context.Background(), registered("lobby-cccc", "10.0.0.3:25565")); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	rule := recv(t, outbox).GetRegisterServer().GetServer().GetJoinRule()
+	if rule == nil || rule.GetNode() != "" {
+		t.Fatalf("a group without a rule should carry an empty one, got %+v", rule)
+	}
+
+	orphan := registered("arena-dddd", "10.0.0.4:25565")
+	orphan.Spec.GroupRef.Name = "arena"
+	if err := f.Register(context.Background(), orphan); err != nil {
+		t.Fatalf("Register: %v", err)
+	}
+	if rule := recv(t, outbox).GetRegisterServer().GetServer().GetJoinRule(); rule != nil {
+		t.Fatalf("a server whose group is gone should carry no rule, got %+v", rule)
+	}
+}
+
+// A registration that cannot read its group's rule must not reach the
+// proxies without it.
+func TestARegistrationWhoseGroupCannotBeReadFailsAndSendsNothing(t *testing.T) {
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	refused := errors.New("the cache is not synced")
+	reader := fake.NewClientBuilder().WithScheme(scheme).
+		WithObjects(proxyGroup("lobby"), serverGroupWithRule("lobby", &spawneryv1alpha1.JoinPermission{Node: "network.vip"})).
+		WithInterceptorFuncs(interceptor.Funcs{
+			Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+				if _, ok := obj.(*spawneryv1alpha1.ServerGroup); ok {
+					return refused
+				}
+				return c.Get(ctx, key, obj, opts...)
+			},
+		}).Build()
+	f := proxyreg.New(proxyreg.Options{Reader: reader})
+	outbox, leave, err := f.Join(context.Background(), ns, group, "uid-1")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+	recv(t, outbox)
+
+	if err := f.Register(context.Background(), registered("lobby-eeee", "10.0.0.5:25565")); !errors.Is(err, refused) {
+		t.Fatalf("Register = %v, want the read error", err)
+	}
+	if got := drain(t, outbox); len(got) != 0 {
+		t.Fatalf("the proxy was sent %v for a registration that failed", got)
 	}
 }

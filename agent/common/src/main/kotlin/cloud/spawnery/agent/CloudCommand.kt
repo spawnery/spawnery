@@ -251,7 +251,29 @@ private fun <S> eventsBranch(
                 .executes { ctx -> setLevel(adapter, format, levels, ctx.source, level) },
         )
     }
+    branch.then(
+        LiteralArgumentBuilder.literal<S>("inherit")
+            .executes { ctx -> inheritLevel(adapter, format, levels, ctx.source) },
+    )
     return branch
+}
+
+private fun <S> inheritLevel(adapter: SourceAdapter<S>, format: () -> String, levels: FeedLevels, source: S): Int {
+    val player = adapter.playerId(source) ?: return consoleHasNoLevel(adapter, format, source)
+    levels.inherit(player).whenComplete { _, failure ->
+        if (failure != null) {
+            replyFail(
+                adapter, format, source,
+                Style.bad("could not clear your feed level") + Style.quiet(": ") + Style.bad(reason(failure)),
+            )
+        } else {
+            replyOk(
+                adapter, format, source,
+                Style.good("Feed level inherited: ${levels.level(player).word}."),
+            )
+        }
+    }
+    return 1
 }
 
 private fun <S> showLevel(adapter: SourceAdapter<S>, format: () -> String, levels: FeedLevels, source: S): Int {
@@ -259,7 +281,7 @@ private fun <S> showLevel(adapter: SourceAdapter<S>, format: () -> String, level
     replyOk(
         adapter, format, source,
         Style.quiet("Your feed level is ") + Style.number(levels.level(player).word) +
-            Style.quiet(". Change it with ") + Style.number("/cloud events minimal|normal|verbose|off") +
+            Style.quiet(". Change it with ") + Style.number("/cloud events minimal|normal|verbose|off|inherit") +
             Style.quiet("."),
     )
     return 1

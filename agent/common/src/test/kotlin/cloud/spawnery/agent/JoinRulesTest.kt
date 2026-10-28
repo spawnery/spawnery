@@ -27,20 +27,4 @@ class JoinRulesTest {
         assertEquals(false, JoinRules.mayJoin(denyOnly, PermissionValue.FALSE))
         assertEquals(true, JoinRules.mayJoin(denyOnly, PermissionValue.UNDEFINED))
     }
-
-    @Test
-    fun `the contexts are the target server's, as a backend registers them`() {
-        assertEquals(
-            mapOf("server" to "vip-x1", "group" to "vip", "network" to "tutorial", "environment" to "paper"),
-            JoinRules.contexts("vip-x1", "vip", "tutorial"),
-        )
-    }
-
-    @Test
-    fun `a blank context is left out rather than matched as empty`() {
-        assertEquals(
-            mapOf("server" to "vip-x1", "group" to "vip", "environment" to "paper"),
-            JoinRules.contexts("vip-x1", "vip", ""),
-        )
-    }
 }

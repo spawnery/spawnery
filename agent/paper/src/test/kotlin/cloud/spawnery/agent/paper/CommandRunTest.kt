@@ -75,4 +75,58 @@ class CommandRunTest {
         assertFalse(outcome.ok)
         assertEquals("gone", outcome.error)
     }
+
+    @Test
+    fun `output added from many threads at once loses no line and stays bounded`() {
+        val threads = 8
+        val each = 5_000
+        val unbounded = CommandOutput(maxLines = Int.MAX_VALUE)
+        val bounded = CommandOutput(maxLines = 20)
+        val start = java.util.concurrent.CountDownLatch(1)
+        val pool = (1..threads).map {
+            Thread {
+                start.await()
+                repeat(each) { i ->
+                    unbounded.addText("line $i")
+                    bounded.addText("line $i")
+                }
+            }.apply { start() }
+        }
+        start.countDown()
+        pool.forEach { it.join() }
+
+        assertEquals(threads * each, unbounded.lines().size)
+        assertEquals(20, bounded.lines().size)
+    }
+
+    @Test
+    fun `a scheduler that refuses is answered at once with a failure`() {
+        val answers = mutableListOf<cloud.spawnery.agent.pb.ExecuteOutcome>()
+
+        scheduleCommand(
+            command("list"),
+            schedule = { throw IllegalStateException("plugin is disabled") },
+            run = { throw AssertionError("ran a command the scheduler refused") },
+            answer = { answers += it },
+        )
+
+        val answer = answers.single()
+        assertEquals(command("list").id, answer.id)
+        assertFalse(answer.ok)
+        assertTrue(answer.error.contains("plugin is disabled"), answer.error)
+    }
+
+    @Test
+    fun `a scheduled command is answered with its outcome`() {
+        val answers = mutableListOf<cloud.spawnery.agent.pb.ExecuteOutcome>()
+
+        scheduleCommand(
+            command("list"),
+            schedule = { it.run() },
+            run = { runCommand(command("list")) { _, _ -> true } },
+            answer = { answers += it },
+        )
+
+        assertTrue(answers.single().ok)
+    }
 }

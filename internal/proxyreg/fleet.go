@@ -30,6 +30,7 @@ import (
 	"sync"
 	"time"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -196,6 +197,15 @@ func (f *Fleet) snapshot(ctx context.Context, namespace, group string) ([]*agent
 		return nil, fmt.Errorf("list servers in %s: %w", namespace, err)
 	}
 
+	groups := &spawneryv1alpha1.ServerGroupList{}
+	if err := f.opts.Reader.List(ctx, groups, client.InNamespace(namespace)); err != nil {
+		return nil, fmt.Errorf("list server groups in %s: %w", namespace, err)
+	}
+	groupOf := make(map[string]*spawneryv1alpha1.ServerGroup, len(groups.Items))
+	for i := range groups.Items {
+		groupOf[groups.Items[i].Name] = &groups.Items[i]
+	}
+
 	sync := &agentpb.FullSync{}
 	var draining []*spawneryv1alpha1.Server
 	for i := range servers.Items {
@@ -204,7 +214,7 @@ func (f *Fleet) snapshot(ctx context.Context, namespace, group string) ([]*agent
 		// were told, and the two disagree for one reconcile after a
 		// deregistration.
 		if srv.Status.Registered && srv.Status.Address != "" {
-			sync.Servers = append(sync.Servers, registeredServer(srv))
+			sync.Servers = append(sync.Servers, registeredServer(srv, groupOf[srv.Spec.GroupRef.Name]))
 		}
 		if srv.Status.Phase == string(phase.Draining) {
 			draining = append(draining, srv)
@@ -277,12 +287,21 @@ func (f *Fleet) voiceConfig(ctx context.Context, namespace, group string) *agent
 	return &agentpb.OperatorToProxy{Message: &agentpb.OperatorToProxy_VoiceConfig{VoiceConfig: cfg}}
 }
 
-func registeredServer(srv *spawneryv1alpha1.Server) *agentpb.RegisteredServer {
-	return &agentpb.RegisteredServer{
+// registeredServer carries the group's join rule; a nil group leaves it out,
+// and the proxy then goes by its NetworkState.
+func registeredServer(srv *spawneryv1alpha1.Server, group *spawneryv1alpha1.ServerGroup) *agentpb.RegisteredServer {
+	out := &agentpb.RegisteredServer{
 		Name:    srv.Name,
 		Address: srv.Status.Address,
 		Group:   srv.Spec.GroupRef.Name,
 	}
+	if group != nil {
+		out.JoinRule = &agentpb.ServerJoinRule{
+			Node:     group.Spec.JoinPermission.ResolvedNode(group.Name),
+			DenyOnly: group.Spec.JoinPermission.DenyOnly(),
+		}
+	}
+	return out
 }
 
 func drainMessage(srv *spawneryv1alpha1.Server, fallbacks []string) *agentpb.OperatorToProxy {
@@ -430,17 +449,43 @@ func (f *Fleet) stateMessage(ctx context.Context, namespace string) *agentpb.Ope
 	}
 }
 
-// Register implements controller.Registrar. With no proxy connected it is a
-// no-op: a Network without a ProxyGroup is legitimate.
+// Register implements controller.Registrar. With no proxy connected in the
+// namespace it is a no-op: a Network without a ProxyGroup is legitimate.
+//
+// A group that cannot be read fails the registration, to be retried, rather
+// than reaching the proxies without its join rule.
 func (f *Fleet) Register(ctx context.Context, srv *spawneryv1alpha1.Server) error {
+	if !f.connected(srv.Namespace) {
+		return nil
+	}
+	group := &spawneryv1alpha1.ServerGroup{}
+	key := types.NamespacedName{Namespace: srv.Namespace, Name: srv.Spec.GroupRef.Name}
+	if err := f.opts.Reader.Get(ctx, key, group); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return fmt.Errorf("read the group of %s for its join rule: %w", srv.Name, err)
+		}
+		group = nil
+	}
+	registration := registeredServer(srv, group)
 	f.broadcast(srv.Namespace, func(*session) *agentpb.OperatorToProxy {
 		return &agentpb.OperatorToProxy{
 			Message: &agentpb.OperatorToProxy_RegisterServer{
-				RegisterServer: &agentpb.RegisterServer{Server: registeredServer(srv)},
+				RegisterServer: &agentpb.RegisterServer{Server: registration},
 			},
 		}
 	})
 	return nil
+}
+
+func (f *Fleet) connected(namespace string) bool {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	for _, s := range f.sessions {
+		if s.namespace == namespace {
+			return true
+		}
+	}
+	return false
 }
 
 // Deregister implements controller.Registrar.

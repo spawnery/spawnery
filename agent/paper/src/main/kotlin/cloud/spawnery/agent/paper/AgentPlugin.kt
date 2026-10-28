@@ -27,6 +27,7 @@ import io.papermc.paper.plugin.lifecycle.event.types.LifecycleEvents
 import org.bukkit.Bukkit
 import org.bukkit.event.EventHandler
 import org.bukkit.event.EventPriority
+import org.bukkit.event.HandlerList
 import org.bukkit.event.Listener
 import org.bukkit.event.server.ServerLoadEvent
 import org.bukkit.plugin.java.JavaPlugin
@@ -52,7 +53,13 @@ class AgentPlugin : JavaPlugin(), Listener {
     }
     private val mirror = NetworkMirror()
 
-    private var loginGate: LoginGateListener? = null
+    private val loginGate = LoginGateSwitch(
+        register = {
+            LoginGateListener(System.getenv("SPAWNERY_GROUP") ?: "", mirror, state, log = logger::info)
+                .also { server.pluginManager.registerEvents(it, this) }
+        },
+        unregister = HandlerList::unregisterAll,
+    )
 
     private val connector = CloudConnector(
         Requests(timeoutMillis = CloudConnector.TIMEOUT_MILLIS),
@@ -62,17 +69,21 @@ class AgentPlugin : JavaPlugin(), Listener {
         loop.send(ServerMessage.newBuilder().setCloudRequest(request).build())
     }
     private val feedLevels = FeedLevels(LuckPermsFeedLevels.storeIfPresent())
-    private val feed = Feed(PaperAudience, feedLevels, System::currentTimeMillis, format = mirror::feedFormat)
+    private val feed = Feed(PaperAudience, feedLevels, format = mirror::feedFormat)
     private val events = CloudEvents()
     private val role = ServerRole(state, mirror, connector, feed, events, ::execute)
 
     private fun execute(command: ExecuteCommand) {
-        server.globalRegionScheduler.execute(this, Runnable {
-            val outcome = runCommand(command) { line, feedback ->
-                server.dispatchCommand(server.createCommandSender { feedback(it) }, line)
-            }
-            loop?.send(ServerMessage.newBuilder().setExecuteOutcome(outcome).build())
-        })
+        scheduleCommand(
+            command,
+            schedule = { server.globalRegionScheduler.execute(this, it) },
+            run = {
+                runCommand(command) { line, feedback ->
+                    server.dispatchCommand(server.createCommandSender { feedback(it) }, line)
+                }
+            },
+            answer = { loop?.send(ServerMessage.newBuilder().setExecuteOutcome(it).build()) },
+        )
     }
 
     /**
@@ -204,7 +215,7 @@ class AgentPlugin : JavaPlugin(), Listener {
                 logger.info(
                     "spawnery API installed for network ${self.network()} group ${self.group()}",
                 )
-                LuckPermsContexts.registerIfPresent(self, logger::info)
+                LuckPermsContexts.registerIfPresent(self, logger::info, logger::warning)
 
                 scheduler = Executors.newSingleThreadScheduledExecutor { runnable ->
                     Thread(runnable, "spawnery-agent").apply { isDaemon = true }
@@ -246,7 +257,7 @@ class AgentPlugin : JavaPlugin(), Listener {
                 // sampled on the global region thread.
                 server.globalRegionScheduler.runAtFixedRate(this, {
                     state.sample(Bukkit.getOnlinePlayers().size, Bukkit.getMaxPlayers())
-                    registerLoginGateOnce()
+                    updateLoginGate()
                     tickSampler.sample()
                     // Recomputed every tick rather than subscribing to joins,
                     // leaves and permission changes separately.
@@ -289,14 +300,16 @@ class AgentPlugin : JavaPlugin(), Listener {
         }
     }
 
-    private fun registerLoginGateOnce() {
-        if (loginGate != null) return
+    private fun updateLoginGate() {
         val group = System.getenv("SPAWNERY_GROUP") ?: return
-        if (mirror.admission(group)?.enforce != true && mirror.joinRule(group) == null) return
-        val gate = LoginGateListener(group, mirror, state, log = logger::info)
-        server.pluginManager.registerEvents(gate, this)
-        loginGate = gate
-        logger.info("group $group enforces playable slots or a join permission; login check registered")
+        val wanted = mirror.admission(group)?.enforce == true || mirror.joinRule(group) != null
+        when (loginGate.update(wanted)) {
+            LoginGateSwitch.Change.REGISTERED ->
+                logger.info("group $group enforces playable slots or a join permission; login check registered")
+            LoginGateSwitch.Change.UNREGISTERED ->
+                logger.info("group $group no longer enforces playable slots or a join permission; login check removed")
+            LoginGateSwitch.Change.NONE -> Unit
+        }
     }
 
     // MONITOR so every other plugin's ServerLoadEvent handler has run first.

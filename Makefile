@@ -8,6 +8,7 @@ OPERATOR_IMAGE ?= $(shell nix eval --raw .#operator-image.imageName):$(shell nix
 WORLDSYNC_IMAGE ?= $(shell nix eval --raw .#worldsync-image.imageName):$(shell nix eval --raw .#worldsync-image.imageTag)
 STUBOP ?= $(shell nix build .#spawnery-stubop --no-link --print-out-paths)/bin/spawnery-stubop
 VOICEPROBE ?= $(shell nix build .#spawnery-stubop --no-link --print-out-paths)/bin/spawnery-voiceprobe
+LPSTANDIN ?= $(shell nix build .#luckperms-standin --no-link --print-out-paths)
 
 .PHONY: all
 all: proto manifests generate fmt vet test build agent
@@ -191,7 +192,7 @@ aot-train-test: purpur-image-load
 .PHONY: agent-test
 agent-test: purpur-image-load velocity-image-load
 	CONTAINER=$(CONTAINER) IMAGE=$(PURPUR_IMAGE) VELOCITY_IMAGE=$(VELOCITY_IMAGE) \
-		STUBOP=$(STUBOP) VOICEPROBE=$(VOICEPROBE) hack/agent-test.sh
+		STUBOP=$(STUBOP) VOICEPROBE=$(VOICEPROBE) LPSTANDIN=$(LPSTANDIN) hack/agent-test.sh
 
 .PHONY: purpur-image
 purpur-image:
@@ -220,7 +221,7 @@ canvas-image-test: canvas-image-load
 .PHONY: canvas-agent-test
 canvas-agent-test: canvas-image-load velocity-image-load
 	CONTAINER=$(CONTAINER) IMAGE=$(CANVAS_IMAGE) VELOCITY_IMAGE=$(VELOCITY_IMAGE) \
-		STUBOP=$(STUBOP) VOICEPROBE=$(VOICEPROBE) hack/agent-test.sh
+		STUBOP=$(STUBOP) VOICEPROBE=$(VOICEPROBE) LPSTANDIN=$(LPSTANDIN) hack/agent-test.sh
 
 .PHONY: velocity-image
 velocity-image:

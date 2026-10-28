@@ -122,9 +122,9 @@ let in up to `maxPlayers` and never takes a seat at the door, so an admin
 watching a round does not keep a player out. The operator still counts every
 player: its free seats, the scaler and a connect to the group see the admin as
 seated, so a group may order its next server one watcher early. The flag is
-read at runtime and restarts nothing; a server registers the check only once
-its group turns it on, because a login listener switches off Paper's
-reconfiguration API for the whole server.
+read at runtime and restarts nothing; a server registers the check only while
+its group has it on, because a login listener switches off Paper's
+reconfiguration API for every login made while it is registered.
 
 The check is the server's own: its agent counts its online players exactly,
 plus those it admitted in the same moment who have not joined yet, so a rush

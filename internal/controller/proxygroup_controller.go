@@ -79,10 +79,11 @@ func NewProxyName(group string) string { return NewServerName(group) }
 // once it is empty or its deadline has passed.
 //
 // Group events: NodeDraining (a proxy marked off a departing node),
-// ProxyDrainTimeout (the one thing here that disconnects a player),
 // ReadinessDiverged/ReadinessAgrees and ProxyPodBlocked/ProxyPodsAdmitted on
 // the flanks of their conditions. Pod events, which let the in-game feed name
-// the proxy: ProxyStarted, ProxyRetiring, ProxyStopped.
+// the proxy: ProxyStarted, ProxyRetiring, ProxyStopped (also for a proxy gone
+// outside a drain), ProxyDrainTimeout (the one thing here that disconnects a
+// player).
 type ProxyGroupReconciler struct {
 	client.Client
 	Scheme *runtime.Scheme
@@ -295,6 +296,9 @@ func (r *ProxyGroupReconciler) reconcileObserved(
 		return obs, ctrl.Result{}, err
 	}
 	if err := r.announceReady(ctx, pods); err != nil {
+		return obs, ctrl.Result{}, err
+	}
+	if err := r.announceLost(ctx, group); err != nil {
 		return obs, ctrl.Result{}, err
 	}
 	obs = proxyObservation{observed: true, pods: pods, svc: svc, voiceSvc: voiceSvc, voiceErr: voiceErr}
@@ -770,12 +774,15 @@ func (r *ProxyGroupReconciler) drainDeparting(
 		case expired:
 			// The one path that disconnects anybody, so it says so loudly.
 			announce = func() {
-				r.Recorder.Eventf(group, nil, corev1.EventTypeWarning, "ProxyDrainTimeout", actionDrainProxy,
+				r.Recorder.Eventf(pod, nil, corev1.EventTypeWarning, "ProxyDrainTimeout", actionDrainProxy,
 					"deleting proxy %s after %s: %s",
 					pod.Name, group.DrainTimeout(), proxyPlayerNote(snap))
 			}
 		default:
 			continue
+		}
+		if err := r.markGoneAnnounced(ctx, pod); err != nil {
+			return err
 		}
 		if err := r.Delete(ctx, pod); err != nil {
 			if !apierrors.IsNotFound(err) {
@@ -930,6 +937,46 @@ func (r *ProxyGroupReconciler) markDraining(ctx context.Context, pod *corev1.Pod
 		patch := client.MergeFrom(pod.DeepCopy())
 		delete(pod.Annotations, ProxyDrainingSinceAnnotation)
 		return client.IgnoreNotFound(r.Patch(ctx, pod, patch))
+	}
+	return nil
+}
+
+// markGoneAnnounced stamps a proxy this reconciler is about to delete and
+// announce, so announceLost leaves it alone.
+func (r *ProxyGroupReconciler) markGoneAnnounced(ctx context.Context, pod *corev1.Pod) error {
+	if pod.Annotations[podspec.AnnotationProxyGoneAnnounced] != "" {
+		return nil
+	}
+	patch := client.MergeFrom(pod.DeepCopy())
+	if pod.Annotations == nil {
+		pod.Annotations = map[string]string{}
+	}
+	pod.Annotations[podspec.AnnotationProxyGoneAnnounced] = r.Clock().UTC().Format(time.RFC3339)
+	return client.IgnoreNotFound(r.Patch(ctx, pod, patch))
+}
+
+// announceLost records ProxyStopped, once, for a proxy that announced its
+// start and is being deleted by someone other than this reconciler. A pod gone
+// before any pass saw it terminating is not announced, and neither is a
+// kubelet eviction, which fails the pod without deleting it.
+func (r *ProxyGroupReconciler) announceLost(ctx context.Context, group *spawneryv1alpha1.ProxyGroup) error {
+	list := &corev1.PodList{}
+	labels := podspec.ProxyLabels(group.Spec.NetworkRef.Name, group.Name)
+	if err := r.List(ctx, list, client.InNamespace(group.Namespace), client.MatchingLabels(labels)); err != nil {
+		return err
+	}
+	for i := range list.Items {
+		pod := &list.Items[i]
+		if pod.DeletionTimestamp.IsZero() || pod.Annotations[podspec.AnnotationProxyReadySince] == "" ||
+			pod.Annotations[podspec.AnnotationProxyGoneAnnounced] != "" {
+			continue
+		}
+		if err := r.markGoneAnnounced(ctx, pod); err != nil {
+			return err
+		}
+		snap := r.Agents.Lookup(string(pod.UID))
+		r.Recorder.Eventf(pod, nil, corev1.EventTypeNormal, "ProxyStopped", actionSyncStatus,
+			"proxy %s stopped outside a drain, %d player(s) on it at its last report", pod.Name, snap.Players)
 	}
 	return nil
 }

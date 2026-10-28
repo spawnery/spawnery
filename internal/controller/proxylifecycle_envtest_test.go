@@ -70,6 +70,84 @@ func TestADrainingProxyWithAnUnknownCountStillHasADeadline(t *testing.T) {
 	if !containsEvent(drainEvents(rec), "ProxyDrainTimeout") {
 		t.Error("no ProxyDrainTimeout event for the proxy deleted at its deadline")
 	}
+	// The pod and not the group: the in-game feed names what an event regards.
+	if got := rec.regardingOf("ProxyDrainTimeout"); len(got) != 1 || got[0] != surplus.Name {
+		t.Errorf("ProxyDrainTimeout regarded %v, want the proxy %s", got, surplus.Name)
+	}
+}
+
+// keepTerminating holds a deleted pod in Terminating, as a kubelet would for
+// its grace period; envtest has none.
+func keepTerminating(t *testing.T, f *fixture, pod *corev1.Pod) {
+	t.Helper()
+	patch := client.MergeFrom(pod.DeepCopy())
+	pod.Finalizers = append(pod.Finalizers, "spawnery.cloud/test-hold")
+	if err := f.c.Patch(f.ctx, pod, patch); err != nil {
+		t.Fatalf("hold %s: %v", pod.Name, err)
+	}
+	t.Cleanup(func() {
+		current := &corev1.Pod{}
+		if err := f.c.Get(f.ctx, client.ObjectKeyFromObject(pod), current); err != nil {
+			return
+		}
+		patch := client.MergeFrom(current.DeepCopy())
+		current.Finalizers = nil
+		_ = f.c.Patch(f.ctx, current, patch)
+	})
+}
+
+func TestAProxyLostOutsideADrainIsAnnouncedStoppedOnce(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	rec := r.Recorder.(*nonBlockingRecorder)
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+	pods := f.proxyPods("gateway")
+	for i := range pods {
+		f.markProxyPodReady(t, &pods[i])
+	}
+	f.reconcileProxyGroup(r, "gateway")
+	lost := f.proxyPods("gateway")[0]
+	keepTerminating(t, f, &lost)
+	if err := f.c.Delete(f.ctx, &lost); err != nil {
+		t.Fatalf("delete %s: %v", lost.Name, err)
+	}
+
+	f.reconcileProxyGroup(r, "gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	if got := rec.regardingOf("ProxyStopped"); len(got) != 1 || got[0] != lost.Name {
+		t.Errorf("ProxyStopped regarded %v, want %s once", got, lost.Name)
+	}
+}
+
+func TestAProxyDeletedAtItsDeadlineIsNotAnnouncedAgainAsLost(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	rec := r.Recorder.(*nonBlockingRecorder)
+	surplus := drainOneProxy(t, f, r)
+	current := &corev1.Pod{}
+	if err := f.c.Get(f.ctx, client.ObjectKeyFromObject(&surplus), current); err != nil {
+		t.Fatalf("get %s: %v", surplus.Name, err)
+	}
+	f.markProxyPodReady(t, current)
+	f.reconcileProxyGroup(r, "gateway")
+	if err := f.c.Get(f.ctx, client.ObjectKeyFromObject(&surplus), current); err != nil {
+		t.Fatalf("get %s: %v", surplus.Name, err)
+	}
+	keepTerminating(t, f, current)
+
+	f.agents.Disconnect(string(surplus.UID))
+	f.clock.Advance(time.Hour)
+	f.reconcileProxyGroup(r, "gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	if got := rec.regardingOf("ProxyDrainTimeout"); len(got) != 1 {
+		t.Fatalf("ProxyDrainTimeout regarded %v, want the one proxy", got)
+	}
+	if got := rec.regardingOf("ProxyStopped"); len(got) != 0 {
+		t.Errorf("a proxy this reconciler deleted was also announced as lost: %v", got)
+	}
 }
 
 func TestMaxStaleSecondsBoundsAProxyDrain(t *testing.T) {

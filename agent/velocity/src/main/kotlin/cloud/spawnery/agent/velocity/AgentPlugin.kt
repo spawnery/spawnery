@@ -193,7 +193,7 @@ class AgentPlugin @Inject constructor(
             override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
         }
         val access = JoinPermissions(
-            rules = mirror::joinRule,
+            rules = proxyJoinRules(directory, mirror),
             network = self::network,
             log = ::warn,
             lookups = listOfNotNull(
@@ -206,7 +206,6 @@ class AgentPlugin @Inject constructor(
         val feed = Feed(
             VelocityAudience(proxy),
             feedLevels,
-            System::currentTimeMillis,
             format = mirror::feedFormat,
             groupKind = mirror::groupKind,
         )
@@ -220,7 +219,7 @@ class AgentPlugin @Inject constructor(
             },
         )
         Spawnery.install(api)
-        LuckPermsContexts.registerIfPresent(self, logger::info)
+        LuckPermsContexts.registerIfPresent(self, logger::info, logger::warn)
         // Not the deprecated one-argument register(), which files the command
         // under no plugin.
         val proxyCommands = ProxyCommands<CommandSource>(connector) { source -> (source as? Player)?.username ?: "console" }
@@ -346,7 +345,7 @@ class AgentPlugin @Inject constructor(
 
     private fun resolveVoice(player: UUID): VoiceBackend {
         val server = proxy.getPlayer(player).flatMap { it.currentServer }.map { it.serverInfo.name }.orElse(null)
-            ?: mirror.players().firstOrNull { it.id() == player }?.server()?.orElse(null)
+            ?: mirror.player(player)?.server()?.orElse(null)
             ?: return VoiceBackend.UnknownPlayer
         val host = directory?.hostOf(server) ?: return VoiceBackend.UnknownServer
         val port = voice?.backendPort() ?: return VoiceBackend.UnknownServer
@@ -373,7 +372,7 @@ class AgentPlugin @Inject constructor(
         val transfer = env.transfer ?: return
         val transfers = Transfers(
             cookie = TransferCookie(transfer.secret) { System.currentTimeMillis() / 1000 },
-            policy = TransferPolicy(transfer.forceAfterSeconds * 1000, transfer.forceGroups, System::currentTimeMillis),
+            policy = TransferPolicy(transfer.forceAfterSeconds * 1000, transfer.forceGroups),
             picture = {
                 TransferPolicy.Picture(
                     self.name(), self.group(), mirror.proxies(), mirror.closedDoors(), mirror.acceptingTransfers(),
@@ -389,7 +388,7 @@ class AgentPlugin @Inject constructor(
         )
         this.transfers = transfers
         transferPass = proxy.scheduler
-            .buildTask(this, Runnable { transfers.pass(proxy.allPlayers.map { VelocityTraveller(it, ::warn) }) })
+            .buildTask(this, Runnable { transfers.pass(proxy.allPlayers.map { VelocityTraveller(it) }) })
             .repeat(TRANSFER_PASS_SECONDS, TimeUnit.SECONDS)
             .schedule()
     }
@@ -506,8 +505,7 @@ class AgentPlugin @Inject constructor(
         }
     }
 
-    @Subscribe
-    fun onServerPreConnectJoinRule(event: ServerPreConnectEvent) {
+    private fun checkJoinRule(event: ServerPreConnectEvent) {
         if (!event.result.isAllowed) return
         val target = event.result.server.orElse(event.originalServer)
         val name = target.serverInfo.name
@@ -545,12 +543,22 @@ class AgentPlugin @Inject constructor(
             .build()
     }
 
+    /**
+     * One handler at Short.MIN_VALUE, below PostOrder.LAST (-32767): the join
+     * rule is checked after every other plugin's redirect, then the transfer
+     * decision sees the server the check settled on.
+     */
     @Subscribe(priority = Short.MIN_VALUE)
     fun onServerPreConnect(event: ServerPreConnectEvent) {
+        checkJoinRule(event)
+        decideTransfer(event)
+    }
+
+    private fun decideTransfer(event: ServerPreConnectEvent) {
         val transfers = transfers ?: return
         if (!event.result.isAllowed || event.player.currentServer.isEmpty) return
         val target = event.result.server.orElse(event.originalServer)
-        if (transfers.onSwitch(VelocityTraveller(event.player, ::warn), target.serverInfo.name)) {
+        if (transfers.onSwitch(VelocityTraveller(event.player), target.serverInfo.name)) {
             event.result = ServerPreConnectEvent.ServerResult.denied()
         }
     }

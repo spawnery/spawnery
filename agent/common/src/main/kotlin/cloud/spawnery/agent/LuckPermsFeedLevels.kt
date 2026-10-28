@@ -18,6 +18,7 @@ package cloud.spawnery.agent
 
 import net.luckperms.api.LuckPermsProvider
 import net.luckperms.api.node.NodeType
+import net.luckperms.api.model.user.User
 import net.luckperms.api.node.types.MetaNode
 import java.util.UUID
 import java.util.concurrent.CompletionStage
@@ -50,9 +51,24 @@ object LuckPermsFeedLevels {
             LuckPermsProvider.get().userManager.getUser(player)?.cachedData?.metaData?.getMetaValue(META_KEY)
 
         override fun write(player: UUID, value: String): CompletionStage<*> =
-            LuckPermsProvider.get().userManager.modifyUser(player) { user ->
+            modify(player) { user -> user.data().add(MetaNode.builder(META_KEY, value).build()) }
+
+        override fun clear(player: UUID): CompletionStage<*> = modify(player) {}
+
+        /**
+         * The push lets every other server on the messaging service reload the
+         * player now; without it they read the old value until the player's
+         * next login there. A network without a messaging service skips it.
+         */
+        private fun modify(player: UUID, add: (User) -> Unit): CompletionStage<*> {
+            val luckPerms = LuckPermsProvider.get()
+            return luckPerms.userManager.modifyUser(player) { user ->
                 user.data().clear(NodeType.META.predicate { it.metaKey == META_KEY })
-                user.data().add(MetaNode.builder(META_KEY, value).build())
+                add(user)
+            }.thenRun {
+                val user = luckPerms.userManager.getUser(player) ?: return@thenRun
+                luckPerms.messagingService.ifPresent { it.pushUserUpdate(user) }
             }
+        }
     }
 }

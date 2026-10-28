@@ -28,16 +28,33 @@ object LuckPermsContexts {
     /** What LuckPerms reports when nobody has configured a server name. */
     const val UNCONFIGURED = "global"
 
+    fun of(self: Self, luckPermsServerName: String): Map<String, String> =
+        // The API, not the jar: Purpur reports `paper`, so a grant survives a swap.
+        of(self.name(), self.group(), self.network(), if (self is ProxySelf) "velocity" else "paper", luckPermsServerName)
+
+    /**
+     * What the backend [server] registers, for a proxy asking LuckPerms on its
+     * behalf. The proxy cannot see the backend's LuckPerms server name, so it
+     * takes it as unconfigured.
+     */
+    fun ofBackend(server: String, group: String, network: String): Map<String, String> =
+        of(server, group, network, "paper", UNCONFIGURED)
+
     /** `server` is LuckPerms' own key, so it is filled in only while LuckPerms has none configured. */
-    fun of(self: Self, luckPermsServerName: String): Map<String, String> {
+    private fun of(
+        server: String,
+        group: String,
+        network: String,
+        environment: String,
+        luckPermsServerName: String,
+    ): Map<String, String> {
         val contexts = LinkedHashMap<String, String>()
         if (luckPermsServerName == UNCONFIGURED) {
-            contexts.putIfCarried("server", self.name())
+            contexts.putIfCarried("server", server)
         }
-        contexts.putIfCarried("group", self.group())
-        contexts.putIfCarried("network", self.network())
-        // The API, not the jar: Purpur reports `paper`, so a grant survives a swap.
-        contexts["environment"] = if (self is ProxySelf) "velocity" else "paper"
+        contexts.putIfCarried("group", group)
+        contexts.putIfCarried("network", network)
+        contexts["environment"] = environment
         return contexts
     }
 
@@ -45,27 +62,34 @@ object LuckPermsContexts {
         if (value.isNotBlank()) this[key] = value
     }
 
-    /** Probed rather than caught: a NoClassDefFoundError out of `onEnable` makes Paper disable the agent. */
-    fun registerIfPresent(self: Self, log: (String) -> Unit) {
+    /**
+     * Probed rather than caught: a NoClassDefFoundError out of `onEnable` makes
+     * Paper disable the agent. The probe proves only that the jar is there;
+     * [LuckPermsProvider.get] still throws while LuckPerms' own enable has not
+     * finished or has failed, and the agent's session must outlive that.
+     */
+    fun registerIfPresent(
+        self: Self,
+        info: (String) -> Unit,
+        warn: (String) -> Unit,
+        present: () -> Boolean = ::luckPermsPresent,
+        registration: (Self, (String) -> Unit) -> Unit = ::register,
+    ) {
+        if (!present()) return
         try {
-            Class.forName("net.luckperms.api.LuckPermsProvider")
-        } catch (_: ClassNotFoundException) {
-            return
+            registration(self, info)
+        } catch (e: Throwable) {
+            warn("spawnery LuckPerms contexts: registration failed, continuing without them: $e")
         }
-        registerSurviving(log) { register(self, log) }
     }
 
-    /**
-     * [LuckPermsProvider.get] throws while LuckPerms' own enable has not finished
-     * or has failed, and the agent's session must outlive that.
-     */
-    internal fun registerSurviving(log: (String) -> Unit, registration: () -> Unit) {
+    private fun luckPermsPresent(): Boolean =
         try {
-            registration()
-        } catch (e: Throwable) {
-            log("spawnery LuckPerms contexts: registration failed, continuing without them: $e")
+            Class.forName("net.luckperms.api.LuckPermsProvider")
+            true
+        } catch (_: ClassNotFoundException) {
+            false
         }
-    }
 
     private fun register(self: Self, log: (String) -> Unit) {
         val luckPerms = LuckPermsProvider.get()

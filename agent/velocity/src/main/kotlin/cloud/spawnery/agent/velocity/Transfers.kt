@@ -1,5 +1,6 @@
 package cloud.spawnery.agent.velocity
 
+import cloud.spawnery.agent.monotonicMillis
 import com.velocitypowered.api.proxy.Player
 import com.velocitypowered.proxy.connection.client.ConnectedPlayer
 import net.kyori.adventure.key.Key
@@ -7,6 +8,7 @@ import net.kyori.adventure.text.Component
 import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.ConcurrentHashMap
 
 interface Traveller {
@@ -18,8 +20,12 @@ interface Traveller {
 
     fun tell(message: Component)
 
-    /** Stores [cookie] on the client and sends it to [to]; throws when the client cannot be transferred. */
-    fun transfer(cookie: ByteArray, to: InetSocketAddress)
+    /**
+     * Stores [cookie] on the client and sends it to [to]. Throws when the
+     * transfer cannot be queued; the future fails when it was queued and then
+     * could not be sent.
+     */
+    fun transfer(cookie: ByteArray, to: InetSocketAddress): CompletableFuture<Unit>
 }
 
 class Transfers(
@@ -31,7 +37,9 @@ class Transfers(
     private val warn: (String, Throwable?) -> Unit,
     /** The receiving proxy refuses a second login from one address within its login rate limit. */
     private val spacingMillis: Long = 0,
-    private val clock: () -> Long = System::currentTimeMillis,
+    private val clock: () -> Long = ::monotonicMillis,
+    /** The wall clock: it is the only one the proxies of a group share, and [myTurn]'s windows must line up across them. */
+    private val turnClock: () -> Long = System::currentTimeMillis,
 ) {
     private val waiting = ConcurrentHashMap<UUID, () -> Unit>()
     private val asked = ConcurrentHashMap.newKeySet<UUID>()
@@ -49,7 +57,7 @@ class Transfers(
         val host = player.virtualHost ?: return false
         val now = clock()
         val picture = picture()
-        if (cooling(player.address, now) || !myTurn(picture, now)) return false
+        if (cooling(player.address, now) || !myTurn(picture)) return false
         if (!policy.onSwitch(picture, player.uuid)) return false
         return send(player, host, target, "switch")
     }
@@ -68,7 +76,7 @@ class Transfers(
                 warn("spawnery: could not warn '${player.username}' of the coming transfer", e)
             }
         }
-        if (!myTurn(picture, now)) return
+        if (!myTurn(picture)) return
         val chosen = mutableSetOf<InetAddress>()
         val admit = { id: UUID ->
             val address = movable.getValue(id).address
@@ -81,15 +89,24 @@ class Transfers(
     }
 
     private fun send(player: Traveller, host: InetSocketAddress, target: String, reason: String): Boolean {
-        try {
+        val what = "'${player.username}' ($reason) toward '$target'"
+        val sent = try {
             player.transfer(cookie.write(player.uuid, target), host)
         } catch (e: Exception) {
-            warn("spawnery: could not transfer '${player.username}' ($reason) toward '$target'; leaving them here", e)
+            warn("spawnery: could not transfer $what; leaving them here", e)
             return false
         }
         leaving += player.uuid
         player.address?.let { lastSentFrom[it] = clock() }
-        info("spawnery: transferred '${player.username}' ($reason) toward '$target'")
+        if (!sent.isDone) info("spawnery: queued the transfer of $what")
+        sent.whenComplete { _, failure ->
+            if (failure == null) {
+                info("spawnery: transferred $what")
+            } else {
+                leaving -= player.uuid
+                warn("spawnery: could not transfer $what after queueing it; leaving them here", failure)
+            }
+        }
         return true
     }
 
@@ -142,12 +159,12 @@ class Transfers(
      * rate limit, and none of them knows the others' addresses. Each sends
      * only in its own window, with an empty window between any two.
      */
-    private fun myTurn(picture: TransferPolicy.Picture, now: Long): Boolean {
+    private fun myTurn(picture: TransferPolicy.Picture): Boolean {
         if (spacingMillis <= 0) return true
         val leaving = picture.proxies.filter { it.group() == picture.group && it.draining() }.map { it.name() }.sorted()
         val index = leaving.indexOf(picture.self)
         if (leaving.size <= 1 || index < 0) return true
-        return (now / spacingMillis) % (2L * leaving.size) == 2L * index
+        return (turnClock() / spacingMillis) % (2L * leaving.size) == 2L * index
     }
 
     private fun cooling(address: InetAddress?, now: Long): Boolean {
@@ -162,10 +179,7 @@ class Transfers(
 
 internal val TRANSFER_COOKIE_KEY: Key = Key.key(TransferCookie.KEY)
 
-internal class VelocityTraveller(
-    private val player: Player,
-    private val warn: (String, Throwable?) -> Unit,
-) : Traveller {
+internal class VelocityTraveller(private val player: Player) : Traveller {
     override val uuid: UUID get() = player.uniqueId
     override val username: String get() = player.username
     override val currentServer: String? get() = player.currentServer.map { it.serverInfo.name }.orElse(null)
@@ -174,17 +188,21 @@ internal class VelocityTraveller(
 
     override fun tell(message: Component) = player.sendMessage(message)
 
-    override fun transfer(cookie: ByteArray, to: InetSocketAddress) {
+    override fun transfer(cookie: ByteArray, to: InetSocketAddress): CompletableFuture<Unit> {
         player.storeCookie(TRANSFER_COOKIE_KEY, cookie)
         // storeCookie writes its packet from a task on the connection's event
         // loop; queued behind it, the transfer cannot overtake the cookie.
-        val loop = (player as? ConnectedPlayer)?.connection?.eventLoop() ?: return player.transferToHost(to)
+        val loop = (player as? ConnectedPlayer)?.connection?.eventLoop()
+            ?: return CompletableFuture.completedFuture(player.transferToHost(to))
+        val sent = CompletableFuture<Unit>()
         loop.execute {
             try {
                 player.transferToHost(to)
+                sent.complete(Unit)
             } catch (e: Exception) {
-                warn("spawnery: could not transfer '${player.username}' toward $to", e)
+                sent.completeExceptionally(e)
             }
         }
+        return sent
     }
 }

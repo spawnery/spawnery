@@ -12,6 +12,9 @@ interface LevelStore {
     fun read(player: UUID): String?
 
     fun write(player: UUID, value: String): CompletionStage<*>
+
+    /** Removes the player's own value, so what they inherit counts again. */
+    fun clear(player: UUID): CompletionStage<*>
 }
 
 /**
@@ -27,6 +30,11 @@ class MemoryLevels : LevelStore {
 
     override fun write(player: UUID, value: String): CompletionStage<*> {
         values[player] = value
+        return CompletableFuture.completedFuture(Unit)
+    }
+
+    override fun clear(player: UUID): CompletionStage<*> {
+        values.remove(player)
         return CompletableFuture.completedFuture(Unit)
     }
 }
@@ -47,6 +55,13 @@ class FeedLevels(private val durable: LevelStore?, private val memory: LevelStor
     fun set(player: UUID, level: FeedLevel): CompletionStage<*> =
         try {
             store().write(player, level.word)
+        } catch (e: RuntimeException) {
+            CompletableFuture.failedFuture<Unit>(e)
+        }
+
+    fun inherit(player: UUID): CompletionStage<*> =
+        try {
+            store().clear(player)
         } catch (e: RuntimeException) {
             CompletableFuture.failedFuture<Unit>(e)
         }
