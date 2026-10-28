@@ -23,6 +23,8 @@ import (
 	"net"
 	"strconv"
 
+	corev1 "k8s.io/api/core/v1"
+
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
@@ -97,6 +99,26 @@ func Announce(network *spawneryv1alpha1.Network, group *spawneryv1alpha1.ProxyGr
 		return Endpoint{Host: host, Port: port}, true
 	}
 	return Endpoint{}, false
+}
+
+// KeepsClientIP is whether the game connection and the voice packets both reach
+// a proxy with the client's own source address. NodePort is Local by
+// construction, and ClusterIP stands behind something the operator knows
+// nothing about.
+func KeepsClientIP(group *spawneryv1alpha1.ProxyGroup) bool {
+	voiceSpec, _ := group.VoiceExpose()
+	return exposeKeepsClientIP(group.Spec.Expose) && exposeKeepsClientIP(voiceSpec)
+}
+
+func exposeKeepsClientIP(spec spawneryv1alpha1.ExposeSpec) bool {
+	switch spec.Type {
+	case spawneryv1alpha1.ExposeNodePort, spawneryv1alpha1.ExposeHostPort:
+		return true
+	case spawneryv1alpha1.ExposeLoadBalancer:
+		return spec.LoadBalancer == nil ||
+			spec.LoadBalancer.ExternalTrafficPolicy != corev1.ServiceExternalTrafficPolicyCluster
+	}
+	return false
 }
 
 // splitAddress reads "host" or "host:port"; a bare host means 25565.

@@ -280,6 +280,7 @@ func (f *Fleet) voiceConfig(ctx context.Context, namespace, group string) *agent
 	cfg := &agentpb.VoiceConfig{}
 	if port, on := network.VoiceBackendPort(); on {
 		cfg.Enabled, cfg.BackendPort = true, port
+		cfg.ClientIpPreserved = voice.KeepsClientIP(pg)
 		if ep, known := voice.Announce(network, pg); known {
 			cfg.AnnounceHost, cfg.AnnouncePort, cfg.AnnounceOwnNode = ep.Host, ep.Port, ep.OwnNode
 		}

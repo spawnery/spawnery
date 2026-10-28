@@ -1063,6 +1063,27 @@ func TestASessionInAVoiceNetworkGetsItsVoiceConfig(t *testing.T) {
 	}
 }
 
+func TestTheVoiceConfigSaysWhetherTheClientIPSurvives(t *testing.T) {
+	cluster := loadBalancerGroup()
+	cluster.Spec.Expose.LoadBalancer = &spawneryv1alpha1.LoadBalancerSpec{
+		ExternalTrafficPolicy: corev1.ServiceExternalTrafficPolicyCluster,
+	}
+	for name, c := range map[string]struct {
+		pg   *spawneryv1alpha1.ProxyGroup
+		want bool
+	}{
+		"a LoadBalancer on its default policy": {loadBalancerGroup(), true},
+		"a LoadBalancer with policy Cluster":   {cluster, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			f := newFleet(t, network(&spawneryv1alpha1.NetworkVoiceSpec{BackendPort: 24454}), c.pg)
+			if got := joinVoiceConfig(t, f).GetClientIpPreserved(); got != c.want {
+				t.Errorf("client_ip_preserved = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 // An explicit off, so a proxy whose network turned voice off stops relaying.
 func TestASessionWithoutVoiceIsToldVoiceIsOff(t *testing.T) {
 	f := newFleet(t, network(nil), loadBalancerGroup())

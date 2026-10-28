@@ -19,6 +19,8 @@ package voice
 import (
 	"testing"
 
+	corev1 "k8s.io/api/core/v1"
+
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
 
@@ -92,5 +94,35 @@ func TestAClusterIPOverrideWithoutAPortMeans25565(t *testing.T) {
 	got, known := Announce(voiceNetwork(), group(lb, &bare, "voice.example.test:25565"))
 	if !known || got != (Endpoint{Host: "voice.example.test", Port: 25565}) {
 		t.Fatalf("Announce() = %+v, %v", got, known)
+	}
+}
+
+func TestKeepsClientIP(t *testing.T) {
+	cluster := spawneryv1alpha1.ExposeSpec{Type: spawneryv1alpha1.ExposeLoadBalancer,
+		LoadBalancer: &spawneryv1alpha1.LoadBalancerSpec{ExternalTrafficPolicy: corev1.ServiceExternalTrafficPolicyCluster}}
+	local := spawneryv1alpha1.ExposeSpec{Type: spawneryv1alpha1.ExposeLoadBalancer,
+		LoadBalancer: &spawneryv1alpha1.LoadBalancerSpec{ExternalTrafficPolicy: corev1.ServiceExternalTrafficPolicyLocal}}
+	cases := []struct {
+		name string
+		g    *spawneryv1alpha1.ProxyGroup
+		want bool
+	}{
+		{"LoadBalancer without a spec block", group(lb, nil, ""), true},
+		{"LoadBalancer with policy Local", group(local, nil, ""), true},
+		{"LoadBalancer with policy Cluster", group(cluster, nil, ""), false},
+		{"NodePort", group(nodePort, nil, ""), true},
+		{"HostPort", group(hostPort, nil, ""), true},
+		{"ClusterIP", group(clusterIP, nil, ""), false},
+		{"voice on its own NodePort beside a Local game path", group(lb, &nodePort, ""), true},
+		{"voice on its own Cluster LoadBalancer beside a Local game path", group(lb, &cluster, ""), false},
+		{"voice on its own HostPort beside a Cluster game path", group(cluster, &hostPort, ""), false},
+		{"voice on its own ClusterIP beside a HostPort game path", group(hostPort, &clusterIP, ""), false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			if got := KeepsClientIP(c.g); got != c.want {
+				t.Fatalf("KeepsClientIP() = %v, want %v", got, c.want)
+			}
+		})
 	}
 }

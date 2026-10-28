@@ -655,42 +655,48 @@ public final class AgentProto extends com.google.protobuf.GeneratedFile {
       "name\030\001 \001(\t\"8\n\nMovePlayer\022\023\n\013player_uuid\030" +
       "\001 \001(\t\022\025\n\rtarget_server\030\002 \001(\t\"6\n\014DrainPla" +
       "yers\022\023\n\013from_server\030\001 \001(\t\022\021\n\tto_groups\030\002" +
-      " \003(\t\"\031\n\010SetReady\022\r\n\005ready\030\001 \001(\010\"}\n\013Voice" +
-      "Config\022\017\n\007enabled\030\001 \001(\010\022\024\n\014backend_port\030" +
-      "\002 \001(\005\022\025\n\rannounce_host\030\003 \001(\t\022\025\n\rannounce" +
-      "_port\030\004 \001(\005\022\031\n\021announce_own_node\030\005 \001(\010\"\202" +
-      "\001\n\rVoiceCounters\022B\n\006totals\030\001 \003(\01322.spawn" +
-      "ery.agent.v1alpha1.VoiceCounters.TotalsE" +
-      "ntry\032-\n\013TotalsEntry\022\013\n\003key\030\001 \001(\t\022\r\n\005valu" +
-      "e\030\002 \001(\003:\0028\001\"\232\006\n\017OperatorToProxy\0226\n\tfull_" +
-      "sync\030\001 \001(\0132!.spawnery.agent.v1alpha1.Ful" +
-      "lSyncH\000\022B\n\017register_server\030\002 \001(\0132\'.spawn" +
-      "ery.agent.v1alpha1.RegisterServerH\000\022F\n\021u" +
-      "nregister_server\030\003 \001(\0132).spawnery.agent." +
-      "v1alpha1.UnregisterServerH\000\022>\n\rdrain_pla" +
-      "yers\030\004 \001(\0132%.spawnery.agent.v1alpha1.Dra" +
-      "inPlayersH\000\022B\n\017report_interval\030\005 \001(\0132\'.s" +
-      "pawnery.agent.v1alpha1.ReportIntervalH\000\022" +
-      "D\n\020session_deadline\030\006 \001(\0132(.spawnery.age" +
-      "nt.v1alpha1.SessionDeadlineH\000\0226\n\tset_rea" +
-      "dy\030\007 \001(\0132!.spawnery.agent.v1alpha1.SetRe" +
-      "adyH\000\022>\n\rnetwork_state\030\010 \001(\0132%.spawnery." +
-      "agent.v1alpha1.NetworkStateH\000\022@\n\016cloud_r" +
-      "esponse\030\t \001(\0132&.spawnery.agent.v1alpha1." +
-      "CloudResponseH\000\022:\n\013move_player\030\n \001(\0132#.s" +
-      "pawnery.agent.v1alpha1.MovePlayerH\000\022:\n\013c" +
-      "loud_event\030\013 \001(\0132#.spawnery.agent.v1alph" +
-      "a1.CloudEventH\000\022<\n\014voice_config\030\014 \001(\0132$." +
-      "spawnery.agent.v1alpha1.VoiceConfigH\000B\t\n" +
-      "\007message2\333\001\n\014AgentService\022c\n\014ProxySessio" +
-      "n\022%.spawnery.agent.v1alpha1.ProxyMessage" +
-      "\032(.spawnery.agent.v1alpha1.OperatorToPro" +
-      "xy(\0010\001\022f\n\rServerSession\022&.spawnery.agent" +
-      ".v1alpha1.ServerMessage\032).spawnery.agent" +
-      ".v1alpha1.OperatorToServer(\0010\001BV\n\027cloud." +
-      "spawnery.agent.pbB\nAgentProtoP\001Z-github." +
-      "com/spawnery/spawnery/internal/agentpbb\006" +
-      "proto3"
+      " \003(\t\"\031\n\010SetReady\022\r\n\005ready\030\001 \001(\010\"\232\001\n\013Voic" +
+      "eConfig\022\017\n\007enabled\030\001 \001(\010\022\024\n\014backend_port" +
+      "\030\002 \001(\005\022\025\n\rannounce_host\030\003 \001(\t\022\025\n\rannounc" +
+      "e_port\030\004 \001(\005\022\031\n\021announce_own_node\030\005 \001(\010\022" +
+      "\033\n\023client_ip_preserved\030\006 \001(\010\"\301\001\n\rVoiceCo" +
+      "unters\022B\n\006totals\030\001 \003(\01322.spawnery.agent." +
+      "v1alpha1.VoiceCounters.TotalsEntry\022=\n\013re" +
+      "lay_state\030\002 \001(\0162(.spawnery.agent.v1alpha" +
+      "1.VoiceRelayState\032-\n\013TotalsEntry\022\013\n\003key\030" +
+      "\001 \001(\t\022\r\n\005value\030\002 \001(\003:\0028\001\"\232\006\n\017OperatorToP" +
+      "roxy\0226\n\tfull_sync\030\001 \001(\0132!.spawnery.agent" +
+      ".v1alpha1.FullSyncH\000\022B\n\017register_server\030" +
+      "\002 \001(\0132\'.spawnery.agent.v1alpha1.Register" +
+      "ServerH\000\022F\n\021unregister_server\030\003 \001(\0132).sp" +
+      "awnery.agent.v1alpha1.UnregisterServerH\000" +
+      "\022>\n\rdrain_players\030\004 \001(\0132%.spawnery.agent" +
+      ".v1alpha1.DrainPlayersH\000\022B\n\017report_inter" +
+      "val\030\005 \001(\0132\'.spawnery.agent.v1alpha1.Repo" +
+      "rtIntervalH\000\022D\n\020session_deadline\030\006 \001(\0132(" +
+      ".spawnery.agent.v1alpha1.SessionDeadline" +
+      "H\000\0226\n\tset_ready\030\007 \001(\0132!.spawnery.agent.v" +
+      "1alpha1.SetReadyH\000\022>\n\rnetwork_state\030\010 \001(" +
+      "\0132%.spawnery.agent.v1alpha1.NetworkState" +
+      "H\000\022@\n\016cloud_response\030\t \001(\0132&.spawnery.ag" +
+      "ent.v1alpha1.CloudResponseH\000\022:\n\013move_pla" +
+      "yer\030\n \001(\0132#.spawnery.agent.v1alpha1.Move" +
+      "PlayerH\000\022:\n\013cloud_event\030\013 \001(\0132#.spawnery" +
+      ".agent.v1alpha1.CloudEventH\000\022<\n\014voice_co" +
+      "nfig\030\014 \001(\0132$.spawnery.agent.v1alpha1.Voi" +
+      "ceConfigH\000B\t\n\007message*\225\001\n\017VoiceRelayStat" +
+      "e\022!\n\035VOICE_RELAY_STATE_UNSPECIFIED\020\000\022\035\n\031" +
+      "VOICE_RELAY_STATE_RUNNING\020\001\022!\n\035VOICE_REL" +
+      "AY_STATE_BIND_FAILED\020\002\022\035\n\031VOICE_RELAY_ST" +
+      "ATE_STOPPED\020\0032\333\001\n\014AgentService\022c\n\014ProxyS" +
+      "ession\022%.spawnery.agent.v1alpha1.ProxyMe" +
+      "ssage\032(.spawnery.agent.v1alpha1.Operator" +
+      "ToProxy(\0010\001\022f\n\rServerSession\022&.spawnery." +
+      "agent.v1alpha1.ServerMessage\032).spawnery." +
+      "agent.v1alpha1.OperatorToServer(\0010\001BV\n\027c" +
+      "loud.spawnery.agent.pbB\nAgentProtoP\001Z-gi" +
+      "thub.com/spawnery/spawnery/internal/agen" +
+      "tpbb\006proto3"
     };
     descriptor = com.google.protobuf.Descriptors.FileDescriptor
       .internalBuildGeneratedFileFrom(descriptorData,
@@ -1133,13 +1139,13 @@ public final class AgentProto extends com.google.protobuf.GeneratedFile {
     internal_static_spawnery_agent_v1alpha1_VoiceConfig_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_VoiceConfig_descriptor,
-        new java.lang.String[] { "Enabled", "BackendPort", "AnnounceHost", "AnnouncePort", "AnnounceOwnNode", });
+        new java.lang.String[] { "Enabled", "BackendPort", "AnnounceHost", "AnnouncePort", "AnnounceOwnNode", "ClientIpPreserved", });
     internal_static_spawnery_agent_v1alpha1_VoiceCounters_descriptor =
       getDescriptor().getMessageType(69);
     internal_static_spawnery_agent_v1alpha1_VoiceCounters_fieldAccessorTable = new
       com.google.protobuf.GeneratedMessage.FieldAccessorTable(
         internal_static_spawnery_agent_v1alpha1_VoiceCounters_descriptor,
-        new java.lang.String[] { "Totals", });
+        new java.lang.String[] { "Totals", "RelayState", });
     internal_static_spawnery_agent_v1alpha1_VoiceCounters_TotalsEntry_descriptor =
       internal_static_spawnery_agent_v1alpha1_VoiceCounters_descriptor.getNestedType(0);
     internal_static_spawnery_agent_v1alpha1_VoiceCounters_TotalsEntry_fieldAccessorTable = new

@@ -61,4 +61,17 @@ public interface VoiceConfigOrBuilder extends
    * @return The announceOwnNode.
    */
   boolean getAnnounceOwnNode();
+
+  /**
+   * <pre>
+   * Whether a client's game connection and its voice packets reach this proxy
+   * with the client's own source address. The relay prefers the sender on the
+   * game connection's host only when this is true; false from an operator older
+   * than the field.
+   * </pre>
+   *
+   * <code>bool client_ip_preserved = 6;</code>
+   * @return The clientIpPreserved.
+   */
+  boolean getClientIpPreserved();
 }

@@ -260,7 +260,9 @@ message spawnery.agent.v1alpha1.VoiceConfig 2 backend_port int32
 message spawnery.agent.v1alpha1.VoiceConfig 3 announce_host string
 message spawnery.agent.v1alpha1.VoiceConfig 4 announce_port int32
 message spawnery.agent.v1alpha1.VoiceConfig 5 announce_own_node bool
+message spawnery.agent.v1alpha1.VoiceConfig 6 client_ip_preserved bool
 message spawnery.agent.v1alpha1.VoiceCounters 1 totals map<string,int64>
+message spawnery.agent.v1alpha1.VoiceCounters 2 relay_state spawnery.agent.v1alpha1.VoiceRelayState
 enum spawnery.agent.v1alpha1.GroupState.Kind 0 KIND_UNSPECIFIED
 enum spawnery.agent.v1alpha1.GroupState.Kind 1 EPHEMERAL
 enum spawnery.agent.v1alpha1.GroupState.Kind 2 PERSISTENT
@@ -271,5 +273,9 @@ enum spawnery.agent.v1alpha1.RequestError.Reason 1 NOT_FOUND
 enum spawnery.agent.v1alpha1.RequestError.Reason 2 REFUSED
 enum spawnery.agent.v1alpha1.RequestError.Reason 3 RATE_LIMITED
 enum spawnery.agent.v1alpha1.RequestError.Reason 4 UNAVAILABLE
+enum spawnery.agent.v1alpha1.VoiceRelayState 0 VOICE_RELAY_STATE_UNSPECIFIED
+enum spawnery.agent.v1alpha1.VoiceRelayState 1 VOICE_RELAY_STATE_RUNNING
+enum spawnery.agent.v1alpha1.VoiceRelayState 2 VOICE_RELAY_STATE_BIND_FAILED
+enum spawnery.agent.v1alpha1.VoiceRelayState 3 VOICE_RELAY_STATE_STOPPED
 service spawnery.agent.v1alpha1.AgentService ProxySession stream spawnery.agent.v1alpha1.ProxyMessage stream spawnery.agent.v1alpha1.OperatorToProxy
 service spawnery.agent.v1alpha1.AgentService ServerSession stream spawnery.agent.v1alpha1.ServerMessage stream spawnery.agent.v1alpha1.OperatorToServer

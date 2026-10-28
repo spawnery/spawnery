@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"net"
 	"strconv"
+	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -213,7 +214,32 @@ func voicePluginPod(agents *agent.Registry, pods []corev1.Pod) string {
 	return ""
 }
 
-func setVoiceCondition(group *spawneryv1alpha1.ProxyGroup, network *spawneryv1alpha1.Network, serviceErr error, conflictPod string) {
+// voiceRelays sorts the group's proxies by what each last said about its
+// relay. A proxy whose stream is down keeps serving and cannot retry a failed
+// bind, so its last report counts.
+type voiceRelays struct {
+	running     int
+	bindFailed  []string
+	unconfirmed []string
+}
+
+func voiceRelayReports(agents *agent.Registry, pods []corev1.Pod) voiceRelays {
+	var out voiceRelays
+	for i := range pods {
+		switch agents.Lookup(string(pods[i].UID)).VoiceRelay {
+		case agent.VoiceRelayRunning:
+			out.running++
+		case agent.VoiceRelayBindFailed:
+			out.bindFailed = append(out.bindFailed, pods[i].Name)
+		default:
+			out.unconfirmed = append(out.unconfirmed, pods[i].Name)
+		}
+	}
+	return out
+}
+
+func setVoiceCondition(group *spawneryv1alpha1.ProxyGroup, network *spawneryv1alpha1.Network, serviceErr error,
+	conflictPod string, relays voiceRelays) {
 	_, on := network.VoiceBackendPort()
 	cond := metav1.Condition{Type: spawneryv1alpha1.ConditionVoice, Status: metav1.ConditionTrue,
 		Reason: spawneryv1alpha1.ReasonVoiceRelaying, Message: "this group's proxies relay voice chat"}
@@ -235,6 +261,16 @@ func setVoiceCondition(group *spawneryv1alpha1.ProxyGroup, network *spawneryv1al
 		cond.Status, cond.Reason = metav1.ConditionFalse, spawneryv1alpha1.ReasonVoicePluginConflict
 		cond.Message = fmt.Sprintf("proxy %s has Simple Voice Chat's own Velocity plugin loaded; "+
 			"remove it, spawnery relays voice itself", conflictPod)
+	case len(relays.bindFailed) > 0:
+		cond.Status, cond.Reason = metav1.ConditionFalse, spawneryv1alpha1.ReasonVoiceRelayBindFailed
+		cond.Message = fmt.Sprintf("proxy %s could not bind the relay's UDP port %d and retries", strings.Join(relays.bindFailed, ", "), voice.RelayPort)
+	case len(relays.unconfirmed) > 0:
+		cond.Status, cond.Reason = metav1.ConditionUnknown, spawneryv1alpha1.ReasonVoiceRelayNotReported
+		cond.Message = fmt.Sprintf("proxy %s has not reported a running relay; an agent older than the "+
+			"relay report never does", strings.Join(relays.unconfirmed, ", "))
+	case relays.running == 0:
+		cond.Status, cond.Reason = metav1.ConditionUnknown, spawneryv1alpha1.ReasonVoiceRelayNotReported
+		cond.Message = "no proxy of this group has reported its relay yet"
 	}
 	meta.SetStatusCondition(&group.Status.Conditions, cond)
 }

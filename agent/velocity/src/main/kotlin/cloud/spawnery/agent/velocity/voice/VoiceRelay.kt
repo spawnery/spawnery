@@ -3,6 +3,7 @@ package cloud.spawnery.agent.velocity.voice
 import cloud.spawnery.agent.monotonicMillis
 import java.io.IOException
 import java.net.Inet6Address
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.net.StandardProtocolFamily
 import java.nio.ByteBuffer
@@ -28,6 +29,7 @@ class VoiceRelay(
     private val counters: VoiceCounters,
     private val log: (String, Throwable?) -> Unit,
     private val clock: () -> Long = ::monotonicMillis,
+    private val gameAddress: (UUID) -> InetAddress? = { null },
 ) : AutoCloseable {
     private val selector = Selector.open()
     private val public = try {
@@ -103,7 +105,10 @@ class VoiceRelay(
             Backend.UnknownPlayer -> return counters.inc(VoiceCounters.UNKNOWN_PLAYER)
             Backend.UnknownServer -> return counters.inc(VoiceCounters.UNKNOWN_SERVER)
         }
-        if (bridges.route(player, from, backend) is Route.Open) {
+        val isGameHost = { source: InetSocketAddress ->
+            sameHost(source.address, runCatching { gameAddress(player) }.getOrNull())
+        }
+        if (bridges.route(player, from, backend, isGameHost) is Route.Open) {
             runCatching { upstream.remove(player)?.close() }
             var channel: DatagramChannel? = null
             try {

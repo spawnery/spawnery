@@ -593,6 +593,7 @@ func (s *Server) handleProxy(
 			logger.V(1).Info("discarded a roster report", "reason", err.Error())
 		}
 	case *agentpb.ProxyMessage_VoiceCounters:
+		s.opts.Agents.ReportVoiceRelay(id.PodUID, voiceRelayState(m.VoiceCounters.GetRelayState()))
 		for reason, n := range s.opts.Agents.ReportVoiceTotals(id.PodUID, m.VoiceCounters.GetTotals()) {
 			if n > 0 {
 				VoicePackets.WithLabelValues(id.Namespace, id.Group, reason).Add(float64(n))
@@ -654,4 +655,16 @@ func seconds(d time.Duration) int32 {
 		return int32(s / time.Second)
 	}
 	return 1
+}
+
+func voiceRelayState(state agentpb.VoiceRelayState) agent.VoiceRelayState {
+	switch state {
+	case agentpb.VoiceRelayState_VOICE_RELAY_STATE_RUNNING:
+		return agent.VoiceRelayRunning
+	case agentpb.VoiceRelayState_VOICE_RELAY_STATE_BIND_FAILED:
+		return agent.VoiceRelayBindFailed
+	case agentpb.VoiceRelayState_VOICE_RELAY_STATE_STOPPED:
+		return agent.VoiceRelayStopped
+	}
+	return agent.VoiceRelayNotReported
 }

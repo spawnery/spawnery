@@ -417,6 +417,18 @@ voice_phase() {
 	done
 	echo "$answer"
 	echo "a proxy holding no player relayed voice for one it only knows from the mirror"
+
+	echo "waiting for the proxy to report its relay running..."
+	start=$SECONDS
+	until jq -e 'select(.kind == "voice_counters" and .relayState == "VOICE_RELAY_STATE_RUNNING")' <"$EVENTS8" >/dev/null 2>&1; do
+		if [ $((SECONDS - start)) -gt "$VOICE_WITHIN" ]; then
+			echo "the proxy never reported its relay running; its voice reports:" >&2
+			jq -c 'select(.kind == "voice_counters")' <"$EVENTS8" >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
+	echo "the proxy reported its relay running"
 }
 
 if [ "${AGENT_TEST_ONLY:-}" = voice ]; then

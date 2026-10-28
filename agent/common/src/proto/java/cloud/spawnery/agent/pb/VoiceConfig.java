@@ -153,6 +153,24 @@ private static final long serialVersionUID = 0L;
     return announceOwnNode_;
   }
 
+  public static final int CLIENT_IP_PRESERVED_FIELD_NUMBER = 6;
+  private boolean clientIpPreserved_ = false;
+  /**
+   * <pre>
+   * Whether a client's game connection and its voice packets reach this proxy
+   * with the client's own source address. The relay prefers the sender on the
+   * game connection's host only when this is true; false from an operator older
+   * than the field.
+   * </pre>
+   *
+   * <code>bool client_ip_preserved = 6;</code>
+   * @return The clientIpPreserved.
+   */
+  @java.lang.Override
+  public boolean getClientIpPreserved() {
+    return clientIpPreserved_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -182,6 +200,9 @@ private static final long serialVersionUID = 0L;
     if (announceOwnNode_ != false) {
       output.writeBool(5, announceOwnNode_);
     }
+    if (clientIpPreserved_ != false) {
+      output.writeBool(6, clientIpPreserved_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -204,6 +225,10 @@ private static final long serialVersionUID = 0L;
     if (announceOwnNode_ != false) {
       size += com.google.protobuf.CodedOutputStream
         .computeBoolSize(5, announceOwnNode_);
+    }
+    if (clientIpPreserved_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(6, clientIpPreserved_);
     }
     return size;
   }
@@ -239,6 +264,8 @@ private static final long serialVersionUID = 0L;
         != other.getAnnouncePort()) return false;
     if (getAnnounceOwnNode()
         != other.getAnnounceOwnNode()) return false;
+    if (getClientIpPreserved()
+        != other.getClientIpPreserved()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -262,6 +289,9 @@ private static final long serialVersionUID = 0L;
     hash = (37 * hash) + ANNOUNCE_OWN_NODE_FIELD_NUMBER;
     hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
         getAnnounceOwnNode());
+    hash = (37 * hash) + CLIENT_IP_PRESERVED_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getClientIpPreserved());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -403,6 +433,7 @@ private static final long serialVersionUID = 0L;
       announceHost_ = "";
       announcePort_ = 0;
       announceOwnNode_ = false;
+      clientIpPreserved_ = false;
       return this;
     }
 
@@ -451,6 +482,9 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000010) != 0)) {
         result.announceOwnNode_ = announceOwnNode_;
       }
+      if (((from_bitField0_ & 0x00000020) != 0)) {
+        result.clientIpPreserved_ = clientIpPreserved_;
+      }
     }
 
     @java.lang.Override
@@ -481,6 +515,9 @@ private static final long serialVersionUID = 0L;
       }
       if (other.getAnnounceOwnNode() != false) {
         setAnnounceOwnNode(other.getAnnounceOwnNode());
+      }
+      if (other.getClientIpPreserved() != false) {
+        setClientIpPreserved(other.getClientIpPreserved());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -533,6 +570,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000010;
               break;
             } // case 40
+            case 48: {
+              clientIpPreserved_ = input.readBool();
+              bitField0_ |= 0x00000020;
+              break;
+            } // case 48
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -788,6 +830,59 @@ private static final long serialVersionUID = 0L;
     public Builder clearAnnounceOwnNode() {
       bitField0_ = (bitField0_ & ~0x00000010);
       announceOwnNode_ = false;
+      onChanged();
+      return this;
+    }
+
+    private boolean clientIpPreserved_ ;
+    /**
+     * <pre>
+     * Whether a client's game connection and its voice packets reach this proxy
+     * with the client's own source address. The relay prefers the sender on the
+     * game connection's host only when this is true; false from an operator older
+     * than the field.
+     * </pre>
+     *
+     * <code>bool client_ip_preserved = 6;</code>
+     * @return The clientIpPreserved.
+     */
+    @java.lang.Override
+    public boolean getClientIpPreserved() {
+      return clientIpPreserved_;
+    }
+    /**
+     * <pre>
+     * Whether a client's game connection and its voice packets reach this proxy
+     * with the client's own source address. The relay prefers the sender on the
+     * game connection's host only when this is true; false from an operator older
+     * than the field.
+     * </pre>
+     *
+     * <code>bool client_ip_preserved = 6;</code>
+     * @param value The clientIpPreserved to set.
+     * @return This builder for chaining.
+     */
+    public Builder setClientIpPreserved(boolean value) {
+
+      clientIpPreserved_ = value;
+      bitField0_ |= 0x00000020;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Whether a client's game connection and its voice packets reach this proxy
+     * with the client's own source address. The relay prefers the sender on the
+     * game connection's host only when this is true; false from an operator older
+     * than the field.
+     * </pre>
+     *
+     * <code>bool client_ip_preserved = 6;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearClientIpPreserved() {
+      bitField0_ = (bitField0_ & ~0x00000020);
+      clientIpPreserved_ = false;
       onChanged();
       return this;
     }

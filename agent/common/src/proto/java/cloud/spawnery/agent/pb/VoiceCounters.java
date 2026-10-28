@@ -33,6 +33,7 @@ private static final long serialVersionUID = 0L;
     super(builder);
   }
   private VoiceCounters() {
+    relayState_ = 0;
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -142,6 +143,34 @@ private static final long serialVersionUID = 0L;
     return map.get(key);
   }
 
+  public static final int RELAY_STATE_FIELD_NUMBER = 2;
+  private int relayState_ = 0;
+  /**
+   * <pre>
+   * The relay's state when this report was written. Unspecified from an agent
+   * older than this field: the operator reads that as not reported.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.VoiceRelayState relay_state = 2;</code>
+   * @return The enum numeric value on the wire for relayState.
+   */
+  @java.lang.Override public int getRelayStateValue() {
+    return relayState_;
+  }
+  /**
+   * <pre>
+   * The relay's state when this report was written. Unspecified from an agent
+   * older than this field: the operator reads that as not reported.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.VoiceRelayState relay_state = 2;</code>
+   * @return The relayState.
+   */
+  @java.lang.Override public cloud.spawnery.agent.pb.VoiceRelayState getRelayState() {
+    cloud.spawnery.agent.pb.VoiceRelayState result = cloud.spawnery.agent.pb.VoiceRelayState.forNumber(relayState_);
+    return result == null ? cloud.spawnery.agent.pb.VoiceRelayState.UNRECOGNIZED : result;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -162,6 +191,9 @@ private static final long serialVersionUID = 0L;
         internalGetTotals(),
         TotalsDefaultEntryHolder.defaultEntry,
         1);
+    if (relayState_ != cloud.spawnery.agent.pb.VoiceRelayState.VOICE_RELAY_STATE_UNSPECIFIED.getNumber()) {
+      output.writeEnum(2, relayState_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -175,6 +207,10 @@ private static final long serialVersionUID = 0L;
           .buildPartial();
       size += com.google.protobuf.CodedOutputStream
           .computeMessageSize(1, totals__);
+    }
+    if (relayState_ != cloud.spawnery.agent.pb.VoiceRelayState.VOICE_RELAY_STATE_UNSPECIFIED.getNumber()) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeEnumSize(2, relayState_);
     }
     return size;
   }
@@ -202,6 +238,7 @@ private static final long serialVersionUID = 0L;
 
     if (!internalGetTotals().equals(
         other.internalGetTotals())) return false;
+    if (relayState_ != other.relayState_) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -217,6 +254,8 @@ private static final long serialVersionUID = 0L;
       hash = (37 * hash) + TOTALS_FIELD_NUMBER;
       hash = (53 * hash) + internalGetTotals().hashCode();
     }
+    hash = (37 * hash) + RELAY_STATE_FIELD_NUMBER;
+    hash = (53 * hash) + relayState_;
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -376,6 +415,7 @@ private static final long serialVersionUID = 0L;
       super.clear();
       bitField0_ = 0;
       internalGetMutableTotals().clear();
+      relayState_ = 0;
       return this;
     }
 
@@ -413,6 +453,9 @@ private static final long serialVersionUID = 0L;
         result.totals_ = internalGetTotals();
         result.totals_.makeImmutable();
       }
+      if (((from_bitField0_ & 0x00000002) != 0)) {
+        result.relayState_ = relayState_;
+      }
     }
 
     @java.lang.Override
@@ -430,6 +473,9 @@ private static final long serialVersionUID = 0L;
       internalGetMutableTotals().mergeFrom(
           other.internalGetTotals());
       bitField0_ |= 0x00000001;
+      if (other.relayState_ != 0) {
+        setRelayStateValue(other.getRelayStateValue());
+      }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
       return this;
@@ -465,6 +511,11 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000001;
               break;
             } // case 10
+            case 16: {
+              relayState_ = input.readEnum();
+              bitField0_ |= 0x00000002;
+              break;
+            } // case 16
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -604,6 +655,83 @@ private static final long serialVersionUID = 0L;
       internalGetMutableTotals().getMutableMap()
           .putAll(values);
       bitField0_ |= 0x00000001;
+      return this;
+    }
+
+    private int relayState_ = 0;
+    /**
+     * <pre>
+     * The relay's state when this report was written. Unspecified from an agent
+     * older than this field: the operator reads that as not reported.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.VoiceRelayState relay_state = 2;</code>
+     * @return The enum numeric value on the wire for relayState.
+     */
+    @java.lang.Override public int getRelayStateValue() {
+      return relayState_;
+    }
+    /**
+     * <pre>
+     * The relay's state when this report was written. Unspecified from an agent
+     * older than this field: the operator reads that as not reported.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.VoiceRelayState relay_state = 2;</code>
+     * @param value The enum numeric value on the wire for relayState to set.
+     * @return This builder for chaining.
+     */
+    public Builder setRelayStateValue(int value) {
+      relayState_ = value;
+      bitField0_ |= 0x00000002;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * The relay's state when this report was written. Unspecified from an agent
+     * older than this field: the operator reads that as not reported.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.VoiceRelayState relay_state = 2;</code>
+     * @return The relayState.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.VoiceRelayState getRelayState() {
+      cloud.spawnery.agent.pb.VoiceRelayState result = cloud.spawnery.agent.pb.VoiceRelayState.forNumber(relayState_);
+      return result == null ? cloud.spawnery.agent.pb.VoiceRelayState.UNRECOGNIZED : result;
+    }
+    /**
+     * <pre>
+     * The relay's state when this report was written. Unspecified from an agent
+     * older than this field: the operator reads that as not reported.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.VoiceRelayState relay_state = 2;</code>
+     * @param value The relayState to set.
+     * @throws IllegalArgumentException if UNRECOGNIZED is provided.
+     * @return This builder for chaining.
+     */
+    public Builder setRelayState(cloud.spawnery.agent.pb.VoiceRelayState value) {
+      if (value == null) { throw new NullPointerException(); }
+      bitField0_ |= 0x00000002;
+      relayState_ = value.getNumber();
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * The relay's state when this report was written. Unspecified from an agent
+     * older than this field: the operator reads that as not reported.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.VoiceRelayState relay_state = 2;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearRelayState() {
+      bitField0_ = (bitField0_ & ~0x00000002);
+      relayState_ = 0;
+      onChanged();
       return this;
     }
 
