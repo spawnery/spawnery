@@ -78,6 +78,36 @@ install SVC's Velocity plugin: the group reports `Voice=False` with reason
 `VoicePluginConflict` and the relay stays off. Its licence forbids shipping it
 in an image, which is why you bring it.
 
+## Who receives a player's voice
+
+A player's replies go to one UDP source at a time. When two sources send for
+the same player UUID, the first one keeps the replies until it has been silent
+for 3 seconds, and then the other takes them.
+
+Where the game connection and the voice packets reach the proxy with the
+client's own source address, the operator tells the proxy so, and the relay
+prefers the source whose IP is the IP of the player's game connection (an
+IPv4-mapped IPv6 address counts as its IPv4 address). That source takes the
+replies at once, and a source elsewhere takes them back only after the matching
+one has been silent for 15 seconds. The operator decides by strategy:
+
+| Strategy | Client IP kept |
+|---|---|
+| `LoadBalancer` with `externalTrafficPolicy` `Local` (the default) | yes |
+| `LoadBalancer` with `externalTrafficPolicy` `Cluster` | no |
+| `NodePort` (always `Local`) | yes |
+| `HostPort` | yes (assumes the CNI keeps the source address of a host port) |
+| `ClusterIP` | no, something else in front |
+
+With `spec.voice.expose`, both the game's strategy and voice's have to keep the
+client IP. The rule is a preference where it applies, and the first sender
+wins elsewhere: under `Cluster` policy and behind `ClusterIP`; for a sender on
+the same public IP as the player (household, campus, CGNAT, VPN exit); and for
+a player whose game connection is on another proxy replica, which has no
+address to compare. An operator older than this release does not tell the
+proxy, so there the first sender always wins. [Known
+issues](../reference/known-issues.md) has the details.
+
 ## Checking it
 
 ```bash

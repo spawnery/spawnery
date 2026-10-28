@@ -1,5 +1,6 @@
 package cloud.spawnery.agent.velocity.voice
 
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.util.UUID
 
@@ -19,7 +20,12 @@ class Bridges(private val clock: () -> Long) {
 
     private val states = HashMap<UUID, State>()
 
-    fun route(player: UUID, from: InetSocketAddress, backend: InetSocketAddress): Route {
+    fun route(
+        player: UUID,
+        from: InetSocketAddress,
+        backend: InetSocketAddress,
+        isGameHost: (InetSocketAddress) -> Boolean = { false },
+    ): Route {
         val now = clock()
         val state = states[player]
         if (state == null || state.backend != backend) {
@@ -28,9 +34,17 @@ class Bridges(private val clock: () -> Long) {
         }
         if (from == state.replyTo) {
             state.heardFromClient = now
-        } else if (now - state.heardFromClient >= TAKEOVER_MILLIS) {
-            state.replyTo = from
-            state.heardFromClient = now
+        } else {
+            val fromHost = isGameHost(from)
+            val currentHost = isGameHost(state.replyTo)
+            val takeOver = when {
+                fromHost != currentHost -> fromHost || now - state.heardFromClient >= IDLE_MILLIS
+                else -> now - state.heardFromClient >= TAKEOVER_MILLIS
+            }
+            if (takeOver) {
+                state.replyTo = from
+                state.heardFromClient = now
+            }
         }
         state.lastTraffic = now
         return Route.Existing
@@ -65,4 +79,17 @@ class Bridges(private val clock: () -> Long) {
         /** Above SVC's 10 s timeout, so a bridge never ends under a live connection. */
         const val IDLE_MILLIS = 15_000L
     }
+}
+
+/** Equal hosts, with an IPv4-mapped IPv6 address read as the IPv4 address it carries. */
+fun sameHost(a: InetAddress?, b: InetAddress?): Boolean {
+    if (a == null || b == null) return false
+    return hostBytes(a).contentEquals(hostBytes(b))
+}
+
+private fun hostBytes(address: InetAddress): ByteArray {
+    val bytes = address.address
+    val mapped = bytes.size == 16 && (0 until 10).all { bytes[it] == 0.toByte() } &&
+        bytes[10] == 0xff.toByte() && bytes[11] == 0xff.toByte()
+    return if (mapped) bytes.copyOfRange(12, 16) else bytes
 }

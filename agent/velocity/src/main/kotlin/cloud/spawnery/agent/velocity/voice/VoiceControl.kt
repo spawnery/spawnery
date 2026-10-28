@@ -3,6 +3,7 @@ package cloud.spawnery.agent.velocity.voice
 import cloud.spawnery.agent.pb.ProxyMessage
 import cloud.spawnery.agent.pb.VoiceConfig
 import cloud.spawnery.agent.pb.VoiceRelayState
+import java.net.InetAddress
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -18,6 +19,7 @@ class VoiceControl(
     private val hostIp: String?,
     private val counters: VoiceCounters,
     private val log: (String, Throwable?) -> Unit,
+    private val gameAddressOf: (UUID) -> InetAddress? = { null },
 ) {
     @Volatile private var config: VoiceConfig? = null
     @Volatile private var everEnabled = false
@@ -96,6 +98,9 @@ class VoiceControl(
         versions.remove(player)
         warnedVersion.remove(player)
     }
+
+    fun gameAddress(player: UUID): InetAddress? =
+        if (config?.clientIpPreserved == true) gameAddressOf(player) else null
 
     fun backendPort(): Int = config?.backendPort?.takeIf { it > 0 } ?: DEFAULT_BACKEND_PORT
 

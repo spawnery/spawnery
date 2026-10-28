@@ -143,4 +143,23 @@ class VoiceControlTest {
         c.apply(config(enabled = false))
         assertEquals(VoiceRelayState.VOICE_RELAY_STATE_STOPPED, c.report()!!.voiceCounters.relayState)
     }
+
+    private val gameHost = java.net.InetAddress.getByName("192.0.2.10")
+
+    private fun controlWithGameHost() = VoiceControl(
+        startRelay = { AutoCloseable { } }, hostIp = null, counters = counters, log = { _, _ -> },
+        gameAddressOf = { gameHost },
+    )
+
+    @Test
+    fun `the game connection's host is offered only where the operator says the client IP survives`() {
+        val c = controlWithGameHost()
+        assertNull(c.gameAddress(player))
+        c.apply(config())
+        assertNull(c.gameAddress(player))
+        c.apply(config().toBuilder().setClientIpPreserved(true).build())
+        assertEquals(gameHost, c.gameAddress(player))
+        c.apply(config().toBuilder().setClientIpPreserved(false).build())
+        assertNull(c.gameAddress(player))
+    }
 }

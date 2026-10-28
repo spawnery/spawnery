@@ -56,6 +56,7 @@ import com.velocitypowered.proxy.VelocityServer
 import com.velocitypowered.api.scheduler.ScheduledTask
 import net.kyori.adventure.text.Component
 import org.slf4j.Logger
+import java.net.InetAddress
 import java.net.InetSocketAddress
 import java.nio.file.Files
 import java.nio.file.Path
@@ -323,7 +324,10 @@ class AgentPlugin @Inject constructor(
         val voiceCounters = VoiceCounters()
         val voice = VoiceControl(
             startRelay = { port ->
-                val relay = VoiceRelay(InetSocketAddress(port), resolve = ::resolveVoice, counters = voiceCounters, log = ::warn)
+                val relay = VoiceRelay(
+                    InetSocketAddress(port), resolve = ::resolveVoice, counters = voiceCounters, log = ::warn,
+                    gameAddress = ::voiceGameAddress,
+                )
                 try {
                     relay.start()
                 } catch (e: Exception) {
@@ -335,6 +339,7 @@ class AgentPlugin @Inject constructor(
             hostIp = System.getenv("SPAWNERY_HOST_IP"),
             counters = voiceCounters,
             log = ::warn,
+            gameAddressOf = { id -> proxy.getPlayer(id).map { it.remoteAddress?.address }.orElse(null) },
         )
         proxy.channelRegistrar.register(
             MinecraftChannelIdentifier.from(VoiceWire.SECRET_CHANNEL),
@@ -342,6 +347,8 @@ class AgentPlugin @Inject constructor(
         )
         return voice
     }
+
+    private fun voiceGameAddress(player: UUID): InetAddress? = voice?.gameAddress(player)
 
     private fun resolveVoice(player: UUID): VoiceBackend {
         val server = proxy.getPlayer(player).flatMap { it.currentServer }.map { it.serverInfo.name }.orElse(null)

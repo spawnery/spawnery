@@ -260,6 +260,7 @@ message spawnery.agent.v1alpha1.VoiceConfig 2 backend_port int32
 message spawnery.agent.v1alpha1.VoiceConfig 3 announce_host string
 message spawnery.agent.v1alpha1.VoiceConfig 4 announce_port int32
 message spawnery.agent.v1alpha1.VoiceConfig 5 announce_own_node bool
+message spawnery.agent.v1alpha1.VoiceConfig 6 client_ip_preserved bool
 message spawnery.agent.v1alpha1.VoiceCounters 1 totals map<string,int64>
 message spawnery.agent.v1alpha1.VoiceCounters 2 relay_state spawnery.agent.v1alpha1.VoiceRelayState
 enum spawnery.agent.v1alpha1.GroupState.Kind 0 KIND_UNSPECIFIED

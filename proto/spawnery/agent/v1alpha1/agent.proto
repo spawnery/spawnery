@@ -857,6 +857,11 @@ message VoiceConfig {
   string announce_host = 3;
   int32 announce_port = 4;
   bool announce_own_node = 5;
+  // Whether a client's game connection and its voice packets reach this proxy
+  // with the client's own source address. The relay prefers the sender on the
+  // game connection's host only when this is true; false from an operator older
+  // than the field.
+  bool client_ip_preserved = 6;
 }
 
 // VoiceCounters are the relay's packet totals since the agent started, by

@@ -81,17 +81,36 @@ controller decided against a pod that is no longer there; an empty namespace
 with a clean condition says something else refused the create. The second
 occurrence should be a diagnosis, and this entry leaves with it.
 
-## Voice relay: the first sender holds a player's reply path
+## Voice relay: the first sender can still hold a player's reply path
 
-The relay in a proxy ties a player's voice bridge to the address of the first
-frame it sees for that UUID. A UUID is public, so anyone who can reach the
-relay's UDP port can send about one frame per second for a player's UUID
-before that player starts voice, or right after a server switch rebuilds the
-bridge, and receive the replies meant for the player. The player then hears
-nothing. The payload is encrypted, so nothing leaks; the damage is a denial
-of service for chosen players. SVC's own Velocity plugin captures the reply
-address the same way. A player who is already talking keeps the path.
+The relay sends a player's voice replies to one UDP source per player. A UUID
+is public, so anyone who can reach the relay's UDP port can send for a
+player's UUID before that player starts voice, or right after a server switch
+rebuilds the bridge, and receive the replies meant for the player, who then
+hears nothing. The payload is encrypted, so nothing leaks; the damage is a
+denial of service for chosen players. A source silent for 3 seconds loses the
+path to any other.
 
-Closing it means preferring a source whose IP matches the player's game
-connection, which breaks behind SNAT or an ingress and so needs a decision
-first.
+Where the operator knows that both the game connection and the voice packets
+reach a proxy with the client's own source address, it tells the proxy so, and
+the relay then prefers a source on the game connection's host: that source
+takes the replies at once, and a source elsewhere can take them back only after
+15 seconds of silence from it. That holds for a LoadBalancer with
+`externalTrafficPolicy` Local (the default), for NodePort and for HostPort, on
+the game path and on a voice override alike. HostPort rests on the CNI keeping
+the source address, which is not measured here. What remains:
+
+- A sender behind the same public IP as the player (a household, a campus, a
+  CGNAT or VPN exit) is on the game connection's host too, so both match and
+  the first sender wins.
+- Under a LoadBalancer with policy Cluster, behind a ClusterIP entry point, or
+  behind anything else that rewrites source addresses, the operator does not
+  tell the proxy, and the first sender wins.
+- A player whose game connection sits on another proxy replica gives the
+  relay no address to compare. No Service sets session affinity, so with N
+  replicas behind a LoadBalancer or NodePort a player's voice reaches the
+  replica holding the game connection roughly one time in N if flows spread
+  evenly (not measured); in a three-replica group most players get no
+  preference. A voice announcement of the pod's own node (HostPort or an
+  own-node override) sends voice to the replica's own node and covers most
+  of this.

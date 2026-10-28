@@ -139,6 +139,35 @@ class VoiceRelayTest {
     }
 
     @Test
+    fun `a sender on the game connection's host takes the replies from one that got there first`() {
+        val other = InetAddress.getByName("127.0.0.2")
+        assumeTrue(runCatching { DatagramSocket(0, other).close() }.isSuccess, "no 127.0.0.2 here")
+        val backend = echoBackend()
+        VoiceRelay(
+            InetSocketAddress(InetAddress.getLoopbackAddress(), 0),
+            resolve = { Backend.At(backend.localSocketAddress as InetSocketAddress) },
+            counters = VoiceCounters(), log = { _, _ -> },
+            gameAddress = { if (it == player) other else null },
+        ).use { relay ->
+            relay.start()
+            DatagramSocket(0, InetAddress.getLoopbackAddress()).use { squatter ->
+                DatagramSocket(0, other).use { owner ->
+                    squatter.soTimeout = 2_000
+                    owner.soTimeout = 2_000
+                    assertEquals(backend.localPort, roundTrip(squatter, relay.localPort, frame(player, "first"))!!.int)
+                    assertEquals(backend.localPort, roundTrip(owner, relay.localPort, frame(player, "mine"))!!.int)
+                    squatter.soTimeout = 300
+                    assertNull(roundTrip(squatter, relay.localPort, frame(player, "again")))
+                    val reply = DatagramPacket(ByteArray(2048), 2048)
+                    owner.receive(reply)
+                    assertEquals(backend.localPort, ByteBuffer.wrap(reply.data, 0, reply.length).int)
+                }
+            }
+        }
+        backend.close()
+    }
+
+    @Test
     fun `garbage opens nothing and is counted`() {
         val counters = VoiceCounters()
         var resolved = 0

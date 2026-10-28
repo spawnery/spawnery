@@ -5484,8 +5484,13 @@ type VoiceConfig struct {
 	AnnounceHost    string `protobuf:"bytes,3,opt,name=announce_host,json=announceHost,proto3" json:"announce_host,omitempty"`
 	AnnouncePort    int32  `protobuf:"varint,4,opt,name=announce_port,json=announcePort,proto3" json:"announce_port,omitempty"`
 	AnnounceOwnNode bool   `protobuf:"varint,5,opt,name=announce_own_node,json=announceOwnNode,proto3" json:"announce_own_node,omitempty"`
-	unknownFields   protoimpl.UnknownFields
-	sizeCache       protoimpl.SizeCache
+	// Whether a client's game connection and its voice packets reach this proxy
+	// with the client's own source address. The relay prefers the sender on the
+	// game connection's host only when this is true; false from an operator older
+	// than the field.
+	ClientIpPreserved bool `protobuf:"varint,6,opt,name=client_ip_preserved,json=clientIpPreserved,proto3" json:"client_ip_preserved,omitempty"`
+	unknownFields     protoimpl.UnknownFields
+	sizeCache         protoimpl.SizeCache
 }
 
 func (x *VoiceConfig) Reset() {
@@ -5549,6 +5554,13 @@ func (x *VoiceConfig) GetAnnouncePort() int32 {
 func (x *VoiceConfig) GetAnnounceOwnNode() bool {
 	if x != nil {
 		return x.AnnounceOwnNode
+	}
+	return false
+}
+
+func (x *VoiceConfig) GetClientIpPreserved() bool {
+	if x != nil {
+		return x.ClientIpPreserved
 	}
 	return false
 }
@@ -6239,13 +6251,14 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"fromServer\x12\x1b\n" +
 	"\tto_groups\x18\x02 \x03(\tR\btoGroups\" \n" +
 	"\bSetReady\x12\x14\n" +
-	"\x05ready\x18\x01 \x01(\bR\x05ready\"\xc0\x01\n" +
+	"\x05ready\x18\x01 \x01(\bR\x05ready\"\xf0\x01\n" +
 	"\vVoiceConfig\x12\x18\n" +
 	"\aenabled\x18\x01 \x01(\bR\aenabled\x12!\n" +
 	"\fbackend_port\x18\x02 \x01(\x05R\vbackendPort\x12#\n" +
 	"\rannounce_host\x18\x03 \x01(\tR\fannounceHost\x12#\n" +
 	"\rannounce_port\x18\x04 \x01(\x05R\fannouncePort\x12*\n" +
-	"\x11announce_own_node\x18\x05 \x01(\bR\x0fannounceOwnNode\"\xe1\x01\n" +
+	"\x11announce_own_node\x18\x05 \x01(\bR\x0fannounceOwnNode\x12.\n" +
+	"\x13client_ip_preserved\x18\x06 \x01(\bR\x11clientIpPreserved\"\xe1\x01\n" +
 	"\rVoiceCounters\x12J\n" +
 	"\x06totals\x18\x01 \x03(\v22.spawnery.agent.v1alpha1.VoiceCounters.TotalsEntryR\x06totals\x12I\n" +
 	"\vrelay_state\x18\x02 \x01(\x0e2(.spawnery.agent.v1alpha1.VoiceRelayStateR\n" +
