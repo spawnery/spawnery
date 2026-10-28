@@ -33,8 +33,7 @@ kubectl -n spawnery-system get secret spawnery-agent-tls \
   been waiting for a human.
 - `spawnery.cloud/ca-rotation-discarded` appears only if a rotation slot was
   hand-edited into something that would not parse, or `ca.crt` into more than
-  one PEM block. A `ca.crt` that does not parse leaves no record: the operator
-  logs that it is reissuing the bundle and issues a new CA.
+  one PEM block, or a first block that is not the certificate for `ca.key`.
 
 Nothing here happens quickly. On an idle cluster `start` can sit for up to
 an hour before it is picked up, and the switch follows roughly a quarter of an
@@ -122,10 +121,11 @@ a value that is none of the three: it is never consumed, so its
 `RotationRequestUnrecognised` event fires on every tick for as long as it sits
 there, which is every 30 seconds while a rotation is in flight.
 
-Eight reasons appear as events here (`internal/certs/events.go`):
+Ten reasons appear as events here (`internal/certs/events.go`):
 `RotationStarted`, `RotationBlocked`, `RotationSwitched`, `RotationCompleted`,
 `RotationRequestUnrecognised`, `RotationRequestRefused`,
-`RotationSlotDiscarded` and `RotationSlotTruncated`. `rollback` alone ends a
+`RotationSlotDiscarded`, `RotationSlotTruncated`, `CACertificateRepaired` and
+`CAReissueRefused`. `rollback` alone ends a
 rotation with no event. All expire within the hour; the gauge
 `spawnery_ca_rotation_phase` (1 for the phase in effect, 0 for the others)
 does not.
@@ -138,10 +138,24 @@ the PEM encoding of one certificate: those bytes go verbatim into every
 `spawnery-ca` ConfigMap, and an agent that cannot parse the bundle loses its
 whole trust store, not one slot. A failing slot is repaired (truncated to its
 first PEM block, `RotationSlotTruncated`) or cleared (`RotationSlotDiscarded`)
-there and then. `ca.crt` is only ever truncated: one whose first block is not
-a certificate matching `ca.key` makes the operator issue a new CA, which
-strands every agent that pinned the old one. Only a hand-edited or truncated
-secret reaches this; nothing the procedure itself does can.
+there and then. `ca.crt` is only ever truncated, with one repair beside it.
+
+A `ca.crt` whose first block does not parse, or is not the certificate for
+`ca.key`, is searched for the block that is; pasting "the new CA" in front of
+the real one gets here. A match becomes `ca.crt` alone
+(`CACertificateRepaired`).
+
+With no match, or a `ca.key` that is not a readable EC key, the operator
+issues no new CA, which would strand every agent that pinned the old one. It
+leaves the secret alone and records `CAReissueRefused` and
+`spawnery_ca_key_unmatched` (alert `SpawneryCAKeyMatchesNoCertificate`). A
+running operator keeps serving its last certificate until it expires, at most
+90 days; a restarted one serves none, so no agent connects and no pod or proxy
+is created. **Do not restart it.** Repair the secret: put the matching
+certificate (from a backup or a `spawnery-ca` ConfigMap) back into `ca.crt`, or
+restore `ca.key` from a backup, and the next check, within 30 seconds, picks it
+up. A new CA on purpose means deleting the secret and restarting every agent
+pod; a secret with no `ca.key` gets one by itself.
 
 A cleared `ca-next.crt` while `distributing` abandons the rotation. A cleared
 `ca-previous.crt` while `switched` completes the irreversible drop within one
@@ -174,6 +188,3 @@ A compromised CA key is a different emergency: the overlap above keeps
 trusting the outgoing CA for the width of that wait, which a compromise cannot
 afford. "Delete the secret, restart all pods" stays the
 answer there.
-
-Start with time in hand: the procedure above has a hold in the middle that
-waits for one.

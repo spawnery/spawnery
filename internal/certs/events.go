@@ -38,6 +38,15 @@ import (
 //
 // ReasonRotationSlotTruncated: a slot holding more than one PEM block is cut
 // to the first, the one parseCA signs with, so nothing usable is lost.
+//
+// ReasonCACertificateRepaired: ca.crt's first block is not the certificate
+// for ca.key but another block of it is; ca.crt is rewritten to that one, so
+// the CA every agent pinned stays. AnnotationRotationDiscarded keeps the
+// record.
+//
+// ReasonCAReissueRefused: ca.key matches no certificate in ca.crt. A new CA
+// would lock out every agent that pinned the old one, so the secret is left
+// as it is until a person repairs it. Recorded on every check while it holds.
 const (
 	ReasonRotationStarted             = "RotationStarted"
 	ReasonRotationBlocked             = "RotationBlocked"
@@ -47,6 +56,8 @@ const (
 	ReasonRotationRequestRefused      = "RotationRequestRefused"
 	ReasonRotationSlotDiscarded       = "RotationSlotDiscarded"
 	ReasonRotationSlotTruncated       = "RotationSlotTruncated"
+	ReasonCACertificateRepaired       = "CACertificateRepaired"
+	ReasonCAReissueRefused            = "CAReissueRefused"
 )
 
 // Event actions: events.k8s.io/v1 rejects an event with an empty action.
@@ -61,6 +72,8 @@ const (
 	actionRefuseRotationRequest     = "RefuseRotationRequest"
 	actionDiscardRotationSlot       = "DiscardRotationSlot"
 	actionTruncateRotationSlot      = "TruncateRotationSlot"
+	actionRepairCACertificate       = "RepairCACertificate"
+	actionRefuseCAReissue           = "RefuseCAReissue"
 )
 
 // event is a no-op without a Recorder, which only main.go's wiring sets.

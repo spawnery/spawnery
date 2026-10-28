@@ -36,6 +36,8 @@ var certsActions = map[string]string{
 	"actionRefuseRotationRequest":     actionRefuseRotationRequest,
 	"actionDiscardRotationSlot":       actionDiscardRotationSlot,
 	"actionTruncateRotationSlot":      actionTruncateRotationSlot,
+	"actionRepairCACertificate":       actionRepairCACertificate,
+	"actionRefuseCAReissue":           actionRefuseCAReissue,
 }
 
 // events.k8s.io/v1 rejects an event whose action is empty.
