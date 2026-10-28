@@ -42,7 +42,6 @@ cd "$repo_root"
 # not rewrite the manifest before the game images have succeeded.
 all_images=(
 	"purpur-image:result-purpur"
-	"purpur-image-26-2:result-purpur-26-2"
 	"canvas-image:result-canvas"
 	"velocity-image:result-velocity"
 	"worldsync-image:result-worldsync"

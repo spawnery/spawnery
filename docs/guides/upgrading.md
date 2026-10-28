@@ -105,9 +105,14 @@ unless a `false` was asserted.
 A game image's tag is `<minecraft>-<release>`. When a release moves to a new
 Minecraft version, the previous version's Paper and Purpur images are
 published beside it for a short transition, so the operator and the proxies
-can move first and the worlds later: `purpur:26.2-<release>` next to
-`purpur:26.3-<release>`. The one Velocity image serves both. Worlds only go
-forward, so move a persistent group to the new version once, and not back.
+can move first and the worlds later. The one Velocity image serves both.
+Worlds only go forward, so move a persistent group to the new version once,
+and not back.
+
+No 26.2 image is built any more; the last release that publishes
+`purpur:26.2-<release>` is 0.30.1. A group still on one moves to 26.3 by
+changing its image to the `purpur:26.3-<release>` tag of the release it
+upgrades to.
 
 ## `/cloud start` and `/cloud stop` are gone
 

@@ -109,13 +109,6 @@
             inherit (paper) mojangJar;
           };
 
-          # The previous Minecraft version, built beside the current one so a
-          # network can move on its own schedule.
-          paper-26-2 = pkgs.callPackage ./nix/paper-26.2.nix { };
-          purpur-26-2 = pkgs.callPackage ./nix/purpur-26.2.nix {
-            inherit (paper-26-2) mojangJar;
-          };
-
           oci-common = pkgs.callPackage ./nix/oci-common.nix { };
 
           paper-jre = pkgs.callPackage ./nix/paper-jre.nix { };
@@ -236,13 +229,6 @@
 
           canvas-image = pkgs.callPackage ./nix/canvas-image.nix {
             inherit canvas spawnery-slp spawnery-config agents imageVersion oci-common paper-jre;
-          };
-
-          # The same image over the 26.2 pins and the same agent jar: its
-          # api-version 26.2 loads on both.
-          purpur-image-26-2 = pkgs.callPackage ./nix/purpur-image.nix {
-            purpur = purpur-26-2;
-            inherit spawnery-slp spawnery-config agents imageVersion oci-common paper-jre;
           };
 
           # No spawnery-slp: a proxy's readiness is the agent's ready port.
