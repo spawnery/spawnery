@@ -46,6 +46,11 @@ jobs:
             # before the failing test's name.
             log-lines = 40
 
+      # Nix does not retry an HTTP 416 from cache.nixos.org; a fresh invocation
+      # fetches the path again from its start.
+      - name: Fetch the image's inputs
+        run: for _ in 1 2 3; do nix build .#docs-image --no-link && exit 0; sleep 10; done; exit 1
+
       - name: Build the image
         run: echo "archive=$(nix build .#docs-image --no-link --print-out-paths)" >> "$GITHUB_ENV"
 

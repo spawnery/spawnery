@@ -28,6 +28,7 @@ import (
 	"os/exec"
 	"strconv"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -417,10 +418,29 @@ func (s *proxySession) recv(t *testing.T, within time.Duration) (*agentpb.Operat
 	}
 }
 
-// proxyToken mints what the proxy's own projected volume would hold: a token
-// for the proxy ServiceAccount, in the agent audience, bound to that pod.
+type mintedToken struct {
+	token   string
+	expires time.Time
+}
+
+// One token per pod and reused, as the pod's projected volume does: every
+// session reaches the operator from the port-forward's 127.0.0.1, and a fresh
+// token per session misses its review cache each time, which its per-address
+// limit (grpcauth.PeerBurst, one more per grpcauth.PeerRefill) soon refuses.
+var proxyTokens = struct {
+	sync.Mutex
+	byPod map[types.UID]mintedToken
+}{byPod: map[types.UID]mintedToken{}}
+
+// proxyToken returns what the proxy's own projected volume would hold: a
+// token for the proxy ServiceAccount, in the agent audience, bound to that pod.
 func proxyToken(t *testing.T, pod *corev1.Pod) string {
 	t.Helper()
+	proxyTokens.Lock()
+	defer proxyTokens.Unlock()
+	if m, ok := proxyTokens.byPod[pod.UID]; ok && time.Until(m.expires) > 10*time.Minute {
+		return m.token
+	}
 	tr, err := clientset.CoreV1().ServiceAccounts(pod.Namespace).CreateToken(ctx,
 		podspec.ProxyServiceAccountName,
 		&authnv1.TokenRequest{Spec: authnv1.TokenRequestSpec{
@@ -433,6 +453,7 @@ func proxyToken(t *testing.T, pod *corev1.Pod) string {
 	if err != nil {
 		t.Fatalf("mint a proxy token bound to %s: %v", pod.Name, err)
 	}
+	proxyTokens.byPod[pod.UID] = mintedToken{token: tr.Status.Token, expires: tr.Status.ExpirationTimestamp.Time}
 	return tr.Status.Token
 }
 

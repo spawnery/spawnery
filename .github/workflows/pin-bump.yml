@@ -42,6 +42,11 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
+      # Nix does not retry an HTTP 416 from cache.nixos.org; a fresh invocation
+      # fetches the path again from its start.
+      - name: Fetch the dev shell
+        run: for _ in 1 2 3; do nix develop -c true && exit 0; sleep 10; done; exit 1
+
       - name: Commit as the app
         env:
           GH_TOKEN: ${{ steps.token.outputs.token }}

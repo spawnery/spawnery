@@ -56,7 +56,7 @@ vet:
 .PHONY: test
 # -race unconditionally: a separate test-race target would go unrun. envtest
 # startup dominates the suite, so it costs about 20% rather than 2-10x.
-test: manifests generate fmt vet chart-lint toolchain-lint image-tag-lint docs-length-lint crd-docs-test chart-values-docs-test chart-worldsync-test metrics-docs-test image-version-bump-test canvas-pin-test
+test: manifests generate fmt vet chart-lint toolchain-lint image-tag-lint chart-version-lint chart-version-lint-test docs-length-lint crd-docs-test chart-values-docs-test chart-worldsync-test metrics-docs-test image-version-bump-test canvas-pin-test
 	go test -race ./... -coverprofile cover.out
 
 # protoc and protoc-gen-grpc-java against the Gradle pins; see flake.nix.
@@ -79,6 +79,16 @@ image-tag-lint:
 .PHONY: image-tag-lint-test
 image-tag-lint-test:
 	hack/image-tag-pins-agree-test.sh
+
+# The helm install/upgrade lines in the READMEs and docs/ name the chart
+# version by hand; a stale one still installs, an old chart.
+.PHONY: chart-version-lint
+chart-version-lint:
+	hack/chart-version-pins-agree.sh
+
+.PHONY: chart-version-lint-test
+chart-version-lint-test:
+	hack/chart-version-pins-agree-test.sh
 
 .PHONY: image-version-bump-test
 image-version-bump-test:

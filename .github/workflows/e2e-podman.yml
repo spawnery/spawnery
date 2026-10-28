@@ -57,12 +57,18 @@ jobs:
             # before the failing test's name.
             log-lines = 40
 
+      # Nix does not retry an HTTP 416 from cache.nixos.org; a fresh invocation
+      # fetches the path again from its start.
+      - name: Fetch the dev shell
+        run: for _ in 1 2 3; do nix develop -c true && exit 0; sleep 10; done; exit 1
+
       # Exactly the invocation hack/e2e.sh documents. The job's shell is no
       # login session, so systemd-run --user needs both variables set by hand.
       - name: make e2e under rootless podman
         run: |
           set -euo pipefail
-          export XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          XDG_RUNTIME_DIR="/run/user/$(id -u)"
+          export XDG_RUNTIME_DIR
           export DBUS_SESSION_BUS_ADDRESS="unix:path=${XDG_RUNTIME_DIR}/bus"
           systemd-run --scope --user --property=Delegate=yes -- \
             nix develop -c env KIND_EXPERIMENTAL_PROVIDER=podman make e2e

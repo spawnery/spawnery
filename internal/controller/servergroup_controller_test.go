@@ -2288,14 +2288,13 @@ func TestDegradedEventDoesNotFireWhenNetworkDiesAfterAGiveUp(t *testing.T) {
 		}
 		f.reconcileGroup(t, r)
 		f.clock.Advance(backoffCap)
-		drainRecorder(rec)
 	}
 	f.reconcileGroup(t, r)
 
 	if !meta.IsStatusConditionTrue(f.reloadGroup(t).Status.Conditions, spawneryv1alpha1.ConditionDegraded) {
 		t.Fatalf("Degraded is not true after %d failures; the network-dies pass below would prove nothing", backoffGiveUpAt)
 	}
-	drainRecorder(rec)
+	drainEvents(rec)
 
 	if err := f.c.Delete(f.ctx, f.network); err != nil {
 		t.Fatalf("delete network: %v", err)
@@ -2406,8 +2405,6 @@ func TestBackingOffIsNotDecidedWithoutAUsableNetwork(t *testing.T) {
 	}
 }
 
-func drainRecorder(rec *nonBlockingRecorder) { drainEvents(rec) }
-
 // Every new-generation server is failed each pass because the stale one stays
 // Ready, and the clock moves first so failedAt is newer than its readySince.
 // bound = 1 cold-start server + 2 windows (opening at 15 s and 40 s of the 50 s
@@ -2429,8 +2426,6 @@ func TestGroupWithABrokenNewImageDoesNotRebuildEveryPass(t *testing.T) {
 	generation := f.reloadGroup(t).Generation
 
 	for i := 0; i < passes; i++ {
-		drainRecorder(f.reconc.Recorder.(*nonBlockingRecorder))
-		drainRecorder(r.Recorder.(*nonBlockingRecorder))
 		f.clock.Advance(ResyncInterval)
 		for _, s := range f.serversOfGeneration(t, generation) {
 			if s.Status.Phase != string(phase.Failed) {

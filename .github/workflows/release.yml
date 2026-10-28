@@ -45,6 +45,11 @@ jobs:
           extra_nix_config: |
             experimental-features = nix-command flakes
 
+      # Nix does not retry an HTTP 416 from cache.nixos.org; a fresh invocation
+      # fetches the path again from its start.
+      - name: Fetch the dev shell
+        run: for _ in 1 2 3; do nix develop -c true && exit 0; sleep 10; done; exit 1
+
       # skopeo writes its credential under $XDG_RUNTIME_DIR, which hosted runners
       # leave unset, and its fallback /run/containers is not creatable by a non-root
       # runner. REGISTRY_AUTH_FILE names just this file and also reaches
