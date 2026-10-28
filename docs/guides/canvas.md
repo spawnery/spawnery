@@ -112,7 +112,6 @@ change while a snapshot is copied.
 
 - No startup cache. `--aot-cache` is Purpur's: a Canvas group starts as it does
   with the flag off, and the `purpur-aot` images are not pulled for it.
-- No Canvas 26.2 image.
 
 The login gate works as on Purpur. A group that enforces playable slots or a
 [join permission](join-permission.md) refuses and admits players on Canvas.

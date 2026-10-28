@@ -76,9 +76,9 @@ closed until a server list has arrived and opens once one does.
 
 ## The images
 
-`make image-test` runs the game images (Purpur 26.3, Purpur 26.2 and
-Velocity) offline under the same constraints the podspec imposes, loading each
-first so the target needs no separate build step of its own.
+`make image-test` runs the game images (Purpur 26.3 and Velocity) offline
+under the same constraints the podspec imposes, loading each first so the
+target needs no separate build step of its own.
 `hack/image-test.sh` asserts Paper's behaviour (config rewritten, plugin
 loaded, nothing downloaded at start), which Purpur, a Paper fork, keeps.
 
