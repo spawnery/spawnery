@@ -19,6 +19,7 @@ package worldsync
 import (
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -49,17 +50,41 @@ func chain(t *testing.T, root string, depth int) {
 	t.Cleanup(func() { _ = os.RemoveAll(filepath.Join(root, "a")) })
 }
 
+// The yardstick is a scan of as many sibling directories, which runs the same
+// walk under the same build flags: a walk that reopens each directory from the
+// root costs the chain over 100 times what it costs the siblings.
 func TestAScanRefusesATreeDeeperThanAPathCanBe(t *testing.T) {
-	data := t.TempDir()
-	chain(t, data, 2100)
+	const depth = 2100
+	flat, deep := t.TempDir(), t.TempDir()
+	for i := range depth {
+		if err := os.MkdirAll(filepath.Join(flat, "a", strconv.Itoa(i)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+	}
+	chain(t, deep, depth)
+
 	start := time.Now()
+	if _, err := Scan(flat, keepOf(t, "a")); err != nil {
+		t.Fatal(err)
+	}
+	yardstick := time.Since(start)
+
+	visited := 0
+	walkHook = func(string) { visited++ }
+	t.Cleanup(func() { walkHook = nil })
 	var err error
-	withTimeout(t, "a scan of a deep chain", func() { _, err = Scan(data, keepOf(t, "a")) }, func() {})
+	start = time.Now()
+	withTimeout(t, "a scan of a deep chain", func() { _, err = Scan(deep, keepOf(t, "a")) }, func() {})
+	took := time.Since(start)
+
 	if err == nil {
 		t.Error("a scan of a chain 2100 levels deep succeeded")
 	}
-	if d := time.Since(start); d > time.Second {
-		t.Errorf("the scan took %v", d)
+	if visited >= depth {
+		t.Errorf("the scan visited %d entries of a chain it must stop at a path's length in", visited)
+	}
+	if limit := max(20*yardstick, time.Second); took > limit {
+		t.Errorf("the scan took %v, over %v (20 times the %v a scan of as many sibling directories took)", took, limit, yardstick)
 	}
 }
 

@@ -42,6 +42,13 @@ var (
 		Help: "NotAfter of the CA currently signing the serving certificate, in Unix seconds.",
 	})
 
+	// CAKeyUnmatched is set by every Ensure that reaches a verdict, so a
+	// restarted or newly elected operator repopulates it.
+	CAKeyUnmatched = prometheus.NewGauge(prometheus.GaugeOpts{
+		Name: "spawnery_ca_key_unmatched",
+		Help: "1 while the CA key in the operator's TLS secret matches no certificate in ca.crt and the operator refuses to issue a new CA, 0 otherwise.",
+	})
+
 	// ServingCertExpiry renews on its own (Bundle.NeedsRenewal); a value that
 	// stops moving forward means renewal has stopped working.
 	ServingCertExpiry = prometheus.NewGauge(prometheus.GaugeOpts{
@@ -52,7 +59,7 @@ var (
 
 func init() {
 	metrics.Registry.MustRegister(
-		RotationPhase, RotationBlockedNamespaces, CAExpiry, ServingCertExpiry,
+		RotationPhase, RotationBlockedNamespaces, CAExpiry, ServingCertExpiry, CAKeyUnmatched,
 	)
 }
 

@@ -483,6 +483,20 @@ snap_await_request() {
 	printf '%s\n' "$seq"
 }
 
+# snap_check_deadline <container> <seq> - snapshot.deadline names the request
+# and ends within the agent's 60 s wait, on the clock the node agent would read.
+snap_check_deadline() {
+	local name="$1" seq="$2" got millis now
+	got="$("$CONTAINER" exec "$name" cat "$SNAP_CONTROL/snapshot.deadline" 2>/dev/null || true)"
+	millis="${got#* }"
+	now="$(date +%s%3N)"
+	if [ "${got%% *}" != "$seq" ] || ! [[ "$millis" =~ ^[0-9]+$ ]] ||
+		[ "$millis" -le "$now" ] || [ "$millis" -gt $((now + 60000)) ]; then
+		echo "snapshot.deadline is '$got' for request $seq; want '$seq <unix ms within the next 60 s>' (now $now)" >&2
+		exit 1
+	fi
+}
+
 # The warning names the exception only on the line after it.
 snap_explain() {
 	grep -A 1 'spawnery world sync' <<<"$("$CONTAINER" logs "$1" 2>&1)" | tail -20 >&2 || true
@@ -550,6 +564,7 @@ snapshot_phase() {
 	start_agent "$empty" "${SNAP_VOLUMES[0]}" "$WORK/agent-snapshot" "$WORK/config" "stubop:19451" "$IMAGE" \
 		"${sync_env[@]}"
 	first="$(snap_await_request "$empty" "")"
+	snap_check_deadline "$empty" "$first"
 	snap_answer "$empty" "$first"
 	seq="$(snap_await_request "$empty" "$first")"
 	if [ -n "$(snap_warnings "$empty")" ]; then

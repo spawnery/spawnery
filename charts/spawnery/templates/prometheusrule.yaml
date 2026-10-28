@@ -51,6 +51,30 @@ spec:
               left, so reaching one day means the renewal path has stopped.
               Every agent handshake fails when it expires.
 
+        # The operator stays up, so that this series is scraped; it checks the
+        # secret every 30 seconds while this holds.
+        - alert: SpawneryCAKeyMatchesNoCertificate
+          expr: spawnery_ca_key_unmatched == 1
+          for: 5m
+          labels:
+            severity: critical
+          annotations:
+            summary: The spawnery operator refuses to issue a new CA, because ca.key matches no certificate in ca.crt or is not a readable key.
+            description: >-
+              A new CA would lock out every agent that pinned the old one, so
+              the operator leaves the TLS secret as it is. A running operator
+              keeps serving its last certificate and agents stay connected
+              until it expires, at most 90 days; one that restarts serves none,
+              refuses every agent connection and creates no new pods or
+              proxies until the secret is repaired. Do not restart the
+              operator to fix this. Put the certificate that
+              matches ca.key back into ca.crt (from a backup, or from the
+              spawnery-ca ConfigMap in any namespace holding a Network), or
+              restore ca.key from a backup if that is the broken half; the
+              operator picks the repair up within 30 seconds. Starting over
+              with a new CA means deleting the secret and restarting every
+              agent pod; see docs/guides/rotating-the-ca.md.
+
         # A RotationBlocked event fires only when the blocked list changes.
         - alert: SpawneryCARotationBlocked
           expr: spawnery_ca_rotation_blocked_namespaces > 0

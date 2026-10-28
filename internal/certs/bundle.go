@@ -330,6 +330,50 @@ func (b *Bundle) parseCA() (*x509.Certificate, *ecdsa.PrivateKey, error) {
 	return cert, key, nil
 }
 
+// ErrCAKeyUnmatched: the secret holds a CA key and no certificate in ca.crt
+// belongs to it, or the key cannot be read. Ensure refuses to replace the CA
+// then.
+var ErrCAKeyUnmatched = errors.New("ca.key matches no certificate in ca.crt")
+
+// matchingCACertificate returns the PEM encoding of the first certificate in
+// certPEM whose public key belongs to keyPEM, with its 1-based position among
+// the certificates and their number. Blocks that are not certificates, or do
+// not parse, are skipped.
+func matchingCACertificate(certPEM, keyPEM []byte) (cert []byte, position, total int, err error) {
+	keyBlock, _ := pem.Decode(keyPEM)
+	if keyBlock == nil {
+		return nil, 0, 0, fmt.Errorf("%w: ca.key is not PEM", ErrCAKeyUnmatched)
+	}
+	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	if err != nil {
+		return nil, 0, 0, fmt.Errorf("%w: parse CA key: %v", ErrCAKeyUnmatched, err)
+	}
+	var match []byte
+	rest := certPEM
+	for {
+		var block *pem.Block
+		block, rest = pem.Decode(rest)
+		if block == nil {
+			break
+		}
+		if block.Type != "CERTIFICATE" {
+			continue
+		}
+		total++
+		c, err := x509.ParseCertificate(block.Bytes)
+		if err != nil {
+			continue
+		}
+		if pub, ok := c.PublicKey.(*ecdsa.PublicKey); ok && key.PublicKey.Equal(pub) && match == nil {
+			match, position = encodeCert(block.Bytes), total
+		}
+	}
+	if match == nil {
+		return nil, 0, total, fmt.Errorf("%w (%d certificate blocks in ca.crt)", ErrCAKeyUnmatched, total)
+	}
+	return match, position, total, nil
+}
+
 func (b *Bundle) parseServing() (*x509.Certificate, error) {
 	block, _ := pem.Decode(b.ServingCertPEM)
 	if block == nil {

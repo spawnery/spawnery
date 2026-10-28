@@ -17,8 +17,10 @@ limitations under the License.
 package certs
 
 import (
+	"bytes"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"sync/atomic"
 	"time"
@@ -67,8 +69,21 @@ type Store struct {
 // hack/chart-templates.sh replaces with the release namespace.
 // +kubebuilder:rbac:groups="",namespace=spawnery-system,resources=secrets,verbs=get;create;update
 
-// Ensure returns a usable bundle, creating or renewing it if needed.
+// Ensure returns a usable bundle, creating or renewing it if needed. It
+// returns an error wrapping ErrCAKeyUnmatched, and writes nothing, for a
+// secret whose CA key no certificate in ca.crt matches.
 func (s *Store) Ensure(ctx context.Context) (*Bundle, error) {
+	bundle, err := s.ensure(ctx)
+	switch {
+	case errors.Is(err, ErrCAKeyUnmatched):
+		CAKeyUnmatched.Set(1)
+	case err == nil:
+		CAKeyUnmatched.Set(0)
+	}
+	return bundle, err
+}
+
+func (s *Store) ensure(ctx context.Context) (*Bundle, error) {
 	now := s.Clock()
 
 	secret := &corev1.Secret{}
@@ -101,14 +116,31 @@ func (s *Store) Ensure(ctx context.Context) (*Bundle, error) {
 	validErr := bundle.Validate(now, s.DNSNames)
 	switch {
 	case validErr != nil:
-		// Start over rather than guess what broke it.
-		log.FromContext(ctx).Info("reissuing the TLS bundle", "reason", validErr.Error())
-		fresh, err := s.reissueOrIssue(now, bundle)
+		log.FromContext(ctx).Info("the TLS bundle is invalid", "reason", validErr.Error())
+		fresh, repair, err := s.reissueOrIssue(now, bundle)
 		if err != nil {
+			if errors.Is(err, ErrCAKeyUnmatched) {
+				s.event(corev1.EventTypeWarning, ReasonCAReissueRefused, actionRefuseCAReissue,
+					"%.600s; no new CA is issued, because every agent that pinned the current one "+
+						"would be locked out. Do not restart the operator: restore the certificate "+
+						"that matches ca.key into ca.crt, or ca.key itself from a backup. Deleting "+
+						"the secret starts over with a new CA, and every agent pod must restart", err)
+			}
 			return nil, err
 		}
 		fresh = carryRotation(fresh, bundle)
-		return fresh, s.write(ctx, secret, fresh)
+		if repair != "" {
+			setAnnotation(secret, AnnotationRotationDiscarded,
+				fmt.Sprintf("%s (%s)", repair, now.UTC().Format(time.RFC3339)))
+		}
+		if err := s.write(ctx, secret, fresh); err != nil {
+			return fresh, err
+		}
+		if repair != "" {
+			s.event(corev1.EventTypeWarning, ReasonCACertificateRepaired, actionRepairCACertificate,
+				"%s; the CA is the one every agent already pinned, so nothing is stranded", repair)
+		}
+		return fresh, nil
 	case bundle.NeedsRenewal(now):
 		fresh, err := Reissue(now, bundle, s.DNSNames)
 		if err != nil {
@@ -133,12 +165,31 @@ func carryRotation(fresh, stale *Bundle) *Bundle {
 }
 
 // reissueOrIssue keeps the CA if it is still intact, so agents that pinned it
-// survive a damaged serving certificate.
-func (s *Store) reissueOrIssue(now time.Time, broken *Bundle) (*Bundle, error) {
+// survive a damaged serving certificate. When ca.crt no longer matches ca.key
+// it looks for the matching certificate among ca.crt's other blocks and keeps
+// that CA, naming what it did in repair. A secret holding a CA key and no
+// certificate for it is refused with ErrCAKeyUnmatched: a new CA would lock
+// out every agent that pinned the old one. Only a secret with no CA key at all
+// gets a new CA, since there is nothing to keep.
+func (s *Store) reissueOrIssue(now time.Time, broken *Bundle) (fresh *Bundle, repair string, err error) {
 	if _, _, err := broken.parseCA(); err == nil {
-		return Reissue(now, broken, s.DNSNames)
+		fresh, err := Reissue(now, broken, s.DNSNames)
+		return fresh, "", err
 	}
-	return Issue(now, s.DNSNames)
+	if len(bytes.TrimSpace(broken.CAKeyPEM)) == 0 {
+		fresh, err := Issue(now, s.DNSNames)
+		return fresh, "", err
+	}
+	cert, position, total, err := matchingCACertificate(broken.CACertPEM, broken.CAKeyPEM)
+	if err != nil {
+		return nil, "", err
+	}
+	fresh, err = Reissue(now, &Bundle{CACertPEM: cert, CAKeyPEM: broken.CAKeyPEM}, s.DNSNames)
+	if err != nil {
+		return nil, "", err
+	}
+	return fresh, fmt.Sprintf("%s: the first PEM block is not the certificate for %s; "+
+		"repaired to certificate %d of %d in it, the one that matches", keyCACert, keyCAKey, position, total), nil
 }
 
 func (s *Store) secretFor(b *Bundle) *corev1.Secret {
@@ -224,23 +275,30 @@ func (p *Provider) CABundle() []byte {
 func (p *Provider) Start(ctx context.Context) error {
 	logger := log.FromContext(ctx).WithName("certs")
 
-	bundle, err := p.store.Ensure(ctx)
-	if err != nil {
-		return fmt.Errorf("ensure the TLS bundle: %w", err)
-	}
 	// Seeded true: if the first pass cannot tell, polling a timed window too
 	// often is cheap and polling it hourly is not.
 	inFlight := true
-	if advanced, rotating, err := p.store.AdvanceRotation(ctx, bundle); err != nil {
-		// Not fatal: the certificate in hand still works.
-		logger.Error(err, "the CA rotation did not advance")
-	} else {
-		bundle, inFlight = advanced, rotating
+	bundle, err := p.store.Ensure(ctx)
+	switch {
+	case errors.Is(err, ErrCAKeyUnmatched):
+		// Kept alive, not crashed, so spawnery_ca_key_unmatched is scraped and
+		// the alert fires; the checks below run until a person has repaired the
+		// secret. Nothing is served meanwhile.
+		logger.Error(err, "refusing to issue a new CA; waiting for the secret to be repaired")
+	case err != nil:
+		return fmt.Errorf("ensure the TLS bundle: %w", err)
+	default:
+		if advanced, rotating, err := p.store.AdvanceRotation(ctx, bundle); err != nil {
+			// Not fatal: the certificate in hand still works.
+			logger.Error(err, "the CA rotation did not advance")
+		} else {
+			bundle, inFlight = advanced, rotating
+		}
+		if err := p.Set(bundle); err != nil {
+			return err
+		}
+		logger.Info("serving certificate ready")
 	}
-	if err := p.Set(bundle); err != nil {
-		return err
-	}
-	logger.Info("serving certificate ready")
 
 	// A timer, because the interval changes when a rotation starts or ends.
 	timer := time.NewTimer(checkInterval(inFlight))
@@ -262,6 +320,10 @@ func (p *Provider) refresh(ctx context.Context, wasInFlight bool) bool {
 	logger := log.FromContext(ctx).WithName("certs")
 
 	bundle, err := p.store.Ensure(ctx)
+	if errors.Is(err, ErrCAKeyUnmatched) {
+		logger.Error(err, "refusing to issue a new CA; keeping the current certificate")
+		return true
+	}
 	if err != nil {
 		// Renewal starts with a third of the lifetime left.
 		logger.Error(err, "renewal failed, keeping the current certificate")

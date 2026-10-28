@@ -41,7 +41,14 @@ const (
 	FailedFile  = prune.ControlDir + "/failed"
 	RequestFile = prune.ControlDir + "/snapshot.request"
 	DoneFile    = prune.ControlDir + "/snapshot.done"
+	// DeadlineFile holds "<seq> <unix milliseconds>": the end of the wait of
+	// the agent that asked for snapshot seq. It is a file of its own because
+	// the first node agents parsed all of RequestFile as one decimal and
+	// ignored a request that held anything else.
+	DeadlineFile = prune.ControlDir + "/snapshot.deadline"
 )
+
+var errPastDeadline = errors.New("the snapshot request is past the deadline the game server gave it")
 
 var ErrUnavailable = errors.New("worldsync: the world cannot be published on this node now")
 
@@ -739,7 +746,10 @@ func (n *Node) unpublishLocked(s *worldState) error {
 	return n.saveState(s)
 }
 
-func (n *Node) snapshot(s *worldState) error {
+func (n *Node) snapshot(s *worldState) error { return n.snapshotBy(s, time.Time{}) }
+
+// snapshotBy refuses to queue what it copied after a nonzero deadline.
+func (n *Node) snapshotBy(s *worldState, deadline time.Time) error {
 	keep, err := prune.ParseKeep(s.Keep)
 	if err != nil {
 		return err
@@ -765,8 +775,40 @@ func (n *Node) snapshot(s *worldState) error {
 		_ = os.RemoveAll(dir)
 		return err
 	}
+	if n.pastDeadline(deadline) {
+		_ = os.RemoveAll(dir)
+		return errPastDeadline
+	}
 	s.Pending = append(s.Pending, seq)
 	return nil
+}
+
+func (n *Node) pastDeadline(deadline time.Time) bool {
+	return !deadline.IsZero() && !n.cfg.Clock().Before(deadline)
+}
+
+// requestDeadline returns the deadline the game server wrote for request seq,
+// or the zero time if there is none: no file, one for another request, or one
+// that does not parse. An unreadable deadline must not stop a snapshot an
+// older game server asked for.
+func (n *Node) requestDeadline(s *worldState, seq int64) time.Time {
+	b, err := readSmall(n.dataOf(s), DeadlineFile, 64)
+	if err != nil {
+		return time.Time{}
+	}
+	fields := strings.Fields(string(b))
+	if len(fields) != 2 {
+		return time.Time{}
+	}
+	got, err := strconv.ParseInt(fields[0], 10, 64)
+	if err != nil || got != seq {
+		return time.Time{}
+	}
+	millis, err := strconv.ParseInt(fields[1], 10, 64)
+	if err != nil || millis <= 0 {
+		return time.Time{}
+	}
+	return time.UnixMilli(millis)
 }
 
 func (n *Node) Run(ctx context.Context) {
@@ -857,8 +899,11 @@ func (n *Node) pollRequests() {
 		case s.Incomplete:
 			err = errors.New("the world is still downloading")
 		default:
-			if err = n.checkWorldsKept(s); err == nil {
-				err = n.snapshot(s)
+			deadline := n.requestDeadline(s, seq)
+			if n.pastDeadline(deadline) {
+				err = errPastDeadline
+			} else if err = n.checkWorldsKept(s); err == nil {
+				err = n.snapshotBy(s, deadline)
 			}
 		}
 		answer := strconvI(seq)

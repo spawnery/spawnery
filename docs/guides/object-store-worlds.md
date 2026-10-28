@@ -181,6 +181,16 @@ when their size or modification time changed. A file that keeps changing
 while it is copied fails that snapshot after three attempts, and the next one
 tries again.
 
+The agent waits at most 60 seconds for the saves, the flush and the copy
+together, and writes the end of that wait next to the request
+(`snapshot.deadline`, a wall-clock time). The node agent refuses a request it
+picks up after that time. A copy that started in time but finishes after it is
+dropped and never queued for upload, though the node still reads the world
+until that copy ends. Agent and node agent run on one node and read its clock;
+a clock stepped back by an administrator or NTP while a snapshot is in flight
+lets a late copy through by up to the size of the step. A request without a
+deadline, from an older agent, is copied as before.
+
 If a node dies, its running worlds lose the play since their last snapshot
 that finished uploading: at most the interval, plus an upload that was still
 running. After 10 minutes another node may take the lease and start the

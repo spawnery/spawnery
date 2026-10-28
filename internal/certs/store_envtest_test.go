@@ -24,7 +24,6 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 
 	"github.com/spawnery/spawnery/internal/certs"
@@ -147,53 +146,6 @@ func TestEnsureRepairsACorruptSecret(t *testing.T) {
 	}
 }
 
-// A CA cert and key that do not belong together are repaired once, and the
-// repair converges instead of failing Validate again on every tick.
-func TestEnsureConvergesOnAMismatchedCAPair(t *testing.T) {
-	s, _, ctx, _ := newStore(t)
-
-	other, err := certs.Issue(s.Clock(), s.DNSNames)
-	if err != nil {
-		t.Fatalf("Issue (other): %v", err)
-	}
-	mine, err := certs.Issue(s.Clock(), s.DNSNames)
-	if err != nil {
-		t.Fatalf("Issue (mine): %v", err)
-	}
-	broken := &corev1.Secret{
-		ObjectMeta: metav1.ObjectMeta{Name: s.Name, Namespace: s.Namespace},
-		Type:       corev1.SecretTypeTLS,
-		Data: map[string][]byte{
-			"ca.crt":  mine.CACertPEM,
-			"ca.key":  other.CAKeyPEM, // does not belong to ca.crt
-			"tls.crt": mine.ServingCertPEM,
-			"tls.key": mine.ServingKeyPEM,
-		},
-	}
-	if err := s.Client.Create(ctx, broken); err != nil {
-		t.Fatalf("create the mismatched secret: %v", err)
-	}
-
-	first, err := s.Ensure(ctx)
-	if err != nil {
-		t.Fatalf("first Ensure over a mismatched CA pair: %v", err)
-	}
-	if err := first.Validate(s.Clock(), s.DNSNames); err != nil {
-		t.Errorf("the repaired bundle is still broken: %v", err)
-	}
-
-	second, err := s.Ensure(ctx)
-	if err != nil {
-		t.Fatalf("second Ensure: %v", err)
-	}
-	if string(second.CACertPEM) != string(first.CACertPEM) {
-		t.Error("the repair did not converge: the CA changed again on the second Ensure")
-	}
-	if string(second.ServingCertPEM) != string(first.ServingCertPEM) {
-		t.Error("the repair did not converge: the serving certificate changed again on the second Ensure")
-	}
-}
-
 // The provider is asked on every handshake, so a renewal needs no restart.
 func TestProviderServesTheCurrentCertificate(t *testing.T) {
 	s, _, ctx, _ := newStore(t)
@@ -305,9 +257,8 @@ func TestEnsureCarriesARotationSlotThroughAReadBack(t *testing.T) {
 	}
 }
 
-// When the stored CA is damaged beyond repair, Ensure mints a new one but
-// carries the next CA forward (see carryRotation). No other test reaches that
-// fallback.
+// A secret that lost its CA key leaves nothing to keep, so Ensure mints a new
+// CA but carries the next CA forward (see carryRotation).
 func TestEnsureCarriesTheNextCAAcrossAFullCAReissue(t *testing.T) {
 	s, clock, ctx, ns := newStore(t)
 
@@ -327,10 +278,9 @@ func TestEnsureCarriesTheNextCAAcrossAFullCAReissue(t *testing.T) {
 	}
 	secret.Data["ca-next.crt"] = nextCert
 	secret.Data["ca-next.key"] = nextKey
-	// Not PEM at all, so Ensure takes the Issue fallback rather than Reissue.
-	secret.Data["ca.key"] = []byte("not a key")
+	secret.Data["ca.key"] = []byte{}
 	if err := s.Client.Update(ctx, secret); err != nil {
-		t.Fatalf("plant the incoming CA and corrupt ca.key: %v", err)
+		t.Fatalf("plant the incoming CA and empty ca.key: %v", err)
 	}
 
 	after, err := s.Ensure(ctx)

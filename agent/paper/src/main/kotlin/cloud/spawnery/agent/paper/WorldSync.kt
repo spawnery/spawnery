@@ -10,6 +10,10 @@ class WorldSync(
     private val controlDir: Path,
     private val clock: () -> Long = ::monotonicMillis,
     private val sleep: (Long) -> Unit = Thread::sleep,
+    private val wallClock: () -> Long = System::currentTimeMillis,
+    private val move: (from: Path, to: Path) -> Unit = { from, to ->
+        Files.move(from, to, StandardCopyOption.ATOMIC_MOVE, StandardCopyOption.REPLACE_EXISTING)
+    },
 ) {
     sealed interface Outcome {
         data object Ready : Outcome
@@ -26,16 +30,23 @@ class WorldSync(
         }
     }
 
-    fun requestSnapshot(seq: Long) {
+    /**
+     * [waitMillis] is how long the caller will wait for the answer. The node
+     * agent refuses a request past that deadline, in wall-clock time because
+     * it reads the clock in another process. The deadline goes in its own
+     * file, written first: node agents that predate it parse the request file
+     * as one number and would ignore a request with anything else in it.
+     */
+    fun requestSnapshot(seq: Long, waitMillis: Long) {
         Files.createDirectories(controlDir)
-        val tmp = controlDir.resolve("snapshot.request.tmp")
-        Files.writeString(tmp, seq.toString())
-        Files.move(
-            tmp,
-            controlDir.resolve(REQUEST_FILE),
-            StandardCopyOption.ATOMIC_MOVE,
-            StandardCopyOption.REPLACE_EXISTING,
-        )
+        replace(DEADLINE_FILE, "$seq ${wallClock() + waitMillis}")
+        replace(REQUEST_FILE, seq.toString())
+    }
+
+    private fun replace(name: String, content: String) {
+        val tmp = controlDir.resolve("$name.tmp")
+        Files.writeString(tmp, content)
+        move(tmp, controlDir.resolve(name))
     }
 
     fun awaitSnapshot(seq: Long, timeoutMillis: Long): Outcome = poll(timeoutMillis) {
@@ -81,6 +92,7 @@ class WorldSync(
         const val FAILED_FILE = "failed"
         const val REQUEST_FILE = "snapshot.request"
         const val DONE_FILE = "snapshot.done"
+        const val DEADLINE_FILE = "snapshot.deadline"
         const val CONTROL_DIR = ".spawnery-worldsync"
         const val ENV_ENABLED = "SPAWNERY_WORLD_SYNC"
         const val ENV_INTERVAL = "SPAWNERY_WORLD_SYNC_INTERVAL"

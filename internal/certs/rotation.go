@@ -154,7 +154,8 @@ func (s *Store) repairOrDiscardSlots(ctx context.Context, current *Bundle, phase
 		// key fails loudly in parseCA.
 		//
 		// ca.crt is only ever truncated: one that does not parse at all has
-		// already failed Validate, and Ensure reissued it before this runs.
+		// already failed Validate, and Ensure has repaired or refused it
+		// before this runs.
 		{keyCACert, keyCAKey, "",
 			nil,
 			func(b *Bundle, cert, key []byte) { b.CACertPEM, b.CAKeyPEM = cert, key }},

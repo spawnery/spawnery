@@ -24,6 +24,7 @@ The `spawnery_worldsync_` metrics come from the world sync node agents on port 8
 <tr><td><code>spawnery_agent_token_review_cache_misses_total</code></td><td>counter</td><td><em>none</em></td><td>Token checks that required a TokenReview.</td></tr>
 <tr><td><code>spawnery_agents_expected</code></td><td>gauge</td><td><em>none</em></td><td>Managed pods that ought to hold an agent connection.</td></tr>
 <tr><td><code>spawnery_ca_expiry_timestamp_seconds</code></td><td>gauge</td><td><em>none</em></td><td>NotAfter of the CA currently signing the serving certificate, in Unix seconds.</td></tr>
+<tr><td><code>spawnery_ca_key_unmatched</code></td><td>gauge</td><td><em>none</em></td><td>1 while the CA key in the operator&#39;s TLS secret matches no certificate in ca.crt and the operator refuses to issue a new CA, 0 otherwise.</td></tr>
 <tr><td><code>spawnery_ca_rotation_blocked_namespaces</code></td><td>gauge</td><td><em>none</em></td><td>Namespaces holding a Network whose CA ConfigMap does not yet carry the incoming CA.</td></tr>
 <tr><td><code>spawnery_ca_rotation_phase</code></td><td>gauge</td><td><code>phase</code></td><td>1 for the CA rotation phase currently in effect, 0 for the others.</td></tr>
 <tr><td><code>spawnery_group_free_slots</code></td><td>gauge</td><td><code>namespace</code>, <code>network</code>, <code>group</code>, <code>type</code></td><td>Free playable seats of the group.</td></tr>
@@ -102,6 +103,18 @@ The spawnery agent CA expires in under 90 days.
 ```
 
 Rotating it is a deliberate multi-step procedure with a hold in the middle that waits for a person, so start it with time in hand. Annotate the operator&#x27;s TLS secret with spawnery.cloud/rotate-ca=start and follow docs/guides/rotating-the-ca.md. Note that a start annotation can sit unread for up to an hour on an idle cluster, because the operator only re-reads it on its slow tick.
+
+### SpawneryCAKeyMatchesNoCertificate
+
+**Group:** <code>spawnery-ca</code> &nbsp;&nbsp; **Severity:** <code>critical</code> &nbsp;&nbsp; **For:** <code>5m</code>
+
+The spawnery operator refuses to issue a new CA, because ca.key matches no certificate in ca.crt or is not a readable key.
+
+```
+spawnery_ca_key_unmatched == 1
+```
+
+A new CA would lock out every agent that pinned the old one, so the operator leaves the TLS secret as it is. A running operator keeps serving its last certificate and agents stay connected until it expires, at most 90 days; one that restarts serves none, refuses every agent connection and creates no new pods or proxies until the secret is repaired. Do not restart the operator to fix this. Put the certificate that matches ca.key back into ca.crt (from a backup, or from the spawnery-ca ConfigMap in any namespace holding a Network), or restore ca.key from a backup if that is the broken half; the operator picks the repair up within 30 seconds. Starting over with a new CA means deleting the secret and restarting every agent pod; see docs/guides/rotating-the-ca.md.
 
 ### SpawneryCARotationBlocked
 

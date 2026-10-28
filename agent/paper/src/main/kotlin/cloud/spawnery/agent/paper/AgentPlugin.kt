@@ -167,7 +167,7 @@ class AgentPlugin : JavaPlugin(), Listener {
                     ::monotonicMillis,
                     flush = { if (levels.isNotEmpty()) writes.await(levels) },
                     copy = { left ->
-                        sync.requestSnapshot(seq)
+                        sync.requestSnapshot(seq, left)
                         sync.awaitSnapshot(seq, left)
                     },
                 )
