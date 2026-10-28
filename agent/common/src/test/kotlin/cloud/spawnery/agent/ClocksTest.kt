@@ -6,7 +6,10 @@ import kotlin.test.assertEquals
 import kotlin.test.assertTrue
 
 class ClocksTest {
-    /** The two left are instants another process reads: a cookie's expiry, and the proxies' shared transfer windows. */
+    /**
+     * The three left are instants another process reads: a cookie's expiry, the proxies' shared transfer
+     * windows, and the deadline of a snapshot request, which the node agent checks.
+     */
     @Test
     fun `no agent measures a duration on the wall clock`() {
         val sources = File("..").listFiles()!!
@@ -20,9 +23,9 @@ class ClocksTest {
                 .filter { (_, line) -> "currentTimeMillis" in line }
                 .map { (i, line) -> "${file.path}:${i + 1}: ${line.trim()}" }
         }
-        val instants = wallClock.filter { "TransferCookie(" in it || "turnClock" in it }
+        val instants = wallClock.filter { "TransferCookie(" in it || "turnClock" in it || "wallClock" in it }
 
         assertEquals(emptyList(), wallClock - instants.toSet())
-        assertEquals(2, instants.size, "the two instants moved: $instants")
+        assertEquals(3, instants.size, "the three instants moved: $instants")
     }
 }
