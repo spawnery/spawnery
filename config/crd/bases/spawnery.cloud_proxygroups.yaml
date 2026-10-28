@@ -107,19 +107,17 @@ spec:
                 type: object
               configOverlay:
                 description: |-
-                  ConfigOverlay names a ConfigMap whose keys are configuration files to
-                  merge over the rendered defaults — "server.properties",
-                  "paper-global.yml", "paper-world-defaults.yml" or "velocity.toml", in
-                  the target's own dialect.
+                  ConfigOverlay names a ConfigMap whose only accepted key is
+                  "velocity.toml", a TOML fragment to merge over the rendered defaults.
+                  Any other key is refused.
 
                   It outranks the rendered defaults and is outranked by the operationally
                   critical fields.
 
-                  A key the receiving program does not declare is refused, since Paper and
-                  Velocity silently ignore it. The declared keys come from each program's
-                  captured default configuration, so a Paper or Velocity bump can refuse a
-                  new key until that capture is updated. server.properties keys are not
-                  checked.
+                  A key Velocity does not declare is refused, since Velocity silently
+                  ignores it. The declared keys come from its captured default
+                  configuration, so a Velocity bump can refuse a new key until that
+                  capture is updated.
                 properties:
                   name:
                     description: Name of the referenced object.

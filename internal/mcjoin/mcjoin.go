@@ -53,8 +53,9 @@ import (
 	"github.com/spawnery/spawnery/internal/slp"
 )
 
-// Packet ids. The login and configuration ids are the same across every
-// protocol version Velocity 3.5.1 accepts.
+// Packet ids. The login ids hold from 1.20.2 (protocol 764), the first version
+// with Login Acknowledged. The configuration ids hold from 1.20.5 (766): in
+// 1.20.2 to 1.20.4 Disconnect is 0x01 and the keep alives are 0x03.
 const (
 	// Serverbound.
 	idHandshake         = 0x00
@@ -727,6 +728,10 @@ func (c *framedConn) readPacket() (int32, []byte, error) {
 		plain := make([]byte, dataLen)
 		if _, err := io.ReadFull(zr, plain); err != nil {
 			return 0, nil, fmt.Errorf("inflate: %w", err)
+		}
+		var extra [1]byte
+		if n, _ := zr.Read(extra[:]); n > 0 {
+			return 0, nil, fmt.Errorf("inflate: the body runs past the declared length of %d", dataLen)
 		}
 		body = bytes.NewReader(plain)
 	}

@@ -101,7 +101,7 @@ The spawnery agent CA expires in under 90 days.
   < 7776000
 ```
 
-Rotating it is a deliberate multi-step procedure with a hold in the middle that waits for a person, so start it with time in hand. Annotate the operator&#x27;s TLS secret with spawnery.cloud/rotate-ca=start and follow docs/reference/known-issues.md&#x27;s &quot;On the agent channel&quot; section. Note that a start annotation can sit unread for up to an hour on an idle cluster, because the operator only re-reads it on its slow tick.
+Rotating it is a deliberate multi-step procedure with a hold in the middle that waits for a person, so start it with time in hand. Annotate the operator&#x27;s TLS secret with spawnery.cloud/rotate-ca=start and follow docs/guides/rotating-the-ca.md. Note that a start annotation can sit unread for up to an hour on an idle cluster, because the operator only re-reads it on its slow tick.
 
 ### SpawneryCARotationBlocked
 

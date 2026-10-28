@@ -346,8 +346,9 @@ Once enabled, a leaving proxy moves players in two moments:
   transferred there instead, landing on another proxy of the group along the
   way.
 - **Forced, after `forceAfterSeconds`.** Counted from when the proxy's agent
-  first sees itself leaving, which is within one resync (30 s) of the
-  operator starting the drain. Keep it below `drain.timeoutSeconds` and any
+  first sees itself leaving. That is about 45 s after the operator starts
+  the drain: the probe lag plus one 30 s resync (observed while the feature
+  was built, 2026-10-01). Keep it below `drain.timeoutSeconds` and any
   `maxStaleSeconds`, or those disconnect the players first. After that,
   every player whose current server's door is open is transferred back to
   that same server. A player on a server whose door is
