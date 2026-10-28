@@ -29,7 +29,7 @@ spec:
               app: docs
       containers:
         - name: caddy
-          image: ghcr.io/spawnery/docs:sha-6dfa7da
+          image: ghcr.io/spawnery/docs:sha-bc54fdb
           ports:
             - name: http
               containerPort: 8080
