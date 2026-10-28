@@ -148,7 +148,6 @@ jobs:
         if: steps.changed.outputs.build == 'true'
         run: |
           nix build .#purpur-image --no-link
-          nix build .#purpur-image-26-2 --no-link
           nix build .#canvas-image --no-link
           nix build .#velocity-image --no-link
 

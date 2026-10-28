@@ -178,7 +178,7 @@ jobs:
           fi
           published=0
           operator_published=false
-          for image in purpur-image purpur-image-26-2 canvas-image velocity-image worldsync-image operator-image; do
+          for image in purpur-image canvas-image velocity-image worldsync-image operator-image; do
             status=0
             nix develop -c env DRY_RUN="$dry_run" WRITE_DIGEST=1 \
               ./hack/publish.sh "$image" || status=$?

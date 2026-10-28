@@ -4,7 +4,6 @@ CONTAINER ?= docker
 VELOCITY_IMAGE ?= $(shell nix eval --raw .#velocity-image.imageName):$(shell nix eval --raw .#velocity-image.imageTag)
 PURPUR_IMAGE ?= $(shell nix eval --raw .#purpur-image.imageName):$(shell nix eval --raw .#purpur-image.imageTag)
 CANVAS_IMAGE ?= $(shell nix eval --raw .#canvas-image.imageName):$(shell nix eval --raw .#canvas-image.imageTag)
-PURPUR_IMAGE_26_2 ?= $(shell nix eval --raw .#purpur-image-26-2.imageName):$(shell nix eval --raw .#purpur-image-26-2.imageTag)
 OPERATOR_IMAGE ?= $(shell nix eval --raw .#operator-image.imageName):$(shell nix eval --raw .#operator-image.imageTag)
 WORLDSYNC_IMAGE ?= $(shell nix eval --raw .#worldsync-image.imageName):$(shell nix eval --raw .#worldsync-image.imageTag)
 STUBOP ?= $(shell nix build .#spawnery-stubop --no-link --print-out-paths)/bin/spawnery-stubop
@@ -180,9 +179,8 @@ agent-deps:
 	"$$(nix build --no-link --print-out-paths .#agents.mitmCache.updateScript)"
 
 .PHONY: image-test
-image-test: purpur-image-load velocity-image-load images-26-2-load aot-train-test
+image-test: purpur-image-load velocity-image-load aot-train-test
 	CONTAINER=$(CONTAINER) IMAGE=$(PURPUR_IMAGE) hack/image-test.sh
-	CONTAINER=$(CONTAINER) IMAGE=$(PURPUR_IMAGE_26_2) hack/image-test.sh
 	CONTAINER=$(CONTAINER) IMAGE=$(VELOCITY_IMAGE) hack/velocity-image-test.sh
 
 .PHONY: aot-train-test
@@ -223,11 +221,6 @@ canvas-image-test: canvas-image-load
 canvas-agent-test: canvas-image-load velocity-image-load
 	CONTAINER=$(CONTAINER) IMAGE=$(CANVAS_IMAGE) VELOCITY_IMAGE=$(VELOCITY_IMAGE) \
 		STUBOP=$(STUBOP) VOICEPROBE=$(VOICEPROBE) hack/agent-test.sh
-
-.PHONY: images-26-2-load
-images-26-2-load:
-	nix build .#purpur-image-26-2 --out-link result-purpur-26-2
-	$(CONTAINER) load < result-purpur-26-2
 
 .PHONY: velocity-image
 velocity-image:
@@ -274,8 +267,6 @@ worldsync-image-test: worldsync-image-load
 image-repro:
 	nix build .#purpur-image --no-link
 	nix build .#purpur-image --rebuild --no-link
-	nix build .#purpur-image-26-2 --no-link
-	nix build .#purpur-image-26-2 --rebuild --no-link
 	nix build .#canvas-image --no-link
 	nix build .#canvas-image --rebuild --no-link
 	nix build .#velocity-image --no-link
