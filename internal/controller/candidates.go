@@ -64,6 +64,9 @@ type ServerView struct {
 	Retire bool
 	// Hold is spec.hold: nothing automatic removes this server.
 	Hold bool
+	// Unschedulable: the Server's Ready condition says the scheduler cannot
+	// place its pod.
+	Unschedulable bool
 	// Condemned is true when the pod sits on a node leaving service.
 	Condemned bool
 	// NodeName is pod.spec.nodeName, for the NodeDraining condition.

@@ -282,6 +282,103 @@ func TestAFailedServersLatePodStaysWhileItsGroupHasNoReadyServer(t *testing.T) {
 	}
 }
 
+const insufficientMemory = "0/2 nodes are available: 2 Insufficient memory."
+
+func (f *fixture) markUnschedulable(t *testing.T, name, message string) {
+	t.Helper()
+	pod, ok := f.pod(name)
+	if !ok {
+		t.Fatalf("pod %s not found", name)
+	}
+	pod.Status.Conditions = []corev1.PodCondition{{
+		Type: corev1.PodScheduled, Status: corev1.ConditionFalse,
+		Reason: corev1.PodReasonUnschedulable, Message: message,
+	}}
+	if err := f.c.Status().Update(f.ctx, pod); err != nil {
+		t.Fatalf("update pod status: %v", err)
+	}
+}
+
+func TestAGroupNamesItsServerWhosePodCannotBeScheduled(t *testing.T) {
+	f := newFixture(t)
+	gr := groupReconciler(f)
+	f.reconcileGroup(t, gr)
+	servers := f.listServers(t)
+	if len(servers) != 1 {
+		t.Fatalf("the group created %d servers, want 1", len(servers))
+	}
+	name := servers[0].Name
+	f.reconcile(name)
+	f.markUnschedulable(t, name, insufficientMemory)
+	f.reconcile(name)
+
+	f.reconcileGroup(t, gr)
+
+	want := "the scheduler cannot place the pod of " + name
+	if c := f.progressing(t, f.group.Name); c == nil || !strings.Contains(c.Message, want) {
+		t.Errorf("group Progressing = %+v, want its message to contain %q", c, want)
+	}
+}
+
+func TestAServerWhosePodCannotBeScheduledSaysSo(t *testing.T) {
+	f := newFixture(t)
+	f.createServer("lobby-full")
+	f.reconcile("lobby-full")
+	f.markUnschedulable(t, "lobby-full", insufficientMemory)
+
+	f.reconcile("lobby-full")
+
+	srv := f.server("lobby-full")
+	ready := meta.FindStatusCondition(srv.Status.Conditions, spawneryv1alpha1.ConditionReady)
+	if ready == nil || ready.Reason != phase.ReasonPodUnschedulable || !strings.Contains(ready.Message, insufficientMemory) {
+		t.Fatalf("Ready = %+v, want reason %s carrying the scheduler's message", ready, phase.ReasonPodUnschedulable)
+	}
+	if got := srv.Status.Phase; got != string(phase.Pending) {
+		t.Errorf("phase = %q, want Pending", got)
+	}
+	f.reconcile("lobby-full")
+	warned := 0
+	for _, e := range f.reconc.Recorder.(*nonBlockingRecorder).events {
+		if strings.HasPrefix(e, "Warning "+phase.ReasonPodUnschedulable+" ") && strings.Contains(e, insufficientMemory) {
+			warned++
+		}
+	}
+	if warned != 1 {
+		t.Errorf("%d PodUnschedulable warnings over two passes, want 1", warned)
+	}
+
+	f.clock.Advance(6 * time.Minute) // the fixture's deadline is 5 minutes
+	f.reconcile("lobby-full")
+	srv = f.server("lobby-full")
+	ready = meta.FindStatusCondition(srv.Status.Conditions, spawneryv1alpha1.ConditionReady)
+	if srv.Status.Phase != string(phase.Failed) || ready == nil || !strings.Contains(ready.Message, insufficientMemory) {
+		t.Errorf("past the deadline: phase %q, Ready %+v; want Failed naming the scheduler's message", srv.Status.Phase, ready)
+	}
+}
+
+func TestAFailedServersPendingPodIsStoppedWithoutAReadyServer(t *testing.T) {
+	f := newFixture(t)
+	f.createServer("lobby-pending")
+	f.reconcile("lobby-pending")
+	if pod, ok := f.pod("lobby-pending"); !ok || pod.Status.Phase != corev1.PodPending {
+		t.Fatalf("pod = %v (found %t), want a Pending pod", pod, ok)
+	}
+	f.clock.Advance(6 * time.Minute) // the fixture's deadline is 5 minutes
+	f.reconcile("lobby-pending")
+	if got := f.server("lobby-pending").Status.Phase; got != string(phase.Failed) {
+		t.Fatalf("phase = %q past the startup deadline, want Failed", got)
+	}
+
+	f.reconcile("lobby-pending")
+
+	if pod, ok := f.pod("lobby-pending"); ok && pod.DeletionTimestamp.IsZero() {
+		t.Error("a failed server keeps its pending pod, and with it the memory its replacement needs")
+	}
+	if got := f.server("lobby-pending").Status.Phase; got != string(phase.Failed) {
+		t.Errorf("phase = %q, want Failed: the object stays for diagnosis", got)
+	}
+}
+
 func TestAFailedMembersWaitingPodIsStopped(t *testing.T) {
 	f := newFixture(t)
 	srv := f.createServer("lobby-c0ffee")

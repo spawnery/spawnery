@@ -39,6 +39,34 @@ func numberedServer(ns string, number int32) *spawneryv1alpha1.Server {
 	}
 }
 
+func TestATestsNamespaceLosesItsServersAndGroupsWithTheTest(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	var ns string
+	t.Run("leaves objects behind", func(t *testing.T) {
+		ns = testenv.Namespace(t, ctx, c)
+		srv := numberedServer(ns, 1)
+		srv.Finalizers = []string{"spawnery.cloud/test-hold"}
+		if err := c.Create(ctx, srv); err != nil {
+			t.Fatalf("create Server: %v", err)
+		}
+		if err := c.Create(ctx, attributedGroup(ns, nil)); err != nil {
+			t.Fatalf("create ServerGroup: %v", err)
+		}
+	})
+
+	var servers spawneryv1alpha1.ServerList
+	if err := c.List(ctx, &servers, client.InNamespace(ns)); err != nil {
+		t.Fatalf("list Servers: %v", err)
+	}
+	var groups spawneryv1alpha1.ServerGroupList
+	if err := c.List(ctx, &groups, client.InNamespace(ns)); err != nil {
+		t.Fatalf("list ServerGroups: %v", err)
+	}
+	if len(servers.Items)+len(groups.Items) != 0 {
+		t.Errorf("%d Servers and %d ServerGroups outlived their test in %s", len(servers.Items), len(groups.Items), ns)
+	}
+}
+
 func TestTheAPIServerAdmitsAServersNumber(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)

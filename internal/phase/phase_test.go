@@ -486,6 +486,31 @@ func TestDecide(t *testing.T) {
 			want:    Decision{Next: Failed, DeletePod: true, Reason: ReasonStoppingFailedPod},
 		},
 		{
+			name:    "a pending server whose pod the scheduler cannot place says so",
+			current: Pending,
+			in:      Inputs{PodExists: true, PodPending: true, PodUnschedulable: "0/2 nodes are available: 2 Insufficient memory."},
+			want:    Decision{Next: Pending, Reason: ReasonPodUnschedulable},
+		},
+		{
+			name:    "an unschedulable pod still fails its server at the startup deadline",
+			current: Pending,
+			in: Inputs{PodExists: true, PodPending: true, StartupDeadlineReached: true,
+				PodUnschedulable: "0/2 nodes are available: 2 Insufficient memory."},
+			want: Decision{Next: Failed, Reason: ReasonStartupTimeout},
+		},
+		{
+			name:    "a failed server's pending pod is stopped without a ready server in the group",
+			current: Failed,
+			in:      Inputs{PodExists: true, PodPending: true},
+			want:    Decision{Next: Failed, DeletePod: true, Reason: ReasonStoppingFailedPod},
+		},
+		{
+			name:    "a failed server's pending pod is stopped beside a ready server",
+			current: Failed,
+			in:      Inputs{PodExists: true, PodPending: true, GroupHasReadyServer: true},
+			want:    Decision{Next: Failed, DeletePod: true, Reason: ReasonStoppingFailedPod},
+		},
+		{
 			name:    "a failed on-demand member's pod still being created is stopped",
 			current: Failed,
 			in:      Inputs{PodExists: true, HoldsWorld: true},

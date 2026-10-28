@@ -3881,8 +3881,11 @@ spec:
                 default: 3600
                 description: |-
                   FailedRetentionSeconds is how long a Failed server is kept for diagnosis.
-                  A pod that comes up after its server failed is stopped as soon as another
-                  server of the group is Ready; the Server object stays for the retention.
+                  A Pending pod of a Failed server is stopped at once, so it neither holds
+                  its requests on a node nor takes room that frees up ahead of the server
+                  that replaces it; a pod that comes up after its server failed is stopped
+                  as soon as another server of the group is Ready. The Server object stays
+                  for the retention.
                 format: int32
                 minimum: 0
                 type: integer
@@ -5837,7 +5840,11 @@ spec:
                 description: Address is the pod IP and port the proxies connect to.
                 type: string
               conditions:
-                description: Conditions follow the standard Kubernetes condition contract.
+                description: |-
+                  Conditions follow the standard Kubernetes condition contract. While the
+                  scheduler cannot place the server's pod, Ready is False with reason
+                  PodUnschedulable and the scheduler's message; the group's Progressing
+                  condition names the server.
                 items:
                   description: Condition contains details for one aspect of the current
                     state of this API Resource.

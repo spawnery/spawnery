@@ -87,6 +87,7 @@ const MaxReadinessLosses int32 = 3
 // Reasons carried in the decision and mirrored into the CR condition.
 const (
 	ReasonPodPending            = "PodPending"
+	ReasonPodUnschedulable      = "PodUnschedulable"
 	ReasonPodRunning            = "PodRunning"
 	ReasonReadyGatePassed       = "ReadyGatePassed"
 	ReasonReadinessLost         = "ReadinessLost"
@@ -121,7 +122,11 @@ type Inputs struct {
 
 	PodExists  bool
 	PodLost    bool
-	PodRunning bool
+	PodPending bool
+	// PodUnschedulable is the scheduler's message while it cannot place the
+	// pod, empty otherwise.
+	PodUnschedulable string
+	PodRunning       bool
 	// PodReady is the readiness probe (the SLP health check).
 	PodReady bool
 	// PodTerminal also covers CrashLoopBackOff past the operator's tolerance.
@@ -273,6 +278,12 @@ func Decide(current Phase, in Inputs) Decision {
 			return Decision{
 				Next: Failed, DeletePod: true,
 				Reason: ReasonStoppingFailedPod, Message: "stopping the pod of a failed member, which holds its world; the object stays for diagnosis",
+			}
+		}
+		if in.PodExists && in.PodPending && !in.PodTerminal {
+			return Decision{
+				Next: Failed, DeletePod: true,
+				Reason: ReasonStoppingFailedPod, Message: "stopping the pending pod of a failed server, so it does not compete for room with its replacement; the object stays for diagnosis",
 			}
 		}
 		// Stop a pod that came up after its server was failed, so it does not run
@@ -461,9 +472,13 @@ func Decide(current Phase, in Inputs) Decision {
 	// fell out of Ready and stays red is caught here, not by the flap counter,
 	// which only counts Ready -> Starting transitions.
 	if in.StartupDeadlineReached && current != Ready {
+		message := "server did not become ready in time"
+		if in.PodExists && in.PodUnschedulable != "" {
+			message += "; the scheduler could not place its pod: " + in.PodUnschedulable
+		}
 		return Decision{
 			Next: Failed, StartDrain: drainOnFailure,
-			Reason: ReasonStartupTimeout, Message: "server did not become ready in time",
+			Reason: ReasonStartupTimeout, Message: message,
 		}
 	}
 
@@ -479,6 +494,12 @@ func Decide(current Phase, in Inputs) Decision {
 				Next:    Failed,
 				Reason:  ReasonPodNeverCreated,
 				Message: "no pod was ever created for this server",
+			}
+		}
+		if in.PodExists && in.PodUnschedulable != "" {
+			return Decision{
+				Next: Pending, Reason: ReasonPodUnschedulable,
+				Message: "the scheduler cannot place the pod: " + in.PodUnschedulable,
 			}
 		}
 		return Decision{Next: Pending, Reason: ReasonPodPending, Message: "waiting for the pod"}

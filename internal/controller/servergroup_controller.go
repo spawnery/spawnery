@@ -929,10 +929,13 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, 
 	// its whole failed retention, and the changeover stops looking finished.
 	// Reached when a readiness loss beats the retirement in phase.Decide. Named,
 	// because the remedy is deleting that server.
-	var stuck []string
+	var stuck, unschedulable []string
 	for _, v := range views {
 		if v.Retire && v.Phase == phase.Failed {
 			stuck = append(stuck, v.Name)
+		}
+		if v.Unschedulable {
+			unschedulable = append(unschedulable, v.Name)
 		}
 		// An on-demand member of an earlier spec is not a replacement in flight:
 		// nothing rolls it, so counting it would hold the condition True forever.
@@ -946,6 +949,7 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, 
 		}
 	}
 	sort.Strings(stuck)
+	sort.Strings(unschedulable)
 
 	condition := metav1.Condition{Type: spawneryv1alpha1.ConditionProgressing}
 	switch {
@@ -989,6 +993,10 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, 
 		if group.IsOnDemand() {
 			condition.Message = "no member is starting; each carries the spec it started with"
 		}
+	}
+	if condition.Status == metav1.ConditionTrue && len(unschedulable) > 0 {
+		condition.Message += fmt.Sprintf("; the scheduler cannot place the pod of %s (see its Ready condition)",
+			strings.Join(unschedulable, ", "))
 	}
 	meta.SetStatusCondition(&group.Status.Conditions, condition)
 }
@@ -1052,6 +1060,8 @@ func (r *ServerGroupReconciler) collectViews(
 			Retire:       srv.Spec.Retire,
 			Hold:         srv.Spec.Hold,
 			CreatedAt:    srv.CreationTimestamp.Time,
+			Unschedulable: phase.Phase(srv.Status.Phase) == phase.Pending &&
+				readyReasonIs(srv, phase.ReasonPodUnschedulable),
 			// Without a readable live pod there is nothing to condemn: no pod, or one
 			// already being removed. A failed Get declines too, as nodeDeparting does
 			// for an unreadable Node; the next pass asks again.

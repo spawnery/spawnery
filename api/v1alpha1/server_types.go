@@ -190,7 +190,10 @@ type ServerStatus struct {
 	// +optional
 	StorageResizeError string `json:"storageResizeError,omitempty"`
 
-	// Conditions follow the standard Kubernetes condition contract.
+	// Conditions follow the standard Kubernetes condition contract. While the
+	// scheduler cannot place the server's pod, Ready is False with reason
+	// PodUnschedulable and the scheduler's message; the group's Progressing
+	// condition names the server.
 	// +optional
 	// +listType=map
 	// +listMapKey=type

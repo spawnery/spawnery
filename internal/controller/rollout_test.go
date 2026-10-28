@@ -47,6 +47,7 @@ func TestDecideRollout(t *testing.T) {
 		name     string
 		pods     []ProxyView
 		replicas int32
+		noSurge  bool
 		want     RolloutDecision
 	}{
 		{
@@ -331,58 +332,66 @@ func TestDecideRollout(t *testing.T) {
 			replicas: 1,
 			want:     RolloutDecision{Drain: []string{"a", "b"}},
 		},
-	}
-
-	for _, tc := range tests {
-		t.Run(tc.name, func(t *testing.T) {
-			got := DecideRollout(tc.pods, tc.replicas, true)
-			if got.Create != tc.want.Create {
-				t.Errorf("Create = %d, want %d", got.Create, tc.want.Create)
-			}
-			if len(got.Drain) != len(tc.want.Drain) {
-				t.Fatalf("Drain = %v, want %v", got.Drain, tc.want.Drain)
-			}
-			for i := range got.Drain {
-				if got.Drain[i] != tc.want.Drain[i] {
-					t.Errorf("Drain[%d] = %q, want %q", i, got.Drain[i], tc.want.Drain[i])
-				}
-			}
-		})
-	}
-}
-
-// Without surge the group never grows past replicas; it may only touch a pod
-// that already serves nobody.
-func TestDecideRolloutWithoutSurge(t *testing.T) {
-	tests := []struct {
-		name     string
-		pods     []ProxyView
-		replicas int32
-		want     RolloutDecision
-	}{
 		{
-			name: "two stale Ready pods at replicas 2: no create, no drain",
+			name: "without surge: two stale Ready pods at replicas 2: no create, no drain",
 			pods: []ProxyView{
 				{Name: "a", Stale: true, Ready: true, CreatedAt: at(0)},
 				{Name: "b", Stale: true, Ready: true, CreatedAt: at(1)},
 			},
 			replicas: 2,
+			noSurge:  true,
 			want:     RolloutDecision{},
 		},
 		{
-			name: "one stale not-Ready pod among two is replaced in place, no extra pod",
+			name: "without surge: one stale not-Ready pod among two is replaced in place, no extra pod",
 			pods: []ProxyView{
 				{Name: "stale", Stale: true, Ready: false, CreatedAt: at(0)},
 				{Name: "current", Ready: true, CreatedAt: at(1)},
 			},
 			replicas: 2,
+			noSurge:  true,
 			want:     RolloutDecision{Drain: []string{"stale"}},
+		},
+		{
+			name: "without surge: a stale pod serving nobody is marked while another drains",
+			pods: []ProxyView{
+				{Name: "leaving", Stale: true, Draining: true, Players: 3, CreatedAt: at(0)},
+				{Name: "crashing", Stale: true, Ready: false, CreatedAt: at(1)},
+				{Name: "current", Ready: true, CreatedAt: at(2)},
+			},
+			replicas: 2,
+			noSurge:  true,
+			want:     RolloutDecision{Drain: []string{"crashing"}},
+		},
+		{
+			name: "without surge: a ready stale pod waits while another drains",
+			pods: []ProxyView{
+				{Name: "leaving", Stale: true, Draining: true, Players: 3, CreatedAt: at(0)},
+				{Name: "serving", Stale: true, Ready: true, CreatedAt: at(1)},
+				{Name: "c1", Ready: true, CreatedAt: at(2)},
+				{Name: "c2", Ready: true, CreatedAt: at(3)},
+			},
+			replicas: 3,
+			noSurge:  true,
+			want:     RolloutDecision{},
+		},
+		{
+			name: "without surge: a retire request is drained first among stale pods",
+			pods: []ProxyView{
+				{Name: "a", Ready: true, Stale: true, Players: 0, CreatedAt: at(0)},
+				{Name: "b", Ready: true, Stale: true, RetireRequested: true, Players: 5, CreatedAt: at(1)},
+				{Name: "c", Ready: true, Players: 0, CreatedAt: at(2)},
+				{Name: "d", Ready: true, Players: 0, CreatedAt: at(3)},
+			},
+			replicas: 3,
+			noSurge:  true,
+			want:     RolloutDecision{Drain: []string{"b"}},
 		},
 	}
 
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			got := DecideRollout(tc.pods, tc.replicas, false)
+			got := DecideRollout(tc.pods, tc.replicas, !tc.noSurge)
 			if got.Create != tc.want.Create {
 				t.Errorf("Create = %d, want %d", got.Create, tc.want.Create)
 			}
@@ -395,17 +404,5 @@ func TestDecideRolloutWithoutSurge(t *testing.T) {
 				}
 			}
 		})
-	}
-}
-
-func TestARetireRequestIsDrainedFirstAmongStalePods(t *testing.T) {
-	got := DecideRollout([]ProxyView{
-		{Name: "a", Ready: true, Stale: true, Players: 0, CreatedAt: at(0)},
-		{Name: "b", Ready: true, Stale: true, RetireRequested: true, Players: 5, CreatedAt: at(1)},
-		{Name: "c", Ready: true, Players: 0, CreatedAt: at(2)},
-		{Name: "d", Ready: true, Players: 0, CreatedAt: at(3)},
-	}, 3, false)
-	if len(got.Drain) != 1 || got.Drain[0] != "b" {
-		t.Errorf("Drain = %v, want [b]: an admin asked for that one", got.Drain)
 	}
 }

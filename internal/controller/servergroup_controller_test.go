@@ -3461,6 +3461,11 @@ func TestProgressingSaysWhetherTheGroupHasArrived(t *testing.T) {
 			metav1.ConditionTrue, spawneryv1alpha1.ReasonServersStarting, "1 server(s) of the group's current spec",
 		},
 		{
+			"a pending server the scheduler cannot place is named",
+			[]ServerView{view(phase.Ready, "old"), {Name: "lobby-x7", Phase: phase.Pending, PodHash: gen, Unschedulable: true}},
+			metav1.ConditionTrue, spawneryv1alpha1.ReasonServersStarting, "the scheduler cannot place the pod of lobby-x7",
+		},
+		{
 			"the new spec is up but the old one is still here",
 			[]ServerView{view(phase.Ready, gen), view(phase.Ready, "old")},
 			metav1.ConditionTrue, spawneryv1alpha1.ReasonReplacingServers, "earlier spec",

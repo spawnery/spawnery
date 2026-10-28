@@ -372,12 +372,23 @@ func TestTutorialChangeoverStages(t *testing.T) {
 	if err := k8s.Get(ctx, gatewayKey, &gateway); err != nil {
 		t.Fatalf("get ProxyGroup: %v", err)
 	}
+	stageBefore := gateway.Spec.ChangeoverStage
 	gatewayPatch := client.MergeFrom(gateway.DeepCopy())
 	gateway.Spec.ChangeoverStage = -10
 	gateway.Spec.Env = append(gateway.Spec.Env, probe)
 	if err := k8s.Patch(ctx, &gateway, gatewayPatch); err != nil {
 		t.Fatalf("patch ProxyGroup: %v", err)
 	}
+	// The probe env stays: removing it would roll both groups under the next test.
+	t.Cleanup(func() {
+		var now spawneryv1alpha1.ProxyGroup
+		if err := k8s.Get(ctx, gatewayKey, &now); err != nil {
+			return
+		}
+		back := client.MergeFrom(now.DeepCopy())
+		now.Spec.ChangeoverStage = stageBefore
+		_ = k8s.Patch(ctx, &now, back)
+	})
 	t.Logf("+%s gateway patched: changeoverStage -10, %s=%s", since(time.Now()), probe.Name, probe.Value)
 
 	eventuallyIn(t, tutorialOperatorNamespace, time.Minute, "the gateway to report its changeover", func() (bool, string) {

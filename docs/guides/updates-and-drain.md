@@ -130,6 +130,23 @@ Pending, run into their startup timeout, fail and back off, while the stale
 servers they were meant to replace hold exactly the memory the replacements
 need.
 
+Such a replacement says so while it waits. Its `Ready` condition reads
+`PodUnschedulable` with the scheduler's own message, the Server records a
+`PodUnschedulable` warning event once, and the group's `Progressing`
+condition names it:
+
+```bash
+kubectl get server <name> -n minecraft \
+  -o jsonpath='{range .status.conditions[?(@.type=="Ready")]}{.reason}: {.message}{"\n"}{end}'
+# PodUnschedulable: the scheduler cannot place the pod: 0/2 nodes are available: 2 Insufficient memory. ...
+```
+
+The operator does not retire a stale server to make room; it only reports the
+block. When the replacement fails at its startup timeout, the phase-change
+event of that failure repeats the scheduler's message; the `Ready` condition
+moves on to the failed server's own reasons. Its Pending pod is deleted then,
+so it does not take room that frees up ahead of the server that replaces it.
+
 `spec.update.maxConcurrentChangeovers`, on the `Network`, bounds that instead:
 
 ```yaml

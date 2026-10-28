@@ -351,7 +351,8 @@ func (r *NetworkReconciler) countGroups(ctx context.Context, network *spawneryv1
 		switch {
 		case g.IsEphemeral() && g.Status.Changeover == spawneryv1alpha1.ChangeoverBegun && !changeoverFailing(g.Status.Conditions):
 			inFlight++
-		case g.Status.Changeover == spawneryv1alpha1.ChangeoverWaiting:
+		case g.Status.Changeover == spawneryv1alpha1.ChangeoverWaiting &&
+			waitsForChangeover(g.Status.Conditions, spawneryv1alpha1.ConditionProgressing):
 			waiting++
 		}
 	}
@@ -364,7 +365,8 @@ func (r *NetworkReconciler) countGroups(ctx context.Context, network *spawneryv1
 		switch {
 		case g.Status.Changeover == spawneryv1alpha1.ChangeoverBegun && !changeoverFailing(g.Status.Conditions):
 			inFlight++
-		case g.Status.Changeover == spawneryv1alpha1.ChangeoverWaiting:
+		case g.Status.Changeover == spawneryv1alpha1.ChangeoverWaiting &&
+			waitsForChangeover(g.Status.Conditions, spawneryv1alpha1.ConditionChangingOver):
 			waiting++
 		}
 	}
@@ -375,6 +377,15 @@ func (r *NetworkReconciler) countGroups(ctx context.Context, network *spawneryv1
 	ChangeoversInFlight.WithLabelValues(network.Namespace, network.Name).Set(float64(inFlight))
 	ChangeoversWaiting.WithLabelValues(network.Namespace, network.Name).Set(float64(waiting))
 	return nil
+}
+
+// waitsForChangeover: status.changeover also reads Waiting for a group held
+// only by its own ordinal gates or its backoff; the condition says which.
+func waitsForChangeover(conditions []metav1.Condition, condType string) bool {
+	c := meta.FindStatusCondition(conditions, condType)
+	return c != nil && c.Status == metav1.ConditionTrue &&
+		(c.Reason == spawneryv1alpha1.ReasonWaitingForChangeoverBudget ||
+			c.Reason == spawneryv1alpha1.ReasonWaitingForEarlierStage)
 }
 
 // A List error returns nothing: the one-minute requeue covers it.

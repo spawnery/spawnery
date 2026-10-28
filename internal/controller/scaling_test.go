@@ -526,6 +526,10 @@ func TestDecideSizeStillAnswersDemandWhileWaiting(t *testing.T) {
 	if !got.ChangeoverWaiting {
 		t.Error("ChangeoverWaiting = false, want true")
 	}
+	if got.Limited || got.ColdStartBlocked {
+		t.Errorf("Limited = %t, ColdStartBlocked = %t, want both false: the budget is no ceiling",
+			got.Limited, got.ColdStartBlocked)
+	}
 }
 
 func TestDecideSizeDoesNotShrinkWhileACreateIsOutstanding(t *testing.T) {

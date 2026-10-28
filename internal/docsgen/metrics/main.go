@@ -64,13 +64,8 @@ var agentRegistry = func() *prometheus.Registry {
 // The operator registers these only with --world-sync, so no import does.
 func init() { metrics.Registry.MustRegister(worldsync.OperatorCollectors()...) }
 
-// metricNamePrefix restricts the page to the operator's own metrics.
-// Nothing else is registered by the six packages this program imports today,
-// but the filter is here on purpose rather than as a defensive no-op: a
-// program that merely imports package metrics is exactly the kind of thing a
-// later change (a new import pulling in a client-go or controller-runtime
-// metrics package as a side effect) could grow an unrelated metric under,
-// and this page would then silently start documenting it.
+// metricNamePrefix keeps controller-runtime's own metrics, which its metrics
+// package registers in init, off the page.
 const metricNamePrefix = "spawnery_"
 
 type metricDoc struct {
