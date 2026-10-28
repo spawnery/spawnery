@@ -111,8 +111,17 @@ func TestAVoiceNetworkAddsUDPToTheGamesService(t *testing.T) {
 	}
 	group := f.proxyGroup("gateway")
 	if !hasCondition(group.Status.Conditions, spawneryv1alpha1.ConditionVoice,
+		metav1.ConditionUnknown, spawneryv1alpha1.ReasonVoiceRelayNotReported) {
+		t.Errorf("conditions = %+v, want Voice=Unknown/RelayNotReported before any proxy reports", group.Status.Conditions)
+	}
+
+	connectProxiesReporting(f, "gateway", agent.VoiceRelayRunning)
+	f.reconcileProxyGroup(r, "gateway")
+
+	group = f.proxyGroup("gateway")
+	if !hasCondition(group.Status.Conditions, spawneryv1alpha1.ConditionVoice,
 		metav1.ConditionTrue, spawneryv1alpha1.ReasonVoiceRelaying) {
-		t.Errorf("conditions = %+v, want Voice=True/Relaying", group.Status.Conditions)
+		t.Errorf("conditions = %+v, want Voice=True/Relaying once the proxies report it running", group.Status.Conditions)
 	}
 }
 
@@ -457,6 +466,8 @@ func TestAForeignVoiceServiceIsLeftAloneWhenNoneIsWanted(t *testing.T) {
 	f.createProxyGroup("gateway", exposeLoadBalancer)
 
 	f.reconcileProxyGroup(r, "gateway")
+	connectProxiesReporting(f, "gateway", agent.VoiceRelayRunning)
+	f.reconcileProxyGroup(r, "gateway")
 
 	if after := f.service(t, foreign.Name); after == nil || after.ResourceVersion != foreign.ResourceVersion {
 		t.Errorf("the foreign Service was touched: before rv %s, after %+v", foreign.ResourceVersion, after)
@@ -579,5 +590,95 @@ func TestAProxyWithItsOwnVoicePluginIsReported(t *testing.T) {
 	}
 	if group.Status.Phase != "Degraded" {
 		t.Errorf("phase = %q, want Degraded", group.Status.Phase)
+	}
+}
+
+func connectProxiesReporting(f *fixture, group string, state agent.VoiceRelayState) []corev1.Pod {
+	f.t.Helper()
+	pods := f.proxyPods(group)
+	if len(pods) == 0 {
+		f.t.Fatalf("group %s has no proxy pods", group)
+	}
+	for i := range pods {
+		uid := string(pods[i].UID)
+		f.agents.Connect(uid, agent.RoleProxy)
+		f.agents.ReportVoiceRelay(uid, state)
+	}
+	return pods
+}
+
+func TestAProxyWhoseRelayCouldNotBindFailsTheVoiceCondition(t *testing.T) {
+	f := newFixture(t)
+	f.enableVoice(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", exposeLoadBalancer)
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := connectProxiesReporting(f, "gateway", agent.VoiceRelayRunning)
+	f.agents.ReportVoiceRelay(string(pods[0].UID), agent.VoiceRelayBindFailed)
+	f.reconcileProxyGroup(r, "gateway")
+
+	group := f.proxyGroup("gateway")
+	c := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionVoice)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != spawneryv1alpha1.ReasonVoiceRelayBindFailed {
+		t.Fatalf("Voice = %+v, want False/%s", c, spawneryv1alpha1.ReasonVoiceRelayBindFailed)
+	}
+	if !strings.Contains(c.Message, pods[0].Name) {
+		t.Errorf("message = %q, want it to name %s", c.Message, pods[0].Name)
+	}
+	if group.Status.Phase != "Degraded" {
+		t.Errorf("phase = %q, want Degraded", group.Status.Phase)
+	}
+
+	f.agents.ReportVoiceRelay(string(pods[0].UID), agent.VoiceRelayRunning)
+	f.reconcileProxyGroup(r, "gateway")
+	if c := meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions, spawneryv1alpha1.ConditionVoice); c == nil ||
+		c.Status != metav1.ConditionTrue {
+		t.Errorf("Voice = %+v after the retry bound, want True", c)
+	}
+}
+
+func TestAProxyThatDoesNotReportItsRelayReadsAsUnknownNotAsAFailure(t *testing.T) {
+	f := newFixture(t)
+	f.enableVoice(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", exposeLoadBalancer)
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := connectProxiesReporting(f, "gateway", agent.VoiceRelayRunning)
+	f.agents.ReportVoiceRelay(string(pods[0].UID), agent.VoiceRelayNotReported)
+	f.reconcileProxyGroup(r, "gateway")
+
+	group := f.proxyGroup("gateway")
+	c := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionVoice)
+	if c == nil || c.Status != metav1.ConditionUnknown || c.Reason != spawneryv1alpha1.ReasonVoiceRelayNotReported {
+		t.Fatalf("Voice = %+v, want Unknown/%s", c, spawneryv1alpha1.ReasonVoiceRelayNotReported)
+	}
+	if !strings.Contains(c.Message, pods[0].Name) {
+		t.Errorf("message = %q, want it to name %s", c.Message, pods[0].Name)
+	}
+	if group.Status.Phase == "Degraded" {
+		t.Errorf("phase = Degraded: a proxy that cannot report is not a failure")
+	}
+}
+
+func TestAProxyThatIsNotConnectedSaysNothingAboutTheRelay(t *testing.T) {
+	f := newFixture(t)
+	f.enableVoice(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", exposeLoadBalancer)
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := connectProxiesReporting(f, "gateway", agent.VoiceRelayRunning)
+	if len(pods) < 2 {
+		t.Fatalf("the group has %d proxy pods, want 2", len(pods))
+	}
+	f.agents.ReportVoiceRelay(string(pods[0].UID), agent.VoiceRelayBindFailed)
+	f.agents.Disconnect(string(pods[0].UID))
+	f.reconcileProxyGroup(r, "gateway")
+
+	c := meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions, spawneryv1alpha1.ConditionVoice)
+	if c == nil || c.Status != metav1.ConditionTrue {
+		t.Fatalf("Voice = %+v, want True from the proxies still connected", c)
 	}
 }

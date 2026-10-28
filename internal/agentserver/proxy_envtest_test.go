@@ -529,6 +529,44 @@ func TestAProxysVoiceCountersAndPluginFlagReachTheOperator(t *testing.T) {
 	}
 }
 
+func TestAProxysRelayStateReachesTheOperator(t *testing.T) {
+	f := newServerFixture(t)
+	pod := f.proxyPod("gateway-aaaa")
+	stream, done := dialProxy(t, f.ctx, f.addr, f.ca,
+		f.token(podspec.ProxyServiceAccountName, []string{podspec.AgentTokenAudience}, pod))
+	defer done()
+	if _, err := stream.Recv(); err != nil {
+		t.Fatalf("the opening message never arrived: %v", err)
+	}
+	waitRelay := func(want agent.VoiceRelayState) {
+		t.Helper()
+		deadline := time.Now().Add(10 * time.Second)
+		for f.agents.Lookup(string(pod.UID)).VoiceRelay != want {
+			if time.Now().After(deadline) {
+				t.Fatalf("relay state = %v, want %v", f.agents.Lookup(string(pod.UID)).VoiceRelay, want)
+			}
+			time.Sleep(50 * time.Millisecond)
+		}
+	}
+	send := func(state agentpb.VoiceRelayState) {
+		t.Helper()
+		msg := &agentpb.ProxyMessage{Message: &agentpb.ProxyMessage_VoiceCounters{
+			VoiceCounters: &agentpb.VoiceCounters{RelayState: state}}}
+		if err := stream.Send(msg); err != nil {
+			t.Fatalf("send the voice report: %v", err)
+		}
+	}
+
+	send(agentpb.VoiceRelayState_VOICE_RELAY_STATE_BIND_FAILED)
+	waitRelay(agent.VoiceRelayBindFailed)
+	send(agentpb.VoiceRelayState_VOICE_RELAY_STATE_RUNNING)
+	waitRelay(agent.VoiceRelayRunning)
+	send(agentpb.VoiceRelayState_VOICE_RELAY_STATE_STOPPED)
+	waitRelay(agent.VoiceRelayStopped)
+	send(agentpb.VoiceRelayState_VOICE_RELAY_STATE_UNSPECIFIED)
+	waitRelay(agent.VoiceRelayNotReported)
+}
+
 // Proves a CloudRequest crosses the socket and comes back correlated, which no unit
 // test on either side can see: both are built from the same generated code.
 func TestAConnectRequestIsAnsweredOnTheStreamThatAsked(t *testing.T) {

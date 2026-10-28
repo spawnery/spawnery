@@ -86,7 +86,20 @@ type Snapshot struct {
 	// VoicePluginLoaded is whether a proxy's Hello said Simple Voice Chat's own
 	// Velocity plugin is loaded beside spawnery's relay.
 	VoicePluginLoaded bool
+	// VoiceRelay is what a proxy last said about its relay; VoiceRelayNotReported
+	// from an agent older than the field and before the first report.
+	VoiceRelay VoiceRelayState
 }
+
+// VoiceRelayState is a proxy's own account of its voice relay.
+type VoiceRelayState int
+
+const (
+	VoiceRelayNotReported VoiceRelayState = iota
+	VoiceRelayRunning
+	VoiceRelayBindFailed
+	VoiceRelayStopped
+)
 
 // Announcement is what one server last said about itself. The operator carries
 // it and acts on none of it; see the proto's AnnounceRequest.
@@ -143,6 +156,7 @@ type entry struct {
 	readTimeout time.Duration
 
 	voicePlugin bool
+	voiceRelay  VoiceRelayState
 	voiceTotals map[string]int64
 }
 
@@ -552,6 +566,16 @@ func (r *Registry) ReportVoicePlugin(key string, loaded bool) {
 	}
 }
 
+// ReportVoiceRelay records a proxy's relay state. Kept per pod like the totals:
+// a renewal's two streams are one process.
+func (r *Registry) ReportVoiceRelay(key string, state VoiceRelayState) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if e, ok := r.entries[key]; ok && e.role == RoleProxy {
+		e.voiceRelay = state
+	}
+}
+
 // ReportVoiceTotals turns a proxy's cumulative relay totals into increments.
 // Kept per pod, not per stream: during a renewal both streams report the
 // same process's totals.
@@ -678,6 +702,7 @@ func (r *Registry) Lookup(key string) Snapshot {
 		HeapMax:           e.heapMax,
 		PlayersReportedAt: e.lastReportAt,
 		VoicePluginLoaded: e.voicePlugin,
+		VoiceRelay:        e.voiceRelay,
 	}
 	if !e.connected {
 		snap.StreamDownFor = now.Sub(e.disconnectedAt)

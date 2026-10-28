@@ -82,8 +82,9 @@ const (
 	// into Accepted, which every group gates on. Unknown while no proxy has
 	// reported.
 	ConditionRescueWindowShort = "RescueWindowShort"
-	// ConditionVoice is True while the group relays voice chat; absent while
-	// neither the Network nor the group asks for voice.
+	// ConditionVoice is True while every connected proxy of the group reports
+	// its relay running; Unknown while a proxy has not reported one; absent
+	// while neither the Network nor the group asks for voice.
 	ConditionVoice = "Voice"
 )
 
@@ -120,11 +121,13 @@ const (
 	ReasonPodShapeCurrent        = "PodShapeCurrent"
 	ReasonOrdinalNameTaken       = "OrdinalNameTaken"
 	// The Voice reasons on a ProxyGroup.
-	ReasonVoiceRelaying        = "Relaying"
-	ReasonVoiceOffInNetwork    = "VoiceOffInNetwork"
-	ReasonVoicePluginConflict  = "VoicePluginConflict"
-	ReasonVoiceServiceNotOurs  = "VoiceServiceNotOwnedByGroup"
-	ReasonVoiceServiceRejected = "VoiceServiceRejected"
+	ReasonVoiceRelaying         = "Relaying"
+	ReasonVoiceOffInNetwork     = "VoiceOffInNetwork"
+	ReasonVoicePluginConflict   = "VoicePluginConflict"
+	ReasonVoiceServiceNotOurs   = "VoiceServiceNotOwnedByGroup"
+	ReasonVoiceServiceRejected  = "VoiceServiceRejected"
+	ReasonVoiceRelayBindFailed  = "RelayBindFailed"
+	ReasonVoiceRelayNotReported = "RelayNotReported"
 	// ReasonOrdinalDuplicated: the operator will not choose between two
 	// worlds, so this needs a person.
 	ReasonOrdinalDuplicated = "OrdinalCarriedByTwoServers"

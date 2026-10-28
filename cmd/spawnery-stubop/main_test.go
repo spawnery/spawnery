@@ -592,3 +592,18 @@ func TestVoiceFlagsAreRefusedIncomplete(t *testing.T) {
 		})
 	}
 }
+
+func TestAProxysVoiceReportIsRecordedWithItsRelayState(t *testing.T) {
+	var out lockedBuffer
+	served := &stub{events: newRecorder(&out)}
+	served.observeProxy(func(f map[string]any) map[string]any { return f }, &agentpb.ProxyMessage{
+		Message: &agentpb.ProxyMessage_VoiceCounters{VoiceCounters: &agentpb.VoiceCounters{
+			RelayState: agentpb.VoiceRelayState_VOICE_RELAY_STATE_RUNNING,
+		}},
+	})
+	for _, want := range []string{`"kind":"voice_counters"`, `"relayState":"VOICE_RELAY_STATE_RUNNING"`} {
+		if !strings.Contains(out.String(), want) {
+			t.Errorf("the voice_counters event lacks %s:\n%s", want, out.String())
+		}
+	}
+}

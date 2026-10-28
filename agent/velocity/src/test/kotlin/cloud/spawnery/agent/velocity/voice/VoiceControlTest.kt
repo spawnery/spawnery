@@ -1,6 +1,7 @@
 package cloud.spawnery.agent.velocity.voice
 
 import cloud.spawnery.agent.pb.VoiceConfig
+import cloud.spawnery.agent.pb.VoiceRelayState
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -119,5 +120,27 @@ class VoiceControlTest {
         c.apply(config())
         c.apply(config(enabled = false))
         assertNotNull(c.report()!!.voiceCounters)
+    }
+
+    @Test
+    fun `the report says the relay is running once it bound`() {
+        val c = control()
+        c.apply(config())
+        assertEquals(VoiceRelayState.VOICE_RELAY_STATE_RUNNING, c.report()!!.voiceCounters.relayState)
+    }
+
+    @Test
+    fun `the report says bind failed until a retry binds, and stopped after a disable`() {
+        var attempts = 0
+        val c = VoiceControl(
+            startRelay = { attempts++; if (attempts == 1) throw java.net.BindException("in use") else AutoCloseable { } },
+            hostIp = null, counters = counters, log = { _, _ -> },
+        )
+        c.apply(config())
+        assertEquals(VoiceRelayState.VOICE_RELAY_STATE_BIND_FAILED, c.report()!!.voiceCounters.relayState)
+        c.apply(config())
+        assertEquals(VoiceRelayState.VOICE_RELAY_STATE_RUNNING, c.report()!!.voiceCounters.relayState)
+        c.apply(config(enabled = false))
+        assertEquals(VoiceRelayState.VOICE_RELAY_STATE_STOPPED, c.report()!!.voiceCounters.relayState)
     }
 }

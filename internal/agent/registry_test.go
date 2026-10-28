@@ -1058,3 +1058,29 @@ func TestTheVoicePluginFlagIsInTheSnapshot(t *testing.T) {
 		t.Fatal("Lookup lost the flag")
 	}
 }
+
+func TestTheVoiceRelayStateIsInTheSnapshotAndSurvivesAReconnect(t *testing.T) {
+	r, _ := newTestRegistry()
+	r.Connect("pod-a", RoleProxy)
+	if got := r.Lookup("pod-a").VoiceRelay; got != VoiceRelayNotReported {
+		t.Fatalf("before any report = %v, want not reported", got)
+	}
+	r.ReportVoiceRelay("pod-a", VoiceRelayBindFailed)
+	if got := r.Lookup("pod-a").VoiceRelay; got != VoiceRelayBindFailed {
+		t.Fatalf("after a report = %v, want bind failed", got)
+	}
+	r.Disconnect("pod-a")
+	r.Connect("pod-a", RoleProxy)
+	if got := r.Lookup("pod-a").VoiceRelay; got != VoiceRelayBindFailed {
+		t.Fatalf("after a reconnect = %v, want the state of the process still running", got)
+	}
+}
+
+func TestAServerAgentHasNoVoiceRelayState(t *testing.T) {
+	r, _ := newTestRegistry()
+	r.Connect("pod-a", RoleServer)
+	r.ReportVoiceRelay("pod-a", VoiceRelayRunning)
+	if got := r.Lookup("pod-a").VoiceRelay; got != VoiceRelayNotReported {
+		t.Fatalf("a server agent's state = %v, want not reported", got)
+	}
+}

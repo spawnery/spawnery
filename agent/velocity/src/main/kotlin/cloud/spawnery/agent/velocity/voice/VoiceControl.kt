@@ -2,6 +2,7 @@ package cloud.spawnery.agent.velocity.voice
 
 import cloud.spawnery.agent.pb.ProxyMessage
 import cloud.spawnery.agent.pb.VoiceConfig
+import cloud.spawnery.agent.pb.VoiceRelayState
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -21,6 +22,7 @@ class VoiceControl(
     @Volatile private var config: VoiceConfig? = null
     @Volatile private var everEnabled = false
     private var relay: AutoCloseable? = null
+    @Volatile private var relayState = VoiceRelayState.VOICE_RELAY_STATE_STOPPED
     private val versions = ConcurrentHashMap<UUID, Int>()
     private val warnedVersion = ConcurrentHashMap.newKeySet<UUID>()
     private val warnedHostIp = AtomicBoolean(false)
@@ -31,7 +33,13 @@ class VoiceControl(
         if (config.enabled) {
             everEnabled = true
             if (relay == null) relay = start()
+            relayState = if (relay != null) {
+                VoiceRelayState.VOICE_RELAY_STATE_RUNNING
+            } else {
+                VoiceRelayState.VOICE_RELAY_STATE_BIND_FAILED
+            }
         } else {
+            relayState = VoiceRelayState.VOICE_RELAY_STATE_STOPPED
             val running = relay ?: return
             relay = null
             try {
@@ -94,7 +102,9 @@ class VoiceControl(
     fun report(): ProxyMessage? {
         if (!everEnabled) return null
         return ProxyMessage.newBuilder()
-            .setVoiceCounters(PbVoiceCounters.newBuilder().putAllTotals(counters.totals()))
+            .setVoiceCounters(
+                PbVoiceCounters.newBuilder().putAllTotals(counters.totals()).setRelayState(relayState),
+            )
             .build()
     }
 

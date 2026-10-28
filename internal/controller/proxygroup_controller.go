@@ -1347,7 +1347,7 @@ func (r *ProxyGroupReconciler) setStatus(
 	group.Status.ConnectedPlayers = players
 	group.Status.Address = proxyAddress(group, pods, svc)
 	group.Status.VoiceAddress = voiceAddress(network, group, pods, voiceSvc)
-	setVoiceCondition(group, network, voiceErr, voicePluginPod(r.Agents, pods))
+	setVoiceCondition(group, network, voiceErr, voicePluginPod(r.Agents, pods), voiceRelayReports(r.Agents, pods))
 	group.Status.ObservedGeneration = group.Generation
 
 	switch {

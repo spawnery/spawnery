@@ -974,6 +974,8 @@ func (s *stub) observeProxy(of func(map[string]any) map[string]any, message *age
 		s.events.record("player_roster", of(map[string]any{"players": players}))
 	case *agentpb.ProxyMessage_Heartbeat:
 		s.events.record("heartbeat", of(map[string]any{}))
+	case *agentpb.ProxyMessage_VoiceCounters:
+		s.events.record("voice_counters", of(map[string]any{"relayState": body.VoiceCounters.GetRelayState().String()}))
 	case *agentpb.ProxyMessage_EventInterest:
 		s.events.record("event_interest", of(map[string]any{"wanted": body.EventInterest.GetWanted()}))
 	case *agentpb.ProxyMessage_CloudRequest:

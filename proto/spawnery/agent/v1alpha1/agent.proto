@@ -863,6 +863,20 @@ message VoiceConfig {
 // reason. Cumulative: the operator turns them into increments.
 message VoiceCounters {
   map<string, int64> totals = 1;
+  // The relay's state when this report was written. Unspecified from an agent
+  // older than this field: the operator reads that as not reported.
+  VoiceRelayState relay_state = 2;
+}
+
+enum VoiceRelayState {
+  VOICE_RELAY_STATE_UNSPECIFIED = 0;
+  // The relay holds its UDP port and is serving.
+  VOICE_RELAY_STATE_RUNNING = 1;
+  // The operator asked for the relay and binding its UDP port failed; the
+  // agent retries on the next VoiceConfig.
+  VOICE_RELAY_STATE_BIND_FAILED = 2;
+  // The relay is not running because the operator's last VoiceConfig said so.
+  VOICE_RELAY_STATE_STOPPED = 3;
 }
 
 message OperatorToProxy {

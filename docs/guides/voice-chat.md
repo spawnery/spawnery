@@ -23,9 +23,10 @@ spec:
 `voicechat-server.properties`. Switching voice on rolls the network's proxies
 once; backend pods do not change.
 
-Proxies need an image that carries this agent release. With an older image the
-`Voice` condition still shows `Relaying`, because it reflects configuration,
-not what the agent reports.
+Proxies need an image that carries this agent release. The `Voice` condition
+is computed from what the proxies report about their relay, so a proxy on an
+older image cannot confirm it: the condition reads `Unknown`, not `Relaying`,
+until the proxies are rolled to an image that carries this release.
 
 If a group's load balancer cannot carry UDP or mixed protocols, set
 `spec.voice.expose` on that group before you turn voice on in the network,
@@ -88,7 +89,9 @@ is ready. The `Voice` condition says why a group is not relaying:
 
 | Reason | Meaning |
 |---|---|
-| `Relaying` | the group's proxies relay voice |
+| `Relaying` | every connected proxy of the group reports its relay bound and running (`True`) |
+| `RelayNotReported` | `Unknown`: a connected proxy has not reported a running relay, because its image is older than this release or its relay has not started yet, or no proxy has connected yet; the group's phase is not `Degraded` |
+| `RelayBindFailed` | a proxy reports that it could not bind the relay's UDP port 25565; it retries, and the condition follows its next report |
 | `VoiceOffInNetwork` | the group has `spec.voice`, the Network does not |
 | `VoicePluginConflict` | a proxy has SVC's Velocity plugin loaded |
 | `VoiceServiceNotOwnedByGroup` | something else holds the name `<group>-voice` |

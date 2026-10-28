@@ -41,4 +41,25 @@ public interface VoiceCountersOrBuilder extends
    */
   long getTotalsOrThrow(
       java.lang.String key);
+
+  /**
+   * <pre>
+   * The relay's state when this report was written. Unspecified from an agent
+   * older than this field: the operator reads that as not reported.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.VoiceRelayState relay_state = 2;</code>
+   * @return The enum numeric value on the wire for relayState.
+   */
+  int getRelayStateValue();
+  /**
+   * <pre>
+   * The relay's state when this report was written. Unspecified from an agent
+   * older than this field: the operator reads that as not reported.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.VoiceRelayState relay_state = 2;</code>
+   * @return The relayState.
+   */
+  cloud.spawnery.agent.pb.VoiceRelayState getRelayState();
 }
