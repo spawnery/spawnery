@@ -78,16 +78,35 @@ STUB7_PID=""
 STUB8_PID=""
 STUB9_PID=""
 
+# stop_stub <pid> - returns once the stub is gone and its port is free. A
+# stub from start_stub is not this shell's child, so `wait` cannot do this.
+stop_stub() {
+	local pid="$1"
+	[ -n "$pid" ] || return 0
+	kill "$pid" 2>/dev/null || return 0
+	for _ in $(seq 50); do
+		kill -0 "$pid" 2>/dev/null || return 0
+		sleep 0.1
+	done
+	echo "stub operator $pid outlived SIGTERM by 5s; sending SIGKILL" >&2
+	kill -9 "$pid" 2>/dev/null || true
+	for _ in $(seq 50); do
+		kill -0 "$pid" 2>/dev/null || return 0
+		sleep 0.1
+	done
+	echo "stub operator $pid is still there 5s after SIGKILL" >&2
+}
+
 cleanup() {
-	[ -n "$STUB_PID" ] && kill "$STUB_PID" 2>/dev/null || true
-	[ -n "$STUB2_PID" ] && kill "$STUB2_PID" 2>/dev/null || true
-	[ -n "$STUB3_PID" ] && kill "$STUB3_PID" 2>/dev/null || true
-	[ -n "$STUB4_PID" ] && kill "$STUB4_PID" 2>/dev/null || true
-	[ -n "$STUB5_PID" ] && kill "$STUB5_PID" 2>/dev/null || true
-	[ -n "$STUB6_PID" ] && kill "$STUB6_PID" 2>/dev/null || true
-	[ -n "$STUB7_PID" ] && kill "$STUB7_PID" 2>/dev/null || true
-	[ -n "$STUB8_PID" ] && kill "$STUB8_PID" 2>/dev/null || true
-	[ -n "$STUB9_PID" ] && kill "$STUB9_PID" 2>/dev/null || true
+	stop_stub "$STUB_PID"
+	stop_stub "$STUB2_PID"
+	stop_stub "$STUB3_PID"
+	stop_stub "$STUB4_PID"
+	stop_stub "$STUB5_PID"
+	stop_stub "$STUB6_PID"
+	stop_stub "$STUB7_PID"
+	stop_stub "$STUB8_PID"
+	stop_stub "$STUB9_PID"
 	"$CONTAINER" rm -f "$NAME" "$NAME2" "$NAME3" "$NAME4" "$NAME5" "$NAME6" "$NAME7" "$NAME8" \
 		"${SNAP_NAMES[@]}" >/dev/null 2>&1 || true
 	"$CONTAINER" volume rm -f "$VOLUME" "$VOLUME2" "$VOLUME3" "$VOLUME4" "$VOLUME5" "$VOLUME6" \
@@ -504,7 +523,7 @@ snapshot_phase() {
 	mkdir -p "$WORK/agent-snapshot"
 	chmod 0755 "$WORK/agent-snapshot"
 	events="$WORK/events-snapshot-empty.jsonl"
-	STUB9_PID="$(start_stub "$events" "$WORK/stub9.log" "snapshot" \
+	STUB9_PID="$(start_stub "$events" "$WORK/stub9-empty.log" "snapshot" \
 		--dir "$WORK/agent-snapshot" --san stubop --listen ":19451" --report-interval 5 \
 		--renew-after 600 --hard-deadline 1200)"
 	snap_volume "${SNAP_VOLUMES[0]}"
@@ -520,12 +539,12 @@ snapshot_phase() {
 	fi
 	echo "snapshot $first of an empty server was asked for and answered, and $seq followed without a warning"
 	"$CONTAINER" rm -f "$empty" >/dev/null
-	kill "$STUB9_PID" 2>/dev/null || true
+	stop_stub "$STUB9_PID"
 	STUB9_PID=""
 
 	echo "a snapshot after a forceload and a storage write..."
 	events="$WORK/events-snapshot-copy.jsonl"
-	STUB9_PID="$(start_stub "$events" "$WORK/stub9.log" "snapshot" \
+	STUB9_PID="$(start_stub "$events" "$WORK/stub9-copy.log" "snapshot" \
 		--dir "$WORK/agent-snapshot" --san stubop --listen ":19451" --report-interval 5 \
 		--renew-after 600 --hard-deadline 1200 \
 		--execute "$SNAP_FORCELOAD" --execute "$SNAP_MARKER")"
@@ -592,13 +611,13 @@ snapshot_phase() {
 
 	# No shutdown save: only what the snapshot holds can reach the next server.
 	"$CONTAINER" kill "$copy" >/dev/null
-	kill "$STUB9_PID" 2>/dev/null || true
+	stop_stub "$STUB9_PID"
 	STUB9_PID=""
 
 	echo "a server started on the copy..."
 	chmod -R a+rX "$WORK/snapshot"
 	events="$WORK/events-snapshot-restore.jsonl"
-	STUB9_PID="$(start_stub "$events" "$WORK/stub9.log" "snapshot" \
+	STUB9_PID="$(start_stub "$events" "$WORK/stub9-restore.log" "snapshot" \
 		--dir "$WORK/agent-snapshot" --san stubop --listen ":19451" --report-interval 5 \
 		--renew-after 600 --hard-deadline 1200 \
 		--execute "data get storage spawnery:agent_test marker")"
@@ -617,7 +636,7 @@ snapshot_phase() {
 	done
 	echo "a server started on the copy reads the marker written before the snapshot"
 	"$CONTAINER" rm -f "$restore" >/dev/null
-	kill "$STUB9_PID" 2>/dev/null || true
+	stop_stub "$STUB9_PID"
 	STUB9_PID=""
 
 	if [ -z "$CANVAS_BUILD" ]; then
@@ -637,7 +656,7 @@ snapshot_phase() {
 	chmod 0644 "$config/config.yaml" "$config/forwarding.secret" "$config/overlay/paper-world-defaults.yml"
 	local file="$SNAP_REGION/r.3.3.mca"
 	events="$WORK/events-snapshot-autosave.jsonl"
-	STUB9_PID="$(start_stub "$events" "$WORK/stub9.log" "autosave" \
+	STUB9_PID="$(start_stub "$events" "$WORK/stub9-autosave.log" "autosave" \
 		--dir "$WORK/agent-snapshot" --san stubop --listen ":19451" --report-interval 5 \
 		--renew-after 600 --hard-deadline 1200 \
 		--execute "save-off" --execute "forceload add 1760 1760")"
@@ -688,7 +707,7 @@ snapshot_phase() {
 	done
 	echo "under save-off $file stood still for 5s; after save-on it changed within $((SECONDS - start))s"
 	"$CONTAINER" rm -f "$autosave" >/dev/null
-	kill "$STUB9_PID" 2>/dev/null || true
+	stop_stub "$STUB9_PID"
 	STUB9_PID=""
 }
 
@@ -983,7 +1002,7 @@ echo "the connection peak was $peak, within the $CONNECTION_PEAK_BOUND per peer 
 echo
 echo "restarting the agent against a superseding operator..."
 "$CONTAINER" rm -f "$NAME" >/dev/null 2>&1 || true
-kill "$STUB_PID" 2>/dev/null || true
+stop_stub "$STUB_PID"
 STUB_PID=""
 
 mkdir -p "$WORK/agent-supersede"
@@ -1043,7 +1062,7 @@ echo "the agent opened $opened streams in ${WINDOW}s across $superseded superses
 echo
 echo "restarting the agent against an operator that accepts a stream and says nothing..."
 "$CONTAINER" rm -f "$NAME2" >/dev/null 2>&1 || true
-kill "$STUB2_PID" 2>/dev/null || true
+stop_stub "$STUB2_PID"
 STUB2_PID=""
 
 MUTE_HARD_DEADLINE=20
@@ -1111,7 +1130,7 @@ echo "the agent opened $opened3 streams in ${WINDOW3}s while the operator said n
 echo
 echo "starting the proxy against an operator that holds its server list back..."
 "$CONTAINER" rm -f "$NAME3" >/dev/null 2>&1 || true
-kill "$STUB3_PID" 2>/dev/null || true
+stop_stub "$STUB3_PID"
 STUB3_PID=""
 
 # Counted from the stream opening; the closed-gate probes must fit inside it.
@@ -1360,7 +1379,7 @@ echo "the proxy sends a PlayerRoster the operator can parse, empty with nobody c
 echo
 echo "restarting the proxy against a superseding operator..."
 "$CONTAINER" rm -f "$NAME4" >/dev/null 2>&1 || true
-kill "$STUB4_PID" 2>/dev/null || true
+stop_stub "$STUB4_PID"
 STUB4_PID=""
 
 # --proxy with no hold, so every stream is opened, answered and synced.
@@ -1440,7 +1459,7 @@ echo "the ready gate stayed open across $synced5 syncs and $superseded5 superses
 echo
 echo "restarting the agent against a stub mid CA rotation..."
 "$CONTAINER" rm -f "$NAME5" >/dev/null 2>&1 || true
-kill "$STUB5_PID" 2>/dev/null || true
+stop_stub "$STUB5_PID"
 STUB5_PID=""
 
 # renew-after past the phase: it asserts on the handshake alone.
@@ -1476,7 +1495,7 @@ echo "the agent completed a session through it"
 echo
 echo "deafening the operator mid-session, to prove the agent has a clock of its own..."
 "$CONTAINER" rm -f "$NAME6" >/dev/null 2>&1 || true
-kill "$STUB6_PID" 2>/dev/null || true
+stop_stub "$STUB6_PID"
 STUB6_PID=""
 
 # The keepalive fires 45s after the last thing the operator said and waits 20
@@ -1538,7 +1557,7 @@ echo "the agent reconnected $((SECONDS - deaf_start))s after the operator went s
 # ---------------------------------------------------------------------------
 # Phase eight is voice_phase, defined before phase one.
 "$CONTAINER" rm -f "$NAME7" >/dev/null 2>&1 || true
-kill "$STUB7_PID" 2>/dev/null || true
+stop_stub "$STUB7_PID"
 STUB7_PID=""
 
 voice_phase

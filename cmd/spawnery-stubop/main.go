@@ -256,8 +256,9 @@ func run(args []string, stdout, stderr io.Writer, stop <-chan os.Signal) int {
 
 	// Outside the counter: a deafened connection still counts.
 	var serving net.Listener = counted
+	var deaf *deafness
 	if *deafenAfter > 0 {
-		deaf := &deafness{}
+		deaf = newDeafness()
 		serving = deaf.listener(counted)
 		time.AfterFunc(*deafenAfter, func() {
 			deaf.on.Store(true)
@@ -297,6 +298,9 @@ func run(args []string, stdout, stderr io.Writer, stop <-chan os.Signal) int {
 
 	go func() {
 		<-stop
+		if deaf != nil {
+			deaf.release()
+		}
 		// GracefulStop would wait for streams the agent never closes.
 		server.Stop()
 	}()

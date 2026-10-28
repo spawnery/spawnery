@@ -1,5 +1,6 @@
 package cloud.spawnery.agent.paper.canvas
 
+import cloud.spawnery.agent.paper.RegionSave
 import cloud.spawnery.agent.paper.RegionTicks
 import cloud.spawnery.agent.paper.ServerPlatform
 import cloud.spawnery.agent.paper.TickSample
@@ -35,30 +36,19 @@ class CanvasPlatform(private val plugin: Plugin) : ServerPlatform {
 
     override fun saveRegions(): List<CompletableFuture<*>> {
         val saves = mutableListOf<CompletableFuture<*>>()
-        forEachLiveRegion { region -> saves += CompletableFuture<Void>().also { offer(region, it) } }
+        forEachLiveRegion { region -> saves += RegionSave("${region.id}").also { offer(region, it) } }
         return saves
     }
 
     // A region holds one save ticket at a time and save-all has just handed
     // each its own, so propagate throws until the region takes that one at
     // the start of a tick it saves in. Ours is taken a tick later.
-    private fun offer(region: ChunkRegion, saved: CompletableFuture<Void>) {
-        if (saved.isDone) return
-        // A dead region's chunks went to another region, which may have saved
-        // before they arrived.
-        if (region.state == ChunkRegion.State.DEAD) {
-            saved.completeExceptionally(IllegalStateException("region ${region.id} merged or split before it saved"))
-            return
-        }
-        try {
-            region.tickData.propagateSaveAllTicket(false).whenComplete { _, error ->
-                if (error == null) saved.complete(null) else saved.completeExceptionally(error)
-            }
-        } catch (_: IllegalStateException) {
-            server.globalRegionScheduler.run(plugin) { offer(region, saved) }
-        } catch (t: Throwable) {
-            saved.completeExceptionally(t)
-        }
+    private fun offer(region: ChunkRegion, save: RegionSave) {
+        save.offer(
+            dead = { region.state == ChunkRegion.State.DEAD },
+            propagate = { region.tickData.propagateSaveAllTicket(false) },
+            again = { next -> server.globalRegionScheduler.run(plugin) { next() } },
+        )
     }
 
     private fun forEachLiveRegion(action: (ChunkRegion) -> Unit) {

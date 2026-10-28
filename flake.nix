@@ -216,12 +216,14 @@
         in
         {
           # Exposed on every system (they are jars) so a version bump can repeat
-          # the measurements by hand: jdeps for the JRE module lists, and the one
-          # above paperGlobalDefault in internal/render/paper_test.go.
+          # the measurements by hand: jdeps for the JRE module lists, and the ones
+          # above paperGlobalDefault and canvasGlobalDefault in
+          # internal/render/paper_test.go.
           paper-repo = paper.repo;
           purpur-repo = purpur.repo;
           canvas-repo = canvas.repo;
           paper-jar = paper.paperJar;
+          canvas-jar = canvas.canvasJar;
           velocity-jar = velocity.jar;
 
           inherit spawnery-slp spawnery-stubop spawnery-join spawnery-config agents spawnery-operator spawnery-worldsync mermaid-js docs-fonts agent-api-javadoc docs-site;

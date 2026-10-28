@@ -53,7 +53,6 @@ class AgentPlugin : JavaPlugin(), Listener {
     private val mirror = NetworkMirror()
 
     private var loginGate: LoginGateListener? = null
-    private var ticksFailed = false
 
     private val connector = CloudConnector(
         Requests(timeoutMillis = CloudConnector.TIMEOUT_MILLIS),
@@ -94,6 +93,9 @@ class AgentPlugin : JavaPlugin(), Listener {
     private var snapshotInFlight = false
 
     private val platform by lazy { Platforms.detect(this, server.javaClass.classLoader) }
+    private val tickSampler = TickSampler({ platform.ticks() }, state::sampleTicks) { e ->
+        logger.log(Level.WARNING, "spawnery could not read the tick rate; this is logged once", e)
+    }
 
     private fun startSnapshots() {
         val sync = worldSync ?: return
@@ -120,6 +122,7 @@ class AgentPlugin : JavaPlugin(), Listener {
     private fun snapshot(sync: WorldSync) {
         if (snapshotInFlight) return
         snapshotInFlight = true
+        val deadline = monotonicMillis() + SNAPSHOT_WAIT_MILLIS
         val autosave = server.worlds.associateWith { it.isAutoSave }
         val restore = Runnable {
             autosave.forEach { (world, on) -> world.isAutoSave = on }
@@ -147,14 +150,16 @@ class AgentPlugin : JavaPlugin(), Listener {
         }
         server.asyncScheduler.runNow(this) {
             val outcome: Any = try {
-                when (val saved = SnapshotWait.await(saves, SNAPSHOT_WAIT_MILLIS)) {
-                    WorldSync.Outcome.Ready -> {
-                        if (levels.isNotEmpty()) writes.await(levels)
+                SnapshotWait.freeze(
+                    saves,
+                    deadline,
+                    ::monotonicMillis,
+                    flush = { if (levels.isNotEmpty()) writes.await(levels) },
+                    copy = { left ->
                         sync.requestSnapshot(seq)
-                        sync.awaitSnapshot(seq, SNAPSHOT_WAIT_MILLIS)
-                    }
-                    else -> "the regions did not save: $saved"
-                }
+                        sync.awaitSnapshot(seq, left)
+                    },
+                )
             } catch (t: Throwable) {
                 t
             }
@@ -242,7 +247,7 @@ class AgentPlugin : JavaPlugin(), Listener {
                 server.globalRegionScheduler.runAtFixedRate(this, {
                     state.sample(Bukkit.getOnlinePlayers().size, Bukkit.getMaxPlayers())
                     registerLoginGateOnce()
-                    sampleTicks()
+                    tickSampler.sample()
                     // Recomputed every tick rather than subscribing to joins,
                     // leaves and permission changes separately.
                     feed.tick()
@@ -258,17 +263,6 @@ class AgentPlugin : JavaPlugin(), Listener {
                 logger.info("spawnery agent connecting to ${env.endpoint}")
                 startSnapshots()
             }
-        }
-    }
-
-    private fun sampleTicks() {
-        try {
-            val ticks = platform.ticks()
-            state.sampleTicks(ticks.tps, ticks.mspt)
-        } catch (e: Exception) {
-            if (ticksFailed) return
-            ticksFailed = true
-            logger.log(Level.WARNING, "spawnery could not read the tick rate; this is logged once", e)
         }
     }
 
@@ -330,3 +324,5 @@ class AgentPlugin : JavaPlugin(), Listener {
         const val DEFAULT_SNAPSHOT_MILLIS = 5 * 60 * 1000L
     }
 }
+
+private fun monotonicMillis() = System.nanoTime() / 1_000_000
