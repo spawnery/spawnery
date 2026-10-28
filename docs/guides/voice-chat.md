@@ -97,7 +97,7 @@ is ready. The `Voice` condition says why a group is not relaying:
 While the condition is `False` the group's phase is `Degraded`. Players can
 still join, since only voice is affected.
 
-While people talk, `spawnery_voice_packets_total{group,reason="relayed"}` rises.
+While people talk, `spawnery_voice_packets_total{namespace,group,reason="relayed"}` rises.
 The other reasons count what the relay dropped: `not_svc`, `unknown_player`,
 `unknown_server`, `unknown_version` and `ping`.
 

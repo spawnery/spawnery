@@ -32,7 +32,9 @@ kubectl -n spawnery-system get secret spawnery-agent-tls \
   namespaces ended; after the switch it reads as how long the outgoing CA has
   been waiting for a human.
 - `spawnery.cloud/ca-rotation-discarded` appears only if a rotation slot was
-  hand-edited into something that would not parse.
+  hand-edited into something that would not parse, or `ca.crt` into more than
+  one PEM block. A `ca.crt` that does not parse leaves no record: the operator
+  logs that it is reissuing the bundle and issues a new CA.
 
 Nothing here happens quickly. On an idle cluster `start` can sit for up to
 an hour before it is picked up, and the switch follows roughly a quarter of an
@@ -131,13 +133,15 @@ does not.
 ## Do not hand-edit the secret
 
 On every tick, *before* it looks at `rotate-ca` at all, the operator re-reads
-`ca-next.crt` and `ca-previous.crt` and checks that each is exactly the PEM
-encoding of one certificate: those bytes go verbatim into every `spawnery-ca`
-ConfigMap, and an agent that cannot parse the bundle loses its whole trust
-store, not one slot. A failing slot is repaired (truncated to its first PEM
-block, `RotationSlotTruncated`) or cleared (`RotationSlotDiscarded`) there and
-then. Only a hand-edited or truncated secret reaches this; nothing the
-procedure itself does can.
+`ca.crt`, `ca-next.crt` and `ca-previous.crt` and checks that each is exactly
+the PEM encoding of one certificate: those bytes go verbatim into every
+`spawnery-ca` ConfigMap, and an agent that cannot parse the bundle loses its
+whole trust store, not one slot. A failing slot is repaired (truncated to its
+first PEM block, `RotationSlotTruncated`) or cleared (`RotationSlotDiscarded`)
+there and then. `ca.crt` is only ever truncated: one whose first block is not
+a certificate matching `ca.key` makes the operator issue a new CA, which
+strands every agent that pinned the old one. Only a hand-edited or truncated
+secret reaches this; nothing the procedure itself does can.
 
 A cleared `ca-next.crt` while `distributing` abandons the rotation. A cleared
 `ca-previous.crt` while `switched` completes the irreversible drop within one

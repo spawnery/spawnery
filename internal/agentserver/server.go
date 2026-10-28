@@ -96,6 +96,9 @@ type ProxyFleet interface {
 	// longer exists is ordinary, not an error.
 	SetInterest(podUID string, wanted bool)
 	SendState(ctx context.Context, namespace string)
+	// Delivered is called after every NetworkState the stream sent from the
+	// outbox; SendState holds back the next one until then.
+	Delivered(ctx context.Context, podUID string, msg *agentpb.OperatorToProxy)
 }
 
 type StatusSource interface {
@@ -514,6 +517,9 @@ func (s *Server) ProxySession(stream agentpb.AgentService_ProxySessionServer) er
 			if err := sendBounded(SendDeadline, "a message", func() error { return stream.Send(msg) }); err != nil {
 				return err
 			}
+			if msg.GetNetworkState() != nil {
+				s.opts.Proxies.Delivered(ctx, id.PodUID, msg)
+			}
 		}
 	}
 }
@@ -589,7 +595,7 @@ func (s *Server) handleProxy(
 	case *agentpb.ProxyMessage_VoiceCounters:
 		for reason, n := range s.opts.Agents.ReportVoiceTotals(id.PodUID, m.VoiceCounters.GetTotals()) {
 			if n > 0 {
-				VoicePackets.WithLabelValues(id.Group, reason).Add(float64(n))
+				VoicePackets.WithLabelValues(id.Namespace, id.Group, reason).Add(float64(n))
 			}
 		}
 	case *agentpb.ProxyMessage_EventInterest:

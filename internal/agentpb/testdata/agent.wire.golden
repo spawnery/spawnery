@@ -1,0 +1,272 @@
+message spawnery.agent.v1alpha1.AcceptJoinsRequest 1 accept bool
+message spawnery.agent.v1alpha1.AcceptJoinsRequest 2 round_ended bool
+message spawnery.agent.v1alpha1.AnnounceRequest 1 state string
+message spawnery.agent.v1alpha1.AnnounceRequest 2 attributes map<string,string>
+message spawnery.agent.v1alpha1.BackendPlayers 1 players map<string,int32>
+message spawnery.agent.v1alpha1.BoostRequest 1 group string
+message spawnery.agent.v1alpha1.BoostRequest 2 replicas int32
+message spawnery.agent.v1alpha1.BoostRequest 3 duration_seconds int64
+message spawnery.agent.v1alpha1.BoostResult 1 replicas int32
+message spawnery.agent.v1alpha1.BoostResult 2 expires_at_unix int64
+message spawnery.agent.v1alpha1.CloudEvent 1 kind string
+message spawnery.agent.v1alpha1.CloudEvent 2 subject string
+message spawnery.agent.v1alpha1.CloudEvent 3 group string
+message spawnery.agent.v1alpha1.CloudEvent 4 message string
+message spawnery.agent.v1alpha1.CloudEvent 5 warning bool
+message spawnery.agent.v1alpha1.CloudRequest 1 id uint64
+message spawnery.agent.v1alpha1.CloudRequest 2 connect spawnery.agent.v1alpha1.ConnectRequest oneof request
+message spawnery.agent.v1alpha1.CloudRequest 3 retire spawnery.agent.v1alpha1.RetireRequest oneof request
+message spawnery.agent.v1alpha1.CloudRequest 4 boost spawnery.agent.v1alpha1.BoostRequest oneof request
+message spawnery.agent.v1alpha1.CloudRequest 5 stop_boost spawnery.agent.v1alpha1.StopBoostRequest oneof request
+message spawnery.agent.v1alpha1.CloudRequest 6 announce spawnery.agent.v1alpha1.AnnounceRequest oneof request
+message spawnery.agent.v1alpha1.CloudRequest 7 accept_joins spawnery.agent.v1alpha1.AcceptJoinsRequest oneof request
+message spawnery.agent.v1alpha1.CloudRequest 8 start_server spawnery.agent.v1alpha1.StartServerRequest oneof request
+message spawnery.agent.v1alpha1.CloudRequest 9 stop_server spawnery.agent.v1alpha1.StopServerRequest oneof request
+message spawnery.agent.v1alpha1.CloudRequest 10 unretire spawnery.agent.v1alpha1.UnretireRequest oneof request
+message spawnery.agent.v1alpha1.CloudRequest 11 status spawnery.agent.v1alpha1.StatusRequest oneof request
+message spawnery.agent.v1alpha1.CloudRequest 12 delete_server spawnery.agent.v1alpha1.DeleteServerRequest oneof request
+message spawnery.agent.v1alpha1.CloudRequest 13 scale spawnery.agent.v1alpha1.ScaleRequest oneof request
+message spawnery.agent.v1alpha1.CloudRequest 14 force_stop spawnery.agent.v1alpha1.ForceStopRequest oneof request
+message spawnery.agent.v1alpha1.CloudRequest 15 execute spawnery.agent.v1alpha1.ExecuteRequest oneof request
+message spawnery.agent.v1alpha1.CloudRequest 16 list_restore_points spawnery.agent.v1alpha1.ListRestorePointsRequest oneof request
+message spawnery.agent.v1alpha1.CloudRequest 17 restore_world spawnery.agent.v1alpha1.RestoreWorldRequest oneof request
+message spawnery.agent.v1alpha1.CloudResponse 1 id uint64
+message spawnery.agent.v1alpha1.CloudResponse 2 connect spawnery.agent.v1alpha1.ConnectResult oneof result
+message spawnery.agent.v1alpha1.CloudResponse 3 error spawnery.agent.v1alpha1.RequestError oneof result
+message spawnery.agent.v1alpha1.CloudResponse 4 retire spawnery.agent.v1alpha1.RetireResult oneof result
+message spawnery.agent.v1alpha1.CloudResponse 5 boost spawnery.agent.v1alpha1.BoostResult oneof result
+message spawnery.agent.v1alpha1.CloudResponse 6 stop_boost spawnery.agent.v1alpha1.StopBoostResult oneof result
+message spawnery.agent.v1alpha1.CloudResponse 7 announce spawnery.agent.v1alpha1.AnnounceResult oneof result
+message spawnery.agent.v1alpha1.CloudResponse 8 accept_joins spawnery.agent.v1alpha1.AcceptJoinsResult oneof result
+message spawnery.agent.v1alpha1.CloudResponse 9 start_server spawnery.agent.v1alpha1.StartServerResult oneof result
+message spawnery.agent.v1alpha1.CloudResponse 10 stop_server spawnery.agent.v1alpha1.StopServerResult oneof result
+message spawnery.agent.v1alpha1.CloudResponse 11 unretire spawnery.agent.v1alpha1.UnretireResult oneof result
+message spawnery.agent.v1alpha1.CloudResponse 12 status spawnery.agent.v1alpha1.StatusResult oneof result
+message spawnery.agent.v1alpha1.CloudResponse 13 delete_server spawnery.agent.v1alpha1.DeleteServerResult oneof result
+message spawnery.agent.v1alpha1.CloudResponse 14 scale spawnery.agent.v1alpha1.ScaleResult oneof result
+message spawnery.agent.v1alpha1.CloudResponse 15 force_stop spawnery.agent.v1alpha1.ForceStopResult oneof result
+message spawnery.agent.v1alpha1.CloudResponse 16 execute spawnery.agent.v1alpha1.ExecuteResult oneof result
+message spawnery.agent.v1alpha1.CloudResponse 17 list_restore_points spawnery.agent.v1alpha1.ListRestorePointsResult oneof result
+message spawnery.agent.v1alpha1.CloudResponse 18 restore_world spawnery.agent.v1alpha1.RestoreWorldResult oneof result
+message spawnery.agent.v1alpha1.ConnectRequest 1 player_uuid string
+message spawnery.agent.v1alpha1.ConnectRequest 2 server string oneof target
+message spawnery.agent.v1alpha1.ConnectRequest 3 group string oneof target
+message spawnery.agent.v1alpha1.ConnectResult 1 ordered bool
+message spawnery.agent.v1alpha1.ConnectResult 2 already_there bool
+message spawnery.agent.v1alpha1.ConnectResult 3 target string
+message spawnery.agent.v1alpha1.DeleteServerRequest 1 group string
+message spawnery.agent.v1alpha1.DeleteServerRequest 2 key string
+message spawnery.agent.v1alpha1.DeleteServerResult 1 server string
+message spawnery.agent.v1alpha1.DeleteServerResult 2 world bool
+message spawnery.agent.v1alpha1.DrainPlayers 1 from_server string
+message spawnery.agent.v1alpha1.DrainPlayers 2 to_groups repeated string
+message spawnery.agent.v1alpha1.EventInterest 1 wanted bool
+message spawnery.agent.v1alpha1.ExecuteCommand 1 id uint64
+message spawnery.agent.v1alpha1.ExecuteCommand 2 command string
+message spawnery.agent.v1alpha1.ExecuteOutcome 1 server string
+message spawnery.agent.v1alpha1.ExecuteOutcome 2 ok bool
+message spawnery.agent.v1alpha1.ExecuteOutcome 3 output repeated string
+message spawnery.agent.v1alpha1.ExecuteOutcome 4 error string
+message spawnery.agent.v1alpha1.ExecuteOutcome 5 id uint64
+message spawnery.agent.v1alpha1.ExecuteRequest 1 target string
+message spawnery.agent.v1alpha1.ExecuteRequest 2 command string
+message spawnery.agent.v1alpha1.ExecuteRequest 3 issuer string
+message spawnery.agent.v1alpha1.ExecuteResult 1 outcomes repeated spawnery.agent.v1alpha1.ExecuteOutcome
+message spawnery.agent.v1alpha1.ForceStopRequest 1 server string
+message spawnery.agent.v1alpha1.ForceStopRequest 2 issuer string
+message spawnery.agent.v1alpha1.ForceStopResult 1 server string
+message spawnery.agent.v1alpha1.FullSync 1 servers repeated spawnery.agent.v1alpha1.RegisteredServer
+message spawnery.agent.v1alpha1.GroupState 1 name string
+message spawnery.agent.v1alpha1.GroupState 2 kind spawnery.agent.v1alpha1.GroupState.Kind
+message spawnery.agent.v1alpha1.GroupState 3 replicas int32
+message spawnery.agent.v1alpha1.GroupState 4 ready_replicas int32
+message spawnery.agent.v1alpha1.GroupState 5 online_players int32
+message spawnery.agent.v1alpha1.GroupState 6 free_slots int32
+message spawnery.agent.v1alpha1.GroupState 7 attributes map<string,string>
+message spawnery.agent.v1alpha1.GroupState 8 display_name string
+message spawnery.agent.v1alpha1.GroupState 9 playable_slots int32
+message spawnery.agent.v1alpha1.GroupState 10 enforce_playable_slots bool
+message spawnery.agent.v1alpha1.GroupState 11 join_permission string
+message spawnery.agent.v1alpha1.GroupState 12 join_permission_deny_only bool
+message spawnery.agent.v1alpha1.GroupState 13 pinned bool
+message spawnery.agent.v1alpha1.GroupState 14 pinned_replicas int32
+message spawnery.agent.v1alpha1.GroupState 15 pinned_until_unix int64
+message spawnery.agent.v1alpha1.GroupStatus 1 name string
+message spawnery.agent.v1alpha1.GroupStatus 2 kind spawnery.agent.v1alpha1.GroupState.Kind
+message spawnery.agent.v1alpha1.GroupStatus 3 phase string
+message spawnery.agent.v1alpha1.GroupStatus 4 replicas int32
+message spawnery.agent.v1alpha1.GroupStatus 5 ready_replicas int32
+message spawnery.agent.v1alpha1.GroupStatus 6 players int32
+message spawnery.agent.v1alpha1.GroupStatus 7 lowest_tps double
+message spawnery.agent.v1alpha1.GroupStatus 8 usage spawnery.agent.v1alpha1.ResourceUsage
+message spawnery.agent.v1alpha1.Hello 1 version string
+message spawnery.agent.v1alpha1.Hello 2 ready bool
+message spawnery.agent.v1alpha1.Hello 3 read_timeout_millis int32
+message spawnery.agent.v1alpha1.Hello 4 voice_plugin_loaded bool
+message spawnery.agent.v1alpha1.InstanceStatus 1 name string
+message spawnery.agent.v1alpha1.InstanceStatus 2 group string
+message spawnery.agent.v1alpha1.InstanceStatus 3 proxy bool
+message spawnery.agent.v1alpha1.InstanceStatus 4 phase string
+message spawnery.agent.v1alpha1.InstanceStatus 5 ready bool
+message spawnery.agent.v1alpha1.InstanceStatus 6 players int32
+message spawnery.agent.v1alpha1.InstanceStatus 7 slots int32
+message spawnery.agent.v1alpha1.InstanceStatus 8 tps double
+message spawnery.agent.v1alpha1.InstanceStatus 9 mspt double
+message spawnery.agent.v1alpha1.InstanceStatus 10 age_seconds int64
+message spawnery.agent.v1alpha1.InstanceStatus 11 retiring bool
+message spawnery.agent.v1alpha1.InstanceStatus 12 held bool
+message spawnery.agent.v1alpha1.InstanceStatus 13 draining bool
+message spawnery.agent.v1alpha1.InstanceStatus 14 usage spawnery.agent.v1alpha1.ResourceUsage
+message spawnery.agent.v1alpha1.InstanceStatus 15 node string
+message spawnery.agent.v1alpha1.InstanceStatus 16 playable_slots int32
+message spawnery.agent.v1alpha1.ListRestorePointsRequest 1 group string
+message spawnery.agent.v1alpha1.ListRestorePointsRequest 2 key string
+message spawnery.agent.v1alpha1.ListRestorePointsResult 1 points repeated spawnery.agent.v1alpha1.RestorePoint
+message spawnery.agent.v1alpha1.ListRestorePointsResult 2 settling bool
+message spawnery.agent.v1alpha1.MovePlayer 1 player_uuid string
+message spawnery.agent.v1alpha1.MovePlayer 2 target_server string
+message spawnery.agent.v1alpha1.NetworkState 1 groups repeated spawnery.agent.v1alpha1.GroupState
+message spawnery.agent.v1alpha1.NetworkState 2 servers repeated spawnery.agent.v1alpha1.ServerState
+message spawnery.agent.v1alpha1.NetworkState 3 players repeated spawnery.agent.v1alpha1.RosterEntry
+message spawnery.agent.v1alpha1.NetworkState 4 feed_format string
+message spawnery.agent.v1alpha1.NetworkState 5 proxies repeated spawnery.agent.v1alpha1.ProxyState
+message spawnery.agent.v1alpha1.OperatorToProxy 1 full_sync spawnery.agent.v1alpha1.FullSync oneof message
+message spawnery.agent.v1alpha1.OperatorToProxy 2 register_server spawnery.agent.v1alpha1.RegisterServer oneof message
+message spawnery.agent.v1alpha1.OperatorToProxy 3 unregister_server spawnery.agent.v1alpha1.UnregisterServer oneof message
+message spawnery.agent.v1alpha1.OperatorToProxy 4 drain_players spawnery.agent.v1alpha1.DrainPlayers oneof message
+message spawnery.agent.v1alpha1.OperatorToProxy 5 report_interval spawnery.agent.v1alpha1.ReportInterval oneof message
+message spawnery.agent.v1alpha1.OperatorToProxy 6 session_deadline spawnery.agent.v1alpha1.SessionDeadline oneof message
+message spawnery.agent.v1alpha1.OperatorToProxy 7 set_ready spawnery.agent.v1alpha1.SetReady oneof message
+message spawnery.agent.v1alpha1.OperatorToProxy 8 network_state spawnery.agent.v1alpha1.NetworkState oneof message
+message spawnery.agent.v1alpha1.OperatorToProxy 9 cloud_response spawnery.agent.v1alpha1.CloudResponse oneof message
+message spawnery.agent.v1alpha1.OperatorToProxy 10 move_player spawnery.agent.v1alpha1.MovePlayer oneof message
+message spawnery.agent.v1alpha1.OperatorToProxy 11 cloud_event spawnery.agent.v1alpha1.CloudEvent oneof message
+message spawnery.agent.v1alpha1.OperatorToProxy 12 voice_config spawnery.agent.v1alpha1.VoiceConfig oneof message
+message spawnery.agent.v1alpha1.OperatorToServer 1 report_interval spawnery.agent.v1alpha1.ReportInterval oneof message
+message spawnery.agent.v1alpha1.OperatorToServer 2 session_deadline spawnery.agent.v1alpha1.SessionDeadline oneof message
+message spawnery.agent.v1alpha1.OperatorToServer 3 network_state spawnery.agent.v1alpha1.NetworkState oneof message
+message spawnery.agent.v1alpha1.OperatorToServer 4 cloud_response spawnery.agent.v1alpha1.CloudResponse oneof message
+message spawnery.agent.v1alpha1.OperatorToServer 5 cloud_event spawnery.agent.v1alpha1.CloudEvent oneof message
+message spawnery.agent.v1alpha1.OperatorToServer 6 execute_command spawnery.agent.v1alpha1.ExecuteCommand oneof message
+message spawnery.agent.v1alpha1.PlayerCount 1 players int32
+message spawnery.agent.v1alpha1.PlayerCount 2 slots int32
+message spawnery.agent.v1alpha1.PlayerCount 3 tps double
+message spawnery.agent.v1alpha1.PlayerCount 4 mspt double
+message spawnery.agent.v1alpha1.PlayerCount 5 playable_slots int32
+message spawnery.agent.v1alpha1.PlayerCount 6 heap_used_bytes int64
+message spawnery.agent.v1alpha1.PlayerCount 7 heap_max_bytes int64
+message spawnery.agent.v1alpha1.PlayerJoinedServer 1 player string
+message spawnery.agent.v1alpha1.PlayerJoinedServer 2 server string
+message spawnery.agent.v1alpha1.PlayerRoster 1 players repeated spawnery.agent.v1alpha1.RosterEntry
+message spawnery.agent.v1alpha1.ProxyMessage 1 hello spawnery.agent.v1alpha1.Hello oneof message
+message spawnery.agent.v1alpha1.ProxyMessage 2 player_count spawnery.agent.v1alpha1.PlayerCount oneof message
+message spawnery.agent.v1alpha1.ProxyMessage 3 player_joined_server spawnery.agent.v1alpha1.PlayerJoinedServer oneof message
+message spawnery.agent.v1alpha1.ProxyMessage 4 heartbeat spawnery.agent.v1alpha1.Heartbeat oneof message
+message spawnery.agent.v1alpha1.ProxyMessage 5 backend_players spawnery.agent.v1alpha1.BackendPlayers oneof message
+message spawnery.agent.v1alpha1.ProxyMessage 6 player_roster spawnery.agent.v1alpha1.PlayerRoster oneof message
+message spawnery.agent.v1alpha1.ProxyMessage 7 cloud_request spawnery.agent.v1alpha1.CloudRequest oneof message
+message spawnery.agent.v1alpha1.ProxyMessage 8 event_interest spawnery.agent.v1alpha1.EventInterest oneof message
+message spawnery.agent.v1alpha1.ProxyMessage 9 voice_counters spawnery.agent.v1alpha1.VoiceCounters oneof message
+message spawnery.agent.v1alpha1.ProxyState 1 name string
+message spawnery.agent.v1alpha1.ProxyState 2 group string
+message spawnery.agent.v1alpha1.ProxyState 3 ready bool
+message spawnery.agent.v1alpha1.ProxyState 4 draining bool
+message spawnery.agent.v1alpha1.ProxyState 5 players int32
+message spawnery.agent.v1alpha1.ProxyState 6 node string
+message spawnery.agent.v1alpha1.ProxyState 7 accepts_transfers bool
+message spawnery.agent.v1alpha1.RegisterServer 1 server spawnery.agent.v1alpha1.RegisteredServer
+message spawnery.agent.v1alpha1.RegisteredServer 1 name string
+message spawnery.agent.v1alpha1.RegisteredServer 2 address string
+message spawnery.agent.v1alpha1.RegisteredServer 3 group string
+message spawnery.agent.v1alpha1.ReportInterval 1 seconds int32
+message spawnery.agent.v1alpha1.RequestError 1 reason spawnery.agent.v1alpha1.RequestError.Reason
+message spawnery.agent.v1alpha1.RequestError 2 message string
+message spawnery.agent.v1alpha1.ResourceUsage 1 cpu_used_millicores int64
+message spawnery.agent.v1alpha1.ResourceUsage 2 cpu_requested_millicores int64
+message spawnery.agent.v1alpha1.ResourceUsage 3 cpu_limit_millicores int64
+message spawnery.agent.v1alpha1.ResourceUsage 4 cpu_unlimited bool
+message spawnery.agent.v1alpha1.ResourceUsage 5 memory_used_bytes int64
+message spawnery.agent.v1alpha1.ResourceUsage 6 memory_requested_bytes int64
+message spawnery.agent.v1alpha1.ResourceUsage 7 memory_limit_bytes int64
+message spawnery.agent.v1alpha1.ResourceUsage 8 memory_unlimited bool
+message spawnery.agent.v1alpha1.ResourceUsage 9 pods int32
+message spawnery.agent.v1alpha1.ResourceUsage 10 pods_measured int32
+message spawnery.agent.v1alpha1.RestorePoint 1 generation int64
+message spawnery.agent.v1alpha1.RestorePoint 2 taken_unix_millis int64
+message spawnery.agent.v1alpha1.RestorePoint 3 current bool
+message spawnery.agent.v1alpha1.RestoreWorldRequest 1 group string
+message spawnery.agent.v1alpha1.RestoreWorldRequest 2 key string
+message spawnery.agent.v1alpha1.RestoreWorldRequest 3 generation int64
+message spawnery.agent.v1alpha1.RestoreWorldResult 1 generation int64
+message spawnery.agent.v1alpha1.RestoreWorldResult 2 restored_from int64
+message spawnery.agent.v1alpha1.RetireRequest 1 server string
+message spawnery.agent.v1alpha1.RetireResult 1 server string
+message spawnery.agent.v1alpha1.RosterEntry 1 uuid string
+message spawnery.agent.v1alpha1.RosterEntry 2 name string
+message spawnery.agent.v1alpha1.RosterEntry 3 server string
+message spawnery.agent.v1alpha1.ScaleRequest 1 group string
+message spawnery.agent.v1alpha1.ScaleRequest 2 replicas int32
+message spawnery.agent.v1alpha1.ScaleRequest 3 duration_seconds int64
+message spawnery.agent.v1alpha1.ScaleResult 1 replicas int32
+message spawnery.agent.v1alpha1.ScaleResult 2 expires_at_unix int64
+message spawnery.agent.v1alpha1.ServerMessage 1 hello spawnery.agent.v1alpha1.Hello oneof message
+message spawnery.agent.v1alpha1.ServerMessage 2 ready spawnery.agent.v1alpha1.Ready oneof message
+message spawnery.agent.v1alpha1.ServerMessage 3 player_count spawnery.agent.v1alpha1.PlayerCount oneof message
+message spawnery.agent.v1alpha1.ServerMessage 4 cloud_request spawnery.agent.v1alpha1.CloudRequest oneof message
+message spawnery.agent.v1alpha1.ServerMessage 5 event_interest spawnery.agent.v1alpha1.EventInterest oneof message
+message spawnery.agent.v1alpha1.ServerMessage 6 execute_outcome spawnery.agent.v1alpha1.ExecuteOutcome oneof message
+message spawnery.agent.v1alpha1.ServerState 1 name string
+message spawnery.agent.v1alpha1.ServerState 2 group string
+message spawnery.agent.v1alpha1.ServerState 3 phase string
+message spawnery.agent.v1alpha1.ServerState 4 players int32
+message spawnery.agent.v1alpha1.ServerState 5 slots int32
+message spawnery.agent.v1alpha1.ServerState 6 registered bool
+message spawnery.agent.v1alpha1.ServerState 7 state string
+message spawnery.agent.v1alpha1.ServerState 8 attributes map<string,string>
+message spawnery.agent.v1alpha1.ServerState 9 incarnation string
+message spawnery.agent.v1alpha1.ServerState 10 number int32
+message spawnery.agent.v1alpha1.ServerState 11 held bool
+message spawnery.agent.v1alpha1.ServerState 12 node string
+message spawnery.agent.v1alpha1.ServerState 13 playable_slots int32
+message spawnery.agent.v1alpha1.ServerState 14 joins_closed bool
+message spawnery.agent.v1alpha1.SessionDeadline 1 renew_after_seconds int32
+message spawnery.agent.v1alpha1.SessionDeadline 2 hard_deadline_seconds int32
+message spawnery.agent.v1alpha1.SetReady 1 ready bool
+message spawnery.agent.v1alpha1.StartServerRequest 1 group string
+message spawnery.agent.v1alpha1.StartServerRequest 2 key string
+message spawnery.agent.v1alpha1.StartServerResult 1 server string
+message spawnery.agent.v1alpha1.StartServerResult 2 already_running bool
+message spawnery.agent.v1alpha1.StatusRequest 1 target string
+message spawnery.agent.v1alpha1.StatusResult 1 total spawnery.agent.v1alpha1.ResourceUsage
+message spawnery.agent.v1alpha1.StatusResult 2 groups repeated spawnery.agent.v1alpha1.GroupStatus
+message spawnery.agent.v1alpha1.StatusResult 3 instances repeated spawnery.agent.v1alpha1.InstanceStatus
+message spawnery.agent.v1alpha1.StatusResult 4 other spawnery.agent.v1alpha1.ResourceUsage
+message spawnery.agent.v1alpha1.StatusResult 5 metrics_available bool
+message spawnery.agent.v1alpha1.StatusResult 6 players int32
+message spawnery.agent.v1alpha1.StatusResult 7 servers int32
+message spawnery.agent.v1alpha1.StatusResult 8 proxies int32
+message spawnery.agent.v1alpha1.StopBoostRequest 1 group string
+message spawnery.agent.v1alpha1.StopBoostResult 1 removed int32
+message spawnery.agent.v1alpha1.StopServerRequest 1 server string
+message spawnery.agent.v1alpha1.StopServerResult 1 server string
+message spawnery.agent.v1alpha1.UnregisterServer 1 name string
+message spawnery.agent.v1alpha1.UnretireRequest 1 server string
+message spawnery.agent.v1alpha1.UnretireResult 1 server string
+message spawnery.agent.v1alpha1.VoiceConfig 1 enabled bool
+message spawnery.agent.v1alpha1.VoiceConfig 2 backend_port int32
+message spawnery.agent.v1alpha1.VoiceConfig 3 announce_host string
+message spawnery.agent.v1alpha1.VoiceConfig 4 announce_port int32
+message spawnery.agent.v1alpha1.VoiceConfig 5 announce_own_node bool
+message spawnery.agent.v1alpha1.VoiceCounters 1 totals map<string,int64>
+enum spawnery.agent.v1alpha1.GroupState.Kind 0 KIND_UNSPECIFIED
+enum spawnery.agent.v1alpha1.GroupState.Kind 1 EPHEMERAL
+enum spawnery.agent.v1alpha1.GroupState.Kind 2 PERSISTENT
+enum spawnery.agent.v1alpha1.GroupState.Kind 3 PROXY
+enum spawnery.agent.v1alpha1.GroupState.Kind 4 ON_DEMAND
+enum spawnery.agent.v1alpha1.RequestError.Reason 0 REASON_UNSPECIFIED
+enum spawnery.agent.v1alpha1.RequestError.Reason 1 NOT_FOUND
+enum spawnery.agent.v1alpha1.RequestError.Reason 2 REFUSED
+enum spawnery.agent.v1alpha1.RequestError.Reason 3 RATE_LIMITED
+enum spawnery.agent.v1alpha1.RequestError.Reason 4 UNAVAILABLE
+service spawnery.agent.v1alpha1.AgentService ProxySession stream spawnery.agent.v1alpha1.ProxyMessage stream spawnery.agent.v1alpha1.OperatorToProxy
+service spawnery.agent.v1alpha1.AgentService ServerSession stream spawnery.agent.v1alpha1.ServerMessage stream spawnery.agent.v1alpha1.OperatorToServer

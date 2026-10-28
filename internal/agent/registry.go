@@ -555,6 +555,11 @@ func (r *Registry) ReportVoicePlugin(key string, loaded bool) {
 // ReportVoiceTotals turns a proxy's cumulative relay totals into increments.
 // Kept per pod, not per stream: during a renewal both streams report the
 // same process's totals.
+//
+// A pod's first report only sets the baseline, a reason it leaves out at
+// zero. This registry starts empty on every operator start, and a proxy that
+// has been relaying for a week would otherwise add the week to the counter at
+// once. The price is what a brand-new proxy relays before its first report.
 func (r *Registry) ReportVoiceTotals(key string, totals map[string]int64) map[string]int64 {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -562,10 +567,14 @@ func (r *Registry) ReportVoiceTotals(key string, totals map[string]int64) map[st
 	if !ok || e.role != RoleProxy {
 		return nil
 	}
+	out := make(map[string]int64, len(VoiceReasons))
 	if e.voiceTotals == nil {
 		e.voiceTotals = make(map[string]int64, len(VoiceReasons))
+		for _, reason := range VoiceReasons {
+			e.voiceTotals[reason] = max(totals[reason], 0)
+		}
+		return out
 	}
-	out := make(map[string]int64, len(VoiceReasons))
 	for _, reason := range VoiceReasons {
 		now, reported := totals[reason]
 		if !reported || now < 0 {

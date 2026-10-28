@@ -125,10 +125,10 @@ func (s *Store) AdvanceRotation(ctx context.Context, current *Bundle) (*Bundle, 
 		secret.Annotations[AnnotationRotationBlockedOn])
 }
 
-// repairOrDiscardSlots puts every rotation slot an agent could not parse back
-// into a state it can, records what it did, and ends the rotation when a slot
-// it had to throw away is the one the current phase depends on. A nil bundle
-// means nothing was wrong.
+// repairOrDiscardSlots puts ca.crt and every rotation slot an agent could not
+// parse back into a state it can, records what it did, and ends the rotation
+// when a slot it had to throw away is the one the current phase depends on. A
+// nil bundle means nothing was wrong.
 //
 // A slot whose first PEM block is a certificate is truncated to it: parseCA
 // already signs with that block, so nothing is lost. Otherwise parseCA fails
@@ -152,6 +152,12 @@ func (s *Store) repairOrDiscardSlots(ctx context.Context, current *Bundle, phase
 	}{
 		// Only the certificates are judged, as only they are published. A bad
 		// key fails loudly in parseCA.
+		//
+		// ca.crt is only ever truncated: one that does not parse at all has
+		// already failed Validate, and Ensure reissued it before this runs.
+		{keyCACert, keyCAKey, "",
+			nil,
+			func(b *Bundle, cert, key []byte) { b.CACertPEM, b.CAKeyPEM = cert, key }},
 		{keyNextCACert, keyNextCAKey, PhaseDistributing,
 			func(b *Bundle) { b.NextCACertPEM, b.NextCAKeyPEM = nil, nil },
 			func(b *Bundle, cert, key []byte) { b.NextCACertPEM, b.NextCAKeyPEM = cert, key }},
@@ -196,6 +202,9 @@ func (s *Store) repairOrDiscardSlots(ctx context.Context, current *Bundle, phase
 				record:   fmt.Sprintf("%s: %.150s; truncated to that block", slot.certKey, reason),
 				repaired: true,
 			})
+			continue
+		}
+		if slot.clear == nil {
 			continue
 		}
 		slot.clear(&fresh)

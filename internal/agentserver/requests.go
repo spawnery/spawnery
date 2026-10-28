@@ -245,14 +245,19 @@ func (s *Server) answerBoost(
 	}
 
 	// A duration on the wire, because agent and operator do not share a clock.
-	duration := time.Duration(req.GetDurationSeconds()) * time.Second
-	if duration <= 0 {
-		duration = BoostDefaultDuration
+	seconds := req.GetDurationSeconds()
+	if seconds < 0 {
+		return refuse(reqID, agentpb.RequestError_REFUSED,
+			"a boost cannot last a negative number of seconds")
 	}
-	if duration > BoostMaxDuration {
+	if seconds > int64(BoostMaxDuration/time.Second) {
 		return refuse(reqID, agentpb.RequestError_REFUSED,
 			fmt.Sprintf("the longest a boost may run is %s; a need that outlives an evening "+
 				"belongs in the group's own file", BoostMaxDuration))
+	}
+	duration := time.Duration(seconds) * time.Second
+	if duration == 0 {
+		duration = BoostDefaultDuration
 	}
 
 	headroom, err := s.opts.Writer.Headroom(ctx, id.Namespace, req.GetGroup())

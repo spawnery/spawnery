@@ -77,6 +77,12 @@ type session struct {
 	// wantsEvents is whether this agent last reported anybody reading cloud
 	// events.
 	wantsEvents bool
+	// pushed is the NetworkState SendState queued that the stream has not
+	// reported Delivered yet, and stale says the state changed again since.
+	// One per session at most, so a burst of door flips cannot fill the
+	// outbox: the flips after the first wait for it and leave as one.
+	pushed *agentpb.OperatorToProxy
+	stale  bool
 }
 
 type Fleet struct {
@@ -357,7 +363,8 @@ func (f *Fleet) Move(namespace, playerUUID, targetServer string) {
 }
 
 // SendState sends every session in a namespace a fresh NetworkState now
-// rather than at the next Resync.
+// rather than at the next Resync. A session that still has the previous push
+// queued gets the latest state once that one is Delivered instead.
 func (f *Fleet) SendState(ctx context.Context, namespace string) {
 	if f.opts.State.Reader == nil {
 		return
@@ -365,19 +372,61 @@ func (f *Fleet) SendState(ctx context.Context, namespace string) {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 
+	var msg *agentpb.OperatorToProxy
+	for _, s := range f.sessions {
+		if s.namespace != namespace || s.closed {
+			continue
+		}
+		if s.pushed != nil {
+			s.stale = true
+			continue
+		}
+		if msg == nil {
+			msg = f.stateMessage(ctx, namespace)
+			if msg == nil {
+				return
+			}
+		}
+		s.pushed = msg
+		f.send(s, msg)
+	}
+}
+
+// Delivered tells the fleet that a session's stream has sent msg. Only a
+// NetworkState from SendState matters here; any other message is ignored, and
+// so is a pod whose current session never queued msg.
+func (f *Fleet) Delivered(ctx context.Context, podUID string, msg *agentpb.OperatorToProxy) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+
+	s, ok := f.sessions[podUID]
+	if !ok || s.pushed == nil || s.pushed != msg {
+		return
+	}
+	s.pushed = nil
+	if !s.stale || s.closed {
+		return
+	}
+	s.stale = false
+	if next := f.stateMessage(ctx, s.namespace); next != nil {
+		s.pushed = next
+		f.send(s, next)
+	}
+}
+
+// stateMessage is nil when the state cannot be built; the next Resync sends
+// one.
+//
+// Callers hold f.mu.
+func (f *Fleet) stateMessage(ctx context.Context, namespace string) *agentpb.OperatorToProxy {
 	state, err := f.opts.State.Build(ctx, namespace, netstate.ForProxies)
 	if err != nil {
 		log.FromContext(ctx).V(1).Info("skipped a proxy state push",
 			"namespace", namespace, "reason", err.Error())
-		return
+		return nil
 	}
-	msg := &agentpb.OperatorToProxy{
+	return &agentpb.OperatorToProxy{
 		Message: &agentpb.OperatorToProxy_NetworkState{NetworkState: state},
-	}
-	for _, s := range f.sessions {
-		if s.namespace == namespace {
-			f.send(s, msg)
-		}
 	}
 }
 

@@ -18,6 +18,7 @@ package proxyreg_test
 
 import (
 	"context"
+	"fmt"
 	"strings"
 	"testing"
 	"time"
@@ -765,6 +766,120 @@ func TestSendStateCarriesADoorToEveryProxyOfTheNamespace(t *testing.T) {
 	}
 	if other := drain(t, elsewhere); len(other) != 0 {
 		t.Errorf("a proxy of another namespace was sent %v", other)
+	}
+}
+
+// A burst of door flips larger than the outbox: every state is a whole
+// picture, so the session holds one push and the newest replaces the rest.
+func TestABurstOfDoorFlipsIsCoalescedRatherThanCuttingTheSession(t *testing.T) {
+	start := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	const outbox, flips = 4, 12
+	objects := []client.Object{proxyGroup()}
+	for i := 0; i < flips; i++ {
+		srv := registered(fmt.Sprintf("lobby-%02d", i), fmt.Sprintf("10.0.0.%d:25565", i+1))
+		srv.Status.PodUID = fmt.Sprintf("pod-%02d", i)
+		objects = append(objects, srv)
+	}
+	reader := newReader(t, objects...)
+	agents := agent.New(func() time.Time { return start }, 5*time.Second, start)
+	f := proxyreg.New(proxyreg.Options{
+		Reader: reader, OutboxSize: outbox,
+		State: netstate.Source{Reader: reader, Agents: agents},
+	})
+
+	here, leave, err := f.Join(context.Background(), ns, group, "proxy-a")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+	drain(t, here)
+
+	for i := 0; i < flips; i++ {
+		pod := fmt.Sprintf("pod-%02d", i)
+		agents.Connect(pod, agent.RoleServer)
+		if _, err := agents.ReportAcceptJoins(pod, ns, false, false); err != nil {
+			t.Fatalf("ReportAcceptJoins: %v", err)
+		}
+		f.SendState(context.Background(), ns)
+	}
+
+	closedDoors := func(msg *agentpb.OperatorToProxy) int {
+		n := 0
+		for _, srv := range msg.GetNetworkState().GetServers() {
+			if srv.GetJoinsClosed() {
+				n++
+			}
+		}
+		return n
+	}
+	first := drain(t, here)
+	if len(first) != 1 || first[0].GetNetworkState() == nil {
+		t.Fatalf("queued %d messages, want the first push alone", len(first))
+	}
+	select {
+	case _, open := <-here:
+		if !open {
+			t.Fatalf("a burst of %d door flips cut a session with an outbox of %d", flips, outbox)
+		}
+	default:
+	}
+	if got := closedDoors(first[0]); got != 1 {
+		t.Errorf("the first push shows %d closed doors, want the 1 it was built for", got)
+	}
+
+	f.Delivered(context.Background(), "proxy-a", first[0])
+	latest := drain(t, here)
+	if len(latest) != 1 || latest[0].GetNetworkState() == nil {
+		t.Fatalf("after the first push was delivered, %d messages were queued, want one state", len(latest))
+	}
+	if got := closedDoors(latest[0]); got != flips {
+		t.Errorf("the coalesced push shows %d closed doors, want all %d", got, flips)
+	}
+
+	f.Delivered(context.Background(), "proxy-a", latest[0])
+	if extra := drain(t, here); len(extra) != 0 {
+		t.Errorf("nothing changed since the last push, yet %d more messages were queued", len(extra))
+	}
+	f.SendState(context.Background(), ns)
+	if next := drain(t, here); len(next) != 1 {
+		t.Errorf("a push after everything was delivered queued %d messages, want one at once", len(next))
+	}
+}
+
+// Delivered from a stream that a renewal displaced must not release its
+// successor's push.
+func TestDeliveredIgnoresAMessageTheCurrentSessionNeverQueued(t *testing.T) {
+	start := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
+	reader := newReader(t, proxyGroup())
+	agents := agent.New(func() time.Time { return start }, 5*time.Second, start)
+	f := proxyreg.New(proxyreg.Options{Reader: reader, State: netstate.Source{Reader: reader, Agents: agents}})
+
+	old, leaveOld, err := f.Join(context.Background(), ns, group, "proxy-a")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leaveOld()
+	drain(t, old)
+	f.SendState(context.Background(), ns)
+	oldPush := drain(t, old)
+
+	current, leave, err := f.Join(context.Background(), ns, group, "proxy-a")
+	if err != nil {
+		t.Fatalf("Join: %v", err)
+	}
+	defer leave()
+	drain(t, current)
+	f.SendState(context.Background(), ns)
+	if got := drain(t, current); len(got) != 1 {
+		t.Fatalf("the successor's first push queued %d messages, want 1", len(got))
+	}
+
+	for _, msg := range oldPush {
+		f.Delivered(context.Background(), "proxy-a", msg)
+	}
+	f.SendState(context.Background(), ns)
+	if got := drain(t, current); len(got) != 0 {
+		t.Errorf("the displaced stream's Delivered released the successor's push: %d queued", len(got))
 	}
 }
 
