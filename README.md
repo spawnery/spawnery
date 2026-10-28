@@ -113,7 +113,7 @@ is your first run. To install directly:
 
 ```bash
 helm install spawnery oci://ghcr.io/spawnery/charts/spawnery \
-  --version 0.31.0 \
+  --version 0.32.0 \
   --namespace spawnery-system --create-namespace
 ```
 
