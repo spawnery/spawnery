@@ -89,9 +89,9 @@ is ready. The `Voice` condition says why a group is not relaying:
 
 | Reason | Meaning |
 |---|---|
-| `Relaying` | every connected proxy of the group reports its relay bound and running (`True`) |
-| `RelayNotReported` | `Unknown`: a connected proxy has not reported a running relay, because its image is older than this release or its relay has not started yet, or no proxy has connected yet; the group's phase is not `Degraded` |
-| `RelayBindFailed` | a proxy reports that it could not bind the relay's UDP port 25565; it retries, and the condition follows its next report |
+| `Relaying` | every proxy of the group reports its relay bound and running (`True`) |
+| `RelayNotReported` | `Unknown`: a proxy has not reported a running relay, because its image is older than this release or its relay has not started yet, or no proxy has reported yet; the group's phase is not `Degraded` |
+| `RelayBindFailed` | a proxy last reported that it could not bind the relay's UDP port 25565; it retries while its stream to the operator is up, and the condition follows its next report |
 | `VoiceOffInNetwork` | the group has `spec.voice`, the Network does not |
 | `VoicePluginConflict` | a proxy has SVC's Velocity plugin loaded |
 | `VoiceServiceNotOwnedByGroup` | something else holds the name `<group>-voice` |

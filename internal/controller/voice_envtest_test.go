@@ -662,7 +662,7 @@ func TestAProxyThatDoesNotReportItsRelayReadsAsUnknownNotAsAFailure(t *testing.T
 	}
 }
 
-func TestAProxyThatIsNotConnectedSaysNothingAboutTheRelay(t *testing.T) {
+func TestAProxyWhoseStreamIsDownKeepsItsLastRelayReport(t *testing.T) {
 	f := newFixture(t)
 	f.enableVoice(t)
 	r := proxyGroupReconciler(f)
@@ -678,7 +678,29 @@ func TestAProxyThatIsNotConnectedSaysNothingAboutTheRelay(t *testing.T) {
 	f.reconcileProxyGroup(r, "gateway")
 
 	c := meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions, spawneryv1alpha1.ConditionVoice)
-	if c == nil || c.Status != metav1.ConditionTrue {
-		t.Fatalf("Voice = %+v, want True from the proxies still connected", c)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != spawneryv1alpha1.ReasonVoiceRelayBindFailed {
+		t.Fatalf("Voice = %+v, want False/%s: the proxy keeps serving without a bound relay and cannot retry",
+			c, spawneryv1alpha1.ReasonVoiceRelayBindFailed)
+	}
+}
+
+func TestAFailedBindOutranksAProxyThatDoesNotReport(t *testing.T) {
+	f := newFixture(t)
+	f.enableVoice(t)
+	r := proxyGroupReconciler(f)
+	f.createProxyGroup("gateway", exposeLoadBalancer, func(g *spawneryv1alpha1.ProxyGroup) { g.Spec.Replicas = 3 })
+	f.reconcileProxyGroup(r, "gateway")
+
+	pods := connectProxiesReporting(f, "gateway", agent.VoiceRelayRunning)
+	if len(pods) < 3 {
+		t.Fatalf("the group has %d proxy pods, want 3", len(pods))
+	}
+	f.agents.ReportVoiceRelay(string(pods[0].UID), agent.VoiceRelayBindFailed)
+	f.agents.ReportVoiceRelay(string(pods[1].UID), agent.VoiceRelayNotReported)
+	f.reconcileProxyGroup(r, "gateway")
+
+	c := meta.FindStatusCondition(f.proxyGroup("gateway").Status.Conditions, spawneryv1alpha1.ConditionVoice)
+	if c == nil || c.Status != metav1.ConditionFalse || c.Reason != spawneryv1alpha1.ReasonVoiceRelayBindFailed {
+		t.Fatalf("Voice = %+v, want False/%s beside a proxy on an old image", c, spawneryv1alpha1.ReasonVoiceRelayBindFailed)
 	}
 }

@@ -214,8 +214,9 @@ func voicePluginPod(agents *agent.Registry, pods []corev1.Pod) string {
 	return ""
 }
 
-// voiceRelays sorts the group's connected proxies by what they say about their
-// relay. A proxy that is not connected says nothing, so it is in neither list.
+// voiceRelays sorts the group's proxies by what each last said about its
+// relay. A proxy whose stream is down keeps serving and cannot retry a failed
+// bind, so its last report counts.
 type voiceRelays struct {
 	running     int
 	bindFailed  []string
@@ -225,11 +226,7 @@ type voiceRelays struct {
 func voiceRelayReports(agents *agent.Registry, pods []corev1.Pod) voiceRelays {
 	var out voiceRelays
 	for i := range pods {
-		snap := agents.Lookup(string(pods[i].UID))
-		if !snap.Connected {
-			continue
-		}
-		switch snap.VoiceRelay {
+		switch agents.Lookup(string(pods[i].UID)).VoiceRelay {
 		case agent.VoiceRelayRunning:
 			out.running++
 		case agent.VoiceRelayBindFailed:
@@ -273,7 +270,7 @@ func setVoiceCondition(group *spawneryv1alpha1.ProxyGroup, network *spawneryv1al
 			"relay report never does", strings.Join(relays.unconfirmed, ", "))
 	case relays.running == 0:
 		cond.Status, cond.Reason = metav1.ConditionUnknown, spawneryv1alpha1.ReasonVoiceRelayNotReported
-		cond.Message = "no connected proxy of this group has reported its relay yet"
+		cond.Message = "no proxy of this group has reported its relay yet"
 	}
 	meta.SetStatusCondition(&group.Status.Conditions, cond)
 }

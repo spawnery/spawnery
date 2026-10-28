@@ -82,8 +82,8 @@ const (
 	// into Accepted, which every group gates on. Unknown while no proxy has
 	// reported.
 	ConditionRescueWindowShort = "RescueWindowShort"
-	// ConditionVoice is True while every connected proxy of the group reports
-	// its relay running; Unknown while a proxy has not reported one; absent
+	// ConditionVoice is True while every proxy of the group reports its relay
+	// running; Unknown while a proxy has not reported one; absent
 	// while neither the Network nor the group asks for voice.
 	ConditionVoice = "Voice"
 )

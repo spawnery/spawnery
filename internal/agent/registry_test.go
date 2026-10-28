@@ -1059,7 +1059,7 @@ func TestTheVoicePluginFlagIsInTheSnapshot(t *testing.T) {
 	}
 }
 
-func TestTheVoiceRelayStateIsInTheSnapshotAndSurvivesAReconnect(t *testing.T) {
+func TestTheVoiceRelayStateIsInTheSnapshot(t *testing.T) {
 	r, _ := newTestRegistry()
 	r.Connect("pod-a", RoleProxy)
 	if got := r.Lookup("pod-a").VoiceRelay; got != VoiceRelayNotReported {
@@ -1070,9 +1070,25 @@ func TestTheVoiceRelayStateIsInTheSnapshotAndSurvivesAReconnect(t *testing.T) {
 		t.Fatalf("after a report = %v, want bind failed", got)
 	}
 	r.Disconnect("pod-a")
-	r.Connect("pod-a", RoleProxy)
 	if got := r.Lookup("pod-a").VoiceRelay; got != VoiceRelayBindFailed {
-		t.Fatalf("after a reconnect = %v, want the state of the process still running", got)
+		t.Fatalf("after a disconnect = %v, want the last report: the proxy keeps serving", got)
+	}
+}
+
+func TestARenewalKeepsTheVoiceRelayStateAndAFreshConnectForgetsIt(t *testing.T) {
+	r, _ := newTestRegistry()
+	r.Connect("pod-a", RoleProxy)
+	r.ReportVoiceRelay("pod-a", VoiceRelayRunning)
+
+	r.Supersede("pod-a", RoleProxy)
+	if got := r.Lookup("pod-a").VoiceRelay; got != VoiceRelayRunning {
+		t.Fatalf("after a renewal = %v, want running: both streams are one process", got)
+	}
+
+	r.Disconnect("pod-a")
+	r.Connect("pod-a", RoleProxy)
+	if got := r.Lookup("pod-a").VoiceRelay; got != VoiceRelayNotReported {
+		t.Fatalf("after a fresh connect = %v, want not reported until the new process says", got)
 	}
 }
 

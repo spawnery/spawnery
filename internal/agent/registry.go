@@ -226,6 +226,7 @@ func (r *Registry) connect(key string, role Role, keepReady bool) {
 	if !keepReady {
 		e.ready = false
 		e.emptySince = time.Time{}
+		e.voiceRelay = VoiceRelayNotReported
 	}
 	e.disconnectedAt = time.Time{}
 }
@@ -566,8 +567,6 @@ func (r *Registry) ReportVoicePlugin(key string, loaded bool) {
 	}
 }
 
-// ReportVoiceRelay records a proxy's relay state. Kept per pod like the totals:
-// a renewal's two streams are one process.
 func (r *Registry) ReportVoiceRelay(key string, state VoiceRelayState) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
