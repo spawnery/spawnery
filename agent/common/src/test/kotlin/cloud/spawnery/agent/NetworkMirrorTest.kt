@@ -2,11 +2,14 @@ package cloud.spawnery.agent
 
 import cloud.spawnery.agent.api.Group
 import cloud.spawnery.agent.api.ServerPhase
+import cloud.spawnery.agent.api.ServerResources
 import cloud.spawnery.agent.pb.GroupState
 import cloud.spawnery.agent.pb.NetworkState
 import cloud.spawnery.agent.pb.ProxyState
 import cloud.spawnery.agent.pb.RosterEntry
 import cloud.spawnery.agent.pb.ServerState
+import cloud.spawnery.agent.pb.StartResources
+import java.util.Optional
 import java.util.UUID
 import kotlin.test.Test
 import kotlin.test.assertEquals
@@ -315,6 +318,33 @@ class NetworkMirrorTest {
             ).build(),
         )
         assertEquals(12, mirror.servers().single().playableSlots())
+    }
+
+    @Test
+    fun `a server state's resources reach ServerInfo`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addServers(
+                ServerState.newBuilder().setName("duels-a").setGroup("duels").setPhase("Ready")
+                    .setResources(StartResources.newBuilder().setMemoryLimit("7Gi").setHeap("5Gi")),
+            ).build(),
+        )
+        val resources = mirror.servers().single().resources()
+        assertEquals(Optional.of("7Gi"), resources.memoryLimit())
+        assertEquals(Optional.of("5Gi"), resources.heap())
+        assertEquals(Optional.empty(), resources.memoryRequest())
+        assertEquals(Optional.empty(), resources.cpuLimit())
+    }
+
+    @Test
+    fun `a state without resources reads as NONE`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addServers(
+                ServerState.newBuilder().setName("duels-a").setGroup("duels").setPhase("Ready"),
+            ).build(),
+        )
+        assertEquals(ServerResources.NONE, mirror.servers().single().resources())
     }
 
     @Test

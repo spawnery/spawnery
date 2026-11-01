@@ -304,6 +304,11 @@ func newFixture(t *testing.T) *fixture {
 
 func (f *fixture) createServer(name string) *spawneryv1alpha1.Server {
 	f.t.Helper()
+	return f.createServerWith(name, nil)
+}
+
+func (f *fixture) createServerWith(name string, edit func(*spawneryv1alpha1.Server)) *spawneryv1alpha1.Server {
+	f.t.Helper()
 	srv := &spawneryv1alpha1.Server{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      name,
@@ -320,6 +325,9 @@ func (f *fixture) createServer(name string) *spawneryv1alpha1.Server {
 			GroupGeneration: f.group.Generation,
 			PodHash:         f.desiredPodHash(),
 		},
+	}
+	if edit != nil {
+		edit(srv)
 	}
 	if err := f.c.Create(f.ctx, srv); err != nil {
 		f.t.Fatalf("create Server: %v", err)

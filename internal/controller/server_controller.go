@@ -864,6 +864,7 @@ func (r *ServerReconciler) applyDecision(
 
 	snap := r.Agents.Lookup(podUID(pod, podFound))
 	r.mirrorPlayerCount(srv, snap, group.Spec.MaxPlayers, group.Spec.PlayableSlots, now)
+	r.checkHeap(srv, snap)
 
 	// Written wherever the pod is seen; see ServerStatus.PodUID.
 	if podFound {

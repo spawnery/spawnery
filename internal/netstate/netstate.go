@@ -187,6 +187,7 @@ func (s Source) Build(ctx context.Context, namespace string, audience Audience) 
 			Number:        srv.Spec.Number,
 			Held:          srv.Spec.Hold,
 			Node:          nodeOf[srv.Status.PodName],
+			Resources:     ToStartResources(srv.Spec.Resources, srv.Spec.Heap),
 			// Keyed by pod UID: a persistent server's name outlives the pod that
 			// closed this door.
 			JoinsClosed: closedDoors[srv.Status.PodUID],

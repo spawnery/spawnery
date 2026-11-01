@@ -149,7 +149,7 @@ func startOn(t *testing.T, worlds WorldDeleter) (KubeWriter, *agentpb.CloudRespo
 	g.Spec.MaxInstances = &ceiling
 	c := fakeClient(t, g)
 	w := KubeWriter{Client: c, Reader: c, Clock: time.Now, Worlds: worlds}
-	_, err := w.StartServer(context.Background(), "minecraft", "private-servers", "c0ffee")
+	_, err := w.StartServer(context.Background(), "minecraft", "private-servers", "c0ffee", nil)
 	s := &Server{opts: Options{Writer: w}, requestRate: newRequestLimiter(time.Now)}
 	resp := s.answerStartServer(context.Background(), logr.Discard(),
 		grpcauth.Identity{Namespace: "minecraft", PodName: "gateway-0", PodUID: "proxy-a", Role: agent.RoleProxy},

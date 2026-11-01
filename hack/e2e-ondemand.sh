@@ -45,6 +45,8 @@ dump() {
 	kubectl get networks,servergroups,proxygroups,servers,pods,pvc -A 2>&1 || true
 	echo "================ the private server's own log ================"
 	kubectl -n minecraft logs private-servers-c0ffee --tail=-1 2>&1 || true
+	echo "================ the sized private server's own log ================"
+	kubectl -n minecraft logs private-servers-sized --tail=-1 2>&1 || true
 	echo "================ events ================"
 	kubectl get events -A --sort-by=.lastTimestamp 2>&1 || true
 }
@@ -138,4 +140,4 @@ kubectl -n "$OPERATOR_NAMESPACE" rollout status deployment/spawnery-operator --t
 
 # 30m: a real world is generated twice on a cold kind node.
 SPAWNERY_E2E_ONDEMAND=1 go test -tags e2e -count=1 -v -timeout 30m \
-	-run TestAPrivateServersWorldOutlivesItsServer ./test/e2e/...
+	-run 'TestAPrivateServersWorldOutlivesItsServer|TestAMemberStartsWithTheResourcesItAskedFor' ./test/e2e/...

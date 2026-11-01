@@ -77,11 +77,14 @@ What comes back, by reason:
 | `startServer` | `UNAVAILABLE` | the member of that key is still stopping, or the group is at `maxInstances` only because a member is draining. Neither is a refusal: ask again. |
 | `startServer` | `REFUSED` | the key is not a label, the name would not fit, the group is not `OnDemand`, another group's server already holds the name, or the group is at `maxInstances` with nobody leaving. |
 | `startServer` | `NOT_FOUND` | no such group. |
+| `startServer` with `StartOptions` | `REFUSED` | the group has no `spec.memberResources`, or a value breaks one of the rules in [Choosing resources at the start](#choosing-resources-at-the-start). A group whose own resources are above its `max` refuses a start without options too. |
+| `startServer` with `StartOptions` | `already_running` set | the key is up and keeps what it started with; `resources()` says what that is. |
+| `startServer` with `StartOptions` | `IllegalStateException`, no reason | the operator predates per-start resources. The member runs with the group's values, whether that operator started it or found it running. |
 | `stopServer` | `REFUSED` | the server is not a member of an on-demand group. |
 | `stopServer` | `NOT_FOUND` | no such server, including a stop that was carried out a moment ago. |
 | `deleteServer` | `REFUSED` | the group is not `OnDemand`, the key is not a label, a claim of that name was not made by this operator for that group, or the world predates the key label (only an admin can delete it). |
 | `deleteServer` | `NOT_FOUND` | no such group, or the key has neither a server nor a world, including a delete that finished a moment ago. |
-| `startServer` | `UNAVAILABLE` | also: the key's world is still being deleted. |
+| `startServer` | `UNAVAILABLE` | also: the key's world is still being deleted, or the group has `spec.memberResources` and its Network does not exist yet. |
 | `restorePoints`, `listRestorePoints`, `restoreWorld` | `NOT_FOUND` | no such group, or the key has no world; for `restoreWorld` also a generation the world does not keep, unless the request repeats a restore that already went through. |
 | `restorePoints`, `listRestorePoints`, `restoreWorld` | `REFUSED` | the group is not `OnDemand`, keeps its worlds on claims, the key is one no name can be built from, or the operator runs without world sync. |
 | `restorePoints`, `listRestorePoints`, `restoreWorld` | `UNAVAILABLE` | the operator could not read the bucket just now. Ask again. |
@@ -117,6 +120,143 @@ own stays with its logs.
 It is not a quota. *Who* may have a private server, and how many, is a question
 about a player, a purchase and a ban, and the system that holds those is the one
 that answers it. An operator that enforced it would need all three.
+
+## Choosing resources at the start
+
+Every member gets the group's `spec.resources`, or the network's default where
+the group sets none, unless the group lets a start choose its own. A network
+that offers private worlds in several sizes opts in with
+`spec.memberResources`:
+
+```yaml
+spec:
+  type: OnDemand
+  resources:                 # what a start without values gets
+    requests: { memory: 2Gi }
+    limits:   { memory: 4Gi }
+  memberResources:
+    max:
+      memory: 16Gi
+      cpu: "8"
+    nonHeap: 2Gi
+```
+
+`max` bounds every request and limit of the resources it names, including the
+ones taken from the group. It has to name `memory`; `cpu` is optional,
+and a start may not set a resource that `max` does not name. `nonHeap`, `2Gi`
+unless set, is what a start's memory limit leaves outside the heap when the
+start gives no heap of its own. The API server refuses a group whose
+`max.memory` is not above it, and refuses `memberResources` on any group that
+is not `OnDemand`.
+
+The plugin passes the numbers as Kubernetes quantities:
+
+```java
+api.startServer("private-servers", key, StartOptions.builder()
+        .memoryLimit("7Gi")          // heap 5Gi with the default nonHeap
+        .build());
+
+api.startServer("private-servers", key, StartOptions.builder()
+        .memoryRequest("6Gi").memoryLimit("8Gi").heap("5500Mi")
+        .cpuLimit("4")
+        .build());
+```
+
+With the group above, the first one runs with a request of 2Gi, a limit of
+7Gi and a 5Gi heap. The operator fills in what a start leaves out:
+
+- An empty field takes the group's value. That is the group's
+  `spec.resources`, or the network's `spec.defaults.resources` when the group
+  has none, taken as a whole. A request the group leaves unwritten counts as
+  its limit, as it would in Kubernetes.
+- A memory request left empty keeps the group's request, lowered to the new
+  limit if it is above it; CPU works the same way. A larger limit therefore
+  reserves nothing more on the node unless the start also asks for a larger
+  request. With no group value at all, the request equals the start's limit.
+  The operator always writes the request out, so a namespace `LimitRange`
+  cannot raise it to the new limit.
+- The heap is the start's `heap`. Without one, a start that set a memory limit
+  gets that limit minus `nonHeap`. A start with neither gets no heap, and its
+  server sizes the heap as servers always have, with `MaxRAMPercentage=75` or
+  the group's own `-Xmx`.
+
+The start is `REFUSED`, with a message that names the field and the
+numbers involved, when
+
+- it carries values and the group has no `memberResources`;
+- a value is not a quantity, is not positive, or is a heap below `1Mi`;
+- it sets a resource `max` does not name;
+- a request is above its limit;
+- a memory limit leaves less than `1Mi` after `nonHeap` and the start gives no
+  heap, for example a `memoryLimit` of `2Gi` with the default `nonHeap` of `2Gi`;
+- the heap is not below the memory limit, or a heap is given and neither the
+  start nor the group sets a memory limit;
+- any resolved request or limit is above `max`, also one taken from the group
+  or the network. A group whose own `spec.resources` is above its `max`
+  therefore refuses every start, with values or without.
+
+**A group with `memberResources` stamps every member**, including one started
+without values. The member's `Server` carries the result in `spec.resources`
+and `spec.heap`, and neither changes afterwards; a group edited later reaches a
+key at its next start, as an image bump does ([Nothing rolls](#nothing-rolls)).
+A running member cannot be resized, because a JVM cannot grow its maximum
+heap. Stop it and start it again with the new values; the world survives that
+as it survives any stop.
+
+A start of a key that is already running is answered `already_running` with
+the values the member runs with, whatever the request asked, and also when
+`max` has since been lowered below them. `StartedServer.resources()` carries
+them. Compare only the fields you set, and compare them as quantities: the
+operator answers in canonical form, so a start that asked for `7168Mi` reads
+back `7Gi`. A proxy sees the same values in `ServerInfo.resources()`; backends
+do not see members at all.
+
+### The start's heap wins over the group's `-Xmx`
+
+The image passes the heap to `java` as `-Xmx`, in place of
+`-XX:MaxRAMPercentage=75`. It comes after whatever `JDK_JAVA_OPTIONS` and
+`JAVA_TOOL_OPTIONS` carry, and the JVM keeps the last `-Xmx` it reads, so a
+member with a heap ignores an `-Xmx` the group sets in `spec.env`. A group that
+relied on one will see members that a start sized run with the start's heap.
+`_JAVA_OPTIONS` is the exception: the JVM applies it after the command line,
+and an `-Xmx` there beats the start's.
+
+The operator checks the result. The agent reports the JVM's maximum heap, and
+when that is more than 5 % away from `spec.heap`, the `Server` gets the
+condition `HeapMismatch` set to `True` (reason `HeapMismatched`, with both
+numbers in the message) and a Warning event `HeapMismatch`. While the two
+agree, the condition is `False` with reason `HeapAsAsked`. Besides
+`_JAVA_OPTIONS`, this is how an image built before per-start heaps shows up:
+it ignores the heap the operator passes it.
+
+A group-level `-Xms` in `spec.env` that is larger than a start's heap makes the
+JVM refuse to start ("Initial heap size set to a larger value than the maximum
+heap size"). Such a member never reports a heap, so `HeapMismatch` cannot flag
+it. A group that uses `memberResources` should not set `-Xms`, or should keep
+it at or below the smallest heap it starts.
+
+```bash
+kubectl get server private-servers-<key> -n minecraft \
+  -o jsonpath='{.status.conditions[?(@.type=="HeapMismatch")]}'
+```
+
+Measured on 2026-11-01 in the on-demand e2e run (`make e2e-ondemand`, kind on
+rootless Podman): a member started with only `memoryLimit("3Gi")`, in a group
+with `nonHeap: 1Gi` under a network default of 2Gi request and 2Gi limit, got
+a pod with a 3Gi limit and a 2Gi request, and its agent reported a maximum
+heap within 5 % of 2Gi (`HeapAsAsked`). A start with an 8Gi limit against
+`max.memory: 4Gi` was refused.
+
+### Against older versions
+
+An agent older than 0.33.0 has no `startServer` with `StartOptions`. A newer
+agent against an operator that predates per-start resources fails the stage
+with an `IllegalStateException` that says the operator does not know
+per-start resources and that the member runs with the group's values. For a
+key that was not running, that operator started the member with the group's
+values, and it keeps running; stop it if those values are not good enough. For
+a key that was running, it started nothing. A start without options is not
+affected.
 
 ## Stopping keeps the world; deleting removes it
 

@@ -226,4 +226,34 @@ java.lang.String defaultValue);
    * @return The joinsClosed.
    */
   boolean getJoinsClosed();
+
+  /**
+   * <pre>
+   * What the member was started with, as the operator resolved it; unset for a
+   * server that carries no per-start resources.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.StartResources resources = 15;</code>
+   * @return Whether the resources field is set.
+   */
+  boolean hasResources();
+  /**
+   * <pre>
+   * What the member was started with, as the operator resolved it; unset for a
+   * server that carries no per-start resources.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.StartResources resources = 15;</code>
+   * @return The resources.
+   */
+  cloud.spawnery.agent.pb.StartResources getResources();
+  /**
+   * <pre>
+   * What the member was started with, as the operator resolved it; unset for a
+   * server that carries no per-start resources.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.StartResources resources = 15;</code>
+   */
+  cloud.spawnery.agent.pb.StartResourcesOrBuilder getResourcesOrBuilder();
 }

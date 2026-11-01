@@ -158,6 +158,45 @@ func TestEntrypointStartsTheServerFlatFromTheLaunchFiles(t *testing.T) {
 	}
 }
 
+func TestEntrypointTakesTheHeapFromSpawneryHeap(t *testing.T) {
+	out, err := runEntrypoint(t, t.TempDir(), 0, "SPAWNERY_HEAP=5120m")
+	if err != nil {
+		t.Fatalf("entrypoint: %v\n%s", err, out)
+	}
+	argv := javaArgv(t, out)
+	if !strings.Contains(argv, " -Xmx5120m ") {
+		t.Errorf("the heap flag is missing; got: %s", argv)
+	}
+	if strings.Contains(argv, "MaxRAMPercentage") {
+		t.Errorf("MaxRAMPercentage still sizes the heap; got: %s", argv)
+	}
+}
+
+func TestEntrypointKeepsMaxRAMPercentageWithoutSpawneryHeap(t *testing.T) {
+	out, err := runEntrypoint(t, t.TempDir(), 0)
+	if err != nil {
+		t.Fatalf("entrypoint: %v\n%s", err, out)
+	}
+	argv := javaArgv(t, out)
+	if !strings.Contains(argv, " -XX:MaxRAMPercentage=75 ") {
+		t.Errorf("the percentage flag is gone; got: %s", argv)
+	}
+	if strings.Contains(argv, "-Xmx") {
+		t.Errorf("a heap flag appeared without SPAWNERY_HEAP; got: %s", argv)
+	}
+}
+
+func TestEntrypointHeapComesAfterJdkJavaOptions(t *testing.T) {
+	out, err := runEntrypoint(t, t.TempDir(), 0,
+		"JDK_JAVA_OPTIONS=-Xmx2048m", "SPAWNERY_HEAP=5120m")
+	if err != nil {
+		t.Fatalf("entrypoint: %v\n%s", err, out)
+	}
+	if argv := javaArgv(t, out); !strings.Contains(argv, " -Xmx5120m ") {
+		t.Errorf("the start's heap is not on the command line; got: %s", argv)
+	}
+}
+
 func TestEntrypointRefusesAnImageWithoutLaunchFiles(t *testing.T) {
 	for _, missing := range []string{"launch.classpath", "launch.main"} {
 		t.Run(missing, func(t *testing.T) {

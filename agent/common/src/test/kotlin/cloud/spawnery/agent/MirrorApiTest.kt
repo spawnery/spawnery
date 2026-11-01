@@ -142,6 +142,18 @@ class MirrorApiTest {
     }
 
     @Test
+    fun `a start with options reaches the request on both sides`() {
+        val mirror = NetworkMirror().also { it.apply(aRichState()) }
+        val options = cloud.spawnery.agent.api.StartOptions.builder().memoryLimit("7Gi").heap("5Gi").build()
+        MirrorApi(mirror, serverSelf(), connector(), CloudEvents()).startServer("private-servers", "c0ffee", options)
+        MirrorApi(mirror, proxySelf(), connector(), CloudEvents()).startServer("private-servers", "c0ffee", options)
+
+        assertEquals(requested[0].startServer, requested[1].startServer)
+        assertEquals("7Gi", requested[0].startServer.resources.memoryLimit)
+        assertEquals("5Gi", requested[0].startServer.resources.heap)
+    }
+
+    @Test
     fun `both sides build the same request for the same start and stop`() {
         val mirror = NetworkMirror().also { it.apply(aRichState()) }
         val onServer = MirrorApi(mirror, serverSelf(), connector(), CloudEvents())

@@ -855,3 +855,84 @@ func TestRetentionRefusesAMaxAgeOfZero(t *testing.T) {
 		t.Fatalf("maxAgeDays 0: err = %v, want a minimum of 1", err)
 	}
 }
+
+func TestMemberResourcesIsOnDemandOnly(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	block := &spawneryv1alpha1.MemberResourcesSpec{
+		Max: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("16Gi")},
+	}
+
+	eph := ephemeralGroup(ns, "lobby-with-member-resources")
+	eph.Spec.MemberResources = block.DeepCopy()
+	err := c.Create(ctx, eph)
+	if err == nil || !strings.Contains(err.Error(), "only allowed for type OnDemand") {
+		t.Fatalf("spec.memberResources on an ephemeral group: err = %v, want 'only allowed for type OnDemand'", err)
+	}
+
+	od := onDemandGroup(ns, "worlds")
+	od.Spec.MemberResources = block.DeepCopy()
+	if err := c.Create(ctx, od); err != nil {
+		t.Fatalf("memberResources on an on-demand group was refused: %v", err)
+	}
+	got := &spawneryv1alpha1.ServerGroup{}
+	if err := c.Get(ctx, types.NamespacedName{Name: "worlds", Namespace: ns}, got); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	if got.Spec.MemberResources == nil || got.Spec.MemberResources.NonHeap == nil {
+		t.Fatalf("nonHeap was not defaulted: %+v", got.Spec.MemberResources)
+	}
+	if want := resource.MustParse("2Gi"); got.Spec.MemberResources.NonHeap.Cmp(want) != 0 {
+		t.Errorf("nonHeap = %s, want 2Gi", got.Spec.MemberResources.NonHeap)
+	}
+}
+
+func TestMemberResourcesNeedsAMemoryCeilingAboveNonHeap(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	cases := []struct {
+		name    string
+		block   spawneryv1alpha1.MemberResourcesSpec
+		wantErr string
+	}{
+		{
+			name: "no memory ceiling",
+			block: spawneryv1alpha1.MemberResourcesSpec{
+				Max: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("8")},
+			},
+			wantErr: "max.memory is required",
+		},
+		{
+			name: "ceiling equal to nonHeap",
+			block: spawneryv1alpha1.MemberResourcesSpec{
+				Max:     corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
+				NonHeap: ptr.To(resource.MustParse("2Gi")),
+			},
+			wantErr: "must be above nonHeap",
+		},
+		{
+			name: "ceiling above nonHeap",
+			block: spawneryv1alpha1.MemberResourcesSpec{
+				Max:     corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("3Gi")},
+				NonHeap: ptr.To(resource.MustParse("2Gi")),
+			},
+		},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			g := onDemandGroup(ns, fmt.Sprintf("worlds-%d", i))
+			g.Spec.MemberResources = tc.block.DeepCopy()
+			err := c.Create(ctx, g)
+			if tc.wantErr == "" {
+				if err != nil {
+					t.Fatalf("create: %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
+				t.Fatalf("err = %v, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}

@@ -412,6 +412,17 @@ message AnnounceResult {}
 message StartServerRequest {
   string group = 1;
   string key = 2;
+  StartResources resources = 3;
+}
+
+// Values for one member, as Kubernetes quantities ("6Gi", "500m"). An empty
+// field takes the group's value.
+message StartResources {
+  string memory_request = 1;
+  string memory_limit = 2;
+  string cpu_request = 3;
+  string cpu_limit = 4;
+  string heap = 5;
 }
 
 // StartServerResult says the member has been asked for, which is not the same
@@ -426,6 +437,14 @@ message StartServerResult {
   // True when the member was already there and not stopping, which is a
   // success. It says nothing about the member being ready.
   bool already_running = 2;
+  // What the member's Server carries: the resolved values, with the group's
+  // filled in where the start left them out. Empty for a member of a group
+  // without memberResources and for one started before this field existed.
+  StartResources resources = 3;
+  // Set by an operator that knows per-start resources, on every answer to a
+  // request that carried any. An older operator cannot set it, which is how
+  // the agent tells it apart.
+  bool resources_understood = 4;
 }
 
 // StopServerRequest deletes one member of an OnDemand group.
@@ -754,6 +773,9 @@ message ServerState {
   // True while the server has closed its door (AcceptJoins false). False for
   // a server that never said.
   bool joins_closed = 14;
+  // What the member was started with, as the operator resolved it; unset for a
+  // server that carries no per-start resources.
+  StartResources resources = 15;
 }
 
 // ProxyState is one proxy pod as the operator last saw it.

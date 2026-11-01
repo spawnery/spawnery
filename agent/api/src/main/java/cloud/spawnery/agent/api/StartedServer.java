@@ -25,5 +25,18 @@ package cloud.spawnery.agent.api;
  * @param alreadyRunning whether it was already there, which is a success and
  *     not a refusal. It says nothing about whether the server is ready for
  *     players.
+ * @param resources what the member runs with. For a start that found it
+ *     already running these are the values it was started with, which may not
+ *     be the ones asked for now. {@link ServerResources#NONE} for a member
+ *     without any stamped values.
  */
-public record StartedServer(String name, boolean alreadyRunning) {}
+public record StartedServer(String name, boolean alreadyRunning, ServerResources resources) {
+    public StartedServer {
+        resources = resources == null ? ServerResources.NONE : resources;
+    }
+
+    /** The record as it was before {@code resources}, which it reads as none. */
+    public StartedServer(String name, boolean alreadyRunning) {
+        this(name, alreadyRunning, ServerResources.NONE);
+    }
+}

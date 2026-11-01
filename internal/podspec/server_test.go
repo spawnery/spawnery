@@ -1205,3 +1205,89 @@ func TestEveryReservedVolumeNameIsRefusedAsAUserMount(t *testing.T) {
 		t.Error("aot-cache is not among the reserved names")
 	}
 }
+
+func buildWithServer(t *testing.T, mutate func(*spawneryv1alpha1.ServerGroup, *spawneryv1alpha1.Server)) *corev1.Pod {
+	t.Helper()
+	group, srv := testGroup(), testServer()
+	mutate(group, srv)
+	pod, err := BuildServerPod(testNetwork(), group, srv, testEndpoint)
+	if err != nil {
+		t.Fatalf("BuildServerPod: %v", err)
+	}
+	return pod
+}
+
+func lookupEnv(pod *corev1.Pod, name string) (string, bool) {
+	for _, e := range pod.Spec.Containers[0].Env {
+		if e.Name == name {
+			return e.Value, true
+		}
+	}
+	return "", false
+}
+
+func TestServerPodTakesTheServersResources(t *testing.T) {
+	pod := buildWithServer(t, func(g *spawneryv1alpha1.ServerGroup, s *spawneryv1alpha1.Server) {
+		g.Spec.Resources = &corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("4Gi")},
+		}
+		s.Spec.Resources = &corev1.ResourceRequirements{
+			Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("7Gi")},
+		}
+	})
+
+	got := pod.Spec.Containers[0].Resources.Limits.Memory()
+	if got.Cmp(resource.MustParse("7Gi")) != 0 {
+		t.Errorf("memory limit = %s, want the server's 7Gi", got)
+	}
+}
+
+func TestServerPodWithEmptyResourcesRendersNoResources(t *testing.T) {
+	pod := buildWithServer(t, func(_ *spawneryv1alpha1.ServerGroup, s *spawneryv1alpha1.Server) {
+		s.Spec.Resources = &corev1.ResourceRequirements{}
+	})
+
+	if r := pod.Spec.Containers[0].Resources; len(r.Limits) != 0 || len(r.Requests) != 0 {
+		t.Errorf("resources = %v, want none: a non-nil empty value is used as it is", r)
+	}
+}
+
+func TestServerPodCarriesTheHeap(t *testing.T) {
+	pod := buildWithServer(t, func(_ *spawneryv1alpha1.ServerGroup, s *spawneryv1alpha1.Server) {
+		s.Spec.Heap = ptr.To(resource.MustParse("5Gi"))
+	})
+	if got, ok := lookupEnv(pod, EnvHeap); !ok || got != "5120m" {
+		t.Errorf("%s = %q (set: %v), want 5120m", EnvHeap, got, ok)
+	}
+
+	if _, ok := lookupEnv(build(t, nil), EnvHeap); ok {
+		t.Errorf("%s is set on a server without a heap", EnvHeap)
+	}
+}
+
+func TestServerPodRoundsTheHeapDownToMiB(t *testing.T) {
+	pod := buildWithServer(t, func(_ *spawneryv1alpha1.ServerGroup, s *spawneryv1alpha1.Server) {
+		s.Spec.Heap = ptr.To(resource.MustParse("5000000000"))
+	})
+	if got, _ := lookupEnv(pod, EnvHeap); got != "4768m" {
+		t.Errorf("%s = %q, want 4768m", EnvHeap, got)
+	}
+}
+
+func TestTheHeapSitsWithTheOperatorsOwnEnv(t *testing.T) {
+	pod := buildWithServer(t, func(g *spawneryv1alpha1.ServerGroup, s *spawneryv1alpha1.Server) {
+		g.Spec.Env = []corev1.EnvVar{{Name: "GAME_MODE", Value: "solo"}}
+		s.Spec.Heap = ptr.To(resource.MustParse("1Gi"))
+	})
+
+	got := strings.Join(envNames(pod), ",")
+	want := strings.Join([]string{
+		"SPAWNERY_NETWORK", "SPAWNERY_GROUP", "SPAWNERY_SERVER", EnvOperatorEndpoint, EnvHeap, "GAME_MODE",
+	}, ",")
+	if got != want {
+		t.Errorf("env = %s, want %s", got, want)
+	}
+	if !strings.HasPrefix(EnvHeap, spawneryv1alpha1.ReservedEnvPrefix) {
+		t.Errorf("%s is outside the reserved prefix", EnvHeap)
+	}
+}

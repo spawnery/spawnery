@@ -85,6 +85,15 @@ spec:
                 required:
                 - name
                 type: object
+              heap:
+                anyOf:
+                - type: integer
+                - type: string
+                description: |-
+                  Heap is the JVM heap resolved for this member. Set at creation, never
+                  changed. Unset: the pod keeps the group's heap behaviour.
+                pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                x-kubernetes-int-or-string: true
               hold:
                 description: |-
                   Hold keeps this server against every automatic removal: a rolling
@@ -129,6 +138,68 @@ spec:
                   Empty means adopt, never stale: the group stamps the current hash onto
                   such a server and orders no takedown.
                 type: string
+              resources:
+                description: |-
+                  Resources is what a startServer call resolved for this member, with the
+                  group's values filled in where the call left them out. Set at creation,
+                  never changed. Unset: the pod takes the group's resources.
+                properties:
+                  claims:
+                    description: |-
+                      Claims lists the names of resources, defined in spec.resourceClaims,
+                      that are used by this container.
+
+                      This field depends on the
+                      DynamicResourceAllocation feature gate.
+
+                      This field is immutable. It can only be set for containers.
+                    items:
+                      description: ResourceClaim references one entry in PodSpec.ResourceClaims.
+                      properties:
+                        name:
+                          description: |-
+                            Name must match the name of one entry in pod.spec.resourceClaims of
+                            the Pod where this field is used. It makes that resource available
+                            inside a container.
+                          type: string
+                        request:
+                          description: |-
+                            Request is the name chosen for a request in the referenced claim.
+                            If empty, everything from the claim is made available, otherwise
+                            only the result of this request.
+                          type: string
+                      required:
+                      - name
+                      type: object
+                    type: array
+                    x-kubernetes-list-map-keys:
+                    - name
+                    x-kubernetes-list-type: map
+                  limits:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Limits describes the maximum amount of compute resources allowed.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                  requests:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Requests describes the minimum amount of compute resources required.
+                      If Requests is omitted for a container, it defaults to Limits if that is explicitly specified,
+                      otherwise to an implementation-defined value. Requests cannot exceed Limits.
+                      More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
+                    type: object
+                type: object
               retire:
                 description: |-
                   Retire asks this server to stop taking joins and empty out, without its
@@ -140,6 +211,13 @@ spec:
             required:
             - groupRef
             type: object
+            x-kubernetes-validations:
+            - message: spec.resources is immutable
+              rule: has(self.resources) == has(oldSelf.resources) && (!has(self.resources)
+                || self.resources == oldSelf.resources)
+            - message: spec.heap is immutable
+              rule: has(self.heap) == has(oldSelf.heap) && (!has(self.heap) || self.heap
+                == oldSelf.heap)
           status:
             description: ServerStatus is the observed state of a Server.
             properties:

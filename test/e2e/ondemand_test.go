@@ -38,6 +38,8 @@ import (
 	authnv1 "k8s.io/api/authentication/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/meta"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
@@ -170,6 +172,107 @@ func TestAPrivateServersWorldOutlivesItsServer(t *testing.T) {
 		t.Fatalf("the world of %s came back with %q, want %q. This is the promise the on-demand "+
 			"type exists for: the server is gone and made again, and the player's world is the "+
 			"one they left", server, got, marker)
+	}
+}
+
+func TestAMemberStartsWithTheResourcesItAskedFor(t *testing.T) {
+	if os.Getenv(onDemandGate) != "1" {
+		t.Skipf("set %s=1 to run the on-demand path; hack/e2e-ondemand.sh does", onDemandGate)
+	}
+
+	applyManifest(t, onDemandManifest)
+	proxy := aProxyPodOf(t, onDemandNamespace, onDemandProxyGroup)
+
+	const key = "sized"
+	server, err := instance.Name(onDemandGroup, key)
+	if err != nil {
+		t.Fatalf("compose the member name: %v", err)
+	}
+
+	started := startServerWith(t, proxy, onDemandGroup, key, &agentpb.StartResources{MemoryLimit: "3Gi"})
+	if started.GetAlreadyRunning() {
+		t.Fatalf("the first start of %s answered already_running", server)
+	}
+	if !started.GetResourcesUnderstood() {
+		t.Fatalf("the answer to a start with values does not set resources_understood, so the "+
+			"agent would fail the stage of a member that did start: %v", started)
+	}
+	wantQuantity(t, "the answer's memory_limit", started.GetResources().GetMemoryLimit(), "3Gi")
+	wantQuantity(t, "the answer's memory_request", started.GetResources().GetMemoryRequest(), "2Gi")
+	wantQuantity(t, "the answer's heap", started.GetResources().GetHeap(), "2Gi")
+
+	waitReady(t, onDemandNamespace, server, "the sized start")
+
+	var pod corev1.Pod
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: onDemandNamespace, Name: server}, &pod); err != nil {
+		t.Fatalf("get pod %s: %v", server, err)
+	}
+	var game *corev1.Container
+	for i := range pod.Spec.Containers {
+		if pod.Spec.Containers[i].Name == podspec.ContainerName {
+			game = &pod.Spec.Containers[i]
+		}
+	}
+	if game == nil {
+		t.Fatalf("pod %s has no container %q", server, podspec.ContainerName)
+	}
+	limit := game.Resources.Limits[corev1.ResourceMemory]
+	request := game.Resources.Requests[corev1.ResourceMemory]
+	wantQuantity(t, "the pod's memory limit", limit.String(), "3Gi")
+	wantQuantity(t, "the pod's memory request (the network default, below the new limit)",
+		request.String(), "2Gi")
+
+	// The condition only exists once the agent has reported a maximum heap,
+	// and HeapAsAsked means that report is within 5 % of spec.heap.
+	eventually(t, 3*time.Minute, "the operator to compare "+server+"'s reported heap with spec.heap",
+		func() (bool, string) {
+			var srv spawneryv1alpha1.Server
+			if err := k8s.Get(ctx, client.ObjectKey{Namespace: onDemandNamespace, Name: server}, &srv); err != nil {
+				return false, err.Error()
+			}
+			if srv.Spec.Heap == nil || srv.Spec.Heap.Cmp(resource.MustParse("2Gi")) != 0 {
+				t.Fatalf("%s carries spec.heap %v, want 2Gi: the 3Gi limit minus the group's 1Gi nonHeap",
+					server, srv.Spec.Heap)
+			}
+			c := meta.FindStatusCondition(srv.Status.Conditions, spawneryv1alpha1.ConditionHeapMismatch)
+			if c == nil {
+				return false, "no HeapMismatch condition yet"
+			}
+			if c.Status != metav1.ConditionFalse || c.Reason != spawneryv1alpha1.ReasonHeapAsAsked {
+				t.Fatalf("HeapMismatch is %s (%s): %s. The JVM did not get the heap the start asked for",
+					c.Status, c.Reason, c.Message)
+			}
+			return true, ""
+		})
+
+	resp := askToStart(t, proxy, onDemandGroup, "oversized", &agentpb.StartResources{MemoryLimit: "8Gi"})
+	if resp.GetError().GetReason() != agentpb.RequestError_REFUSED {
+		t.Fatalf("a start with a memory limit of 8Gi, above the group's max of 4Gi, was answered "+
+			"%v, want REFUSED", resp)
+	}
+	if msg := resp.GetError().GetMessage(); !strings.Contains(msg, "8Gi") || !strings.Contains(msg, "4Gi") {
+		t.Errorf("the refusal says %q, which does not name both 8Gi and 4Gi", msg)
+	}
+	oversized, err := instance.Name(onDemandGroup, "oversized")
+	if err != nil {
+		t.Fatalf("compose the member name: %v", err)
+	}
+	err = k8s.Get(ctx, client.ObjectKey{Namespace: onDemandNamespace, Name: oversized}, &spawneryv1alpha1.Server{})
+	if !apierrors.IsNotFound(err) {
+		t.Fatalf("get %s after its refused start: %v, want NotFound", oversized, err)
+	}
+
+	stopServer(t, proxy, server)
+}
+
+func wantQuantity(t *testing.T, what, got, want string) {
+	t.Helper()
+	g, err := resource.ParseQuantity(got)
+	if err != nil {
+		t.Fatalf("%s is %q, not a quantity", what, got)
+	}
+	if g.Cmp(resource.MustParse(want)) != 0 {
+		t.Fatalf("%s is %s, want %s", what, got, want)
 	}
 }
 
@@ -322,19 +425,31 @@ func openProxySession(t *testing.T, pod *corev1.Pod) *proxySession {
 
 func startServer(t *testing.T, proxy *corev1.Pod, group, key string) *agentpb.StartServerResult {
 	t.Helper()
-	s := openProxySession(t, proxy)
-	defer s.close()
-	resp := s.ask(t, &agentpb.CloudRequest{
-		Request: &agentpb.CloudRequest_StartServer{
-			StartServer: &agentpb.StartServerRequest{Group: group, Key: key},
-		},
-	})
+	return startServerWith(t, proxy, group, key, nil)
+}
+
+func startServerWith(t *testing.T, proxy *corev1.Pod, group, key string,
+	res *agentpb.StartResources) *agentpb.StartServerResult {
+	t.Helper()
+	resp := askToStart(t, proxy, group, key, res)
 	result := resp.GetStartServer()
 	if result == nil {
 		t.Fatalf("asking for key %q of group %q was answered %v, not with a server",
 			key, group, resp.GetError())
 	}
 	return result
+}
+
+func askToStart(t *testing.T, proxy *corev1.Pod, group, key string,
+	res *agentpb.StartResources) *agentpb.CloudResponse {
+	t.Helper()
+	s := openProxySession(t, proxy)
+	defer s.close()
+	return s.ask(t, &agentpb.CloudRequest{
+		Request: &agentpb.CloudRequest_StartServer{
+			StartServer: &agentpb.StartServerRequest{Group: group, Key: key, Resources: res},
+		},
+	})
 }
 
 func stopServer(t *testing.T, proxy *corev1.Pod, server string) {

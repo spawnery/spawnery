@@ -63,6 +63,7 @@ private static final long serialVersionUID = 0L;
             cloud.spawnery.agent.pb.StartServerRequest.class, cloud.spawnery.agent.pb.StartServerRequest.Builder.class);
   }
 
+  private int bitField0_;
   public static final int GROUP_FIELD_NUMBER = 1;
   @SuppressWarnings("serial")
   private volatile java.lang.Object group_ = "";
@@ -141,6 +142,32 @@ private static final long serialVersionUID = 0L;
     }
   }
 
+  public static final int RESOURCES_FIELD_NUMBER = 3;
+  private cloud.spawnery.agent.pb.StartResources resources_;
+  /**
+   * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+   * @return Whether the resources field is set.
+   */
+  @java.lang.Override
+  public boolean hasResources() {
+    return ((bitField0_ & 0x00000001) != 0);
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+   * @return The resources.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.StartResources getResources() {
+    return resources_ == null ? cloud.spawnery.agent.pb.StartResources.getDefaultInstance() : resources_;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.StartResourcesOrBuilder getResourcesOrBuilder() {
+    return resources_ == null ? cloud.spawnery.agent.pb.StartResources.getDefaultInstance() : resources_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -161,6 +188,9 @@ private static final long serialVersionUID = 0L;
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(key_)) {
       com.google.protobuf.GeneratedMessage.writeString(output, 2, key_);
     }
+    if (((bitField0_ & 0x00000001) != 0)) {
+      output.writeMessage(3, getResources());
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -170,6 +200,10 @@ private static final long serialVersionUID = 0L;
     }
     if (!com.google.protobuf.GeneratedMessage.isStringEmpty(key_)) {
       size += com.google.protobuf.GeneratedMessage.computeStringSize(2, key_);
+    }
+    if (((bitField0_ & 0x00000001) != 0)) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(3, getResources());
     }
     return size;
   }
@@ -199,6 +233,11 @@ private static final long serialVersionUID = 0L;
         .equals(other.getGroup())) return false;
     if (!getKey()
         .equals(other.getKey())) return false;
+    if (hasResources() != other.hasResources()) return false;
+    if (hasResources()) {
+      if (!getResources()
+          .equals(other.getResources())) return false;
+    }
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -214,6 +253,10 @@ private static final long serialVersionUID = 0L;
     hash = (53 * hash) + getGroup().hashCode();
     hash = (37 * hash) + KEY_FIELD_NUMBER;
     hash = (53 * hash) + getKey().hashCode();
+    if (hasResources()) {
+      hash = (37 * hash) + RESOURCES_FIELD_NUMBER;
+      hash = (53 * hash) + getResources().hashCode();
+    }
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -346,13 +389,19 @@ private static final long serialVersionUID = 0L;
 
     // Construct using cloud.spawnery.agent.pb.StartServerRequest.newBuilder()
     private Builder() {
-
+      maybeForceBuilderInitialization();
     }
 
     private Builder(
         com.google.protobuf.GeneratedMessage.BuilderParent parent) {
       super(parent);
-
+      maybeForceBuilderInitialization();
+    }
+    private void maybeForceBuilderInitialization() {
+      if (com.google.protobuf.GeneratedMessage
+              .alwaysUseFieldBuilders) {
+        internalGetResourcesFieldBuilder();
+      }
     }
     @java.lang.Override
     public Builder clear() {
@@ -360,6 +409,11 @@ private static final long serialVersionUID = 0L;
       bitField0_ = 0;
       group_ = "";
       key_ = "";
+      resources_ = null;
+      if (resourcesBuilder_ != null) {
+        resourcesBuilder_.dispose();
+        resourcesBuilder_ = null;
+      }
       return this;
     }
 
@@ -399,6 +453,14 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000002) != 0)) {
         result.key_ = key_;
       }
+      int to_bitField0_ = 0;
+      if (((from_bitField0_ & 0x00000004) != 0)) {
+        result.resources_ = resourcesBuilder_ == null
+            ? resources_
+            : resourcesBuilder_.build();
+        to_bitField0_ |= 0x00000001;
+      }
+      result.bitField0_ |= to_bitField0_;
     }
 
     @java.lang.Override
@@ -422,6 +484,9 @@ private static final long serialVersionUID = 0L;
         key_ = other.key_;
         bitField0_ |= 0x00000002;
         onChanged();
+      }
+      if (other.hasResources()) {
+        mergeResources(other.getResources());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -459,6 +524,13 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000002;
               break;
             } // case 18
+            case 26: {
+              input.readMessage(
+                  internalGetResourcesFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              bitField0_ |= 0x00000004;
+              break;
+            } // case 26
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -618,6 +690,127 @@ private static final long serialVersionUID = 0L;
       bitField0_ |= 0x00000002;
       onChanged();
       return this;
+    }
+
+    private cloud.spawnery.agent.pb.StartResources resources_;
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.StartResources, cloud.spawnery.agent.pb.StartResources.Builder, cloud.spawnery.agent.pb.StartResourcesOrBuilder> resourcesBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     * @return Whether the resources field is set.
+     */
+    public boolean hasResources() {
+      return ((bitField0_ & 0x00000004) != 0);
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     * @return The resources.
+     */
+    public cloud.spawnery.agent.pb.StartResources getResources() {
+      if (resourcesBuilder_ == null) {
+        return resources_ == null ? cloud.spawnery.agent.pb.StartResources.getDefaultInstance() : resources_;
+      } else {
+        return resourcesBuilder_.getMessage();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     */
+    public Builder setResources(cloud.spawnery.agent.pb.StartResources value) {
+      if (resourcesBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        resources_ = value;
+      } else {
+        resourcesBuilder_.setMessage(value);
+      }
+      bitField0_ |= 0x00000004;
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     */
+    public Builder setResources(
+        cloud.spawnery.agent.pb.StartResources.Builder builderForValue) {
+      if (resourcesBuilder_ == null) {
+        resources_ = builderForValue.build();
+      } else {
+        resourcesBuilder_.setMessage(builderForValue.build());
+      }
+      bitField0_ |= 0x00000004;
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     */
+    public Builder mergeResources(cloud.spawnery.agent.pb.StartResources value) {
+      if (resourcesBuilder_ == null) {
+        if (((bitField0_ & 0x00000004) != 0) &&
+          resources_ != null &&
+          resources_ != cloud.spawnery.agent.pb.StartResources.getDefaultInstance()) {
+          getResourcesBuilder().mergeFrom(value);
+        } else {
+          resources_ = value;
+        }
+      } else {
+        resourcesBuilder_.mergeFrom(value);
+      }
+      if (resources_ != null) {
+        bitField0_ |= 0x00000004;
+        onChanged();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     */
+    public Builder clearResources() {
+      bitField0_ = (bitField0_ & ~0x00000004);
+      resources_ = null;
+      if (resourcesBuilder_ != null) {
+        resourcesBuilder_.dispose();
+        resourcesBuilder_ = null;
+      }
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     */
+    public cloud.spawnery.agent.pb.StartResources.Builder getResourcesBuilder() {
+      bitField0_ |= 0x00000004;
+      onChanged();
+      return internalGetResourcesFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     */
+    public cloud.spawnery.agent.pb.StartResourcesOrBuilder getResourcesOrBuilder() {
+      if (resourcesBuilder_ != null) {
+        return resourcesBuilder_.getMessageOrBuilder();
+      } else {
+        return resources_ == null ?
+            cloud.spawnery.agent.pb.StartResources.getDefaultInstance() : resources_;
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.StartResources, cloud.spawnery.agent.pb.StartResources.Builder, cloud.spawnery.agent.pb.StartResourcesOrBuilder> 
+        internalGetResourcesFieldBuilder() {
+      if (resourcesBuilder_ == null) {
+        resourcesBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.StartResources, cloud.spawnery.agent.pb.StartResources.Builder, cloud.spawnery.agent.pb.StartResourcesOrBuilder>(
+                getResources(),
+                getParentForChildren(),
+                isClean());
+        resources_ = null;
+      }
+      return resourcesBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.StartServerRequest)

@@ -100,6 +100,12 @@ spec:
   image: ghcr.io/spawnery/purpur:26.3-0.32.0
   maxPlayers: 10
   maxInstances: 4
+  # No spec.resources: a start takes the network default above, which has to
+  # stay within max for the starts without values.
+  memberResources:
+    max:
+      memory: 4Gi
+    nonHeap: 1Gi
   storage:
     # kind's default class is rancher.io/local-path, which binds on the first
     # pod scheduled to consume the claim. 1Gi rather than the sample's 2Gi:

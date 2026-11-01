@@ -89,6 +89,11 @@ group of type `OnDemand`, named `<group>-<key>`, whose world is a claim of its
 own. It answers a `StartedServer`: the name, and whether it was already there
 (a success, not a refusal). The stage completing says the server was
 asked for and nothing about its being ready.
+`startServer(group, key, options)` also chooses that member's memory, CPU and
+heap through a `StartOptions`, within the bounds its group sets in
+`spec.memberResources`; `StartedServer.resources()` and, on a proxy,
+`ServerInfo.resources()` say what a member runs with
+([choosing resources](../guides/on-demand-servers.md#choosing-resources-at-the-start)).
 
 `stopServer(server)` **deletes a server.** The players on it are moved through
 the proxies, the pod goes, and the world stays on its claim, where the next

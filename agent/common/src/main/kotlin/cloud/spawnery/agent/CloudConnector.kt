@@ -9,6 +9,7 @@ import cloud.spawnery.agent.api.RestorePoint
 import cloud.spawnery.agent.api.RestorePoints
 import cloud.spawnery.agent.api.RestoredWorld
 import cloud.spawnery.agent.api.ScaleResult
+import cloud.spawnery.agent.api.ServerResources
 import cloud.spawnery.agent.pb.AcceptJoinsRequest
 import cloud.spawnery.agent.pb.AnnounceRequest
 import cloud.spawnery.agent.pb.BoostRequest
@@ -24,6 +25,7 @@ import cloud.spawnery.agent.pb.RestoreWorldRequest
 import cloud.spawnery.agent.pb.RetireRequest
 import cloud.spawnery.agent.pb.ScaleRequest
 import cloud.spawnery.agent.pb.StartServerRequest
+import cloud.spawnery.agent.pb.StartServerResult
 import cloud.spawnery.agent.pb.StatusRequest
 import cloud.spawnery.agent.pb.StopBoostRequest
 import cloud.spawnery.agent.pb.StopServerRequest
@@ -142,19 +144,43 @@ class CloudConnector(
             )
         }
 
-    fun startServer(group: String, key: String): CompletionStage<StartedServer> =
-        requests.start<StartedServer> { id ->
+    fun startServer(
+        group: String,
+        key: String,
+        resources: ServerResources = ServerResources.NONE,
+    ): CompletionStage<StartedServer> {
+        val asked = toStartResources(resources)
+        val answered = requests.start<StartServerResult> { id ->
             sendRequest(
                 CloudRequest.newBuilder()
                     .setId(id)
                     .setStartServer(
                         StartServerRequest.newBuilder()
                             .setGroup(group)
-                            .setKey(key),
+                            .setKey(key)
+                            .apply { if (asked != null) setResources(asked) },
                     )
                     .build(),
             )
         }
+        // Not thenApply: a failure raised there reaches handle() wrapped, and every other failure arrives bare.
+        val started = CompletableFuture<StartedServer>()
+        answered.whenComplete { result, failure ->
+            when {
+                failure != null -> started.completeExceptionally(failure)
+                asked != null && !result.resourcesUnderstood -> started.completeExceptionally(
+                    IllegalStateException(
+                        "the operator does not know per-start resources; " +
+                            "the member runs with the group's values",
+                    ),
+                )
+                else -> started.complete(
+                    StartedServer(result.server, result.alreadyRunning, toServerResources(result.resources)),
+                )
+            }
+        }
+        return started
+    }
 
     /** Its world stays. */
     fun stopServer(server: String): CompletionStage<Void> =
@@ -300,13 +326,7 @@ class CloudConnector(
                     Instant.ofEpochSecond(response.boost.expiresAtUnix),
                 ),
             )
-            response.hasStartServer() -> requests.complete(
-                response.id,
-                StartedServer(
-                    response.startServer.server,
-                    response.startServer.alreadyRunning,
-                ),
-            )
+            response.hasStartServer() -> requests.complete(response.id, response.startServer)
             response.hasStopServer() -> requests.complete(response.id, null)
             response.hasDeleteServer() -> requests.complete(response.id, null)
             response.hasListRestorePoints() -> requests.complete(
