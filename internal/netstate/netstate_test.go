@@ -22,6 +22,7 @@ import (
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -768,5 +769,36 @@ func TestBuildCarriesAGroupsPin(t *testing.T) {
 	}
 	if g := got.GetGroups()[1]; !g.GetPinned() || g.GetPinnedReplicas() != 0 || g.GetPinnedUntilUnix() != 1_800_000_000 {
 		t.Errorf("lobby = %+v, want pinned to 0 until 1800000000", g)
+	}
+}
+
+func TestPrivateServerStateCarriesItsResources(t *testing.T) {
+	stamped := onDemandMember("ns", "private-servers", "c0ffee")
+	stamped.Spec.Resources = &corev1.ResourceRequirements{
+		Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("7Gi")},
+	}
+	heap := resource.MustParse("5Gi")
+	stamped.Spec.Heap = &heap
+	src, _ := source(t,
+		onDemandGroup("ns", "private-servers"),
+		stamped,
+		onDemandMember("ns", "private-servers", "bare"),
+	)
+
+	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	for _, s := range got.GetServers() {
+		switch s.GetName() {
+		case "private-servers-c0ffee":
+			if s.GetResources().GetMemoryLimit() != "7Gi" || s.GetResources().GetHeap() != "5Gi" {
+				t.Errorf("resources = %v, want limit 7Gi and heap 5Gi", s.GetResources())
+			}
+		case "private-servers-bare":
+			if s.GetResources() != nil {
+				t.Errorf("resources = %v, want none for an unstamped member", s.GetResources())
+			}
+		}
 	}
 }

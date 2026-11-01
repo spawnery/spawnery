@@ -86,6 +86,11 @@ const (
 	// running; Unknown while a proxy has not reported one; absent
 	// while neither the Network nor the group asks for voice.
 	ConditionVoice = "Voice"
+	// ConditionHeapMismatch is True while the heap a Server's agent reports
+	// differs from spec.heap by more than 5 %, as when the image predates
+	// SPAWNERY_HEAP or an -Xmx from _JAVA_OPTIONS wins. Absent until the
+	// Server has both a spec.heap and a report.
+	ConditionHeapMismatch = "HeapMismatch"
 )
 
 // Condition reasons.
@@ -120,6 +125,8 @@ const (
 	ReasonPodShapeChanged        = "PodShapeChanged"
 	ReasonPodShapeCurrent        = "PodShapeCurrent"
 	ReasonOrdinalNameTaken       = "OrdinalNameTaken"
+	ReasonHeapMismatched         = "HeapMismatched"
+	ReasonHeapAsAsked            = "HeapAsAsked"
 	// The Voice reasons on a ProxyGroup.
 	ReasonVoiceRelaying         = "Relaying"
 	ReasonVoiceOffInNetwork     = "VoiceOffInNetwork"
