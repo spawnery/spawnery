@@ -651,7 +651,6 @@ func TestAmongFullRoundsAGroupTargetPicksOneWithRoomLeft(t *testing.T) {
 	}
 }
 
-// The create race's loser is answered like a second press: with the winner's values.
 func TestTheLoserOfACreateRaceIsAnsweredWithTheWinnersValues(t *testing.T) {
 	scheme := runtime.NewScheme()
 	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {

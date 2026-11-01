@@ -127,6 +127,18 @@ func makeOnDemandGroup(
 	}
 }
 
+func makeProductionNetwork(t *testing.T, f *serverFixture) {
+	t.Helper()
+	if err := f.c.Create(f.ctx, &spawneryv1alpha1.Network{
+		ObjectMeta: metav1.ObjectMeta{Name: "production", Namespace: f.ns},
+		Spec: spawneryv1alpha1.NetworkSpec{
+			ForwardingSecretRef: spawneryv1alpha1.ObjectRef{Name: "secret"},
+		},
+	}); err != nil {
+		t.Fatalf("create Network: %v", err)
+	}
+}
+
 func withMaxMemory(memory string) func(*spawneryv1alpha1.ServerGroup) {
 	return func(g *spawneryv1alpha1.ServerGroup) {
 		g.Spec.MemberResources = &spawneryv1alpha1.MemberResourcesSpec{
@@ -773,6 +785,7 @@ func TestDeleteRefusesAWorldWithoutItsKeyLabel(t *testing.T) {
 
 func TestStartWithResourcesStampsTheMember(t *testing.T) {
 	f := newServerFixture(t)
+	makeProductionNetwork(t, f)
 	makeOnDemandGroup(t, f, "private-servers", 2, withMaxMemory("16Gi"))
 	pod := f.proxyPod("gateway-aaaa")
 
@@ -824,10 +837,48 @@ func TestStartWithResourcesOnAGroupWithoutMemberResourcesIsRefused(t *testing.T)
 	}
 }
 
+func TestStartWithMemberResourcesAndNoNetworkIsUnavailable(t *testing.T) {
+	f := newServerFixture(t)
+	makeOnDemandGroup(t, f, "private-servers", 2, withMaxMemory("16Gi"), func(g *spawneryv1alpha1.ServerGroup) {
+		g.Spec.NetworkRef.Name = "no-such-network"
+	})
+	pod := f.proxyPod("gateway-aaaa")
+
+	resp := startWithResourcesOverTheWire(t, f, pod, "private-servers", "c0ffee",
+		&agentpb.StartResources{MemoryLimit: "7Gi"})
+	if got := resp.GetError().GetReason(); got != agentpb.RequestError_UNAVAILABLE {
+		t.Fatalf("reason = %v (%s), want UNAVAILABLE", got, resp.GetError().GetMessage())
+	}
+	var servers spawneryv1alpha1.ServerList
+	if err := f.c.List(f.ctx, &servers, client.InNamespace(f.ns)); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(servers.Items) != 0 {
+		t.Fatalf("%d servers exist after a refused start, want 0", len(servers.Items))
+	}
+}
+
+func TestStartWithoutMemberResourcesStartsWithoutTheNetwork(t *testing.T) {
+	f := newServerFixture(t)
+	makeOnDemandGroup(t, f, "private-servers", 2, func(g *spawneryv1alpha1.ServerGroup) {
+		g.Spec.NetworkRef.Name = "no-such-network"
+	})
+	pod := f.proxyPod("gateway-aaaa")
+
+	resp := startOverTheWire(t, f, pod, "private-servers", "c0ffee")
+	if resp.GetError() != nil {
+		t.Fatalf("refused: %s", resp.GetError().GetMessage())
+	}
+	if srv := member(t, f, "private-servers-c0ffee"); srv.Spec.Resources != nil {
+		t.Errorf("spec.resources = %v, want unset", srv.Spec.Resources)
+	}
+}
+
 // A value the group never allows is the caller's mistake; calling it a full group
 // would send the caller to wait for a slot that would not help.
 func TestStartAboveMaxIsRefusedEvenAtTheCeiling(t *testing.T) {
 	f := newServerFixture(t)
+	makeProductionNetwork(t, f)
 	makeOnDemandGroup(t, f, "private-servers", 1, withMaxMemory("16Gi"))
 	pod := f.proxyPod("gateway-aaaa")
 
@@ -852,9 +903,9 @@ func TestStartAboveMaxIsRefusedEvenAtTheCeiling(t *testing.T) {
 	}
 }
 
-// A second press must not fail because an admin tightened the group in between.
 func TestStartOfARunningMemberIgnoresAGroupEditedSince(t *testing.T) {
 	f := newServerFixture(t)
+	makeProductionNetwork(t, f)
 	makeOnDemandGroup(t, f, "private-servers", 2, withMaxMemory("16Gi"))
 	pod := f.proxyPod("gateway-aaaa")
 

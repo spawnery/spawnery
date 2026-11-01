@@ -84,6 +84,10 @@ var ErrNotAnInstance = errors.New("that server is not an on-demand member")
 // server about to stop.
 var ErrInstanceStopping = errors.New("that member is still stopping")
 
+// ErrNetworkMissing is a start of a member that is to be stamped with
+// resources, in a group whose Network does not exist (yet).
+var ErrNetworkMissing = errors.New("that group's network does not exist")
+
 var ErrWorldDeleting = errors.New("that member's world is still being deleted")
 
 // ErrForeignClaim is a delete whose claim this operator did not make for that
@@ -535,8 +539,8 @@ func (w KubeWriter) StartServer(
 	return StartedServer{Name: name, Resources: netstate.ToStartResources(srv.Spec.Resources, srv.Spec.Heap)}, nil
 }
 
-// resolveStart takes a missing Network as one without defaults rather than
-// refusing: the Server controller already reports it on the member.
+// resolveStart refuses a missing Network only for a group that stamps its
+// members: the stamp is permanent and would leave out the network's defaults.
 func (w KubeWriter) resolveStart(
 	ctx context.Context, g *spawneryv1alpha1.ServerGroup, req *agentpb.StartResources,
 ) (Resolved, bool, error) {
@@ -545,6 +549,9 @@ func (w KubeWriter) resolveStart(
 	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: g.Namespace, Name: g.Spec.NetworkRef.Name}, &net); err != nil {
 		if !apierrors.IsNotFound(err) {
 			return Resolved{}, false, err
+		}
+		if g.Spec.MemberResources != nil {
+			return Resolved{}, false, ErrNetworkMissing
 		}
 		netp = nil
 	}

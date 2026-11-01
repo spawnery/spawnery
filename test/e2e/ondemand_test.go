@@ -175,9 +175,6 @@ func TestAPrivateServersWorldOutlivesItsServer(t *testing.T) {
 	}
 }
 
-// TestAMemberStartsWithTheResourcesItAskedFor starts a member with only a
-// memory limit and checks what its pod and its JVM got, then asks for a limit
-// above the group's spec.memberResources.max.
 func TestAMemberStartsWithTheResourcesItAskedFor(t *testing.T) {
 	if os.Getenv(onDemandGate) != "1" {
 		t.Skipf("set %s=1 to run the on-demand path; hack/e2e-ondemand.sh does", onDemandGate)

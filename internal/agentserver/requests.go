@@ -676,6 +676,9 @@ func (s *Server) answerStartServer(
 	case errors.Is(err, ErrWorldDeleting):
 		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
 			"that member's world is still being deleted; the same request starts a fresh one once it is gone")
+	case errors.Is(err, ErrNetworkMissing):
+		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
+			"the network of that group does not exist right now; the same request works once it does")
 	case errors.Is(err, ErrWorldSyncOff):
 		return refuse(reqID, agentpb.RequestError_REFUSED,
 			"that group keeps its worlds in an object store, and this operator runs without --world-sync")
