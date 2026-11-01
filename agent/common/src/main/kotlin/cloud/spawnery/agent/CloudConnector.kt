@@ -171,7 +171,7 @@ class CloudConnector(
                 asked != null && !result.resourcesUnderstood -> started.completeExceptionally(
                     IllegalStateException(
                         "the operator does not know per-start resources; " +
-                            "the member it started runs with the group's",
+                            "the member runs with the group's values",
                     ),
                 )
                 else -> started.complete(

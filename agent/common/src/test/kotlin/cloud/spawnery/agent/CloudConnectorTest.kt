@@ -372,7 +372,7 @@ class CloudConnectorTest {
         val failure = assertFailsWith<ExecutionException> { stage.toCompletableFuture().get(1, TimeUnit.SECONDS) }
         val cause = failure.cause as IllegalStateException
         assertEquals(
-            "the operator does not know per-start resources; the member it started runs with the group's",
+            "the operator does not know per-start resources; the member runs with the group's values",
             cause.message,
         )
     }

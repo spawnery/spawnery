@@ -21,7 +21,9 @@ import java.util.Optional;
 
 /**
  * The resources of one private server, as quantities in Kubernetes notation.
- * A component is empty where the server runs with its group's value.
+ * A component is empty where neither the group nor the network sets it, and
+ * for every component of a member started in a group without
+ * {@code memberResources}.
  *
  * <p>Quantities come back in the operator's canonical form: a start asked
  * for {@code 7168Mi} reports {@code 7Gi}. Compare them as quantities, not as
@@ -31,7 +33,8 @@ import java.util.Optional;
  * @param memoryLimit the memory limit of the server's pod
  * @param cpuRequest the CPU the server's pod requests
  * @param cpuLimit the CPU limit of the server's pod
- * @param heap the JVM's maximum heap, empty when it follows the memory limit
+ * @param heap the JVM's maximum heap, empty when no heap was chosen; the
+ *     server then runs with {@code MaxRAMPercentage} or the group's own {@code -Xmx}
  */
 public record ServerResources(
         Optional<String> memoryRequest,
