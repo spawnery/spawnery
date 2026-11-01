@@ -448,6 +448,42 @@ spec:
                 format: int32
                 minimum: 1
                 type: integer
+              memberResources:
+                description: |-
+                  MemberResources lets a startServer call choose resources for one member,
+                  within these bounds. Without it a start may not set any value. Only for
+                  type OnDemand.
+                properties:
+                  max:
+                    additionalProperties:
+                      anyOf:
+                      - type: integer
+                      - type: string
+                      pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                      x-kubernetes-int-or-string: true
+                    description: |-
+                      Max bounds every request and every limit a start sets, and the group's
+                      own spec.resources combined with them. memory is required, cpu is
+                      optional; a resource not named here cannot be set at a start.
+                    type: object
+                  nonHeap:
+                    anyOf:
+                    - type: integer
+                    - type: string
+                    default: 2Gi
+                    description: |-
+                      NonHeap is what a member's JVM holds outside the heap. When a start sets
+                      a memory limit and no heap, the heap is the limit minus NonHeap.
+                    pattern: ^(\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))(([KMGTPE]i)|[numkMGTPE]|([eE](\+|-)?(([0-9]+(\.[0-9]*)?)|(\.[0-9]+))))?$
+                    x-kubernetes-int-or-string: true
+                required:
+                - max
+                type: object
+                x-kubernetes-validations:
+                - message: spec.memberResources.max.memory is required
+                  rule: '''memory'' in self.max'
+                - message: spec.memberResources.max.memory must be above nonHeap
+                  rule: '!(''memory'' in self.max) || !has(self.nonHeap) || quantity(string(self.max[''memory''])).isGreaterThan(quantity(string(self.nonHeap)))'
               mounts:
                 description: Mounts are extra ConfigMap, Secret and PersistentVolumeClaim
                   mounts.
@@ -2040,6 +2076,8 @@ spec:
             - message: storage.backend ObjectStore needs type OnDemand and storage.keep
               rule: '!has(self.storage) || !has(self.storage.backend) || self.storage.backend
                 != ''ObjectStore'' || (self.type == ''OnDemand'' && has(self.storage.keep))'
+            - message: spec.memberResources is only allowed for type OnDemand
+              rule: self.type == 'OnDemand' || !has(self.memberResources)
             - message: spec.playableSlots must be between 1 and spec.maxPlayers
               rule: '!has(self.playableSlots) || (self.playableSlots >= 1 && self.playableSlots
                 <= self.maxPlayers)'

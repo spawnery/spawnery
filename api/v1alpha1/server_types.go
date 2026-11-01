@@ -16,10 +16,16 @@ limitations under the License.
 
 package v1alpha1
 
-import metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+import (
+	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+)
 
 // ServerSpec describes one running Minecraft server instance. It is created
 // and owned by a ServerGroup and is not meant to be edited by hand.
+// +kubebuilder:validation:XValidation:rule="has(self.resources) == has(oldSelf.resources) && (!has(self.resources) || self.resources == oldSelf.resources)",message="spec.resources is immutable"
+// +kubebuilder:validation:XValidation:rule="has(self.heap) == has(oldSelf.heap) && (!has(self.heap) || self.heap == oldSelf.heap)",message="spec.heap is immutable"
 type ServerSpec struct {
 	// GroupRef names the owning ServerGroup.
 	GroupRef ObjectRef `json:"groupRef"`
@@ -85,6 +91,17 @@ type ServerSpec struct {
 	// request, which only a proxy may send.
 	// +optional
 	ForceStop bool `json:"forceStop,omitempty"`
+
+	// Resources is what a startServer call resolved for this member, with the
+	// group's values filled in where the call left them out. Set at creation,
+	// never changed. Unset: the pod takes the group's resources.
+	// +optional
+	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// Heap is the JVM heap resolved for this member. Set at creation, never
+	// changed. Unset: the pod keeps the group's heap behaviour.
+	// +optional
+	Heap *resource.Quantity `json:"heap,omitempty"`
 }
 
 // ServerStatus is the observed state of a Server.

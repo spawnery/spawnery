@@ -290,6 +290,23 @@ type StorageSpec struct {
 	Retention *RetentionSpec `json:"retention,omitempty"`
 }
 
+// MemberResourcesSpec bounds what a startServer call may choose for one
+// member of an OnDemand group.
+// +kubebuilder:validation:XValidation:rule="'memory' in self.max",message="spec.memberResources.max.memory is required"
+// +kubebuilder:validation:XValidation:rule="!('memory' in self.max) || !has(self.nonHeap) || quantity(string(self.max['memory'])).isGreaterThan(quantity(string(self.nonHeap)))",message="spec.memberResources.max.memory must be above nonHeap"
+type MemberResourcesSpec struct {
+	// Max bounds every request and every limit a start sets, and the group's
+	// own spec.resources combined with them. memory is required, cpu is
+	// optional; a resource not named here cannot be set at a start.
+	Max corev1.ResourceList `json:"max"`
+
+	// NonHeap is what a member's JVM holds outside the heap. When a start sets
+	// a memory limit and no heap, the heap is the limit minus NonHeap.
+	// +kubebuilder:default="2Gi"
+	// +optional
+	NonHeap *resource.Quantity `json:"nonHeap,omitempty"`
+}
+
 // ServerGroupSpec describes a group of Minecraft servers.
 // +kubebuilder:validation:XValidation:rule="self.type == oldSelf.type",message="spec.type is immutable"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Ephemeral' || !has(self.storage)",message="spec.storage is not allowed for type Ephemeral"
@@ -311,6 +328,7 @@ type StorageSpec struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || (has(self.storage.storageClassName) == has(oldSelf.storage.storageClassName) && (!has(self.storage.storageClassName) || self.storage.storageClassName == oldSelf.storage.storageClassName))",message="storage.storageClassName is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || self.storage.accessModes == oldSelf.storage.accessModes",message="storage.accessModes is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(self.storage.backend) || self.storage.backend != 'ObjectStore' || (self.type == 'OnDemand' && has(self.storage.keep))",message="storage.backend ObjectStore needs type OnDemand and storage.keep"
+// +kubebuilder:validation:XValidation:rule="self.type == 'OnDemand' || !has(self.memberResources)",message="spec.memberResources is only allowed for type OnDemand"
 // +kubebuilder:validation:XValidation:rule="!has(self.playableSlots) || (self.playableSlots >= 1 && self.playableSlots <= self.maxPlayers)",message="spec.playableSlots must be between 1 and spec.maxPlayers"
 type ServerGroupSpec struct {
 	// NetworkRef names the Network this group belongs to.
@@ -375,6 +393,12 @@ type ServerGroupSpec struct {
 	// Resources overrides Network.spec.defaults.resources.
 	// +optional
 	Resources *corev1.ResourceRequirements `json:"resources,omitempty"`
+
+	// MemberResources lets a startServer call choose resources for one member,
+	// within these bounds. Without it a start may not set any value. Only for
+	// type OnDemand.
+	// +optional
+	MemberResources *MemberResourcesSpec `json:"memberResources,omitempty"`
 
 	// Scheduling overrides Network.spec.defaults.scheduling.
 	// +optional
