@@ -257,7 +257,11 @@ func TestResolveRefuses(t *testing.T) {
 		{"cpu while max names no cpu", memoryOnlyMax, standardBase(),
 			&agentpb.StartResources{CpuLimit: "2"}, "cpu", []string{"2"}},
 		{"a limit leaving no heap", standardMax(), standardBase(),
-			&agentpb.StartResources{MemoryLimit: "1Gi"}, "memory", []string{"1Gi", "2Gi"}},
+			&agentpb.StartResources{MemoryLimit: "1Gi"}, "heap", []string{"1Gi", "2Gi"}},
+		{"a given heap below 1Mi", standardMax(), standardBase(),
+			&agentpb.StartResources{MemoryLimit: "8Gi", Heap: "0.5"}, "heap", []string{"500m", "1Mi"}},
+		{"a derived heap below 1Mi", standardMax(), standardBase(),
+			&agentpb.StartResources{MemoryLimit: "2147484k"}, "heap", []string{"2147484k", "2Gi", "352", "1Mi"}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			g := onDemandGroup(tc.max, tc.base)
@@ -307,4 +311,20 @@ func TestResolveParsesQuantities(t *testing.T) {
 		_, _, err := ResolveStartResources(g, g.Spec.Resources, tc.req)
 		wantRefusal(t, err, tc.field, tc.value)
 	}
+}
+
+func TestResolveWritesTheRequestOfALimitOnlyTheStartSets(t *testing.T) {
+	g := onDemandGroup(standardMax(), nil)
+	res := resolve(t, g, &agentpb.StartResources{MemoryLimit: "8Gi"})
+	wantQuantity(t, "requests", res.Resources.Requests, corev1.ResourceMemory, "8Gi")
+	wantQuantity(t, "limits", res.Resources.Limits, corev1.ResourceMemory, "8Gi")
+
+	memoryOnly := &corev1.ResourceRequirements{
+		Requests: corev1.ResourceList{corev1.ResourceMemory: q("2Gi")},
+		Limits:   corev1.ResourceList{corev1.ResourceMemory: q("4Gi")},
+	}
+	g = onDemandGroup(standardMax(), memoryOnly)
+	res = resolve(t, g, &agentpb.StartResources{CpuLimit: "2"})
+	wantQuantity(t, "requests", res.Resources.Requests, corev1.ResourceCPU, "2")
+	wantQuantity(t, "limits", res.Resources.Limits, corev1.ResourceCPU, "2")
 }

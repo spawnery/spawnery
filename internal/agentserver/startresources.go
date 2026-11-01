@@ -33,6 +33,9 @@ var ErrNoMemberResources = errors.New("that group sets no spec.memberResources, 
 // defaultNonHeap is the CRD default, for a group that was never through the apiserver's defaulting.
 var defaultNonHeap = resource.MustParse("2Gi")
 
+// minHeap: the pod gets the heap in whole MiB rounded down, and -Xmx0m starts no JVM.
+var minHeap = resource.MustParse("1Mi")
+
 // ResourceRefusal is a start's values refused against its group. Field is
 // memory, cpu or heap; Message names the value and what it was held against.
 type ResourceRefusal struct {
@@ -116,13 +119,17 @@ func ResolveStartResources(
 		}
 		derived := memory.limit.DeepCopy()
 		derived.Sub(nonHeap)
-		if derived.Sign() <= 0 {
-			return Resolved{}, false, refuseResources("memory",
-				"memory limit %s leaves no heap after spec.memberResources.nonHeap %s", memory.limit.String(), nonHeap.String())
+		if derived.Cmp(minHeap) < 0 {
+			return Resolved{}, false, refuseResources("heap",
+				"memory limit %s minus spec.memberResources.nonHeap %s leaves a heap of %s, below %s",
+				memory.limit.String(), nonHeap.String(), derived.String(), minHeap.String())
 		}
 		heap = &derived
 	}
 	if heap != nil {
+		if heap.Cmp(minHeap) < 0 {
+			return Resolved{}, false, refuseResources("heap", "heap %s is below %s", heap.String(), minHeap.String())
+		}
 		if !hasMemLimit {
 			return Resolved{}, false, refuseResources("heap",
 				"heap %s is given, but neither the start nor the group sets a memory limit", heap.String())
@@ -171,7 +178,8 @@ func parseStartQuantity(field, what, value string) (*resource.Quantity, error) {
 }
 
 // resolveInto writes the request out explicitly whenever there is a limit,
-// so that neither Kubernetes nor a LimitRange raises it to a new limit.
+// so that neither Kubernetes nor a LimitRange raises it to a new limit. An
+// unwritten base request counts as the base limit, or else as the new one.
 func (p startPair) resolveInto(out *corev1.ResourceRequirements, bounds corev1.ResourceList) error {
 	name := string(p.resource)
 	if _, bounded := bounds[p.resource]; !bounded {
@@ -194,6 +202,9 @@ func (p startPair) resolveInto(out *corev1.ResourceRequirements, bounds corev1.R
 	request, hasRequest := out.Requests[p.resource]
 	if !hasRequest {
 		request, hasRequest = out.Limits[p.resource]
+	}
+	if !hasRequest && hasLimit {
+		request, hasRequest = limit.DeepCopy(), true
 	}
 	switch {
 	case p.request != nil:
