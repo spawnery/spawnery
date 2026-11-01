@@ -14,7 +14,7 @@ spec:
   networkRef:
     name: production
   type: OnDemand
-  image: ghcr.io/spawnery/purpur:26.3-0.32.0
+  image: ghcr.io/spawnery/purpur:26.3-0.33.0
   maxPlayers: 10
   # A fleet ceiling, not a per-player quota: who may have one is a question
   # about a player, and the system that knows the player answers it.
@@ -226,8 +226,8 @@ when that is more than 5 % away from `spec.heap`, the `Server` gets the
 condition `HeapMismatch` set to `True` (reason `HeapMismatched`, with both
 numbers in the message) and a Warning event `HeapMismatch`. While the two
 agree, the condition is `False` with reason `HeapAsAsked`. Besides
-`_JAVA_OPTIONS`, this is how an image built before per-start heaps shows up:
-it ignores the heap the operator passes it.
+`_JAVA_OPTIONS`, this is how an image older than 0.33.0 shows up: it does not
+read `SPAWNERY_HEAP` and ignores the heap the operator passes it.
 
 A group-level `-Xms` in `spec.env` that is larger than a start's heap makes the
 JVM refuse to start ("Initial heap size set to a larger value than the maximum
