@@ -111,4 +111,15 @@ class ValueTypesTest {
         assertEquals(List.of(new RestorePoint(3, taken, true)), listed.points());
         assertThrows(UnsupportedOperationException.class, () -> listed.points().clear());
     }
+
+    @Test
+    void startOptionsCarryOnlyWhatWasSet() {
+        ServerResources resources = StartOptions.builder().memoryLimit("7Gi").build().resources();
+        assertEquals(Optional.of("7Gi"), resources.memoryLimit());
+        assertEquals(Optional.empty(), resources.memoryRequest());
+        assertEquals(Optional.empty(), resources.cpuRequest());
+        assertEquals(Optional.empty(), resources.cpuLimit());
+        assertEquals(Optional.empty(), resources.heap());
+        assertEquals(ServerResources.NONE, StartOptions.builder().build().resources());
+    }
 }

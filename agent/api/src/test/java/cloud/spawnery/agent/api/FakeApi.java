@@ -83,6 +83,11 @@ class FakeApi implements SpawneryApi {
     }
 
     @Override
+    public CompletionStage<StartedServer> startServer(String group, String key, StartOptions options) {
+        return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
+    }
+
+    @Override
     public CompletionStage<Void> stopServer(String server) {
         return CompletableFuture.failedFuture(new UnsupportedOperationException("fake"));
     }

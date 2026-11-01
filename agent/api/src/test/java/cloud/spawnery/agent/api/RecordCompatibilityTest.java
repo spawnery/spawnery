@@ -81,4 +81,11 @@ class RecordCompatibilityTest {
         };
         assertEquals(points, api.listRestorePoints("worlds", "c0ffee").toCompletableFuture().get(1, TimeUnit.SECONDS));
     }
+
+    @Test
+    void thePreResourcesConstructorsStillBuildAndReadNoResources() {
+        assertEquals(ServerResources.NONE, new StartedServer("lobby-a", false).resources());
+        ServerInfo server = new ServerInfo("lobby-a", "lobby", ServerPhase.READY, 1, 20, true, "", Map.of(), "", 0, false, "node-1", 20);
+        assertEquals(ServerResources.NONE, server.resources());
+    }
 }

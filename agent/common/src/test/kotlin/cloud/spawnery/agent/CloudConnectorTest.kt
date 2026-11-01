@@ -4,6 +4,7 @@ import cloud.spawnery.agent.api.Group
 import cloud.spawnery.agent.api.RestorePoint
 import cloud.spawnery.agent.api.RestorePoints
 import cloud.spawnery.agent.api.RestoredWorld
+import cloud.spawnery.agent.api.ServerResources
 import cloud.spawnery.agent.pb.AnnounceResult
 import cloud.spawnery.agent.pb.CloudRequest
 import cloud.spawnery.agent.pb.CloudResponse
@@ -17,11 +18,13 @@ import cloud.spawnery.agent.pb.RequestError
 import cloud.spawnery.agent.pb.RestorePoint as PbRestorePoint
 import cloud.spawnery.agent.pb.RestoreWorldResult
 import cloud.spawnery.agent.pb.ScaleResult as PbScaleResult
+import cloud.spawnery.agent.pb.StartResources
 import cloud.spawnery.agent.pb.StartServerResult
 import cloud.spawnery.agent.pb.StatusResult
 import cloud.spawnery.agent.pb.StopServerResult
 import java.time.Duration
 import java.time.Instant
+import java.util.Optional
 import java.util.OptionalDouble
 import java.util.concurrent.CompletionException
 import java.util.concurrent.ExecutionException
@@ -328,6 +331,107 @@ class CloudConnectorTest {
 
         assertEquals("private-servers", requested.single().startServer.group)
         assertEquals("c0ffee", requested.single().startServer.key)
+    }
+
+    @Test
+    fun `a start with resources sends them`() {
+        val connector = connector()
+
+        connector.startServer("private-servers", "c0ffee", ServerResources(
+            Optional.empty(), Optional.of("7Gi"), Optional.empty(), Optional.empty(), Optional.empty(),
+        ))
+
+        val sent = requested.single().startServer.resources
+        assertEquals("7Gi", sent.memoryLimit)
+        assertEquals("", sent.memoryRequest)
+        assertEquals("", sent.cpuRequest)
+        assertEquals("", sent.cpuLimit)
+        assertEquals("", sent.heap)
+    }
+
+    @Test
+    fun `a start without resources sends none`() {
+        val connector = connector()
+
+        connector.startServer("private-servers", "c0ffee")
+
+        assertFalse(requested.single().startServer.hasResources())
+    }
+
+    @Test
+    fun `a start with resources fails when the operator does not understand them`() {
+        val connector = connector()
+        val stage = connector.startServer("private-servers", "c0ffee", ServerResources(
+            Optional.empty(), Optional.of("7Gi"), Optional.empty(), Optional.empty(), Optional.empty(),
+        ))
+
+        answer(connector) {
+            setStartServer(StartServerResult.newBuilder().setServer("private-servers-c0ffee").setResourcesUnderstood(false))
+        }
+
+        val failure = assertFailsWith<ExecutionException> { stage.toCompletableFuture().get(1, TimeUnit.SECONDS) }
+        val cause = failure.cause as IllegalStateException
+        assertEquals(
+            "the operator does not know per-start resources; the member it started runs with the group's",
+            cause.message,
+        )
+    }
+
+    @Test
+    fun `the failure of an operator that does not understand resources reaches handle unwrapped`() {
+        val connector = connector()
+        val stage = connector.startServer("private-servers", "c0ffee", ServerResources(
+            Optional.empty(), Optional.empty(), Optional.empty(), Optional.empty(), Optional.of("5Gi"),
+        ))
+
+        var seen: Throwable? = null
+        val handled = stage.handle { _, error -> seen = error; null }
+        answer(connector) { setStartServer(StartServerResult.newBuilder().setServer("private-servers-c0ffee")) }
+
+        handled.toCompletableFuture().get(1, TimeUnit.SECONDS)
+        assertTrue(seen is IllegalStateException)
+    }
+
+    @Test
+    fun `a start without resources does not look at whether the operator understood`() {
+        val connector = connector()
+        val stage = connector.startServer("private-servers", "c0ffee")
+
+        answer(connector) { setStartServer(StartServerResult.newBuilder().setServer("private-servers-c0ffee")) }
+
+        assertEquals("private-servers-c0ffee", stage.toCompletableFuture().get(1, TimeUnit.SECONDS).name())
+    }
+
+    @Test
+    fun `an already running answer with other resources succeeds and carries them`() {
+        val connector = connector()
+        val stage = connector.startServer("private-servers", "c0ffee", ServerResources(
+            Optional.empty(), Optional.of("7168Mi"), Optional.empty(), Optional.empty(), Optional.empty(),
+        ))
+
+        answer(connector) {
+            setStartServer(
+                StartServerResult.newBuilder().setServer("private-servers-c0ffee").setAlreadyRunning(true)
+                    .setResourcesUnderstood(true)
+                    .setResources(StartResources.newBuilder().setMemoryLimit("4Gi").setHeap("2Gi")),
+            )
+        }
+
+        val started = stage.toCompletableFuture().get(1, TimeUnit.SECONDS)
+        assertTrue(started.alreadyRunning())
+        assertEquals(Optional.of("4Gi"), started.resources().memoryLimit())
+        assertEquals(Optional.of("2Gi"), started.resources().heap())
+        assertEquals(Optional.empty(), started.resources().cpuLimit())
+    }
+
+    @Test
+    fun `a start answer without resources reads as NONE`() {
+        val connector = connector()
+        val stage = connector.startServer("private-servers", "c0ffee")
+
+        answer(connector) { setStartServer(StartServerResult.newBuilder().setServer("private-servers-c0ffee")) }
+
+        assertEquals(ServerResources.NONE, stage.toCompletableFuture().get(1, TimeUnit.SECONDS).resources())
     }
 
     @Test

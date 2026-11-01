@@ -14,6 +14,7 @@ import cloud.spawnery.agent.api.Target
 import cloud.spawnery.agent.api.NetworkStatus
 import cloud.spawnery.agent.api.ProxyInfo
 import cloud.spawnery.agent.api.ServerInfo
+import cloud.spawnery.agent.api.StartOptions
 import cloud.spawnery.agent.api.StartedServer
 import cloud.spawnery.agent.api.SpawneryApi
 import java.util.Optional
@@ -85,6 +86,9 @@ class MirrorApi(
 
     override fun startServer(group: String, key: String): CompletionStage<StartedServer> =
         connector.startServer(group, key)
+
+    override fun startServer(group: String, key: String, options: StartOptions): CompletionStage<StartedServer> =
+        connector.startServer(group, key, options.resources())
 
     override fun stopServer(server: String): CompletionStage<Void> =
         connector.stopServer(server)

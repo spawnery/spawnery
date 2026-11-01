@@ -56,6 +56,9 @@ import java.util.Objects;
  * @param playableSlots how many of {@code slots} count as capacity. Equal to
  *     {@code slots} when nothing narrowed it, and for a report from an
  *     operator older than this field.
+ * @param resources the resources stamped on this server when it was started,
+ *     {@link ServerResources#NONE} for one without any and for a report from
+ *     an operator older than this field.
  */
 public record ServerInfo(
         String name,
@@ -70,7 +73,8 @@ public record ServerInfo(
         int number,
         boolean held,
         String node,
-        int playableSlots) {
+        int playableSlots,
+        ServerResources resources) {
     public ServerInfo {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(group, "group");
@@ -82,6 +86,26 @@ public record ServerInfo(
         if (playableSlots <= 0 || playableSlots > slots) {
             playableSlots = slots;
         }
+        resources = resources == null ? ServerResources.NONE : resources;
+    }
+
+    /** The record as it was before {@code resources}, which it reads as none. */
+    public ServerInfo(
+            String name,
+            String group,
+            ServerPhase phase,
+            int players,
+            int slots,
+            boolean registered,
+            String state,
+            Map<String, String> attributes,
+            String incarnation,
+            int number,
+            boolean held,
+            String node,
+            int playableSlots) {
+        this(name, group, phase, players, slots, registered, state, attributes, incarnation, number, held, node,
+                playableSlots, ServerResources.NONE);
     }
 
     /** The record as it was before {@code playableSlots}, which it reads as every seat. */

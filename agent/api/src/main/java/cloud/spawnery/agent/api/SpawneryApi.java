@@ -279,6 +279,30 @@ public interface SpawneryApi {
     CompletionStage<StartedServer> startServer(String group, String key);
 
     /**
+     * Asks for the private server that carries this key, with resources of
+     * your choosing for it.
+     *
+     * <p>As {@link #startServer(String, String)}, which means the group's
+     * values. What {@code options} sets replaces the group's value for this
+     * member. The operator answers {@code REFUSED} for values the group does
+     * not allow, and for any value at all when the group has no
+     * {@code memberResources}.
+     *
+     * <p>A member that is already running keeps the values it started with:
+     * the stage succeeds with {@link StartedServer#alreadyRunning()} set and
+     * {@link StartedServer#resources()} says what it runs with; compare only
+     * the fields you set.
+     *
+     * <p>An operator that predates per-start resources would start the member
+     * with the group's values and say nothing. The stage therefore fails with
+     * an {@link IllegalStateException} when options were set and the operator
+     * did not acknowledge them; the member it started keeps running.
+     *
+     * <p>Agents older than 0.33.0 do not have this method.
+     */
+    CompletionStage<StartedServer> startServer(String group, String key, StartOptions options);
+
+    /**
      * Stops one private server and leaves its world where it is.
      *
      * <p>Not {@link #retire}: retiring closes a server's door and lets it
