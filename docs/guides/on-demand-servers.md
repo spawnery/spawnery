@@ -79,12 +79,12 @@ What comes back, by reason:
 | `startServer` | `NOT_FOUND` | no such group. |
 | `startServer` with `StartOptions` | `REFUSED` | the group has no `spec.memberResources`, or a value breaks one of the rules in [Choosing resources at the start](#choosing-resources-at-the-start). A group whose own resources are above its `max` refuses a start without options too. |
 | `startServer` with `StartOptions` | `already_running` set | the key is up and keeps what it started with; `resources()` says what that is. |
-| `startServer` with `StartOptions` | `IllegalStateException`, no reason | the operator predates per-start resources. The member it started runs with the group's values. |
+| `startServer` with `StartOptions` | `IllegalStateException`, no reason | the operator predates per-start resources. The member runs with the group's values, whether that operator started it or found it running. |
 | `stopServer` | `REFUSED` | the server is not a member of an on-demand group. |
 | `stopServer` | `NOT_FOUND` | no such server, including a stop that was carried out a moment ago. |
 | `deleteServer` | `REFUSED` | the group is not `OnDemand`, the key is not a label, a claim of that name was not made by this operator for that group, or the world predates the key label (only an admin can delete it). |
 | `deleteServer` | `NOT_FOUND` | no such group, or the key has neither a server nor a world, including a delete that finished a moment ago. |
-| `startServer` | `UNAVAILABLE` | also: the key's world is still being deleted. |
+| `startServer` | `UNAVAILABLE` | also: the key's world is still being deleted, or the group has `spec.memberResources` and its Network does not exist yet. |
 | `restorePoints`, `listRestorePoints`, `restoreWorld` | `NOT_FOUND` | no such group, or the key has no world; for `restoreWorld` also a generation the world does not keep, unless the request repeats a restore that already went through. |
 | `restorePoints`, `listRestorePoints`, `restoreWorld` | `REFUSED` | the group is not `OnDemand`, keeps its worlds on claims, the key is one no name can be built from, or the operator runs without world sync. |
 | `restorePoints`, `listRestorePoints`, `restoreWorld` | `UNAVAILABLE` | the operator could not read the bucket just now. Ask again. |
