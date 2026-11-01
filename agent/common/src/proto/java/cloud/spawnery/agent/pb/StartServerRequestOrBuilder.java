@@ -33,4 +33,19 @@ public interface StartServerRequestOrBuilder extends
    */
   com.google.protobuf.ByteString
       getKeyBytes();
+
+  /**
+   * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+   * @return Whether the resources field is set.
+   */
+  boolean hasResources();
+  /**
+   * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+   * @return The resources.
+   */
+  cloud.spawnery.agent.pb.StartResources getResources();
+  /**
+   * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+   */
+  cloud.spawnery.agent.pb.StartResourcesOrBuilder getResourcesOrBuilder();
 }

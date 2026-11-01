@@ -58,6 +58,7 @@ private static final long serialVersionUID = 0L;
             cloud.spawnery.agent.pb.StartServerResult.class, cloud.spawnery.agent.pb.StartServerResult.Builder.class);
   }
 
+  private int bitField0_;
   public static final int SERVER_FIELD_NUMBER = 1;
   @SuppressWarnings("serial")
   private volatile java.lang.Object server_ = "";
@@ -121,6 +122,67 @@ private static final long serialVersionUID = 0L;
     return alreadyRunning_;
   }
 
+  public static final int RESOURCES_FIELD_NUMBER = 3;
+  private cloud.spawnery.agent.pb.StartResources resources_;
+  /**
+   * <pre>
+   * What the member's Server carries: the resolved values, with the group's
+   * filled in where the start left them out. Empty for a member of a group
+   * without memberResources and for one started before this field existed.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+   * @return Whether the resources field is set.
+   */
+  @java.lang.Override
+  public boolean hasResources() {
+    return ((bitField0_ & 0x00000001) != 0);
+  }
+  /**
+   * <pre>
+   * What the member's Server carries: the resolved values, with the group's
+   * filled in where the start left them out. Empty for a member of a group
+   * without memberResources and for one started before this field existed.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+   * @return The resources.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.StartResources getResources() {
+    return resources_ == null ? cloud.spawnery.agent.pb.StartResources.getDefaultInstance() : resources_;
+  }
+  /**
+   * <pre>
+   * What the member's Server carries: the resolved values, with the group's
+   * filled in where the start left them out. Empty for a member of a group
+   * without memberResources and for one started before this field existed.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.StartResourcesOrBuilder getResourcesOrBuilder() {
+    return resources_ == null ? cloud.spawnery.agent.pb.StartResources.getDefaultInstance() : resources_;
+  }
+
+  public static final int RESOURCES_UNDERSTOOD_FIELD_NUMBER = 4;
+  private boolean resourcesUnderstood_ = false;
+  /**
+   * <pre>
+   * Set by an operator that knows per-start resources, on every answer to a
+   * request that carried any. An older operator cannot set it, which is how
+   * the agent tells it apart.
+   * </pre>
+   *
+   * <code>bool resources_understood = 4;</code>
+   * @return The resourcesUnderstood.
+   */
+  @java.lang.Override
+  public boolean getResourcesUnderstood() {
+    return resourcesUnderstood_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -141,6 +203,12 @@ private static final long serialVersionUID = 0L;
     if (alreadyRunning_ != false) {
       output.writeBool(2, alreadyRunning_);
     }
+    if (((bitField0_ & 0x00000001) != 0)) {
+      output.writeMessage(3, getResources());
+    }
+    if (resourcesUnderstood_ != false) {
+      output.writeBool(4, resourcesUnderstood_);
+    }
     getUnknownFields().writeTo(output);
   }
   private int computeSerializedSize_0() {
@@ -151,6 +219,14 @@ private static final long serialVersionUID = 0L;
     if (alreadyRunning_ != false) {
       size += com.google.protobuf.CodedOutputStream
         .computeBoolSize(2, alreadyRunning_);
+    }
+    if (((bitField0_ & 0x00000001) != 0)) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(3, getResources());
+    }
+    if (resourcesUnderstood_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(4, resourcesUnderstood_);
     }
     return size;
   }
@@ -180,6 +256,13 @@ private static final long serialVersionUID = 0L;
         .equals(other.getServer())) return false;
     if (getAlreadyRunning()
         != other.getAlreadyRunning()) return false;
+    if (hasResources() != other.hasResources()) return false;
+    if (hasResources()) {
+      if (!getResources()
+          .equals(other.getResources())) return false;
+    }
+    if (getResourcesUnderstood()
+        != other.getResourcesUnderstood()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -196,6 +279,13 @@ private static final long serialVersionUID = 0L;
     hash = (37 * hash) + ALREADY_RUNNING_FIELD_NUMBER;
     hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
         getAlreadyRunning());
+    if (hasResources()) {
+      hash = (37 * hash) + RESOURCES_FIELD_NUMBER;
+      hash = (53 * hash) + getResources().hashCode();
+    }
+    hash = (37 * hash) + RESOURCES_UNDERSTOOD_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getResourcesUnderstood());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -324,13 +414,19 @@ private static final long serialVersionUID = 0L;
 
     // Construct using cloud.spawnery.agent.pb.StartServerResult.newBuilder()
     private Builder() {
-
+      maybeForceBuilderInitialization();
     }
 
     private Builder(
         com.google.protobuf.GeneratedMessage.BuilderParent parent) {
       super(parent);
-
+      maybeForceBuilderInitialization();
+    }
+    private void maybeForceBuilderInitialization() {
+      if (com.google.protobuf.GeneratedMessage
+              .alwaysUseFieldBuilders) {
+        internalGetResourcesFieldBuilder();
+      }
     }
     @java.lang.Override
     public Builder clear() {
@@ -338,6 +434,12 @@ private static final long serialVersionUID = 0L;
       bitField0_ = 0;
       server_ = "";
       alreadyRunning_ = false;
+      resources_ = null;
+      if (resourcesBuilder_ != null) {
+        resourcesBuilder_.dispose();
+        resourcesBuilder_ = null;
+      }
+      resourcesUnderstood_ = false;
       return this;
     }
 
@@ -377,6 +479,17 @@ private static final long serialVersionUID = 0L;
       if (((from_bitField0_ & 0x00000002) != 0)) {
         result.alreadyRunning_ = alreadyRunning_;
       }
+      int to_bitField0_ = 0;
+      if (((from_bitField0_ & 0x00000004) != 0)) {
+        result.resources_ = resourcesBuilder_ == null
+            ? resources_
+            : resourcesBuilder_.build();
+        to_bitField0_ |= 0x00000001;
+      }
+      if (((from_bitField0_ & 0x00000008) != 0)) {
+        result.resourcesUnderstood_ = resourcesUnderstood_;
+      }
+      result.bitField0_ |= to_bitField0_;
     }
 
     @java.lang.Override
@@ -398,6 +511,12 @@ private static final long serialVersionUID = 0L;
       }
       if (other.getAlreadyRunning() != false) {
         setAlreadyRunning(other.getAlreadyRunning());
+      }
+      if (other.hasResources()) {
+        mergeResources(other.getResources());
+      }
+      if (other.getResourcesUnderstood() != false) {
+        setResourcesUnderstood(other.getResourcesUnderstood());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -435,6 +554,18 @@ private static final long serialVersionUID = 0L;
               bitField0_ |= 0x00000002;
               break;
             } // case 16
+            case 26: {
+              input.readMessage(
+                  internalGetResourcesFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              bitField0_ |= 0x00000004;
+              break;
+            } // case 26
+            case 32: {
+              resourcesUnderstood_ = input.readBool();
+              bitField0_ |= 0x00000008;
+              break;
+            } // case 32
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -587,6 +718,231 @@ private static final long serialVersionUID = 0L;
     public Builder clearAlreadyRunning() {
       bitField0_ = (bitField0_ & ~0x00000002);
       alreadyRunning_ = false;
+      onChanged();
+      return this;
+    }
+
+    private cloud.spawnery.agent.pb.StartResources resources_;
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.StartResources, cloud.spawnery.agent.pb.StartResources.Builder, cloud.spawnery.agent.pb.StartResourcesOrBuilder> resourcesBuilder_;
+    /**
+     * <pre>
+     * What the member's Server carries: the resolved values, with the group's
+     * filled in where the start left them out. Empty for a member of a group
+     * without memberResources and for one started before this field existed.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     * @return Whether the resources field is set.
+     */
+    public boolean hasResources() {
+      return ((bitField0_ & 0x00000004) != 0);
+    }
+    /**
+     * <pre>
+     * What the member's Server carries: the resolved values, with the group's
+     * filled in where the start left them out. Empty for a member of a group
+     * without memberResources and for one started before this field existed.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     * @return The resources.
+     */
+    public cloud.spawnery.agent.pb.StartResources getResources() {
+      if (resourcesBuilder_ == null) {
+        return resources_ == null ? cloud.spawnery.agent.pb.StartResources.getDefaultInstance() : resources_;
+      } else {
+        return resourcesBuilder_.getMessage();
+      }
+    }
+    /**
+     * <pre>
+     * What the member's Server carries: the resolved values, with the group's
+     * filled in where the start left them out. Empty for a member of a group
+     * without memberResources and for one started before this field existed.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     */
+    public Builder setResources(cloud.spawnery.agent.pb.StartResources value) {
+      if (resourcesBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        resources_ = value;
+      } else {
+        resourcesBuilder_.setMessage(value);
+      }
+      bitField0_ |= 0x00000004;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * What the member's Server carries: the resolved values, with the group's
+     * filled in where the start left them out. Empty for a member of a group
+     * without memberResources and for one started before this field existed.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     */
+    public Builder setResources(
+        cloud.spawnery.agent.pb.StartResources.Builder builderForValue) {
+      if (resourcesBuilder_ == null) {
+        resources_ = builderForValue.build();
+      } else {
+        resourcesBuilder_.setMessage(builderForValue.build());
+      }
+      bitField0_ |= 0x00000004;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * What the member's Server carries: the resolved values, with the group's
+     * filled in where the start left them out. Empty for a member of a group
+     * without memberResources and for one started before this field existed.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     */
+    public Builder mergeResources(cloud.spawnery.agent.pb.StartResources value) {
+      if (resourcesBuilder_ == null) {
+        if (((bitField0_ & 0x00000004) != 0) &&
+          resources_ != null &&
+          resources_ != cloud.spawnery.agent.pb.StartResources.getDefaultInstance()) {
+          getResourcesBuilder().mergeFrom(value);
+        } else {
+          resources_ = value;
+        }
+      } else {
+        resourcesBuilder_.mergeFrom(value);
+      }
+      if (resources_ != null) {
+        bitField0_ |= 0x00000004;
+        onChanged();
+      }
+      return this;
+    }
+    /**
+     * <pre>
+     * What the member's Server carries: the resolved values, with the group's
+     * filled in where the start left them out. Empty for a member of a group
+     * without memberResources and for one started before this field existed.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     */
+    public Builder clearResources() {
+      bitField0_ = (bitField0_ & ~0x00000004);
+      resources_ = null;
+      if (resourcesBuilder_ != null) {
+        resourcesBuilder_.dispose();
+        resourcesBuilder_ = null;
+      }
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * What the member's Server carries: the resolved values, with the group's
+     * filled in where the start left them out. Empty for a member of a group
+     * without memberResources and for one started before this field existed.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     */
+    public cloud.spawnery.agent.pb.StartResources.Builder getResourcesBuilder() {
+      bitField0_ |= 0x00000004;
+      onChanged();
+      return internalGetResourcesFieldBuilder().getBuilder();
+    }
+    /**
+     * <pre>
+     * What the member's Server carries: the resolved values, with the group's
+     * filled in where the start left them out. Empty for a member of a group
+     * without memberResources and for one started before this field existed.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     */
+    public cloud.spawnery.agent.pb.StartResourcesOrBuilder getResourcesOrBuilder() {
+      if (resourcesBuilder_ != null) {
+        return resourcesBuilder_.getMessageOrBuilder();
+      } else {
+        return resources_ == null ?
+            cloud.spawnery.agent.pb.StartResources.getDefaultInstance() : resources_;
+      }
+    }
+    /**
+     * <pre>
+     * What the member's Server carries: the resolved values, with the group's
+     * filled in where the start left them out. Empty for a member of a group
+     * without memberResources and for one started before this field existed.
+     * </pre>
+     *
+     * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.StartResources, cloud.spawnery.agent.pb.StartResources.Builder, cloud.spawnery.agent.pb.StartResourcesOrBuilder> 
+        internalGetResourcesFieldBuilder() {
+      if (resourcesBuilder_ == null) {
+        resourcesBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.StartResources, cloud.spawnery.agent.pb.StartResources.Builder, cloud.spawnery.agent.pb.StartResourcesOrBuilder>(
+                getResources(),
+                getParentForChildren(),
+                isClean());
+        resources_ = null;
+      }
+      return resourcesBuilder_;
+    }
+
+    private boolean resourcesUnderstood_ ;
+    /**
+     * <pre>
+     * Set by an operator that knows per-start resources, on every answer to a
+     * request that carried any. An older operator cannot set it, which is how
+     * the agent tells it apart.
+     * </pre>
+     *
+     * <code>bool resources_understood = 4;</code>
+     * @return The resourcesUnderstood.
+     */
+    @java.lang.Override
+    public boolean getResourcesUnderstood() {
+      return resourcesUnderstood_;
+    }
+    /**
+     * <pre>
+     * Set by an operator that knows per-start resources, on every answer to a
+     * request that carried any. An older operator cannot set it, which is how
+     * the agent tells it apart.
+     * </pre>
+     *
+     * <code>bool resources_understood = 4;</code>
+     * @param value The resourcesUnderstood to set.
+     * @return This builder for chaining.
+     */
+    public Builder setResourcesUnderstood(boolean value) {
+
+      resourcesUnderstood_ = value;
+      bitField0_ |= 0x00000008;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * Set by an operator that knows per-start resources, on every answer to a
+     * request that carried any. An older operator cannot set it, which is how
+     * the agent tells it apart.
+     * </pre>
+     *
+     * <code>bool resources_understood = 4;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearResourcesUnderstood() {
+      bitField0_ = (bitField0_ & ~0x00000008);
+      resourcesUnderstood_ = false;
       onChanged();
       return this;
     }

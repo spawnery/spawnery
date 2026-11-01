@@ -232,13 +232,22 @@ message spawnery.agent.v1alpha1.ServerState 11 held bool
 message spawnery.agent.v1alpha1.ServerState 12 node string
 message spawnery.agent.v1alpha1.ServerState 13 playable_slots int32
 message spawnery.agent.v1alpha1.ServerState 14 joins_closed bool
+message spawnery.agent.v1alpha1.ServerState 15 resources spawnery.agent.v1alpha1.StartResources
 message spawnery.agent.v1alpha1.SessionDeadline 1 renew_after_seconds int32
 message spawnery.agent.v1alpha1.SessionDeadline 2 hard_deadline_seconds int32
 message spawnery.agent.v1alpha1.SetReady 1 ready bool
+message spawnery.agent.v1alpha1.StartResources 1 memory_request string
+message spawnery.agent.v1alpha1.StartResources 2 memory_limit string
+message spawnery.agent.v1alpha1.StartResources 3 cpu_request string
+message spawnery.agent.v1alpha1.StartResources 4 cpu_limit string
+message spawnery.agent.v1alpha1.StartResources 5 heap string
 message spawnery.agent.v1alpha1.StartServerRequest 1 group string
 message spawnery.agent.v1alpha1.StartServerRequest 2 key string
+message spawnery.agent.v1alpha1.StartServerRequest 3 resources spawnery.agent.v1alpha1.StartResources
 message spawnery.agent.v1alpha1.StartServerResult 1 server string
 message spawnery.agent.v1alpha1.StartServerResult 2 already_running bool
+message spawnery.agent.v1alpha1.StartServerResult 3 resources spawnery.agent.v1alpha1.StartResources
+message spawnery.agent.v1alpha1.StartServerResult 4 resources_understood bool
 message spawnery.agent.v1alpha1.StatusRequest 1 target string
 message spawnery.agent.v1alpha1.StatusResult 1 total spawnery.agent.v1alpha1.ResourceUsage
 message spawnery.agent.v1alpha1.StatusResult 2 groups repeated spawnery.agent.v1alpha1.GroupStatus

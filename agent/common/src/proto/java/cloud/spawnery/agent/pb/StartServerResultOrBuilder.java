@@ -40,4 +40,49 @@ public interface StartServerResultOrBuilder extends
    * @return The alreadyRunning.
    */
   boolean getAlreadyRunning();
+
+  /**
+   * <pre>
+   * What the member's Server carries: the resolved values, with the group's
+   * filled in where the start left them out. Empty for a member of a group
+   * without memberResources and for one started before this field existed.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+   * @return Whether the resources field is set.
+   */
+  boolean hasResources();
+  /**
+   * <pre>
+   * What the member's Server carries: the resolved values, with the group's
+   * filled in where the start left them out. Empty for a member of a group
+   * without memberResources and for one started before this field existed.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+   * @return The resources.
+   */
+  cloud.spawnery.agent.pb.StartResources getResources();
+  /**
+   * <pre>
+   * What the member's Server carries: the resolved values, with the group's
+   * filled in where the start left them out. Empty for a member of a group
+   * without memberResources and for one started before this field existed.
+   * </pre>
+   *
+   * <code>.spawnery.agent.v1alpha1.StartResources resources = 3;</code>
+   */
+  cloud.spawnery.agent.pb.StartResourcesOrBuilder getResourcesOrBuilder();
+
+  /**
+   * <pre>
+   * Set by an operator that knows per-start resources, on every answer to a
+   * request that carried any. An older operator cannot set it, which is how
+   * the agent tells it apart.
+   * </pre>
+   *
+   * <code>bool resources_understood = 4;</code>
+   * @return The resourcesUnderstood.
+   */
+  boolean getResourcesUnderstood();
 }
