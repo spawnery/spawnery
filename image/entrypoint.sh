@@ -147,8 +147,8 @@ if [ -n "${SPAWNERY_SUBSTITUTION_PREFIX:-}" ]; then
 		--pair "$PLUGIN_SOURCE=plugins" --pair "$FILE_SOURCE=." || exit 1
 fi
 
-# MaxRAMPercentage rather than -Xmx: the image does not know the group's
-# memory limit. The remaining flags are the ones Paper recommends.
+# Without SPAWNERY_HEAP the image does not know the container's memory limit,
+# hence MaxRAMPercentage. The remaining flags are the ones Paper recommends.
 #
 # AlwaysPreTouch claims the whole heap at start. Without a memory limit that
 # is three quarters of the node, so the flag is dropped then. cgroup v1's
@@ -215,8 +215,13 @@ elif [ -f "$AOT_CACHE" ]; then
 	esac
 fi
 
+HEAP="-XX:MaxRAMPercentage=75"
+if [ -n "${SPAWNERY_HEAP:-}" ]; then
+	HEAP="-Xmx$SPAWNERY_HEAP"
+fi
+
 exec java \
-	-XX:MaxRAMPercentage=75 \
+	"$HEAP" \
 	-XX:+UseG1GC \
 	${PRETOUCH:+$PRETOUCH} \
 	-XX:+ParallelRefProcEnabled \
