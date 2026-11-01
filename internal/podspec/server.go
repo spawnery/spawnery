@@ -103,6 +103,7 @@ const (
 	configOverlayDir = "overlay"
 
 	EnvOperatorEndpoint = "SPAWNERY_OPERATOR_ENDPOINT"
+	EnvHeap             = "SPAWNERY_HEAP"
 
 	// TokenExpirationSeconds is short to keep the replay window small; the
 	// kubelet rotates the token well before it runs out.
@@ -162,6 +163,13 @@ func configOverlayVolume(overlay *spawneryv1alpha1.ObjectRef) *corev1.Volume {
 	}
 }
 
+func heapEnv(srv *spawneryv1alpha1.Server) []corev1.EnvVar {
+	if srv.Spec.Heap == nil {
+		return nil
+	}
+	return []corev1.EnvVar{{Name: EnvHeap, Value: strconv.FormatInt(srv.Spec.Heap.Value()>>20, 10) + "m"}}
+}
+
 // BuildServerPod's pod is owned by the Server, so deleting the Server cascades.
 func BuildServerPod(
 	net *spawneryv1alpha1.Network,
@@ -176,7 +184,10 @@ func BuildServerPod(
 		return nil, fmt.Errorf("server group %q has no agent endpoint", group.Name)
 	}
 
-	resources := group.Spec.Resources
+	resources := srv.Spec.Resources
+	if resources == nil {
+		resources = group.Spec.Resources
+	}
 	if resources == nil && net.Spec.Defaults != nil {
 		resources = net.Spec.Defaults.Resources
 	}
@@ -279,13 +290,13 @@ func BuildServerPod(
 			Protocol:      corev1.ProtocolTCP,
 		}},
 		// The group's own variables come last; ReservedEnvPrefix and the CEL rule on
-		// spec.env, not order, protect the operator's four.
-		Env: append(append(append(append(append([]corev1.EnvVar{
+		// spec.env, not order, protect the operator's own.
+		Env: append(append(append(append(append(append([]corev1.EnvVar{
 			{Name: "SPAWNERY_NETWORK", Value: net.Name},
 			{Name: "SPAWNERY_GROUP", Value: group.Name},
 			{Name: "SPAWNERY_SERVER", Value: srv.Name},
 			{Name: EnvOperatorEndpoint, Value: agentEndpoint},
-		}, substitutionEnv(group.Spec.Substitution)...), keepEnv(group.Spec.Storage)...), replaceEnv(group.Spec.Storage)...), worldSyncEnv(group)...), group.Spec.Env...),
+		}, heapEnv(srv)...), substitutionEnv(group.Spec.Substitution)...), keepEnv(group.Spec.Storage)...), replaceEnv(group.Spec.Storage)...), worldSyncEnv(group)...), group.Spec.Env...),
 		VolumeMounts: mounts,
 		// Readiness only: a liveness restart would kick every player, whereas the
 		// state machine deregisters on a red readiness probe.
