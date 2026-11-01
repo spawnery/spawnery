@@ -123,9 +123,10 @@ that answers it. An operator that enforced it would need all three.
 
 ## Choosing resources at the start
 
-Every member gets the group's `spec.resources` unless the group lets a start
-choose its own. A network that offers private worlds in several sizes opts in
-with `spec.memberResources`:
+Every member gets the group's `spec.resources`, or the network's default where
+the group sets none, unless the group lets a start choose its own. A network
+that offers private worlds in several sizes opts in with
+`spec.memberResources`:
 
 ```yaml
 spec:
@@ -140,8 +141,8 @@ spec:
     nonHeap: 2Gi
 ```
 
-`max` bounds every request and every limit a member ends up with, including
-the ones it takes from the group. It has to name `memory`; `cpu` is optional,
+`max` bounds every request and limit of the resources it names, including the
+ones taken from the group. It has to name `memory`; `cpu` is optional,
 and a start may not set a resource that `max` does not name. `nonHeap`, `2Gi`
 unless set, is what a start's memory limit leaves outside the heap when the
 start gives no heap of its own. The API server refuses a group whose
@@ -179,13 +180,15 @@ With the group above, the first one runs with a request of 2Gi, a limit of
   server sizes the heap as servers always have, with `MaxRAMPercentage=75` or
   the group's own `-Xmx`.
 
-The start is `REFUSED`, with a message that names the field and both numbers,
-when
+The start is `REFUSED`, with a message that names the field and the
+numbers involved, when
 
 - it carries values and the group has no `memberResources`;
 - a value is not a quantity, is not positive, or is a heap below `1Mi`;
 - it sets a resource `max` does not name;
 - a request is above its limit;
+- a memory limit leaves less than `1Mi` after `nonHeap` and the start gives no
+  heap, for example a `memoryLimit` of `2Gi` with the default `nonHeap` of `2Gi`;
 - the heap is not below the memory limit, or a heap is given and neither the
   start nor the group sets a memory limit;
 - any resolved request or limit is above `max`, also one taken from the group
@@ -226,6 +229,12 @@ agree, the condition is `False` with reason `HeapAsAsked`. Besides
 `_JAVA_OPTIONS`, this is how an image built before per-start heaps shows up:
 it ignores the heap the operator passes it.
 
+A group-level `-Xms` in `spec.env` that is larger than a start's heap makes the
+JVM refuse to start ("Initial heap size set to a larger value than the maximum
+heap size"). Such a member never reports a heap, so `HeapMismatch` cannot flag
+it. A group that uses `memberResources` should not set `-Xms`, or should keep
+it at or below the smallest heap it starts.
+
 ```bash
 kubectl get server private-servers-<key> -n minecraft \
   -o jsonpath='{.status.conditions[?(@.type=="HeapMismatch")]}'
@@ -243,9 +252,11 @@ heap within 5 % of 2Gi (`HeapAsAsked`). A start with an 8Gi limit against
 An agent older than 0.33.0 has no `startServer` with `StartOptions`. A newer
 agent against an operator that predates per-start resources fails the stage
 with an `IllegalStateException` that says the operator does not know
-per-start resources. That operator has started the member anyway, with the
-group's values, and the member keeps running; stop it if those values are not
-good enough. A start without options is not affected.
+per-start resources and that the member runs with the group's values. For a
+key that was not running, that operator started the member with the group's
+values, and it keeps running; stop it if those values are not good enough. For
+a key that was running, it started nothing. A start without options is not
+affected.
 
 ## Stopping keeps the world; deleting removes it
 
