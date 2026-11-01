@@ -26,6 +26,7 @@ import (
 
 	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/resource"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -577,7 +578,7 @@ func TestStartRefusesAnOnDemandGroupWithNoCeiling(t *testing.T) {
 		Clock:  time.Now,
 	}
 
-	_, err := w.StartServer(context.Background(), "ns", "private-servers", "c0ffee")
+	_, err := w.StartServer(context.Background(), "ns", "private-servers", "c0ffee", nil)
 	if !errors.Is(err, ErrNoCeiling) {
 		t.Fatalf("err = %v, want ErrNoCeiling: an unbounded group started a member", err)
 	}
@@ -647,5 +648,34 @@ func TestAmongFullRoundsAGroupTargetPicksOneWithRoomLeft(t *testing.T) {
 	})
 	if !ok || got != "duels-b" {
 		t.Errorf("target = %q ok=%v, want duels-b: duels-a is at its hard limit", got, ok)
+	}
+}
+
+// The create race's loser is answered like a second press: with the winner's values.
+func TestTheLoserOfACreateRaceIsAnsweredWithTheWinnersValues(t *testing.T) {
+	scheme := runtime.NewScheme()
+	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	heap := resource.MustParse("5Gi")
+	winner := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "private-servers-c0ffee", Namespace: "ns"},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "private-servers"},
+			Key:      "c0ffee",
+			Resources: &corev1.ResourceRequirements{
+				Limits: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("7Gi")},
+			},
+			Heap: &heap,
+		},
+	}
+	w := KubeWriter{Client: fake.NewClientBuilder().WithScheme(scheme).WithObjects(winner).Build()}
+
+	got, err := w.occupant(context.Background(), "ns", "private-servers-c0ffee", "private-servers", "c0ffee")
+	if err != nil {
+		t.Fatalf("occupant: %v", err)
+	}
+	if !got.AlreadyRunning || got.Resources.GetMemoryLimit() != "7Gi" || got.Resources.GetHeap() != "5Gi" {
+		t.Errorf("got %+v, want already running with memory limit 7Gi and heap 5Gi", got)
 	}
 }

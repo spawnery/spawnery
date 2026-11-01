@@ -642,8 +642,11 @@ func (s *Server) answerStartServer(
 	reqID uint64,
 	req *agentpb.StartServerRequest,
 ) *agentpb.CloudResponse {
-	member, err := s.opts.Writer.StartServer(ctx, id.Namespace, req.GetGroup(), req.GetKey())
+	member, err := s.opts.Writer.StartServer(ctx, id.Namespace, req.GetGroup(), req.GetKey(), req.GetResources())
+	var refusal *ResourceRefusal
 	switch {
+	case errors.Is(err, ErrNoMemberResources), errors.As(err, &refusal):
+		return refuse(reqID, agentpb.RequestError_REFUSED, err.Error())
 	case errors.Is(err, ErrNoSuchGroup):
 		return refuse(reqID, agentpb.RequestError_NOT_FOUND,
 			"no group by that name is on this network")
@@ -683,8 +686,10 @@ func (s *Server) answerStartServer(
 	}
 
 	return startedServer(reqID, &agentpb.StartServerResult{
-		Server:         member.Name,
-		AlreadyRunning: member.AlreadyRunning,
+		Server:              member.Name,
+		AlreadyRunning:      member.AlreadyRunning,
+		Resources:           member.Resources,
+		ResourcesUnderstood: hasStartValues(req.GetResources()),
 	})
 }
 

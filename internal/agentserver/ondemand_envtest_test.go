@@ -79,9 +79,16 @@ func startOverTheWire(
 	t *testing.T, f *serverFixture, pod *corev1.Pod, group, key string,
 ) *agentpb.CloudResponse {
 	t.Helper()
+	return startWithResourcesOverTheWire(t, f, pod, group, key, nil)
+}
+
+func startWithResourcesOverTheWire(
+	t *testing.T, f *serverFixture, pod *corev1.Pod, group, key string, res *agentpb.StartResources,
+) *agentpb.CloudResponse {
+	t.Helper()
 	return askOverTheWire(t, f, pod, &agentpb.CloudRequest{
 		Request: &agentpb.CloudRequest_StartServer{
-			StartServer: &agentpb.StartServerRequest{Group: group, Key: key},
+			StartServer: &agentpb.StartServerRequest{Group: group, Key: key, Resources: res},
 		},
 	})
 }
@@ -97,7 +104,9 @@ func stopOverTheWire(
 	})
 }
 
-func makeOnDemandGroup(t *testing.T, f *serverFixture, name string, maxInstances int32) {
+func makeOnDemandGroup(
+	t *testing.T, f *serverFixture, name string, maxInstances int32, opts ...func(*spawneryv1alpha1.ServerGroup),
+) {
 	t.Helper()
 	g := &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns},
@@ -110,8 +119,19 @@ func makeOnDemandGroup(t *testing.T, f *serverFixture, name string, maxInstances
 			Storage:      &spawneryv1alpha1.StorageSpec{Size: resource.MustParse("2Gi")},
 		},
 	}
+	for _, opt := range opts {
+		opt(g)
+	}
 	if err := f.c.Create(f.ctx, g); err != nil {
 		t.Fatalf("create group %s: %v", name, err)
+	}
+}
+
+func withMaxMemory(memory string) func(*spawneryv1alpha1.ServerGroup) {
+	return func(g *spawneryv1alpha1.ServerGroup) {
+		g.Spec.MemberResources = &spawneryv1alpha1.MemberResourcesSpec{
+			Max: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse(memory)},
+		}
 	}
 }
 
@@ -748,5 +768,145 @@ func TestDeleteRefusesAWorldWithoutItsKeyLabel(t *testing.T) {
 	wantReason(t, deleteOverTheWire(t, f, pod, "private-servers", "c0ffee"), agentpb.RequestError_REFUSED)
 	if claimGoing(t, f, "private-servers-c0ffee") {
 		t.Fatal("a world without its key label was deleted")
+	}
+}
+
+func TestStartWithResourcesStampsTheMember(t *testing.T) {
+	f := newServerFixture(t)
+	makeOnDemandGroup(t, f, "private-servers", 2, withMaxMemory("16Gi"))
+	pod := f.proxyPod("gateway-aaaa")
+
+	resp := startWithResourcesOverTheWire(t, f, pod, "private-servers", "c0ffee",
+		&agentpb.StartResources{MemoryLimit: "7Gi"})
+	if resp.GetError() != nil {
+		t.Fatalf("refused: %s", resp.GetError().GetMessage())
+	}
+
+	srv := member(t, f, "private-servers-c0ffee")
+	if srv.Spec.Resources == nil {
+		t.Fatal("spec.resources is unset")
+	}
+	if got := srv.Spec.Resources.Limits[corev1.ResourceMemory]; got.String() != "7Gi" {
+		t.Errorf("spec.resources.limits.memory = %s, want 7Gi", got.String())
+	}
+	if srv.Spec.Heap == nil || srv.Spec.Heap.String() != "5Gi" {
+		t.Errorf("spec.heap = %v, want 5Gi", srv.Spec.Heap)
+	}
+
+	got := resp.GetStartServer()
+	if got.GetResources().GetMemoryLimit() != "7Gi" || got.GetResources().GetHeap() != "5Gi" {
+		t.Errorf("answered resources = %+v, want memory limit 7Gi and heap 5Gi", got.GetResources())
+	}
+	if !got.GetResourcesUnderstood() {
+		t.Error("resources_understood is false on an answer to a start that carried values")
+	}
+}
+
+func TestStartWithResourcesOnAGroupWithoutMemberResourcesIsRefused(t *testing.T) {
+	f := newServerFixture(t)
+	makeOnDemandGroup(t, f, "private-servers", 2)
+	pod := f.proxyPod("gateway-aaaa")
+
+	resp := startWithResourcesOverTheWire(t, f, pod, "private-servers", "c0ffee",
+		&agentpb.StartResources{MemoryLimit: "7Gi"})
+	if got := resp.GetError().GetReason(); got != agentpb.RequestError_REFUSED {
+		t.Fatalf("reason = %v (%s), want REFUSED", got, resp.GetError().GetMessage())
+	}
+	if !strings.Contains(resp.GetError().GetMessage(), "memberResources") {
+		t.Errorf("message = %q, which does not name spec.memberResources", resp.GetError().GetMessage())
+	}
+	var servers spawneryv1alpha1.ServerList
+	if err := f.c.List(f.ctx, &servers, client.InNamespace(f.ns)); err != nil {
+		t.Fatalf("list: %v", err)
+	}
+	if len(servers.Items) != 0 {
+		t.Fatalf("%d servers exist after a refused start, want 0", len(servers.Items))
+	}
+}
+
+// A value the group never allows is the caller's mistake; calling it a full group
+// would send the caller to wait for a slot that would not help.
+func TestStartAboveMaxIsRefusedEvenAtTheCeiling(t *testing.T) {
+	f := newServerFixture(t)
+	makeOnDemandGroup(t, f, "private-servers", 1, withMaxMemory("16Gi"))
+	pod := f.proxyPod("gateway-aaaa")
+
+	if resp := startOverTheWire(t, f, pod, "private-servers", "one"); resp.GetError() != nil {
+		t.Fatalf("the first start was refused: %s", resp.GetError().GetMessage())
+	}
+	resp := startWithResourcesOverTheWire(t, f, pod, "private-servers", "two",
+		&agentpb.StartResources{MemoryLimit: "32Gi"})
+	if got := resp.GetError().GetReason(); got != agentpb.RequestError_REFUSED {
+		t.Fatalf("reason = %v (%s), want REFUSED", got, resp.GetError().GetMessage())
+	}
+	msg := resp.GetError().GetMessage()
+	if !strings.Contains(msg, "32Gi") || !strings.Contains(msg, "16Gi") {
+		t.Errorf("message = %q, want the resources refusal naming 32Gi and 16Gi", msg)
+	}
+	if strings.Contains(msg, "maxInstances") {
+		t.Errorf("message = %q is the ceiling's, not the resources'", msg)
+	}
+	var srv spawneryv1alpha1.Server
+	if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "private-servers-two"}, &srv); err == nil {
+		t.Fatal("the refused member was created anyway")
+	}
+}
+
+// A second press must not fail because an admin tightened the group in between.
+func TestStartOfARunningMemberIgnoresAGroupEditedSince(t *testing.T) {
+	f := newServerFixture(t)
+	makeOnDemandGroup(t, f, "private-servers", 2, withMaxMemory("16Gi"))
+	pod := f.proxyPod("gateway-aaaa")
+
+	if resp := startWithResourcesOverTheWire(t, f, pod, "private-servers", "c0ffee",
+		&agentpb.StartResources{MemoryLimit: "7Gi"}); resp.GetError() != nil {
+		t.Fatalf("the first start was refused: %s", resp.GetError().GetMessage())
+	}
+
+	var g spawneryv1alpha1.ServerGroup
+	if err := f.c.Get(f.ctx, client.ObjectKey{Namespace: f.ns, Name: "private-servers"}, &g); err != nil {
+		t.Fatalf("get group: %v", err)
+	}
+	patch := client.MergeFrom(g.DeepCopy())
+	g.Spec.MemberResources.Max[corev1.ResourceMemory] = resource.MustParse("4Gi")
+	if err := f.c.Patch(f.ctx, &g, patch); err != nil {
+		t.Fatalf("lower max.memory: %v", err)
+	}
+
+	resp := startWithResourcesOverTheWire(t, f, pod, "private-servers", "c0ffee",
+		&agentpb.StartResources{MemoryLimit: "7Gi"})
+	if resp.GetError() != nil {
+		t.Fatalf("the second start was refused: %s", resp.GetError().GetMessage())
+	}
+	got := resp.GetStartServer()
+	if !got.GetAlreadyRunning() {
+		t.Error("already_running is false on the second start")
+	}
+	if got.GetResources().GetMemoryLimit() != "7Gi" {
+		t.Errorf("answered resources = %+v, want the running member's memory limit 7Gi", got.GetResources())
+	}
+	if !got.GetResourcesUnderstood() {
+		t.Error("resources_understood is false on an already_running answer to a start that carried values")
+	}
+}
+
+func TestStartWithoutValuesLeavesAGroupWithoutMemberResourcesUnstamped(t *testing.T) {
+	f := newServerFixture(t)
+	makeOnDemandGroup(t, f, "private-servers", 2)
+	pod := f.proxyPod("gateway-aaaa")
+
+	resp := startOverTheWire(t, f, pod, "private-servers", "c0ffee")
+	if resp.GetError() != nil {
+		t.Fatalf("refused: %s", resp.GetError().GetMessage())
+	}
+	srv := member(t, f, "private-servers-c0ffee")
+	if srv.Spec.Resources != nil || srv.Spec.Heap != nil {
+		t.Errorf("spec.resources = %+v, spec.heap = %v, want both unset", srv.Spec.Resources, srv.Spec.Heap)
+	}
+	if resp.GetStartServer().GetResources() != nil {
+		t.Errorf("answered resources = %+v, want none", resp.GetStartServer().GetResources())
+	}
+	if resp.GetStartServer().GetResourcesUnderstood() {
+		t.Error("resources_understood is set on an answer to a start that carried no values")
 	}
 }

@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
+	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/boost"
 	"github.com/spawnery/spawnery/internal/instance"
 	"github.com/spawnery/spawnery/internal/netstate"
@@ -131,8 +132,9 @@ type ClusterWriter interface {
 	StopBoosts(ctx context.Context, namespace, group string) (int, error)
 
 	// StartServer creates the member of an OnDemand group that carries key, or
-	// reports AlreadyRunning for one that is there.
-	StartServer(ctx context.Context, namespace, group, key string) (StartedServer, error)
+	// reports AlreadyRunning for one that is there. req may be nil. Values the
+	// group does not allow are ErrNoMemberResources or a *ResourceRefusal.
+	StartServer(ctx context.Context, namespace, group, key string, req *agentpb.StartResources) (StartedServer, error)
 
 	// StopServer deletes one member of an OnDemand group and returns
 	// ErrNotAnInstance for any other server.
@@ -169,6 +171,8 @@ type DeletedServer struct {
 type StartedServer struct {
 	Name           string
 	AlreadyRunning bool
+	// Resources is nil for a member without stamped values.
+	Resources *agentpb.StartResources
 }
 
 // Headroom is what a group's own spec leaves for a boost to ask for.
@@ -408,8 +412,12 @@ func (w KubeWriter) StopBoosts(ctx context.Context, namespace, group string) (in
 // takes a lock; on AlreadyExists, occupant reads the object in the way. The
 // ceiling is counted from the list, so two simultaneous creates can put a
 // group one over it.
+//
+// req is resolved after a running member is answered, so a second press
+// never fails on it, and before the ceiling, so a value the group never
+// allows is refused as such even when the group is full.
 func (w KubeWriter) StartServer(
-	ctx context.Context, namespace, group, key string,
+	ctx context.Context, namespace, group, key string, req *agentpb.StartResources,
 ) (StartedServer, error) {
 	name, err := instance.Name(group, key)
 	if err != nil {
@@ -473,7 +481,7 @@ func (w KubeWriter) StartServer(
 				}
 				continue
 			}
-			return StartedServer{Name: name, AlreadyRunning: true}, nil
+			return runningMember(m), nil
 		}
 		if phase.Terminal(phase.Phase(m.Status.Phase)) {
 			continue
@@ -482,6 +490,11 @@ func (w KubeWriter) StartServer(
 		if !m.DeletionTimestamp.IsZero() {
 			going++
 		}
+	}
+
+	resolved, stamp, err := w.resolveStart(ctx, &g, req)
+	if err != nil {
+		return StartedServer{}, err
 	}
 	if g.Spec.MaxInstances == nil {
 		return StartedServer{}, ErrNoCeiling
@@ -509,13 +522,41 @@ func (w KubeWriter) StartServer(
 			Key:      key,
 		},
 	}
+	if stamp {
+		srv.Spec.Resources = &resolved.Resources
+		srv.Spec.Heap = resolved.Heap
+	}
 	if err := w.Client.Create(ctx, srv); err != nil {
 		if apierrors.IsAlreadyExists(err) {
 			return w.occupant(ctx, namespace, name, group, key)
 		}
 		return StartedServer{}, err
 	}
-	return StartedServer{Name: name}, nil
+	return StartedServer{Name: name, Resources: netstate.ToStartResources(srv.Spec.Resources, srv.Spec.Heap)}, nil
+}
+
+// resolveStart takes a missing Network as one without defaults rather than
+// refusing: the Server controller already reports it on the member.
+func (w KubeWriter) resolveStart(
+	ctx context.Context, g *spawneryv1alpha1.ServerGroup, req *agentpb.StartResources,
+) (Resolved, bool, error) {
+	var net spawneryv1alpha1.Network
+	netp := &net
+	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: g.Namespace, Name: g.Spec.NetworkRef.Name}, &net); err != nil {
+		if !apierrors.IsNotFound(err) {
+			return Resolved{}, false, err
+		}
+		netp = nil
+	}
+	return ResolveStartResources(g, EffectiveResources(netp, g), req)
+}
+
+func runningMember(m *spawneryv1alpha1.Server) StartedServer {
+	return StartedServer{
+		Name:           m.Name,
+		AlreadyRunning: true,
+		Resources:      netstate.ToStartResources(m.Spec.Resources, m.Spec.Heap),
+	}
 }
 
 // occupant says what the object already holding name means for this caller.
@@ -535,7 +576,7 @@ func (w KubeWriter) occupant(
 	if !existing.DeletionTimestamp.IsZero() || phase.Terminal(phase.Phase(existing.Status.Phase)) {
 		return StartedServer{}, ErrInstanceStopping
 	}
-	return StartedServer{Name: name, AlreadyRunning: true}, nil
+	return runningMember(&existing), nil
 }
 
 func (w KubeWriter) StopServer(ctx context.Context, namespace, name string) error {
