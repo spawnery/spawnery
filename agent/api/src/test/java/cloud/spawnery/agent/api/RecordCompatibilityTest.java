@@ -88,4 +88,11 @@ class RecordCompatibilityTest {
         ServerInfo server = new ServerInfo("lobby-a", "lobby", ServerPhase.READY, 1, 20, true, "", Map.of(), "", 0, false, "node-1", 20);
         assertEquals(ServerResources.NONE, server.resources());
     }
+
+    @Test
+    void thePreUnschedulableConstructorStillBuildsAndReadsAsPlaceable() {
+        ServerInfo server = new ServerInfo("lobby-a", "lobby", ServerPhase.READY, 1, 20, true, "", Map.of(), "", 0, false, "node-1", 20,
+                ServerResources.NONE);
+        assertEquals(false, server.unschedulable());
+    }
 }

@@ -337,6 +337,29 @@ class NetworkMirrorTest {
     }
 
     @Test
+    fun `a server the scheduler cannot place reads as unschedulable`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addServers(
+                ServerState.newBuilder().setName("duels-a").setGroup("duels").setPhase("Pending")
+                    .setUnschedulable(true),
+            ).build(),
+        )
+        assertEquals(true, mirror.servers().single().unschedulable())
+    }
+
+    @Test
+    fun `a state without the field reads as placeable`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder().addServers(
+                ServerState.newBuilder().setName("duels-a").setGroup("duels").setPhase("Pending"),
+            ).build(),
+        )
+        assertEquals(false, mirror.servers().single().unschedulable())
+    }
+
+    @Test
     fun `a state without resources reads as NONE`() {
         val mirror = NetworkMirror()
         mirror.apply(
