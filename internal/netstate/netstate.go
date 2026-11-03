@@ -25,6 +25,7 @@ import (
 	"sort"
 
 	corev1 "k8s.io/api/core/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -32,6 +33,7 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/agentpb"
+	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
@@ -171,27 +173,8 @@ func (s Source) Build(ctx context.Context, namespace string, audience Audience) 
 		if audience == ForServers && IsPrivateServer(srv) {
 			continue
 		}
-		announced := announcements[srv.Name]
-		state.Servers = append(state.Servers, &agentpb.ServerState{
-			Name:  srv.Name,
-			Group: srv.Spec.GroupRef.Name,
-			// Unmapped, so an agent older than a phase reads it as unknown.
-			Phase:         srv.Status.Phase,
-			Players:       srv.Status.Players,
-			Slots:         srv.Status.Slots,
-			PlayableSlots: srv.Status.PlayableSlots,
-			Registered:    srv.Status.Registered,
-			State:         announced.State,
-			Attributes:    announced.Attributes,
-			Incarnation:   srv.Status.PodUID,
-			Number:        srv.Spec.Number,
-			Held:          srv.Spec.Hold,
-			Node:          nodeOf[srv.Status.PodName],
-			Resources:     ToStartResources(srv.Spec.Resources, srv.Spec.Heap),
-			// Keyed by pod UID: a persistent server's name outlives the pod that
-			// closed this door.
-			JoinsClosed: closedDoors[srv.Status.PodUID],
-		})
+		state.Servers = append(state.Servers, serverState(
+			srv, nodeOf[srv.Status.PodName], announcements[srv.Name], closedDoors[srv.Status.PodUID]))
 	}
 
 	// The staleness flag is not consulted: a namespace with no fresh proxy and one
@@ -235,6 +218,59 @@ func (s Source) Build(ctx context.Context, namespace string, audience Audience) 
 	sort.Slice(state.Servers, func(i, j int) bool { return state.Servers[i].Name < state.Servers[j].Name })
 	sort.Slice(state.Players, func(i, j int) bool { return state.Players[i].Uuid < state.Players[j].Uuid })
 	return state, nil
+}
+
+// Unschedulable reports whether the Kubernetes scheduler has found no node for
+// the server's pod: the server is Pending and its Ready condition carries
+// PodUnschedulable. It reads the status the Server controller wrote, so the
+// agents, the state machine and the group's Progressing condition agree.
+func Unschedulable(srv *spawneryv1alpha1.Server) bool {
+	if srv.Status.Phase != string(phase.Pending) {
+		return false
+	}
+	c := meta.FindStatusCondition(srv.Status.Conditions, spawneryv1alpha1.ConditionReady)
+	return c != nil && c.Reason == phase.ReasonPodUnschedulable
+}
+
+// serverState is one server's entry in a picture. announced and joinsClosed
+// are what the agents reported, which no CR carries.
+func serverState(srv *spawneryv1alpha1.Server, node string, announced agent.Announcement, joinsClosed bool) *agentpb.ServerState {
+	return &agentpb.ServerState{
+		Name:  srv.Name,
+		Group: srv.Spec.GroupRef.Name,
+		// Unmapped, so an agent older than a phase reads it as unknown.
+		Phase:         srv.Status.Phase,
+		Players:       srv.Status.Players,
+		Slots:         srv.Status.Slots,
+		PlayableSlots: srv.Status.PlayableSlots,
+		Registered:    srv.Status.Registered,
+		State:         announced.State,
+		Attributes:    announced.Attributes,
+		Incarnation:   srv.Status.PodUID,
+		Number:        srv.Spec.Number,
+		Held:          srv.Spec.Hold,
+		Node:          node,
+		Resources:     ToStartResources(srv.Spec.Resources, srv.Spec.Heap),
+		// Cleared by a node: the status can lag the bind by one reconcile, and
+		// the two fields never both say yes.
+		Unschedulable: node == "" && Unschedulable(srv),
+		// Keyed by pod UID: a persistent server's name outlives the pod that
+		// closed this door.
+		JoinsClosed: joinsClosed,
+	}
+}
+
+// Visible is the part of a server's entry that a lifecycle change moves: its
+// phase, its pod, where it runs and whether it can be placed. What a report
+// moves (players, slots, announcements, the door) is left blank, so comparing
+// two of these tells whether a proxy needs a fresh picture now or can wait for
+// the next resync.
+func Visible(srv *spawneryv1alpha1.Server, node string) *agentpb.ServerState {
+	state := serverState(srv, node, agent.Announcement{}, false)
+	state.Players = 0
+	state.Slots = 0
+	state.PlayableSlots = 0
+	return state
 }
 
 // serverGroupKind maps a ServerGroup's type onto the wire enum. An unknown type

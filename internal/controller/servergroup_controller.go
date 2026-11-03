@@ -46,6 +46,7 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
 	boostpkg "github.com/spawnery/spawnery/internal/boost"
+	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 	"github.com/spawnery/spawnery/internal/render"
@@ -1053,15 +1054,14 @@ func (r *ServerGroupReconciler) collectViews(
 			Registered: srv.Status.Registered,
 			// AcceptingJoins is true for a pod the registry has never heard from,
 			// so after an operator restart every door reads open until restated.
-			JoinsClosed:  !snap.AcceptingJoins,
-			SessionsGone: srv.Status.PodName != "" && (!podFound || podTerminal(pod)),
-			Generation:   srv.Spec.GroupGeneration,
-			PodHash:      srv.Spec.PodHash,
-			Retire:       srv.Spec.Retire,
-			Hold:         srv.Spec.Hold,
-			CreatedAt:    srv.CreationTimestamp.Time,
-			Unschedulable: phase.Phase(srv.Status.Phase) == phase.Pending &&
-				readyReasonIs(srv, phase.ReasonPodUnschedulable),
+			JoinsClosed:   !snap.AcceptingJoins,
+			SessionsGone:  srv.Status.PodName != "" && (!podFound || podTerminal(pod)),
+			Generation:    srv.Spec.GroupGeneration,
+			PodHash:       srv.Spec.PodHash,
+			Retire:        srv.Spec.Retire,
+			Hold:          srv.Spec.Hold,
+			CreatedAt:     srv.CreationTimestamp.Time,
+			Unschedulable: netstate.Unschedulable(srv),
 			// Without a readable live pod there is nothing to condemn: no pod, or one
 			// already being removed. A failed Get declines too, as nodeDeparting does
 			// for an unreadable Node; the next pass asks again.
