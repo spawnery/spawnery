@@ -32,7 +32,10 @@ import java.util.concurrent.CompletionStage;
  * {@link #player} -- never crosses a network, blocks, or fails: there is no
  * timeout and no exception to handle. What it returns is the last thing the
  * operator said, which during a reconnect may be a few seconds old and is
- * never wrong about a moment that happened. Each stage-returning method says
+ * never wrong about a moment that happened. A proxy is told of a server's
+ * lifecycle (created, placed, unschedulable, gone) within about a second;
+ * counts and announcements arrive with the operator's 30 second resync, and a
+ * backend's mirror is refreshed by that resync alone. Each stage-returning method says
  * how it can fail; {@link #holdReadiness} is local and throws on a proxy.
  *
  * <p><b>Consume this interface; do not implement it.</b> New methods break
