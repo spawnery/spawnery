@@ -233,6 +233,7 @@ message spawnery.agent.v1alpha1.ServerState 12 node string
 message spawnery.agent.v1alpha1.ServerState 13 playable_slots int32
 message spawnery.agent.v1alpha1.ServerState 14 joins_closed bool
 message spawnery.agent.v1alpha1.ServerState 15 resources spawnery.agent.v1alpha1.StartResources
+message spawnery.agent.v1alpha1.ServerState 16 unschedulable bool
 message spawnery.agent.v1alpha1.SessionDeadline 1 renew_after_seconds int32
 message spawnery.agent.v1alpha1.SessionDeadline 2 hard_deadline_seconds int32
 message spawnery.agent.v1alpha1.SetReady 1 ready bool

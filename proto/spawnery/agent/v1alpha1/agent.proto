@@ -776,6 +776,11 @@ message ServerState {
   // What the member was started with, as the operator resolved it; unset for a
   // server that carries no per-start resources.
   StartResources resources = 15;
+  // True while the Kubernetes scheduler cannot place this server's pod: the
+  // server is Pending and its Ready condition carries PodUnschedulable. Never
+  // true together with node. False before the scheduler has looked, once the
+  // pod is placed, and from an operator older than this field.
+  bool unschedulable = 16;
 }
 
 // ProxyState is one proxy pod as the operator last saw it.
