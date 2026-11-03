@@ -33,7 +33,7 @@ import java.util.concurrent.CompletionStage;
  * timeout and no exception to handle. What it returns is the last thing the
  * operator said, which during a reconnect may be a few seconds old and is
  * never wrong about a moment that happened. A proxy is told of a server's
- * lifecycle (created, placed, unschedulable, gone) within about a second;
+ * lifecycle (created, placed, unschedulable, gone) usually within a second;
  * counts and announcements arrive with the operator's 30 second resync, and a
  * backend's mirror is refreshed by that resync alone. Each stage-returning method says
  * how it can fail; {@link #holdReadiness} is local and throws on a proxy.
