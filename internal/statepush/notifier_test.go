@@ -36,6 +36,16 @@ func (r *recordingTarget) SendState(_ context.Context, namespace string) {
 	r.sends = append(r.sends, namespace)
 }
 
+type blockingTarget struct {
+	release chan struct{}
+	entered chan struct{}
+}
+
+func (b *blockingTarget) SendState(context.Context, string) {
+	b.entered <- struct{}{}
+	<-b.release
+}
+
 func (r *recordingTarget) count(namespace string) int {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -65,8 +75,30 @@ func TestTheFirstChangeInAQuietNamespaceGoesOutAtOnce(t *testing.T) {
 
 	n.Changed("a")
 
-	if got := target.count("a"); got != 1 {
-		t.Errorf("pushes = %d right after the first change, want 1", got)
+	target.waitFor(t, "a", 1)
+}
+
+func TestAPushThatBlocksDoesNotBlockTheCaller(t *testing.T) {
+	release := make(chan struct{})
+	target := &blockingTarget{release: release, entered: make(chan struct{}, 1)}
+	n := New(Options{Proxies: target, Interval: time.Hour})
+	defer close(release)
+
+	returned := make(chan struct{})
+	go func() {
+		n.Changed("a")
+		close(returned)
+	}()
+
+	select {
+	case <-returned:
+	case <-time.After(2 * time.Second):
+		t.Fatal("Changed waited for the push it started")
+	}
+	select {
+	case <-target.entered:
+	case <-time.After(2 * time.Second):
+		t.Fatal("the push never reached the target")
 	}
 }
 
@@ -77,6 +109,7 @@ func TestABurstSharesOnePushAtTheEndOfTheInterval(t *testing.T) {
 	for i := 0; i < 50; i++ {
 		n.Changed("a")
 	}
+	target.waitFor(t, "a", 1)
 	if got := target.count("a"); got != 1 {
 		t.Fatalf("pushes = %d right after the burst, want the first one only", got)
 	}
@@ -96,6 +129,8 @@ func TestANamespaceQuietForAnIntervalPushesAtOnceAgain(t *testing.T) {
 	time.Sleep(2 * testInterval)
 	n.Changed("a")
 
+	target.waitFor(t, "a", 2)
+	time.Sleep(2 * testInterval)
 	if got := target.count("a"); got != 2 {
 		t.Errorf("pushes = %d, want 2: a change after a quiet interval waits for nothing", got)
 	}
@@ -108,6 +143,8 @@ func TestNamespacesAreThrottledSeparately(t *testing.T) {
 	n.Changed("a")
 	n.Changed("b")
 
+	target.waitFor(t, "a", 1)
+	target.waitFor(t, "b", 1)
 	if target.count("a") != 1 || target.count("b") != 1 {
 		t.Errorf("pushes a=%d b=%d, want 1 each", target.count("a"), target.count("b"))
 	}
@@ -122,6 +159,7 @@ func TestStartReturnsWhenItsContextEndsAndDropsWhatWaits(t *testing.T) {
 
 	n.Changed("a")
 	n.Changed("a")
+	target.waitFor(t, "a", 1)
 	cancel()
 	select {
 	case err := <-done:

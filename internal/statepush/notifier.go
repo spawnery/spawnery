@@ -46,9 +46,9 @@ type Options struct {
 }
 
 // Notifier pushes the picture of a namespace when something in it changed. The
-// first change in a quiet namespace goes out at once; changes that follow
-// within the interval share one push at its end, built from whatever the cache
-// holds by then.
+// first change in a quiet namespace goes out at once, without making the caller
+// wait for it; changes that follow within the interval share one push at its
+// end, built from whatever the cache holds by then.
 type Notifier struct {
 	proxies  Target
 	interval time.Duration
@@ -108,7 +108,10 @@ func (n *Notifier) Changed(namespace string) {
 	ctx := n.ctx
 	n.mu.Unlock()
 
-	n.proxies.SendState(ctx, namespace)
+	// Off the caller's goroutine: SendState can wait on the registry's lock
+	// while a resync holds it, and the caller is the Server controller's one
+	// worker.
+	go n.proxies.SendState(ctx, namespace)
 }
 
 func (n *Notifier) flush(namespace string) {
