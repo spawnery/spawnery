@@ -54,6 +54,7 @@ import (
 	"github.com/spawnery/spawnery/internal/proxyreg"
 	"github.com/spawnery/spawnery/internal/rbacaudit"
 	"github.com/spawnery/spawnery/internal/serverreg"
+	"github.com/spawnery/spawnery/internal/statepush"
 	"github.com/spawnery/spawnery/internal/version"
 	"github.com/spawnery/spawnery/internal/worldsync"
 )
@@ -385,6 +386,12 @@ func main() {
 		os.Exit(1)
 	}
 
+	statePush := statepush.New(statepush.Options{Proxies: proxies})
+	if err := mgr.Add(statePush); err != nil {
+		setupLog.Error(err, "unable to add the state push")
+		os.Exit(1)
+	}
+
 	fleet := &agentserver.FleetCounter{Pods: mgr.GetClient()}
 	if err := mgr.Add(fleet); err != nil {
 		setupLog.Error(err, "unable to add the fleet counter")
@@ -479,6 +486,7 @@ func main() {
 		AgentEndpoint:     agentEndpoint(operatorNamespace),
 		OperatorNamespace: operatorNamespace,
 		Proxies:           proxies,
+		State:             statePush,
 		DrainTaintKeys:    drainTaints,
 	}); err != nil {
 		setupLog.Error(err, "unable to set up controllers")

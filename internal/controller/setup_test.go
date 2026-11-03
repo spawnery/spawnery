@@ -135,6 +135,39 @@ func TestSetupAllThreadsTheDrainTaintKeys(t *testing.T) {
 	}
 }
 
+// A notifier left unwired is a server controller that never tells the proxies
+// anything, and nothing else fails.
+func TestSetupAllThreadsTheStateNotifier(t *testing.T) {
+	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	clock := &testClock{now: start}
+
+	mgr, err := ctrl.NewManager(testenv.Config(t), manager.Options{
+		Scheme:         testenv.Scheme(t),
+		Metrics:        metricsserver.Options{BindAddress: "0"},
+		LeaderElection: false,
+	})
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	state := &recordingState{}
+	opts := Options{
+		Agents:    agent.New(clock.Now, 5*time.Second, start),
+		Clock:     clock.Now,
+		Registrar: NoopRegistrar{},
+		Bootstrapper: &Bootstrapper{
+			Client: mgr.GetClient(), Reader: mgr.GetAPIReader(),
+			CA: func() []byte { return []byte("test-ca") },
+		},
+		Proxies: &recordingFleet{},
+		State:   state,
+	}
+
+	if got := newServerReconciler(mgr, opts).State; got != StateNotifier(state) {
+		t.Errorf("ServerReconciler.State = %v, want the notifier from Options", got)
+	}
+}
+
 // An empty OperatorNamespace renders a legal selector that matches no
 // namespace, silently cutting every agent off from the operator.
 func TestSetupAllThreadsTheOperatorNamespace(t *testing.T) {

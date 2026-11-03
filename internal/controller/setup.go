@@ -65,6 +65,9 @@ type Options struct {
 	OperatorNamespace string
 	// Proxies tells a surplus proxy to stop taking connections. Required.
 	Proxies ProxyReadinessSetter
+	// State is told when a server changes in a way the proxies show; nil means
+	// they learn of it at the next resync.
+	State StateNotifier
 	// DrainTaintKeys mark a node as departing beside spec.unschedulable, for
 	// autoscalers that taint without cordoning.
 	DrainTaintKeys []string
@@ -97,21 +100,7 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 		return fmt.Errorf("setup server group controller: %w", err)
 	}
 
-	if err := (&ServerReconciler{
-		Client:               mgr.GetClient(),
-		Scheme:               mgr.GetScheme(),
-		Recorder:             cloudevent.Recorder{Inner: mgr.GetEventRecorder("server"), Sink: opts.Events},
-		Agents:               opts.Agents,
-		Clock:                opts.Clock,
-		StartupDeadline:      opts.StartupDeadline,
-		PlayerStatusInterval: opts.PlayerStatusInterval,
-		Registrar:            opts.Registrar,
-		Bootstrap:            opts.Bootstrapper,
-		AgentEndpoint:        opts.AgentEndpoint,
-		AOTCache:             opts.AOTCache,
-		WorldSync:            opts.WorldSync,
-		WorldSyncInterval:    opts.WorldSyncInterval,
-	}).SetupWithManager(mgr); err != nil {
+	if err := newServerReconciler(mgr, opts).SetupWithManager(mgr); err != nil {
 		return fmt.Errorf("setup server controller: %w", err)
 	}
 
@@ -144,6 +133,25 @@ func newNetworkReconciler(mgr ctrl.Manager, opts Options) *NetworkReconciler {
 		Bootstrap:         opts.Bootstrapper,
 		Agents:            opts.Agents,
 		ReportInterval:    opts.ReportInterval,
+	}
+}
+
+func newServerReconciler(mgr ctrl.Manager, opts Options) *ServerReconciler {
+	return &ServerReconciler{
+		Client:               mgr.GetClient(),
+		Scheme:               mgr.GetScheme(),
+		Recorder:             cloudevent.Recorder{Inner: mgr.GetEventRecorder("server"), Sink: opts.Events},
+		Agents:               opts.Agents,
+		Clock:                opts.Clock,
+		StartupDeadline:      opts.StartupDeadline,
+		PlayerStatusInterval: opts.PlayerStatusInterval,
+		Registrar:            opts.Registrar,
+		Bootstrap:            opts.Bootstrapper,
+		AgentEndpoint:        opts.AgentEndpoint,
+		AOTCache:             opts.AOTCache,
+		WorldSync:            opts.WorldSync,
+		WorldSyncInterval:    opts.WorldSyncInterval,
+		State:                opts.State,
 	}
 }
 

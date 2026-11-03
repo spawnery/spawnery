@@ -35,6 +35,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
+	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 )
@@ -116,6 +117,11 @@ type ServerReconciler struct {
 	WorldSync     bool
 	// WorldSyncInterval is how often a member of an ObjectStore group asks for a snapshot.
 	WorldSyncInterval time.Duration
+	// State is told when a server changes in a way the proxies show; nil means
+	// they learn of it at the next resync.
+	State StateNotifier
+
+	visible visibleMemo
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servers,verbs=get;list;watch;create;update;patch;delete
@@ -140,6 +146,9 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	srv := &spawneryv1alpha1.Server{}
 	if err := r.Get(ctx, req.NamespacedName, srv); err != nil {
+		if apierrors.IsNotFound(err) && r.visible.forget(req.NamespacedName) && r.State != nil {
+			r.State.Changed(req.Namespace)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -199,6 +208,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	r.noteVisible(srv, pod)
 
 	// Recover from a status write lost between Create(pod) and Status().Update.
 	nameConflict := false
@@ -397,6 +407,23 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	return ctrl.Result{RequeueAfter: ResyncInterval}, nil
+}
+
+// noteVisible tells the proxies when the server looks different to them. It
+// reads what the cache holds, so the picture a push builds from the same cache
+// already contains the change; it runs before the adoption below, which
+// rewrites status.podName from the pod.
+func (r *ServerReconciler) noteVisible(srv *spawneryv1alpha1.Server, pod *corev1.Pod) {
+	if r.State == nil {
+		return
+	}
+	node := ""
+	if pod != nil && pod.Name == srv.Status.PodName {
+		node = pod.Spec.NodeName
+	}
+	if r.visible.note(client.ObjectKeyFromObject(srv), netstate.Visible(srv, node)) {
+		r.State.Changed(srv.Namespace)
+	}
 }
 
 // persistedServer treats the Server's disappearance during a write as done:
