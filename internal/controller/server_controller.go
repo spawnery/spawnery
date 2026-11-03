@@ -244,10 +244,10 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Every pass: a persistent server's pod usually already exists when its
 	// claim needs to grow.
-	claimExists := false
+	var claim *corev1.PersistentVolumeClaim
 	if group.UsesClaim() {
 		var err error
-		if claimExists, err = r.growClaim(ctx, group, srv); err != nil {
+		if claim, err = r.growClaim(ctx, group, srv); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.readResizePending(ctx, srv); err != nil {
@@ -300,9 +300,8 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Not waiting for Bound: under WaitForFirstConsumer a volume binds only once
 	// a pod demands it. An existing claim is never created again; growClaim grows
 	// it.
-	if createPod && group.UsesClaim() && !claimExists {
-		claim := podspec.BuildDataClaim(group, srv)
-		err := r.Create(ctx, claim)
+	if createPod && group.UsesClaim() && claim == nil {
+		err := r.Create(ctx, podspec.BuildDataClaim(group, srv))
 		switch {
 		case err == nil, apierrors.IsAlreadyExists(err):
 		case apierrors.IsForbidden(err), apierrors.IsInvalid(err):
@@ -368,7 +367,8 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	in := r.collectInputs(srv, group, pod, podFound, nameStillHeld || nameConflict)
+	claimBinding := claim != nil && claim.Status.Phase != corev1.ClaimBound
+	in := r.collectInputs(srv, group, pod, podFound, nameStillHeld || nameConflict, claimBinding)
 	in.HoldsWorld = srv.Spec.Key != ""
 	current := phase.Phase(srv.Status.Phase)
 	if current == "" {
@@ -434,9 +434,10 @@ func persistedServer(err error) error {
 	return client.IgnoreNotFound(err)
 }
 
-// growClaim reports whether the claim exists and raises its storage request
-// to spec.storage.size, never lowering it; a claim grown by hand is left alone.
-// It is the operator's only write to an existing claim, by patch.
+// growClaim returns the claim as the cache holds it, nil when there is none,
+// and raises its storage request to spec.storage.size, never lowering it; a
+// claim grown by hand is left alone. It is the operator's only write to an
+// existing claim, by patch.
 //
 // A synchronous refusal is usually allowVolumeExpansion: false but has other
 // causes of the same error kind (an unbound, class-less claim), so the message
@@ -447,9 +448,9 @@ func (r *ServerReconciler) growClaim(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
 	srv *spawneryv1alpha1.Server,
-) (exists bool, err error) {
+) (*corev1.PersistentVolumeClaim, error) {
 	if group.Spec.Storage == nil {
-		return false, nil
+		return nil, nil
 	}
 	claim := &corev1.PersistentVolumeClaim{}
 	key := types.NamespacedName{Name: podspec.DataClaimName(srv.Name), Namespace: srv.Namespace}
@@ -457,19 +458,19 @@ func (r *ServerReconciler) growClaim(
 		if apierrors.IsNotFound(err) {
 			srv.Status.StorageResizeError = ""
 		}
-		return false, client.IgnoreNotFound(err)
+		return nil, client.IgnoreNotFound(err)
 	}
 	want := group.Spec.Storage.Size
 	have := claim.Spec.Resources.Requests[corev1.ResourceStorage]
 	if want.Cmp(have) <= 0 {
 		srv.Status.StorageResizeError = resizeConditionError(claim)
-		return true, nil
+		return claim, nil
 	}
 	patched := claim.DeepCopy()
 	patched.Spec.Resources.Requests[corev1.ResourceStorage] = want
 	if err := r.Patch(ctx, patched, client.MergeFrom(claim)); err != nil {
 		if !apierrors.IsInvalid(err) && !apierrors.IsForbidden(err) {
-			return true, err
+			return claim, err
 		}
 		// Recorded rather than returned: retrying an admission rejection changes
 		// nothing, and returning would skip readResizePending.
@@ -481,10 +482,10 @@ func (r *ServerReconciler) growClaim(
 			"claim %s: the patch growing it to %s was refused by the API server: %v; "+
 				"check storage class %q first, in particular whether it sets allowVolumeExpansion: true",
 			claim.Name, want.String(), err, className)
-		return true, nil
+		return claim, nil
 	}
 	srv.Status.StorageResizeError = resizeConditionError(claim)
-	return true, nil
+	return claim, nil
 }
 
 // resizeConditionError reads the resize-error conditions a CSI driver sets
@@ -605,6 +606,7 @@ func (r *ServerReconciler) collectInputs(
 	pod *corev1.Pod,
 	podFound bool,
 	nameTaken bool,
+	claimBinding bool,
 ) phase.Inputs {
 	now := r.Clock()
 
@@ -623,7 +625,13 @@ func (r *ServerReconciler) collectInputs(
 
 	if podFound {
 		in.PodPending = pod.Status.Phase == corev1.PodPending
-		in.PodUnschedulable = unschedulableMessage(pod)
+		// The scheduler's first tries fail while the server's own claim is still
+		// binding (an Immediate-binding class takes seconds), which is waiting and
+		// not a lack of room. A pod condition change or the resync reconciles
+		// again once the claim is bound, and the next message is read as usual.
+		if !claimBinding {
+			in.PodUnschedulable = unschedulableMessage(pod)
+		}
 		in.PodRunning = pod.Status.Phase == corev1.PodRunning
 		in.PodTerminal = podTerminal(pod)
 		for _, c := range pod.Status.Conditions {

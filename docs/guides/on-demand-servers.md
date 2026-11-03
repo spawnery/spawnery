@@ -109,10 +109,14 @@ A start into a full cluster does not fail. The member is created, its pod stays
 Pending, and left alone the member fails at the operator's startup deadline.
 `ServerInfo.unschedulable()` says so while it is happening: true while the
 server is Pending and the scheduler has found no node for its pod, whatever the
-cause (no free memory, a node selector nothing matches, a claim that cannot
-bind). It is never true together with a non-empty `node()`, and it reads false
-before the scheduler has looked, so a start that was just asked for is neither
-placed nor unschedulable for a moment.
+cause (no free memory, a node selector nothing matches). It is never true
+together with a non-empty `node()`, and it reads false before the scheduler has
+looked, so a start that was just asked for is neither placed nor unschedulable
+for a moment. It also reads false while the member's own claim is still
+binding: with a storage class that binds at once, the scheduler's first tries
+fail until the volume exists, and the operator counts that as waiting for the
+pod. A claim that never binds therefore shows no `unschedulable()`, only the
+startup deadline.
 
 A plugin that does not want a player waiting on a full cluster watches the
 member after `startServer`:

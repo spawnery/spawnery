@@ -24,13 +24,20 @@ start and stop"); they described no code.
 
 **A bool on the wire.** `ServerState.unschedulable` (field 16), true while the
 server is Pending and its Ready condition carries `PodUnschedulable`. The
-scheduler's reason is the same whether the cluster is full, a node selector
-matches nothing or a claim cannot bind, and its message describes the cluster
+scheduler's reason is the same whether the cluster is full or a node selector
+matches nothing, and its message describes the cluster
 and changes on every attempt, so neither is sent; `status()` and the event keep
 carrying the message. The field follows `held` and `joins_closed`: an operator
 older than the field sends false, which is today's behaviour. It is also
 cleared whenever `node` is set, so the two never both say yes in the instant
 between the bind and the next status write.
+
+While the server's own claim exists and is not `Bound`, the Server controller
+reads the pod as plainly waiting (`PodPending`) and not as unschedulable: an
+Immediate-binding class makes the scheduler's first tries fail with unbound
+claims for seconds, and a consumer acts on `true` by stopping the member. The
+claim is not watched; a pod condition change or the 5 second resync reconciles
+again once it is bound.
 
 The predicate is `netstate.Unschedulable(srv)`, the same one the server group
 controller used for its `Progressing` message, so the agents, the state
