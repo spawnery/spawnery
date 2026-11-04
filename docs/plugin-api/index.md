@@ -90,9 +90,9 @@ widen.
 **A backend's mirror leaves out the private servers of an on-demand group, and
 the group itself.** A plugin on a proxy sees them; one on a backend does not,
 because routing lives on the proxies and a backend would otherwise carry an
-entry, and a fresh picture on every start and stop, for servers nobody sends
-anyone to. [Private servers](../guides/on-demand-servers.md#who-sees-them) says
-what that changes for `connect`.
+entry for servers nobody sends anyone to.
+[Private servers](../guides/on-demand-servers.md#who-sees-them) says what that
+changes for `connect`.
 
 Reads need no permission, and there is no way to require one: Bukkit and
 Velocity attach permissions to a player or the console, never to a plugin, so
@@ -114,6 +114,12 @@ admin took a server's retirement back.
 
 Reads never block, never time out, and throw nothing: the operator keeps a
 mirror current inside the agent, so `servers()` is a lookup in a local map.
+
+**How current the mirror is depends on what changed.** A proxy is sent a fresh
+picture when a server is created, changes phase, gets its pod, is placed on a
+node, becomes unschedulable or goes away, at most once a second per namespace.
+Player counts and announcements are not part of that: they arrive with the
+30 second resync, and a backend's mirror is refreshed by the resync alone.
 
 `CloudPlayer.server()` is empty for a player the proxy has and no backend does
 (during login, and between one backend and the next). That is ordinary, and it
@@ -152,8 +158,8 @@ to do with your plugin. Read a phase with `ServerPhase.fromWire`, which never
 throws, rather than `valueOf`, which does.
 
 The value records gain components as the operator learns to say more, and
-`ServerInfo` has gained two. Read them through their accessors, which is what
-they are for; a plugin that constructs a `ServerInfo` of its own (in a test
+`ServerInfo` has gained several. Read them through their accessors, which is
+what they are for; a plugin that constructs a `ServerInfo` of its own (in a test
 double, say) is the one thing that has to be rebuilt when they do.
 
 ---

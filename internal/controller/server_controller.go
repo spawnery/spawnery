@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -35,6 +36,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
+	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 )
@@ -116,6 +118,11 @@ type ServerReconciler struct {
 	WorldSync     bool
 	// WorldSyncInterval is how often a member of an ObjectStore group asks for a snapshot.
 	WorldSyncInterval time.Duration
+	// State is told when a server changes in a way the proxies show; nil means
+	// they learn of it at the next resync.
+	State StateNotifier
+
+	visible visibleMemo
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servers,verbs=get;list;watch;create;update;patch;delete
@@ -140,6 +147,9 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	srv := &spawneryv1alpha1.Server{}
 	if err := r.Get(ctx, req.NamespacedName, srv); err != nil {
+		if apierrors.IsNotFound(err) && r.visible.forget(req.NamespacedName) && r.State != nil {
+			r.State.Changed(req.Namespace)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -199,6 +209,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	if err != nil {
 		return ctrl.Result{}, err
 	}
+	r.noteVisible(srv, pod)
 
 	// Recover from a status write lost between Create(pod) and Status().Update.
 	nameConflict := false
@@ -234,10 +245,10 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	// Every pass: a persistent server's pod usually already exists when its
 	// claim needs to grow.
-	claimExists := false
+	var claim *corev1.PersistentVolumeClaim
 	if group.UsesClaim() {
 		var err error
-		if claimExists, err = r.growClaim(ctx, group, srv); err != nil {
+		if claim, err = r.growClaim(ctx, group, srv); err != nil {
 			return ctrl.Result{}, err
 		}
 		if err := r.readResizePending(ctx, srv); err != nil {
@@ -290,9 +301,8 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	// Not waiting for Bound: under WaitForFirstConsumer a volume binds only once
 	// a pod demands it. An existing claim is never created again; growClaim grows
 	// it.
-	if createPod && group.UsesClaim() && !claimExists {
-		claim := podspec.BuildDataClaim(group, srv)
-		err := r.Create(ctx, claim)
+	if createPod && group.UsesClaim() && claim == nil {
+		err := r.Create(ctx, podspec.BuildDataClaim(group, srv))
 		switch {
 		case err == nil, apierrors.IsAlreadyExists(err):
 		case apierrors.IsForbidden(err), apierrors.IsInvalid(err):
@@ -358,7 +368,8 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		}
 	}
 
-	in := r.collectInputs(srv, group, pod, podFound, nameStillHeld || nameConflict)
+	claimBinding := claim != nil && claim.Status.Phase != corev1.ClaimBound
+	in := r.collectInputs(srv, group, pod, podFound, nameStillHeld || nameConflict, claimBinding)
 	in.HoldsWorld = srv.Spec.Key != ""
 	current := phase.Phase(srv.Status.Phase)
 	if current == "" {
@@ -399,6 +410,23 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	return ctrl.Result{RequeueAfter: ResyncInterval}, nil
 }
 
+// noteVisible tells the proxies when the server looks different to them. It
+// reads what the cache holds, so the picture a push builds from the same cache
+// already contains the change; it runs before the adoption below, which
+// rewrites status.podName from the pod.
+func (r *ServerReconciler) noteVisible(srv *spawneryv1alpha1.Server, pod *corev1.Pod) {
+	if r.State == nil {
+		return
+	}
+	node := ""
+	if pod != nil && pod.Name == srv.Status.PodName {
+		node = pod.Spec.NodeName
+	}
+	if r.visible.note(client.ObjectKeyFromObject(srv), netstate.Visible(srv, node)) {
+		r.State.Changed(srv.Namespace)
+	}
+}
+
 // persistedServer treats the Server's disappearance during a write as done:
 // the recreate path deletes the Server itself, and a NotFound from a cached
 // read would log as a false error that `make e2e` reads for real refusals.
@@ -407,9 +435,10 @@ func persistedServer(err error) error {
 	return client.IgnoreNotFound(err)
 }
 
-// growClaim reports whether the claim exists and raises its storage request
-// to spec.storage.size, never lowering it; a claim grown by hand is left alone.
-// It is the operator's only write to an existing claim, by patch.
+// growClaim returns the claim as the cache holds it, nil when there is none,
+// and raises its storage request to spec.storage.size, never lowering it; a
+// claim grown by hand is left alone. It is the operator's only write to an
+// existing claim, by patch.
 //
 // A synchronous refusal is usually allowVolumeExpansion: false but has other
 // causes of the same error kind (an unbound, class-less claim), so the message
@@ -420,9 +449,9 @@ func (r *ServerReconciler) growClaim(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
 	srv *spawneryv1alpha1.Server,
-) (exists bool, err error) {
+) (*corev1.PersistentVolumeClaim, error) {
 	if group.Spec.Storage == nil {
-		return false, nil
+		return nil, nil
 	}
 	claim := &corev1.PersistentVolumeClaim{}
 	key := types.NamespacedName{Name: podspec.DataClaimName(srv.Name), Namespace: srv.Namespace}
@@ -430,19 +459,19 @@ func (r *ServerReconciler) growClaim(
 		if apierrors.IsNotFound(err) {
 			srv.Status.StorageResizeError = ""
 		}
-		return false, client.IgnoreNotFound(err)
+		return nil, client.IgnoreNotFound(err)
 	}
 	want := group.Spec.Storage.Size
 	have := claim.Spec.Resources.Requests[corev1.ResourceStorage]
 	if want.Cmp(have) <= 0 {
 		srv.Status.StorageResizeError = resizeConditionError(claim)
-		return true, nil
+		return claim, nil
 	}
 	patched := claim.DeepCopy()
 	patched.Spec.Resources.Requests[corev1.ResourceStorage] = want
 	if err := r.Patch(ctx, patched, client.MergeFrom(claim)); err != nil {
 		if !apierrors.IsInvalid(err) && !apierrors.IsForbidden(err) {
-			return true, err
+			return claim, err
 		}
 		// Recorded rather than returned: retrying an admission rejection changes
 		// nothing, and returning would skip readResizePending.
@@ -454,10 +483,10 @@ func (r *ServerReconciler) growClaim(
 			"claim %s: the patch growing it to %s was refused by the API server: %v; "+
 				"check storage class %q first, in particular whether it sets allowVolumeExpansion: true",
 			claim.Name, want.String(), err, className)
-		return true, nil
+		return claim, nil
 	}
 	srv.Status.StorageResizeError = resizeConditionError(claim)
-	return true, nil
+	return claim, nil
 }
 
 // resizeConditionError reads the resize-error conditions a CSI driver sets
@@ -578,6 +607,7 @@ func (r *ServerReconciler) collectInputs(
 	pod *corev1.Pod,
 	podFound bool,
 	nameTaken bool,
+	claimBinding bool,
 ) phase.Inputs {
 	now := r.Clock()
 
@@ -596,7 +626,13 @@ func (r *ServerReconciler) collectInputs(
 
 	if podFound {
 		in.PodPending = pod.Status.Phase == corev1.PodPending
-		in.PodUnschedulable = unschedulableMessage(pod)
+		// The scheduler's first tries fail while the server's own claim is still
+		// binding (an Immediate-binding class takes seconds), which is waiting and
+		// not a lack of room. A pod condition change or the resync reconciles
+		// again once the claim is bound, and the next message is read as usual.
+		if msg := unschedulableMessage(pod); !claimBinding || !strings.Contains(msg, unboundImmediateClaims) {
+			in.PodUnschedulable = msg
+		}
 		in.PodRunning = pod.Status.Phase == corev1.PodRunning
 		in.PodTerminal = podTerminal(pod)
 		for _, c := range pod.Status.Conditions {
@@ -735,6 +771,11 @@ func podTerminal(pod *corev1.Pod) bool {
 		pod.Status.Phase == corev1.PodSucceeded ||
 		crashLooping(pod)
 }
+
+// unboundImmediateClaims is the scheduler's message for a pod waiting on an
+// Immediate-binding claim. A WaitForFirstConsumer claim stays unbound until the
+// pod is placed, so for it the message names the real shortage instead.
+const unboundImmediateClaims = "pod has unbound immediate PersistentVolumeClaims"
 
 func unschedulableMessage(pod *corev1.Pod) string {
 	for _, c := range pod.Status.Conditions {

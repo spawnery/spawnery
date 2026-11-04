@@ -256,4 +256,17 @@ java.lang.String defaultValue);
    * <code>.spawnery.agent.v1alpha1.StartResources resources = 15;</code>
    */
   cloud.spawnery.agent.pb.StartResourcesOrBuilder getResourcesOrBuilder();
+
+  /**
+   * <pre>
+   * True while the Kubernetes scheduler cannot place this server's pod: the
+   * server is Pending and its Ready condition carries PodUnschedulable. Never
+   * true together with node. False before the scheduler has looked, once the
+   * pod is placed, and from an operator older than this field.
+   * </pre>
+   *
+   * <code>bool unschedulable = 16;</code>
+   * @return The unschedulable.
+   */
+  boolean getUnschedulable();
 }

@@ -4736,7 +4736,12 @@ type ServerState struct {
 	JoinsClosed bool `protobuf:"varint,14,opt,name=joins_closed,json=joinsClosed,proto3" json:"joins_closed,omitempty"`
 	// What the member was started with, as the operator resolved it; unset for a
 	// server that carries no per-start resources.
-	Resources     *StartResources `protobuf:"bytes,15,opt,name=resources,proto3" json:"resources,omitempty"`
+	Resources *StartResources `protobuf:"bytes,15,opt,name=resources,proto3" json:"resources,omitempty"`
+	// True while the Kubernetes scheduler cannot place this server's pod: the
+	// server is Pending and its Ready condition carries PodUnschedulable. Never
+	// true together with node. False before the scheduler has looked, once the
+	// pod is placed, and from an operator older than this field.
+	Unschedulable bool `protobuf:"varint,16,opt,name=unschedulable,proto3" json:"unschedulable,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4874,6 +4879,13 @@ func (x *ServerState) GetResources() *StartResources {
 		return x.Resources
 	}
 	return nil
+}
+
+func (x *ServerState) GetUnschedulable() bool {
+	if x != nil {
+		return x.Unschedulable
+	}
+	return false
 }
 
 // ProxyState is one proxy pod as the operator last saw it.
@@ -6311,7 +6323,7 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\n" +
 	"PERSISTENT\x10\x02\x12\t\n" +
 	"\x05PROXY\x10\x03\x12\r\n" +
-	"\tON_DEMAND\x10\x04\"\xbb\x04\n" +
+	"\tON_DEMAND\x10\x04\"\xe1\x04\n" +
 	"\vServerState\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05group\x18\x02 \x01(\tR\x05group\x12\x14\n" +
@@ -6332,7 +6344,8 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\x04node\x18\f \x01(\tR\x04node\x12%\n" +
 	"\x0eplayable_slots\x18\r \x01(\x05R\rplayableSlots\x12!\n" +
 	"\fjoins_closed\x18\x0e \x01(\bR\vjoinsClosed\x12E\n" +
-	"\tresources\x18\x0f \x01(\v2'.spawnery.agent.v1alpha1.StartResourcesR\tresources\x1a=\n" +
+	"\tresources\x18\x0f \x01(\v2'.spawnery.agent.v1alpha1.StartResourcesR\tresources\x12$\n" +
+	"\runschedulable\x18\x10 \x01(\bR\runschedulable\x1a=\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc3\x01\n" +

@@ -63,6 +63,9 @@ group, a proxy group, a server, then a proxy; an unknown one fails.
 
 `ServerInfo.node()`, `ProxyInfo.node()` and `InstanceStatus.node()` name the
 Kubernetes node the pod runs on, empty while it is not scheduled.
+`ServerInfo.unschedulable()` says the scheduler has found no node for a
+server's pod; [Waiting for room](../guides/on-demand-servers.md#waiting-for-room)
+says what to do with that.
 
 `boost(group, replicas, forHowLong)` adds capacity for a while, as a
 `ScaleBoost` object rather than as an edit to the group. Pass `null` for the

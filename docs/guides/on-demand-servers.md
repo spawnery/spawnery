@@ -103,6 +103,51 @@ install a plugin in the namespace**, the same boundary
 [the plugin API](../plugin-api/index.md#what-it-can-see) describes for every
 call, which is why `maxInstances` below is required rather than defaulted.
 
+## Waiting for room
+
+A start into a full cluster does not fail. The member is created, its pod stays
+Pending, and left alone the member fails at the operator's startup deadline.
+`ServerInfo.unschedulable()` says so while it is happening: true while the
+server is Pending and the scheduler has found no node for its pod, whatever the
+cause (no free memory, a node selector nothing matches). It is never true
+together with a non-empty `node()`, and it reads false before the scheduler has
+looked, so a start that was just asked for is neither placed nor unschedulable
+for a moment. It also reads false while the member's own claim is still
+binding under a storage class with `volumeBindingMode: Immediate`: the
+scheduler's first tries fail until the volume exists, and the operator counts
+that as waiting for the pod. Such a claim that never binds therefore shows no
+`unschedulable()`, only the startup deadline. A `WaitForFirstConsumer` claim
+binds only after the pod is placed and does not hold the flag back.
+
+A plugin that does not want a player waiting on a full cluster watches the
+member after `startServer`:
+
+- `node()` is non-empty: the pod is placed, and the wait is the ordinary one for
+  `READY`.
+- `unschedulable()` is true: there is no room right now. Capacity can still
+  arrive, because an autoscaler adds a node or a terminating pod frees its
+  memory, and the operator reports no time for how long a server has been
+  unschedulable, so the grace is yours to keep on your side. When it runs out,
+  call `stopServer(name)`, tell the player, and queue them on your side.
+
+**Stop it with `stopServer`, never `deleteServer`.** `deleteServer` removes the
+world for good. A member that never took a player ends at once when it is
+stopped, and a `startServer` of the same key a moment later can answer
+`UNAVAILABLE` until the pod is gone; ask again.
+
+`unschedulable()` comes from the same status the group's `Progressing`
+condition reads, so the two agree. A proxy plugin that wants the scheduler's own
+sentence subscribes to the event feed and matches `kind` `PodUnschedulable`;
+that is a feed and not a ledger, and it has no counterpart for the moment the
+pod is placed, which `node()` gives.
+
+**Stopping before the deadline keeps the group's backoff out of it.** An
+on-demand start is never held back by the creation backoff, so every start
+creates a pod. A member that reaches the startup deadline Pending counts as a
+failed round, the group reports `BackingOff`, and after six rounds `Degraded`,
+which is something an administrator should see; a member stopped before then
+leaves nothing to count.
+
 ## The ceiling is a fleet's, not a player's
 
 `spec.maxInstances` is how many members the group may have at once. It counts
@@ -357,9 +402,11 @@ operator is working to end.
 ## Who sees them
 
 **Members, and the group itself, are in the proxies' network picture and not the
-backends'.** A lobby's `servers()` never lists three hundred private servers,
-and never receives a fresh picture for each start and stop. A proxy's does, and
-that is where a plugin that sends players to them lives.
+backends'.** A lobby's `servers()` never lists three hundred private servers. A
+proxy's does, and that is where a plugin that sends players to them lives. A
+proxy is sent a fresh picture when a member's phase, pod, node or
+`unschedulable()` changes, at most once a second per namespace; player counts
+and announcements wait for the 30 second resync, as they do everywhere.
 
 **The players stay, their whereabouts do not.** A backend's `players()` lists
 everyone on the network, including whoever is on a private server; taking them

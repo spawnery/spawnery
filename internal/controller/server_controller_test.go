@@ -284,6 +284,9 @@ func TestAFailedServersLatePodStaysWhileItsGroupHasNoReadyServer(t *testing.T) {
 
 const insufficientMemory = "0/2 nodes are available: 2 Insufficient memory."
 
+const unboundImmediate = "0/2 nodes are available: pod has unbound immediate PersistentVolumeClaims. " +
+	"preemption: 0/2 nodes are available: 2 Preemption is not helpful for scheduling."
+
 func (f *fixture) markUnschedulable(t *testing.T, name, message string) {
 	t.Helper()
 	pod, ok := f.pod(name)
@@ -353,6 +356,71 @@ func TestAServerWhosePodCannotBeScheduledSaysSo(t *testing.T) {
 	ready = meta.FindStatusCondition(srv.Status.Conditions, spawneryv1alpha1.ConditionReady)
 	if srv.Status.Phase != string(phase.Failed) || ready == nil || !strings.Contains(ready.Message, insufficientMemory) {
 		t.Errorf("past the deadline: phase %q, Ready %+v; want Failed naming the scheduler's message", srv.Status.Phase, ready)
+	}
+}
+
+func (f *fixture) bindClaim(t *testing.T, name string) {
+	t.Helper()
+	claim := f.claim(name)
+	if claim == nil {
+		t.Fatalf("claim %s not found", name)
+	}
+	claim.Status.Phase = corev1.ClaimBound
+	if err := f.c.Status().Update(f.ctx, claim); err != nil {
+		t.Fatalf("bind claim: %v", err)
+	}
+}
+
+func (f *fixture) readyReason(name string) string {
+	ready := meta.FindStatusCondition(f.server(name).Status.Conditions, spawneryv1alpha1.ConditionReady)
+	if ready == nil {
+		return ""
+	}
+	return ready.Reason
+}
+
+func TestAServerWhoseClaimIsStillBindingIsNotUnschedulable(t *testing.T) {
+	f := newFixture(t)
+	f.createPersistentGroup(t, "survival", 1)
+	f.createPersistentServer(t, "survival", 0)
+	f.reconcile("survival-0")
+	f.markUnschedulable(t, "survival-0", unboundImmediate)
+
+	f.reconcile("survival-0")
+
+	if got := f.readyReason("survival-0"); got != phase.ReasonPodPending {
+		t.Errorf("Ready reason = %q while the claim binds, want %q", got, phase.ReasonPodPending)
+	}
+}
+
+func TestAServerWhoseClaimIsBoundIsUnschedulableWhenTheSchedulerFindsNoRoom(t *testing.T) {
+	f := newFixture(t)
+	f.createPersistentGroup(t, "survival", 1)
+	f.createPersistentServer(t, "survival", 0)
+	f.reconcile("survival-0")
+	f.markUnschedulable(t, "survival-0", unboundImmediate)
+	f.reconcile("survival-0")
+
+	f.bindClaim(t, "survival-0-data")
+	f.markUnschedulable(t, "survival-0", insufficientMemory)
+	f.reconcile("survival-0")
+
+	if got := f.readyReason("survival-0"); got != phase.ReasonPodUnschedulable {
+		t.Errorf("Ready reason = %q once the claim is bound, want %q", got, phase.ReasonPodUnschedulable)
+	}
+}
+
+func TestAServerWhoseWaitForFirstConsumerClaimIsUnboundIsUnschedulableWhenTheSchedulerFindsNoRoom(t *testing.T) {
+	f := newFixture(t)
+	f.createPersistentGroup(t, "survival", 1)
+	f.createPersistentServer(t, "survival", 0)
+	f.reconcile("survival-0")
+	f.markUnschedulable(t, "survival-0", insufficientMemory)
+
+	f.reconcile("survival-0")
+
+	if got := f.readyReason("survival-0"); got != phase.ReasonPodUnschedulable {
+		t.Errorf("Ready reason = %q with an unbound claim and no room, want %q", got, phase.ReasonPodUnschedulable)
 	}
 }
 
@@ -1584,7 +1652,7 @@ func collectInputsReconciler(clock func() time.Time) *ServerReconciler {
 func TestMaxStaleZeroNeverForcesADrain(t *testing.T) {
 	// The default: a retiring server with players waits indefinitely.
 	in := collectInputsReconciler(time.Now).
-		collectInputs(retiringFor(time.Hour*24), groupWithMaxStale(0), nil, false, false)
+		collectInputs(retiringFor(time.Hour*24), groupWithMaxStale(0), nil, false, false, false)
 	if in.MaxStaleReached {
 		t.Error("MaxStaleReached with maxStaleSeconds = 0")
 	}
@@ -1592,7 +1660,7 @@ func TestMaxStaleZeroNeverForcesADrain(t *testing.T) {
 
 func TestMaxStaleFiresOnceTheWaitExceedsIt(t *testing.T) {
 	in := collectInputsReconciler(time.Now).
-		collectInputs(retiringFor(2*time.Minute), groupWithMaxStale(60), nil, false, false)
+		collectInputs(retiringFor(2*time.Minute), groupWithMaxStale(60), nil, false, false, false)
 	if !in.MaxStaleReached {
 		t.Error("MaxStaleReached is false after twice the configured wait")
 	}

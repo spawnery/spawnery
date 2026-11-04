@@ -571,6 +571,24 @@ java.lang.String defaultValue) {
     return resources_ == null ? cloud.spawnery.agent.pb.StartResources.getDefaultInstance() : resources_;
   }
 
+  public static final int UNSCHEDULABLE_FIELD_NUMBER = 16;
+  private boolean unschedulable_ = false;
+  /**
+   * <pre>
+   * True while the Kubernetes scheduler cannot place this server's pod: the
+   * server is Pending and its Ready condition carries PodUnschedulable. Never
+   * true together with node. False before the scheduler has looked, once the
+   * pod is placed, and from an operator older than this field.
+   * </pre>
+   *
+   * <code>bool unschedulable = 16;</code>
+   * @return The unschedulable.
+   */
+  @java.lang.Override
+  public boolean getUnschedulable() {
+    return unschedulable_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -632,6 +650,9 @@ java.lang.String defaultValue) {
     }
     if (((bitField0_ & 0x00000001) != 0)) {
       output.writeMessage(15, getResources());
+    }
+    if (unschedulable_ != false) {
+      output.writeBool(16, unschedulable_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -697,6 +718,10 @@ java.lang.String defaultValue) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(15, getResources());
     }
+    if (unschedulable_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(16, unschedulable_);
+    }
     return size;
   }
   @java.lang.Override
@@ -754,6 +779,8 @@ java.lang.String defaultValue) {
       if (!getResources()
           .equals(other.getResources())) return false;
     }
+    if (getUnschedulable()
+        != other.getUnschedulable()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -802,6 +829,9 @@ java.lang.String defaultValue) {
       hash = (37 * hash) + RESOURCES_FIELD_NUMBER;
       hash = (53 * hash) + getResources().hashCode();
     }
+    hash = (37 * hash) + UNSCHEDULABLE_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getUnschedulable());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -984,6 +1014,7 @@ java.lang.String defaultValue) {
         resourcesBuilder_.dispose();
         resourcesBuilder_ = null;
       }
+      unschedulable_ = false;
       return this;
     }
 
@@ -1067,6 +1098,9 @@ java.lang.String defaultValue) {
             : resourcesBuilder_.build();
         to_bitField0_ |= 0x00000001;
       }
+      if (((from_bitField0_ & 0x00008000) != 0)) {
+        result.unschedulable_ = unschedulable_;
+      }
       result.bitField0_ |= to_bitField0_;
     }
 
@@ -1138,6 +1172,9 @@ java.lang.String defaultValue) {
       }
       if (other.hasResources()) {
         mergeResources(other.getResources());
+      }
+      if (other.getUnschedulable() != false) {
+        setUnschedulable(other.getUnschedulable());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -1246,6 +1283,11 @@ java.lang.String defaultValue) {
               bitField0_ |= 0x00004000;
               break;
             } // case 122
+            case 128: {
+              unschedulable_ = input.readBool();
+              bitField0_ |= 0x00008000;
+              break;
+            } // case 128
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2396,6 +2438,59 @@ java.lang.String defaultValue) {
         resources_ = null;
       }
       return resourcesBuilder_;
+    }
+
+    private boolean unschedulable_ ;
+    /**
+     * <pre>
+     * True while the Kubernetes scheduler cannot place this server's pod: the
+     * server is Pending and its Ready condition carries PodUnschedulable. Never
+     * true together with node. False before the scheduler has looked, once the
+     * pod is placed, and from an operator older than this field.
+     * </pre>
+     *
+     * <code>bool unschedulable = 16;</code>
+     * @return The unschedulable.
+     */
+    @java.lang.Override
+    public boolean getUnschedulable() {
+      return unschedulable_;
+    }
+    /**
+     * <pre>
+     * True while the Kubernetes scheduler cannot place this server's pod: the
+     * server is Pending and its Ready condition carries PodUnschedulable. Never
+     * true together with node. False before the scheduler has looked, once the
+     * pod is placed, and from an operator older than this field.
+     * </pre>
+     *
+     * <code>bool unschedulable = 16;</code>
+     * @param value The unschedulable to set.
+     * @return This builder for chaining.
+     */
+    public Builder setUnschedulable(boolean value) {
+
+      unschedulable_ = value;
+      bitField0_ |= 0x00008000;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * True while the Kubernetes scheduler cannot place this server's pod: the
+     * server is Pending and its Ready condition carries PodUnschedulable. Never
+     * true together with node. False before the scheduler has looked, once the
+     * pod is placed, and from an operator older than this field.
+     * </pre>
+     *
+     * <code>bool unschedulable = 16;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearUnschedulable() {
+      bitField0_ = (bitField0_ & ~0x00008000);
+      unschedulable_ = false;
+      onChanged();
+      return this;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.ServerState)

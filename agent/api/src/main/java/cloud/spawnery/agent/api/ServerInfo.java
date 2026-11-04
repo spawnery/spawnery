@@ -59,6 +59,12 @@ import java.util.Objects;
  * @param resources the resources stamped on this server when it was started,
  *     {@link ServerResources#NONE} for one without any and for a report from
  *     an operator older than this field.
+ * @param unschedulable whether the Kubernetes scheduler has found no node for
+ *     this server's pod: the cluster has no room for it right now, whatever
+ *     the cause, and left alone the server fails at the startup deadline.
+ *     Never true together with a non-empty {@link #node()}. False while the
+ *     scheduler has not looked yet, once the pod is placed, and for a report
+ *     from an operator older than this field.
  */
 public record ServerInfo(
         String name,
@@ -74,7 +80,8 @@ public record ServerInfo(
         boolean held,
         String node,
         int playableSlots,
-        ServerResources resources) {
+        ServerResources resources,
+        boolean unschedulable) {
     public ServerInfo {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(group, "group");
@@ -87,6 +94,26 @@ public record ServerInfo(
             playableSlots = slots;
         }
         resources = resources == null ? ServerResources.NONE : resources;
+    }
+
+    /** The record as it was before {@code unschedulable}, which it reads as false. */
+    public ServerInfo(
+            String name,
+            String group,
+            ServerPhase phase,
+            int players,
+            int slots,
+            boolean registered,
+            String state,
+            Map<String, String> attributes,
+            String incarnation,
+            int number,
+            boolean held,
+            String node,
+            int playableSlots,
+            ServerResources resources) {
+        this(name, group, phase, players, slots, registered, state, attributes, incarnation, number, held, node,
+                playableSlots, resources, false);
     }
 
     /** The record as it was before {@code resources}, which it reads as none. */
@@ -105,7 +132,7 @@ public record ServerInfo(
             String node,
             int playableSlots) {
         this(name, group, phase, players, slots, registered, state, attributes, incarnation, number, held, node,
-                playableSlots, ServerResources.NONE);
+                playableSlots, ServerResources.NONE, false);
     }
 
     /** The record as it was before {@code playableSlots}, which it reads as every seat. */
