@@ -20,6 +20,7 @@ import (
 	"context"
 	"fmt"
 	"slices"
+	"strings"
 	"time"
 
 	corev1 "k8s.io/api/core/v1"
@@ -629,8 +630,8 @@ func (r *ServerReconciler) collectInputs(
 		// binding (an Immediate-binding class takes seconds), which is waiting and
 		// not a lack of room. A pod condition change or the resync reconciles
 		// again once the claim is bound, and the next message is read as usual.
-		if !claimBinding {
-			in.PodUnschedulable = unschedulableMessage(pod)
+		if msg := unschedulableMessage(pod); !claimBinding || !strings.Contains(msg, unboundImmediateClaims) {
+			in.PodUnschedulable = msg
 		}
 		in.PodRunning = pod.Status.Phase == corev1.PodRunning
 		in.PodTerminal = podTerminal(pod)
@@ -770,6 +771,11 @@ func podTerminal(pod *corev1.Pod) bool {
 		pod.Status.Phase == corev1.PodSucceeded ||
 		crashLooping(pod)
 }
+
+// unboundImmediateClaims is the scheduler's message for a pod waiting on an
+// Immediate-binding claim. A WaitForFirstConsumer claim stays unbound until the
+// pod is placed, so for it the message names the real shortage instead.
+const unboundImmediateClaims = "pod has unbound immediate PersistentVolumeClaims"
 
 func unschedulableMessage(pod *corev1.Pod) string {
 	for _, c := range pod.Status.Conditions {

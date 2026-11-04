@@ -284,6 +284,9 @@ func TestAFailedServersLatePodStaysWhileItsGroupHasNoReadyServer(t *testing.T) {
 
 const insufficientMemory = "0/2 nodes are available: 2 Insufficient memory."
 
+const unboundImmediate = "0/2 nodes are available: pod has unbound immediate PersistentVolumeClaims. " +
+	"preemption: 0/2 nodes are available: 2 Preemption is not helpful for scheduling."
+
 func (f *fixture) markUnschedulable(t *testing.T, name, message string) {
 	t.Helper()
 	pod, ok := f.pod(name)
@@ -381,7 +384,7 @@ func TestAServerWhoseClaimIsStillBindingIsNotUnschedulable(t *testing.T) {
 	f.createPersistentGroup(t, "survival", 1)
 	f.createPersistentServer(t, "survival", 0)
 	f.reconcile("survival-0")
-	f.markUnschedulable(t, "survival-0", "pod has unbound immediate PersistentVolumeClaims")
+	f.markUnschedulable(t, "survival-0", unboundImmediate)
 
 	f.reconcile("survival-0")
 
@@ -395,7 +398,7 @@ func TestAServerWhoseClaimIsBoundIsUnschedulableWhenTheSchedulerFindsNoRoom(t *t
 	f.createPersistentGroup(t, "survival", 1)
 	f.createPersistentServer(t, "survival", 0)
 	f.reconcile("survival-0")
-	f.markUnschedulable(t, "survival-0", "pod has unbound immediate PersistentVolumeClaims")
+	f.markUnschedulable(t, "survival-0", unboundImmediate)
 	f.reconcile("survival-0")
 
 	f.bindClaim(t, "survival-0-data")
@@ -404,6 +407,20 @@ func TestAServerWhoseClaimIsBoundIsUnschedulableWhenTheSchedulerFindsNoRoom(t *t
 
 	if got := f.readyReason("survival-0"); got != phase.ReasonPodUnschedulable {
 		t.Errorf("Ready reason = %q once the claim is bound, want %q", got, phase.ReasonPodUnschedulable)
+	}
+}
+
+func TestAServerWhoseWaitForFirstConsumerClaimIsUnboundIsUnschedulableWhenTheSchedulerFindsNoRoom(t *testing.T) {
+	f := newFixture(t)
+	f.createPersistentGroup(t, "survival", 1)
+	f.createPersistentServer(t, "survival", 0)
+	f.reconcile("survival-0")
+	f.markUnschedulable(t, "survival-0", insufficientMemory)
+
+	f.reconcile("survival-0")
+
+	if got := f.readyReason("survival-0"); got != phase.ReasonPodUnschedulable {
+		t.Errorf("Ready reason = %q with an unbound claim and no room, want %q", got, phase.ReasonPodUnschedulable)
 	}
 }
 

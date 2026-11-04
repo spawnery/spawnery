@@ -32,12 +32,15 @@ older than the field sends false, which is today's behaviour. It is also
 cleared whenever `node` is set, so the two never both say yes in the instant
 between the bind and the next status write.
 
-While the server's own claim exists and is not `Bound`, the Server controller
-reads the pod as plainly waiting (`PodPending`) and not as unschedulable: an
-Immediate-binding class makes the scheduler's first tries fail with unbound
-claims for seconds, and a consumer acts on `true` by stopping the member. The
-claim is not watched; a pod condition change or the 5 second resync reconciles
-again once it is bound.
+While the server's own claim exists and is not `Bound` and the scheduler's
+message names unbound immediate claims, the Server controller reads the pod as
+plainly waiting (`PodPending`) and not as unschedulable: an Immediate-binding
+class makes the scheduler's first tries fail with unbound claims for seconds,
+and a consumer acts on `true` by stopping the member. The message decides, not
+the claim alone: a `WaitForFirstConsumer` claim stays unbound until the pod is
+placed, so on a full cluster it is unbound for exactly as long as the pod is
+unschedulable. The claim is not watched; a pod condition change or the 5
+second resync reconciles again once it is bound.
 
 The predicate is `netstate.Unschedulable(srv)`, the same one the server group
 controller used for its `Progressing` message, so the agents, the state
