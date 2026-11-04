@@ -14,7 +14,7 @@ spec:
   networkRef:
     name: production
   type: OnDemand
-  image: ghcr.io/spawnery/purpur:26.3-0.33.0
+  image: ghcr.io/spawnery/purpur:26.3-0.34.0
   maxPlayers: 10
   # A fleet ceiling, not a per-player quota: who may have one is a question
   # about a player, and the system that knows the player answers it.
@@ -117,7 +117,8 @@ binding under a storage class with `volumeBindingMode: Immediate`: the
 scheduler's first tries fail until the volume exists, and the operator counts
 that as waiting for the pod. Such a claim that never binds therefore shows no
 `unschedulable()`, only the startup deadline. A `WaitForFirstConsumer` claim
-binds only after the pod is placed and does not hold the flag back.
+binds only after the pod is placed and does not hold the flag back. An
+operator older than 0.34.0 never sets the flag.
 
 A plugin that does not want a player waiting on a full cluster watches the
 member after `startServer`:
