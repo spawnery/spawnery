@@ -178,10 +178,13 @@ computed from the views each pass, without memory of the previous state:
 
 | situation | state |
 |---|---|
-| no stale ordinal below `replicas` | `None` |
-| a stale ordinal is leaving or reserved for deletion | `Begun` |
-| otherwise, some stale ordinal is known empty | `Waiting` |
-| otherwise (every stale ordinal is occupied) | `Deferred` |
+| no stale server that is not held or terminal | `None` |
+| a stale ordinal below `replicas` is leaving or reserved for deletion | `Begun` |
+| otherwise, a stale ordinal below `replicas` is known empty, or a stale ordinal is surplus | `Waiting` |
+| otherwise (every stale ordinal is below `replicas` and occupied) | `Deferred` |
+
+A stale surplus ordinal keeps the group `Waiting`, as it does today, since
+surplus removal ignores occupancy.
 
 Nominating a stale ordinal always needs the stage gate, from whatever state.
 `Waiting` asks it as today. A `Deferred` group never nominates, because it
