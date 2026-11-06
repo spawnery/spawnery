@@ -343,11 +343,13 @@ spec:
 
 `keep` is required, as for an on-demand group, because it is exactly what is
 synced. No claim is created for an ordinal. The operator needs
-`--world-sync`; without it no pod is created and `Accepted` is `False` with
-reason `WorldSyncOff`. `retention` prunes at every upload, and a running
-persistent server uploads every snapshot interval, so its history is pruned
-continuously. `storageClassName`, `accessModes` and `annotations` stay valid
-and are ignored. A persistent group on `Claim` renders as before.
+`--world-sync`; without it no pod is created and the `Server`'s `Accepted` is
+`False` with reason `WorldSyncOff`.
+
+`retention` prunes at every upload, and a running persistent server uploads
+every snapshot interval, so its history is pruned continuously.
+`storageClassName`, `accessModes` and `annotations` stay valid and are
+ignored. Nothing changes for a persistent group on `Claim`.
 
 A persistent world is `<namespace>/<group>/<ordinal>` in the store, with the
 ordinal in decimal and no leading zeros, so `minecraft/survival/0` for
@@ -392,7 +394,7 @@ steps:
 
 1. Lower `replicas` to 0, or delete the group. The claims stay either way.
    Wait until no server of the group is left, so that no pod has a claim
-   mounted. The import must not run while a server holds the claim.
+   mounted.
 2. For each ordinal, run the import Job from [Moving existing worlds
    in](object-store-worlds.md#moving-existing-worlds-in) against the claim
    `<group>-<ordinal>-data`, with `--world=<namespace>/<group>/<ordinal>` and
@@ -403,8 +405,9 @@ steps:
    name with `backend: ObjectStore`. Each ordinal finds its manifest.
 4. Delete the claims once the worlds are confirmed in the store.
 
-There is no way back. The object store has no export in this version, so a
-group that returns to `Claim` starts on empty claims.
+There is no way back. The object store has no export in this version. A group
+recreated on `Claim` starts on fresh claims, or, before step 4, on the claims
+as they were before the move, without anything played since.
 
 ## Two things a lowered `replicas` and a dead node each cost
 
@@ -477,11 +480,12 @@ Confirm the node is really gone first.
 kubectl delete pod <group>-<ordinal> -n <namespace> --force --grace-period=0
 ```
 
-
 ### A dead node under ObjectStore
 
 On `ObjectStore` the ordinal still waits for the pod on the dead node to be
-force-deleted, since the pod's name is what is held. After the force-delete,
-the replacement waits up to 10 minutes for the dead node's lease to go stale
-before it can take the world. The warning above reads differently here: the
-lease refuses a second writer. The world loses the play since its last uploaded snapshot.
+force-deleted, because no replacement is created while a pod of that name
+exists (`PodNameTerminating`, above). After the force-delete, the replacement
+waits up to 10 minutes for the dead node's lease to go stale before it can take
+the world. The risk in the force-delete warning above shrinks: a pod on a node
+that is only unreachable cannot put two writers on one world, because the lease
+refuses the second.

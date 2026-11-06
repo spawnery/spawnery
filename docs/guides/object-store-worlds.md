@@ -118,9 +118,8 @@ which is the form the node agent sends. Requests use path-style addressing.
 ## What the group needs
 
 The API refuses `ObjectStore` without `type: OnDemand` or `type: Persistent`,
-and without `keep`. `keep` is
-exactly what is synced, so list every level directory and every plugin
-directory that holds state. Paper 26.3, which the example's image runs, keeps
+and without `keep`. `keep` is exactly what is synced, so list every level
+directory and every plugin directory that holds state. Paper 26.3, which the example's image runs, keeps
 all dimensions of a world inside its level directory
 (`world/dimensions/minecraft/the_nether` and `.../the_end`) and moves the
 `world_nether` and `world_the_end` directories of older versions in there at
@@ -146,7 +145,7 @@ start. The operator cannot tell which agent an image
 carries.
 
 `size`, `storageClassName`, `accessModes` and `annotations` stay valid and are
-ignored, so a group can switch back to `Claim` without touching the immutable
+ignored, so an on-demand group can switch back to `Claim` without touching the immutable
 fields. Switching either way moves no data: claims stay where they are, and so
 does the bucket. A running member keeps the backend it started with, and the
 switch reaches it at its next start.

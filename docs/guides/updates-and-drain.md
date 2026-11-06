@@ -129,7 +129,7 @@ players instead:
 kind: ServerGroup
 spec:
   type: Persistent
-  replicas: 1
+  replicas: 2
   update:
     strategy: WhenEmpty    # RollingUpdate (default) or WhenEmpty
 ```
@@ -138,8 +138,8 @@ spec:
 The API refuses the others, each with a message that names the field:
 `maxUnavailable` other than 1, `maxStaleSeconds` other than 0, and
 `minAvailable`, since a persistent group builds no extra server. An absent
-`spec.update` and `strategy: RollingUpdate` behave as before. Setting or
-changing `spec.update` restarts nothing.
+`spec.update` and `strategy: RollingUpdate` replace each stale ordinal, occupied
+or not. Setting or changing `spec.update` restarts nothing.
 
 Two takedowns wait for an empty ordinal: replacing a stale ordinal and the
 restart for a pending claim resize. Only an ordinal that is known empty is
@@ -152,7 +152,7 @@ ordinal down whether or not it has players, because lowering it is an
 explicit instruction. A node that is leaving takes its servers with it.
 
 While every stale ordinal is occupied, the group is waiting for players and
-holds nobody. `Progressing` says so:
+gates no later stage. `Progressing` says so:
 
 ```text
 WaitingForEmpty: stale servers wait for their players to leave: survival-0 has 3 players, survival-1 has 1 player
@@ -164,7 +164,7 @@ stage-wait reasons and `RetireeStuck` come before it in the same condition.
 `status.changeover` reads `Deferred` in that state, as it does for an
 ephemeral `WhenEmpty` group. A persistent group in `Waiting` or `Begun` holds
 every later [stage](#stages) back, and an occupied world could do that for
-hours, so `Deferred` holds nobody. When an ordinal empties, the group is
+hours, so `Deferred` gates no later stage. When an ordinal empties, the group is
 `Waiting` again and asks for its stage like any other, so lower stages still
 go first.
 
