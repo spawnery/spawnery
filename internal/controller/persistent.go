@@ -61,6 +61,9 @@ type PersistentInputs struct {
 	// ChangeoverRefused withholds the stale nomination while an earlier stage
 	// of the network is still changing over.
 	ChangeoverRefused bool
+	// WhenEmpty limits the stale and resize-pending nominations to servers
+	// whose player count is known to be zero.
+	WhenEmpty bool
 }
 
 // DecidePersistentSize nominates at most one delete: surplus outranks stale,
@@ -137,7 +140,7 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 			continue
 		}
 		v := viewByName(in.Views, name)
-		if !staleSpec(v, in.PodHash) {
+		if !staleSpec(v, in.PodHash) || (in.WhenEmpty && !v.knownEmpty()) {
 			continue
 		}
 		stale = append(stale, ordinal)
@@ -155,7 +158,7 @@ func DecidePersistentSize(in PersistentInputs) SizeDecision {
 		if ordinal >= in.Replicas || carrying[ordinal] != nil {
 			continue
 		}
-		if viewByName(in.Views, name).ResizePending {
+		if v := viewByName(in.Views, name); v.ResizePending && (!in.WhenEmpty || v.knownEmpty()) {
 			resizing = append(resizing, ordinal)
 		}
 	}

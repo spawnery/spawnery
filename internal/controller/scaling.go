@@ -320,7 +320,7 @@ func selectRetirement(in ScalingInputs) (string, bool) {
 	}
 	sort.SliceStable(stale, func(i, j int) bool {
 		// A stale count that last read zero may be hiding players.
-		if ei, ej := stale[i].Players == 0 && !stale[i].Stale, stale[j].Players == 0 && !stale[j].Stale; ei != ej {
+		if ei, ej := stale[i].knownEmpty(), stale[j].knownEmpty(); ei != ej {
 			return ei
 		}
 		if !stale[i].CreatedAt.Equal(stale[j].CreatedAt) {

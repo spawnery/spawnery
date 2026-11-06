@@ -18,6 +18,7 @@ package controller
 
 import (
 	"reflect"
+	"slices"
 	"testing"
 
 	"github.com/spawnery/spawnery/internal/phase"
@@ -547,5 +548,91 @@ func TestNoConflictsWhenEveryOrdinalIsSingle(t *testing.T) {
 	})
 	if got.Conflicts != nil {
 		t.Errorf("Conflicts = %+v, want nil", got.Conflicts)
+	}
+}
+
+func whenEmptyView(ordinal int32, hash string, players int32) ServerView {
+	v := ordinalViewWithHash(PersistentServerName("g", ordinal), ordinal, phase.Ready, hash)
+	v.Players = players
+	return v
+}
+
+func decideWhenEmpty(replicas int32, whenEmpty bool, views ...ServerView) SizeDecision {
+	return DecidePersistentSize(PersistentInputs{
+		Group: "g", Replicas: replicas, PodHash: "h2", WhenEmpty: whenEmpty, Views: views,
+	})
+}
+
+func TestWhenEmptyPersistentSkipsAnOccupiedOrdinal(t *testing.T) {
+	views := []ServerView{whenEmptyView(0, "h1", 0), whenEmptyView(1, "h1", 3)}
+	got := decideWhenEmpty(2, true, views...)
+	if !slices.Equal(got.Delete, []string{"g-0"}) || got.DeleteReason != "StaleSpec" {
+		t.Fatalf("Delete = %v (%s), want [g-0] StaleSpec", got.Delete, got.DeleteReason)
+	}
+	got = decideWhenEmpty(2, false, views...)
+	if !slices.Equal(got.Delete, []string{"g-1"}) {
+		t.Fatalf("without WhenEmpty Delete = %v, want [g-1]", got.Delete)
+	}
+}
+
+func TestWhenEmptyPersistentTakesTheHighestEmpty(t *testing.T) {
+	got := decideWhenEmpty(3, true, whenEmptyView(0, "h1", 0), whenEmptyView(1, "h1", 0), whenEmptyView(2, "h1", 0))
+	if !slices.Equal(got.Delete, []string{"g-2"}) {
+		t.Fatalf("Delete = %v, want [g-2]", got.Delete)
+	}
+}
+
+func TestWhenEmptyPersistentSkipsAnUntrustedCount(t *testing.T) {
+	v := whenEmptyView(0, "h1", 0)
+	v.Stale = true
+	got := decideWhenEmpty(1, true, v)
+	if len(got.Delete) != 0 {
+		t.Fatalf("Delete = %v, want none for an untrusted count", got.Delete)
+	}
+}
+
+func TestWhenEmptyPersistentWaitsWhenAllAreOccupied(t *testing.T) {
+	views := []ServerView{whenEmptyView(0, "h1", 2), whenEmptyView(1, "h1", 1)}
+	got := decideWhenEmpty(2, true, views...)
+	if len(got.Delete) != 0 || len(got.CreateOrdinals) != 0 {
+		t.Fatalf("got %+v, want no delete and no create", got)
+	}
+	got = decideWhenEmpty(2, false, views...)
+	if !slices.Equal(got.Delete, []string{"g-1"}) {
+		t.Fatalf("without WhenEmpty Delete = %v, want [g-1]", got.Delete)
+	}
+}
+
+func TestWhenEmptyPersistentStillRemovesOccupiedSurplus(t *testing.T) {
+	got := decideWhenEmpty(1, true, whenEmptyView(0, "h2", 0), whenEmptyView(1, "h2", 5))
+	if !slices.Equal(got.Delete, []string{"g-1"}) || got.DeleteReason != "SurplusOrdinal" {
+		t.Fatalf("Delete = %v (%s), want [g-1] SurplusOrdinal", got.Delete, got.DeleteReason)
+	}
+}
+
+func TestWhenEmptyPersistentSkipsAnOccupiedResize(t *testing.T) {
+	v := whenEmptyView(0, "h2", 1)
+	v.ResizePending = true
+	got := decideWhenEmpty(1, true, v)
+	if len(got.Delete) != 0 {
+		t.Fatalf("Delete = %v, want none for an occupied resize", got.Delete)
+	}
+	v.Players = 0
+	got = decideWhenEmpty(1, true, v)
+	if !slices.Equal(got.Delete, []string{"g-0"}) || got.DeleteReason != "ResizePending" {
+		t.Fatalf("Delete = %v (%s), want [g-0] ResizePending", got.Delete, got.DeleteReason)
+	}
+}
+
+func TestWhenEmptyPersistentKeepsBothGates(t *testing.T) {
+	starting := whenEmptyView(0, "h2", 0)
+	starting.Phase = phase.Starting
+	if got := decideWhenEmpty(2, true, starting, whenEmptyView(1, "h1", 0)); len(got.Delete) != 0 {
+		t.Fatalf("Gate B: Delete = %v, want none", got.Delete)
+	}
+	draining := whenEmptyView(0, "h2", 0)
+	draining.Phase = phase.Draining
+	if got := decideWhenEmpty(2, true, draining, whenEmptyView(1, "h1", 0)); len(got.Delete) != 0 {
+		t.Fatalf("Gate A: Delete = %v, want none", got.Delete)
 	}
 }
