@@ -5531,8 +5531,17 @@ spec:
               rule: self.type != 'Ephemeral' || has(self.scaling)
             - message: spec.scaling is not allowed for type Persistent
               rule: self.type != 'Persistent' || !has(self.scaling)
-            - message: spec.update is not allowed for type Persistent
-              rule: self.type != 'Persistent' || !has(self.update)
+            - message: 'spec.update.maxUnavailable must be 1 for type Persistent:
+                one ordinal is down at a time'
+              rule: self.type != 'Persistent' || !has(self.update) || !has(self.update.maxUnavailable)
+                || self.update.maxUnavailable == 1
+            - message: 'spec.update.maxStaleSeconds must be 0 for type Persistent:
+                a persistent server is never drained for staleness'
+              rule: self.type != 'Persistent' || !has(self.update) || !has(self.update.maxStaleSeconds)
+                || self.update.maxStaleSeconds == 0
+            - message: 'spec.update.minAvailable is not allowed for type Persistent:
+                a persistent group builds no extra server'
+              rule: self.type != 'Persistent' || !has(self.update) || !has(self.update.minAvailable)
             - message: spec.storage is required for type Persistent
               rule: self.type != 'Persistent' || has(self.storage)
             - message: spec.replicas is required for type Persistent

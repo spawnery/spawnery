@@ -242,9 +242,11 @@ const (
 	// ChangeoverBegun means the group has a server or pod of the current
 	// generation beside stale ones: it holds a place until the changeover ends.
 	ChangeoverBegun ChangeoverState = "Begun"
-	// ChangeoverDeferred means the group's new generation stands and its
-	// remaining stale servers or pods wait only for their players: it holds
-	// no place in the network's budget and gates no later stage.
+	// ChangeoverDeferred means the group waits only for players. For an
+	// ephemeral or proxy group, the new generation stands and the stale ones
+	// wait for their players; for a persistent group, every stale ordinal
+	// waits for its players. Either way it holds no place in the network's
+	// budget and gates no later stage.
 	ChangeoverDeferred ChangeoverState = "Deferred"
 )
 

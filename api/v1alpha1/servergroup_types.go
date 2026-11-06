@@ -107,7 +107,8 @@ type ScalingSpec struct {
 	ScaleDownStabilizationSeconds int32 `json:"scaleDownStabilizationSeconds,omitempty"`
 }
 
-// UpdateStrategy is how a changeover replaces stale servers.
+// UpdateStrategy is how a changeover replaces stale servers. A persistent
+// group restarts a stale ordinal in place, one at a time.
 // +kubebuilder:validation:Enum=RollingUpdate;WhenEmpty
 type UpdateStrategy string
 
@@ -120,7 +121,8 @@ const (
 	UpdateWhenEmpty UpdateStrategy = "WhenEmpty"
 )
 
-// UpdateSpec controls the rolling update of ephemeral groups.
+// UpdateSpec controls how an ephemeral group rolls out a new generation. A
+// persistent group takes only the strategy.
 // +kubebuilder:validation:XValidation:rule="!has(self.strategy) || self.strategy != 'WhenEmpty' || !has(self.maxStaleSeconds) || self.maxStaleSeconds == 0",message="spec.update.maxStaleSeconds must be 0 with strategy WhenEmpty: it drains the occupied servers WhenEmpty leaves alone"
 type UpdateSpec struct {
 	// Strategy is how stale servers are replaced.
@@ -313,7 +315,9 @@ type MemberResourcesSpec struct {
 // +kubebuilder:validation:XValidation:rule="self.type != 'Ephemeral' || !has(self.replicas)",message="spec.replicas is not allowed for type Ephemeral"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Ephemeral' || has(self.scaling)",message="spec.scaling is required for type Ephemeral"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.scaling)",message="spec.scaling is not allowed for type Persistent"
-// +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.update)",message="spec.update is not allowed for type Persistent"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.update) || !has(self.update.maxUnavailable) || self.update.maxUnavailable == 1",message="spec.update.maxUnavailable must be 1 for type Persistent: one ordinal is down at a time"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.update) || !has(self.update.maxStaleSeconds) || self.update.maxStaleSeconds == 0",message="spec.update.maxStaleSeconds must be 0 for type Persistent: a persistent server is never drained for staleness"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.update) || !has(self.update.minAvailable)",message="spec.update.minAvailable is not allowed for type Persistent: a persistent group builds no extra server"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || has(self.storage)",message="spec.storage is required for type Persistent"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || has(self.replicas)",message="spec.replicas is required for type Persistent"
 // +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || !has(self.scaling)",message="spec.scaling is not allowed for type OnDemand"

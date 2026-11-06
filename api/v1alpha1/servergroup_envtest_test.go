@@ -241,13 +241,6 @@ func TestServerGroupCELRejections(t *testing.T) {
 			},
 		},
 		{
-			name: "persistent with update",
-			base: persistentGroup,
-			mutate: func(g *spawneryv1alpha1.ServerGroup) {
-				g.Spec.Update = &spawneryv1alpha1.UpdateSpec{MaxUnavailable: 1}
-			},
-		},
-		{
 			name: "persistent without storage",
 			base: persistentGroup,
 			mutate: func(g *spawneryv1alpha1.ServerGroup) {
@@ -932,6 +925,49 @@ func TestMemberResourcesNeedsAMemoryCeilingAboveNonHeap(t *testing.T) {
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("err = %v, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestPersistentUpdateTakesOnlyStrategy(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	tests := []struct {
+		name    string
+		group   func(ns, name string) *spawneryv1alpha1.ServerGroup
+		update  *spawneryv1alpha1.UpdateSpec
+		wantErr string
+	}{
+		{"WhenEmpty", persistentGroup, &spawneryv1alpha1.UpdateSpec{Strategy: spawneryv1alpha1.UpdateWhenEmpty}, ""},
+		{"RollingUpdate", persistentGroup, &spawneryv1alpha1.UpdateSpec{Strategy: spawneryv1alpha1.UpdateRollingUpdate}, ""},
+		{"empty update", persistentGroup, &spawneryv1alpha1.UpdateSpec{}, ""},
+		{"maxUnavailable 2", persistentGroup, &spawneryv1alpha1.UpdateSpec{Strategy: spawneryv1alpha1.UpdateWhenEmpty, MaxUnavailable: 2}, "maxUnavailable must be 1 for type Persistent"},
+		{"maxStaleSeconds", persistentGroup, &spawneryv1alpha1.UpdateSpec{MaxStaleSeconds: 60}, "maxStaleSeconds must be 0 for type Persistent"},
+		{"minAvailable", persistentGroup, &spawneryv1alpha1.UpdateSpec{Strategy: spawneryv1alpha1.UpdateWhenEmpty, MinAvailable: ptr.To[int32](1)}, "minAvailable is not allowed for type Persistent"},
+		{"on-demand", onDemandGroup, &spawneryv1alpha1.UpdateSpec{Strategy: spawneryv1alpha1.UpdateWhenEmpty}, "spec.update is not allowed for type OnDemand"},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := tt.group(ns, fmt.Sprintf("update-%d", i))
+			g.Spec.Update = tt.update
+			err := c.Create(ctx, g)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("create: got %v, want error containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			var got spawneryv1alpha1.ServerGroup
+			if err := c.Get(ctx, client.ObjectKeyFromObject(g), &got); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if tt.name == "WhenEmpty" && (got.Spec.Update == nil || got.Spec.Update.MaxUnavailable != 1) {
+				t.Fatalf("maxUnavailable not defaulted to 1: %+v", got.Spec.Update)
 			}
 		})
 	}
