@@ -735,7 +735,7 @@ func (r *ServerGroupReconciler) size(
 		// No size can be decided: members exist because somebody asked for them
 		// by name. The persistent path would read the nil spec.replicas as zero.
 	default:
-		own := ownPersistentChangeover(views, podHash, pendingDeletes, group.DesiredReplicas(), was)
+		own := ownPersistentChangeover(views, podHash, pendingDeletes, group.DesiredReplicas(), group.UpdateWhenEmpty(), was)
 		self.State = own
 		refused := changeoverRefused(siblings, budget, self)
 		decision = DecidePersistentSize(PersistentInputs{
@@ -745,6 +745,7 @@ func (r *ServerGroupReconciler) size(
 			Views:             views,
 			PendingCreates:    pendingCreates,
 			PendingDeletes:    pendingDeletes,
+			WhenEmpty:         group.UpdateWhenEmpty(),
 			ChangeoverRefused: refused,
 		})
 		decision.ChangeoverWaiting = refused

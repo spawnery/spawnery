@@ -443,7 +443,41 @@ func TestOwnPersistentChangeover(t *testing.T) {
 		{"a current ordinal leaving while a stale one waits stays Waiting", []ServerView{stale, {Name: "w-1", PodHash: "current", Phase: phase.Draining, Ordinal: ptr.To[int32](1)}}, nil, spawneryv1alpha1.ChangeoverWaiting, spawneryv1alpha1.ChangeoverWaiting},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := ownPersistentChangeover(tc.views, "current", tc.pendingDeletes, 2, tc.was); got != tc.want {
+			if got := ownPersistentChangeover(tc.views, "current", tc.pendingDeletes, 2, false, tc.was); got != tc.want {
+				t.Errorf("ownPersistentChangeover = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+func TestOwnPersistentChangeoverWhenEmpty(t *testing.T) {
+	ord := func(i int32) *int32 { return &i }
+	occupied := ServerView{Name: "w-0", PodHash: "old", Phase: phase.Ready, Ordinal: ord(0), Players: 2}
+	empty := ServerView{Name: "w-0", PodHash: "old", Phase: phase.Ready, Ordinal: ord(0)}
+	untrusted := ServerView{Name: "w-0", PodHash: "old", Phase: phase.Ready, Ordinal: ord(0), Stale: true}
+	draining := ServerView{Name: "w-0", PodHash: "old", Phase: phase.Draining, Ordinal: ord(0)}
+	held := ServerView{Name: "w-0", PodHash: "old", Phase: phase.Ready, Ordinal: ord(0), Hold: true, Players: 2}
+	surplus := ServerView{Name: "w-2", PodHash: "old", Phase: phase.Ready, Ordinal: ord(2), Players: 1}
+	current := ServerView{Name: "w-1", PodHash: "current", Phase: phase.Ready, Ordinal: ord(1)}
+	for _, tc := range []struct {
+		name           string
+		views          []ServerView
+		pendingDeletes map[string]bool
+		was            spawneryv1alpha1.ChangeoverState
+		want           spawneryv1alpha1.ChangeoverState
+	}{
+		{"nothing stale", []ServerView{current}, nil, "", spawneryv1alpha1.ChangeoverNone},
+		{"stale occupied", []ServerView{occupied, current}, nil, "", spawneryv1alpha1.ChangeoverDeferred},
+		{"stale occupied after Begun", []ServerView{occupied, current}, nil, spawneryv1alpha1.ChangeoverBegun, spawneryv1alpha1.ChangeoverDeferred},
+		{"stale empty after Deferred", []ServerView{empty, current}, nil, spawneryv1alpha1.ChangeoverDeferred, spawneryv1alpha1.ChangeoverWaiting},
+		{"stale empty draining", []ServerView{draining, current}, nil, "", spawneryv1alpha1.ChangeoverBegun},
+		{"stale empty reserved for deletion", []ServerView{empty, current}, map[string]bool{"w-0": true}, "", spawneryv1alpha1.ChangeoverBegun},
+		{"stale untrusted", []ServerView{untrusted, current}, nil, "", spawneryv1alpha1.ChangeoverDeferred},
+		{"stale occupied plus stale surplus", []ServerView{occupied, current, surplus}, nil, "", spawneryv1alpha1.ChangeoverWaiting},
+		{"held stale", []ServerView{held, current}, nil, spawneryv1alpha1.ChangeoverDeferred, spawneryv1alpha1.ChangeoverNone},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := ownPersistentChangeover(tc.views, "current", tc.pendingDeletes, 2, true, tc.was); got != tc.want {
 				t.Errorf("ownPersistentChangeover = %q, want %q", got, tc.want)
 			}
 		})
