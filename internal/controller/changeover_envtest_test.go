@@ -374,9 +374,6 @@ func TestAPersistentWhenEmptyGroupDefersAndStillWaitsForItsStage(t *testing.T) {
 	if srv := f.server("world-0"); !srv.DeletionTimestamp.IsZero() || srv.Status.Phase == string(phase.Draining) {
 		t.Fatalf("occupied world-0 is being taken down")
 	}
-	if c := f.progressing(t, "late"); strings.Contains(c.Message, "world") {
-		t.Fatalf("late is held by the deferred world: %s %q", c.Reason, c.Message)
-	}
 
 	f.reportPlayersOn(t, "world-0", 0)
 	f.reconcileNamedGroup(t, r, "world")
@@ -392,7 +389,19 @@ func TestAPersistentWhenEmptyGroupDefersAndStillWaitsForItsStage(t *testing.T) {
 		t.Fatalf("world Progressing = %s %q", c.Reason, c.Message)
 	}
 
+	f.reportPlayersOn(t, "world-0", 2)
 	f.finishChangeover(t, r, "lobby")
+	f.reconcileNamedGroup(t, r, "world")
+	if got := f.serverGroup(t, "world").Status.Changeover; got != spawneryv1alpha1.ChangeoverDeferred {
+		t.Fatalf("world status.changeover = %q with players back on it, want Deferred", got)
+	}
+	f.reconcileNamedGroup(t, r, "late")
+	if c := f.progressing(t, "late"); c.Reason == spawneryv1alpha1.ReasonWaitingForEarlierStage ||
+		strings.Contains(c.Message, "world") {
+		t.Fatalf("late is held by the deferred world: %s %q", c.Reason, c.Message)
+	}
+
+	f.reportPlayersOn(t, "world-0", 0)
 	f.reconcileNamedGroup(t, r, "world")
 
 	if srv, present := f.serverIfPresent("world-0"); present && srv.DeletionTimestamp.IsZero() &&

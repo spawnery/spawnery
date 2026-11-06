@@ -475,6 +475,8 @@ func TestOwnPersistentChangeoverWhenEmpty(t *testing.T) {
 		{"stale untrusted", []ServerView{untrusted, current}, nil, "", spawneryv1alpha1.ChangeoverDeferred},
 		{"stale occupied plus stale surplus", []ServerView{occupied, current, surplus}, nil, "", spawneryv1alpha1.ChangeoverWaiting},
 		{"held stale", []ServerView{held, current}, nil, spawneryv1alpha1.ChangeoverDeferred, spawneryv1alpha1.ChangeoverNone},
+		{"stale terminal only", []ServerView{{Name: "w-0", PodHash: "old", Phase: phase.Failed, Ordinal: ord(0)}}, nil, "", spawneryv1alpha1.ChangeoverNone},
+		{"stale without an ordinal only", []ServerView{{Name: "w-x", PodHash: "old", Phase: phase.Ready}}, nil, "", spawneryv1alpha1.ChangeoverDeferred},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			if got := ownPersistentChangeover(tc.views, "current", tc.pendingDeletes, 2, true, tc.was); got != tc.want {
