@@ -213,8 +213,8 @@ type StorageSpec struct {
 	// default, keeps it on a PersistentVolumeClaim per member. ObjectStore
 	// keeps it in the object store configured for the operator (chart value
 	// worldSync) and gives /data from a directory on the node that runs the
-	// member; it needs type OnDemand or Persistent and keep, and synchronises exactly what
-	// keep matches. It also needs spawnery's game images 0.24.3 or later,
+	// member; it needs type OnDemand or Persistent and keep, and
+	// synchronises exactly what keep matches. It also needs spawnery's game images 0.24.3 or later,
 	// whose bootstrapper holds the server until the world is on disk and
 	// whose entrypoint leaves the node agent's files alone: an older or a
 	// custom image starts on a half-downloaded world and can corrupt it, or
@@ -493,7 +493,8 @@ type ServerGroupSpec struct {
 	// +optional
 	ChangeoverStage int32 `json:"changeoverStage,omitempty"`
 
-	// Update configures the rolling update. Ephemeral only.
+	// Update configures the rolling update. Ephemeral groups take all of it,
+	// Persistent groups only strategy, OnDemand groups refuse it.
 	// +optional
 	Update *UpdateSpec `json:"update,omitempty"`
 

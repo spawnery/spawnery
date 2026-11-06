@@ -152,7 +152,8 @@ const (
 	ReasonServersStarting        = "ServersStarting"
 	ReasonReplacingServers       = "ReplacingServers"
 	ReasonAtDesiredState         = "AtDesiredState"
-	// ReasonWaitingForEmpty: a WhenEmpty persistent group has stale servers, and every one still has players.
+	// ReasonWaitingForEmpty: a WhenEmpty persistent group has stale
+	// servers, and every one still has players.
 	ReasonWaitingForEmpty = "WaitingForEmpty"
 	// ReasonRetireeStuck says a server carrying spec.retire has failed, and is
 	// therefore holding an update slot until its retention window ends.
