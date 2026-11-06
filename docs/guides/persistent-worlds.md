@@ -398,7 +398,8 @@ steps:
 2. For each ordinal, run the import Job from [Moving existing worlds
    in](object-store-worlds.md#moving-existing-worlds-in) against the claim
    `<group>-<ordinal>-data`, with `--world=<namespace>/<group>/<ordinal>` and
-   the group's keep list. For `survival-0` in `minecraft` that is
+   the keep list the group will carry under `ObjectStore`. Anything outside
+   that list does not survive the move. For `survival-0` in `minecraft` that is
    `--world=minecraft/survival/0` and `survival-0-data`. The import refuses a
    world that already has a manifest.
 3. Delete the group if step 1 did not, and create it again under the same

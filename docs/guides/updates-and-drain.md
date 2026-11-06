@@ -152,7 +152,7 @@ ordinal down whether or not it has players, because lowering it is an
 explicit instruction. A node that is leaving takes its servers with it.
 
 While every stale ordinal is occupied, the group is waiting for players and
-gates no later stage. `Progressing` says so:
+holds up no later stage. `Progressing` says so:
 
 ```text
 WaitingForEmpty: stale servers wait for their players to leave: survival-0 has 3 players, survival-1 has 1 player
@@ -164,7 +164,7 @@ stage-wait reasons and `RetireeStuck` come before it in the same condition.
 `status.changeover` reads `Deferred` in that state, as it does for an
 ephemeral `WhenEmpty` group. A persistent group in `Waiting` or `Begun` holds
 every later [stage](#stages) back, and an occupied world could do that for
-hours, so `Deferred` gates no later stage. When an ordinal empties, the group is
+hours, so a `Deferred` group holds up no later stage. When an ordinal empties, the group is
 `Waiting` again and asks for its stage like any other, so lower stages still
 go first.
 
@@ -316,8 +316,8 @@ have made the same trade since they were introduced.
 
 Persistent groups wait for their stage and gate later ones until no stale
 ordinal is left, but take no budget place of their own: they never surge.
-A persistent group on `WhenEmpty` gates nobody while every stale ordinal is
-occupied; see [`WhenEmpty` for persistent groups](#whenempty-for-persistent-groups).
+A persistent group on `WhenEmpty` holds up no other group while every stale
+ordinal is occupied; see [`WhenEmpty` for persistent groups](#whenempty-for-persistent-groups).
 On-demand groups refuse the field; their members never roll.
 
 A group gated by its stage reports it the same way as the budget, in its own
