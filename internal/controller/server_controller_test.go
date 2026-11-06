@@ -1876,6 +1876,58 @@ func TestAPersistentServerGetsItsClaimBeforeItsPod(t *testing.T) {
 	}
 }
 
+func (f *fixture) createPersistentObjectStoreGroup(t *testing.T, name string) *spawneryv1alpha1.ServerGroup {
+	t.Helper()
+	return f.createPersistentGroupWithStorage(t, name, 1, &spawneryv1alpha1.StorageSpec{
+		Backend: spawneryv1alpha1.StorageBackendObjectStore,
+		Keep:    []string{"world"},
+	})
+}
+
+func TestAPersistentObjectStoreServerGetsNoClaim(t *testing.T) {
+	f := newFixture(t)
+	f.reconc.WorldSync = true
+	f.createPersistentObjectStoreGroup(t, "survival")
+	srv := f.createPersistentServer(t, "survival", 0)
+
+	f.reconcile(srv.Name)
+
+	pod, ok := f.pod(srv.Name)
+	if !ok {
+		t.Fatal("no pod for a persistent ObjectStore server with world sync on")
+	}
+	if claim := f.claim(podspec.DataClaimName(srv.Name)); claim != nil {
+		t.Fatalf("a persistent ObjectStore server got the claim %s", claim.Name)
+	}
+	var world string
+	for _, v := range pod.Spec.Volumes {
+		if v.Name == podspec.DataVolumeName && v.CSI != nil {
+			world = v.CSI.VolumeAttributes[podspec.WorldSyncAttrWorld]
+		}
+	}
+	if want := f.ns + "/survival/0"; world != want {
+		t.Errorf("world = %q, want %q", world, want)
+	}
+}
+
+func TestAPersistentObjectStoreServerWaitsWhenWorldSyncIsOff(t *testing.T) {
+	f := newFixture(t)
+	f.createPersistentObjectStoreGroup(t, "survival")
+	srv := f.createPersistentServer(t, "survival", 0)
+
+	f.reconcile(srv.Name)
+
+	if _, ok := f.pod(srv.Name); ok {
+		t.Fatal("a pod exists although world sync is off")
+	}
+	got := f.server(srv.Name)
+	if !hasCondition(got.Status.Conditions, spawneryv1alpha1.ConditionAccepted,
+		metav1.ConditionFalse, ReasonWorldSyncOff) {
+		t.Errorf("conditions = %+v, want Accepted=False with reason %s",
+			got.Status.Conditions, ReasonWorldSyncOff)
+	}
+}
+
 // With no kubelet a bound pod keeps its deletion timestamp; a force delete stands in for the kubelet's confirmation.
 func (f *fixture) retirePodTheWayAKubeletWould(t *testing.T, pod *corev1.Pod) {
 	t.Helper()

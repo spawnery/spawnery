@@ -2670,6 +2670,13 @@ func TestNodeDrainingConditionNamesTheNode(t *testing.T) {
 // than edited from the fixture's.
 func (f *fixture) createPersistentGroup(t *testing.T, name string, replicas int32) *spawneryv1alpha1.ServerGroup {
 	t.Helper()
+	return f.createPersistentGroupWithStorage(t, name, replicas,
+		&spawneryv1alpha1.StorageSpec{Size: resource.MustParse("10Gi")})
+}
+
+func (f *fixture) createPersistentGroupWithStorage(t *testing.T, name string, replicas int32,
+	storage *spawneryv1alpha1.StorageSpec) *spawneryv1alpha1.ServerGroup {
+	t.Helper()
 	group := &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns},
 		Spec: spawneryv1alpha1.ServerGroupSpec{
@@ -2681,7 +2688,7 @@ func (f *fixture) createPersistentGroup(t *testing.T, name string, replicas int3
 			TerminationGracePeriodSeconds: 60,
 			FailedRetentionSeconds:        3600,
 			Drain:                         &spawneryv1alpha1.DrainSpec{TimeoutSeconds: 60},
-			Storage:                       &spawneryv1alpha1.StorageSpec{Size: resource.MustParse("10Gi")},
+			Storage:                       storage,
 		},
 	}
 	if err := f.c.Create(f.ctx, group); err != nil {

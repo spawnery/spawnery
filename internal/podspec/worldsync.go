@@ -17,6 +17,7 @@ limitations under the License.
 package podspec
 
 import (
+	"strconv"
 	"strings"
 	"time"
 
@@ -36,9 +37,19 @@ const (
 	EnvWorldSyncInterval = "SPAWNERY_WORLD_SYNC_INTERVAL"
 )
 
+func WorldKey(srv *spawneryv1alpha1.Server) string {
+	switch {
+	case srv.Spec.Key != "":
+		return srv.Spec.Key
+	case srv.Spec.Ordinal != nil:
+		return strconv.Itoa(int(*srv.Spec.Ordinal))
+	}
+	return ""
+}
+
 func worldSyncVolume(group *spawneryv1alpha1.ServerGroup, srv *spawneryv1alpha1.Server) corev1.Volume {
 	attrs := map[string]string{
-		WorldSyncAttrWorld: srv.Namespace + "/" + group.Name + "/" + srv.Spec.Key,
+		WorldSyncAttrWorld: srv.Namespace + "/" + group.Name + "/" + WorldKey(srv),
 		WorldSyncAttrKeep:  strings.Join(group.Spec.Storage.Keep, "\n"),
 	}
 	if len(group.Spec.Storage.Replace) > 0 {

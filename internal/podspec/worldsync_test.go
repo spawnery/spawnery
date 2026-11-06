@@ -22,6 +22,7 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/api/resource"
+	"k8s.io/utils/ptr"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 )
@@ -111,5 +112,88 @@ func TestAClaimPodGetsNoInterval(t *testing.T) {
 	WithWorldSyncInterval(pod, time.Minute)
 	if envValue(pod, EnvWorldSyncInterval) != "" {
 		t.Error("a claim pod carries the interval")
+	}
+}
+
+func persistentObjectStoreGroup(g *spawneryv1alpha1.ServerGroup) {
+	g.Spec.Type = spawneryv1alpha1.ServerGroupPersistent
+	g.Spec.Scaling = nil
+	g.Spec.Storage = &spawneryv1alpha1.StorageSpec{
+		Size: resource.MustParse("6Gi"), Backend: spawneryv1alpha1.StorageBackendObjectStore,
+		Keep: []string{"world"},
+	}
+}
+
+func TestAPersistentObjectStoreServerNamesItsWorldByOrdinal(t *testing.T) {
+	net, group := testNetwork(), testGroup()
+	persistentObjectStoreGroup(group)
+	srv := testServer()
+	srv.Spec.Ordinal = ptr.To[int32](3)
+	pod, err := BuildServerPod(net, group, srv, testEndpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := volumeNamed(pod, DataVolumeName)
+	if v == nil || v.CSI == nil {
+		t.Fatalf("data volume = %+v, want a CSI inline volume", v)
+	}
+	if got, want := v.CSI.VolumeAttributes["world"], srv.Namespace+"/"+group.Name+"/3"; got != want {
+		t.Errorf("world = %q, want %q", got, want)
+	}
+	for _, vol := range pod.Spec.Volumes {
+		if vol.PersistentVolumeClaim != nil {
+			t.Errorf("volume %s is a claim", vol.Name)
+		}
+	}
+	if envValue(pod, EnvWorldSync) != "1" {
+		t.Error("SPAWNERY_WORLD_SYNC is not set")
+	}
+}
+
+func TestWorldKey(t *testing.T) {
+	tests := []struct {
+		name string
+		spec spawneryv1alpha1.ServerSpec
+		want string
+	}{
+		{"key", spawneryv1alpha1.ServerSpec{Key: "c0ffee"}, "c0ffee"},
+		{"ordinal zero", spawneryv1alpha1.ServerSpec{Ordinal: ptr.To[int32](0)}, "0"},
+		{"ordinal twelve", spawneryv1alpha1.ServerSpec{Ordinal: ptr.To[int32](12)}, "12"},
+		{"neither", spawneryv1alpha1.ServerSpec{}, ""},
+		{"both", spawneryv1alpha1.ServerSpec{Key: "c0ffee", Ordinal: ptr.To[int32](1)}, "c0ffee"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := WorldKey(&spawneryv1alpha1.Server{Spec: tt.spec}); got != tt.want {
+				t.Errorf("WorldKey = %q, want %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAPersistentObjectStoreHashIgnoresTheOrdinal(t *testing.T) {
+	net, group := testNetwork(), testGroup()
+	persistentObjectStoreGroup(group)
+	a, err := DesiredServerHash(net, group, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	b, err := DesiredServerHash(net, group, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a != b {
+		t.Errorf("hash differs between calls: %s, %s", a, b)
+	}
+	claim := testGroup()
+	claim.Spec.Type = spawneryv1alpha1.ServerGroupPersistent
+	claim.Spec.Scaling = nil
+	claim.Spec.Storage = &spawneryv1alpha1.StorageSpec{Size: resource.MustParse("6Gi")}
+	c, err := DesiredServerHash(net, claim, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if a == c {
+		t.Error("ObjectStore and Claim groups hash alike")
 	}
 }
