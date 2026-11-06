@@ -119,6 +119,67 @@ Such a group takes a network changeover place only for its first new server.
 Once that is Ready, `status.changeover` reads `Deferred`: the rest waits for
 players, not for the budget, and other groups are not held behind it.
 
+## `WhenEmpty` for persistent groups
+
+A persistent group rolls one ordinal at a time, and each roll moves the
+players off it. `WhenEmpty` makes the group wait until an ordinal has no
+players instead:
+
+```yaml
+kind: ServerGroup
+spec:
+  type: Persistent
+  replicas: 1
+  update:
+    strategy: WhenEmpty    # RollingUpdate (default) or WhenEmpty
+```
+
+`strategy` is the only field of `spec.update` that a persistent group takes.
+The API refuses the others, each with a message that names the field:
+`maxUnavailable` other than 1, `maxStaleSeconds` other than 0, and
+`minAvailable`, since a persistent group builds no extra server. An absent
+`spec.update` and `strategy: RollingUpdate` behave as before. Setting or
+changing `spec.update` restarts nothing.
+
+Two takedowns wait for an empty ordinal: replacing a stale ordinal and the
+restart for a pending claim resize. Only an ordinal that is known empty is
+chosen, which means zero players and a count that can be trusted. An occupied
+stale ordinal stays `Ready`, registered and joinable. An occupied higher
+ordinal does not hold up an empty lower one.
+
+Two takedowns do not wait. Lowering `replicas` takes the highest surplus
+ordinal down whether or not it has players, because lowering it is an
+explicit instruction. A node that is leaving takes its servers with it.
+
+While every stale ordinal is occupied, the group is waiting for players and
+holds nobody. `Progressing` says so:
+
+```text
+WaitingForEmpty: stale servers wait for their players to leave: survival-0 has 3 players, survival-1 has 1 player
+```
+
+A count that cannot be trusted reads `has an unknown number of players`. The
+stage-wait reasons and `RetireeStuck` come before it in the same condition.
+
+`status.changeover` reads `Deferred` in that state, as it does for an
+ephemeral `WhenEmpty` group. A persistent group in `Waiting` or `Begun` holds
+every later [stage](#stages) back, and an occupied world could do that for
+hours, so `Deferred` holds nobody. When an ordinal empties, the group is
+`Waiting` again and asks for its stage like any other, so lower stages still
+go first.
+
+To update an occupied ordinal now, delete its `Server`. The group recreates it
+under the same name from the current spec, and its players are moved off as
+in any takedown:
+
+```bash
+kubectl delete server <group>-<ordinal> -n <namespace>
+```
+
+The rule decides on the last reported count. A player who joins between the
+decision and the deregistration is moved off by the drain like every player is
+on a `RollingUpdate` group. The window is one reconcile pass wide.
+
 ## Changing over a whole network
 
 `maxUnavailable` bounds one group's own roll. It says nothing about what
@@ -255,6 +316,8 @@ have made the same trade since they were introduced.
 
 Persistent groups wait for their stage and gate later ones until no stale
 ordinal is left, but take no budget place of their own: they never surge.
+A persistent group on `WhenEmpty` gates nobody while every stale ordinal is
+occupied; see [`WhenEmpty` for persistent groups](#whenempty-for-persistent-groups).
 On-demand groups refuse the field; their members never roll.
 
 A group gated by its stage reports it the same way as the budget, in its own

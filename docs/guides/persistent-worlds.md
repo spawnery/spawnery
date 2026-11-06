@@ -318,6 +318,94 @@ kubectl get servergroup <name> \
   -o jsonpath='{.status.consecutiveFailures} {.status.lastFailureAt}'
 ```
 
+## Worlds in the object store
+
+A persistent group can keep its worlds in an S3 bucket instead of on claims.
+The installation needs the chart's `worldSync` values first; see [Worlds in
+an object store](object-store-worlds.md) for them and for how the node agent
+works.
+
+```yaml
+kind: ServerGroup
+spec:
+  type: Persistent
+  replicas: 1
+  storage:
+    backend: ObjectStore
+    size: 6Gi           # required, ignored under ObjectStore
+    keep:
+      - worlds/world
+      - plugins/Example/data
+    retention:
+      last: 6
+      daily: 7
+```
+
+`keep` is required, as for an on-demand group, because it is exactly what is
+synced. No claim is created for an ordinal. The operator needs
+`--world-sync`; without it no pod is created and `Accepted` is `False` with
+reason `WorldSyncOff`. `retention` prunes at every upload, and a running
+persistent server uploads every snapshot interval, so its history is pruned
+continuously. `storageClassName`, `accessModes` and `annotations` stay valid
+and are ignored. A persistent group on `Claim` renders as before.
+
+A persistent world is `<namespace>/<group>/<ordinal>` in the store, with the
+ordinal in decimal and no leading zeros, so `minecraft/survival/0` for
+`survival-0`. A group deleted and recreated under the same name in the same
+namespace finds the same worlds.
+
+`storage.backend` cannot change on a persistent group. The API refuses it with
+a message that points here. A new backend would change the pod hash, roll
+every ordinal and start each on a world the new backend does not hold: a fresh
+world from an empty store, or a fresh claim, with the old world left where the
+server no longer looks. To move a world, follow [Moving a world onto the object
+store](#moving-a-world-onto-the-object-store).
+
+Four things differ from a claim:
+
+- An ordinal is no longer pinned to a node by its volume, so a replacement pod
+  may schedule anywhere. On another node it waits in `ContainerCreating` until
+  the old node has uploaded the final snapshot and released the lease, then
+  downloads the world. A 150 MB world downloads in 1 to 2.5 s and uploads in 3
+  to 6 s.
+- An ordinal is still held through its drain. The reason is now that the lease
+  refuses two nodes on one world.
+- When a node dies, the world loses the play since its last uploaded snapshot.
+  See [the dead-node section](#a-dead-node-under-objectstore) below.
+- Snapshots run for as long as the group exists, because a persistent server
+  is always started. That is one copy of the changed files and one upload
+  every `snapshotInterval` per ordinal.
+
+A scaled-away ordinal's world stays in the store, as its claim stays on
+`Claim`. Raising `replicas` again resumes it. If the group sets
+`retention.maxAgeDays`, the age pass prunes its history like that of any world
+nobody plays.
+
+`restorePoints` and `restoreWorld` refuse a persistent group. A restore needs
+the world's server stopped and kept stopped, and spawnery never stops a
+persistent ordinal on request. The history is kept in the meantime.
+
+### Moving a world onto the object store
+
+Because `backend` is immutable, a persistent group moves to the store in four
+steps:
+
+1. Lower `replicas` to 0, or delete the group. The claims stay either way.
+   Wait until no server of the group is left, so that no pod has a claim
+   mounted. The import must not run while a server holds the claim.
+2. For each ordinal, run the import Job from [Moving existing worlds
+   in](object-store-worlds.md#moving-existing-worlds-in) against the claim
+   `<group>-<ordinal>-data`, with `--world=<namespace>/<group>/<ordinal>` and
+   the group's keep list. For `survival-0` in `minecraft` that is
+   `--world=minecraft/survival/0` and `survival-0-data`. The import refuses a
+   world that already has a manifest.
+3. Delete the group if step 1 did not, and create it again under the same
+   name with `backend: ObjectStore`. Each ordinal finds its manifest.
+4. Delete the claims once the worlds are confirmed in the store.
+
+There is no way back. The object store has no export in this version, so a
+group that returns to `Claim` starts on empty claims.
+
 ## Two things a lowered `replicas` and a dead node each cost
 
 **Lowering `replicas` nominates the top ordinal whoever is on it.** The two
@@ -389,3 +477,11 @@ Confirm the node is really gone first.
 kubectl delete pod <group>-<ordinal> -n <namespace> --force --grace-period=0
 ```
 
+
+### A dead node under ObjectStore
+
+On `ObjectStore` the ordinal still waits for the pod on the dead node to be
+force-deleted, since the pod's name is what is held. After the force-delete,
+the replacement waits up to 10 minutes for the dead node's lease to go stale
+before it can take the world. The warning above reads differently here: the
+lease refuses a second writer. The world loses the play since its last uploaded snapshot.
