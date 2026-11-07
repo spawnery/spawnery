@@ -68,8 +68,13 @@ type WorldDeleter interface {
 	MarkDeleted(ctx context.Context, world string) error
 	DeletionPending(ctx context.Context, world string) (bool, error)
 	// Bind writes the binding that lets a node agent key a standby slot onto
-	// world; worldsync.ErrBound when one names another server.
+	// world; a *worldsync.BoundError when one names another server.
 	Bind(ctx context.Context, world string, b worldsync.Binding) error
+	// Rebind replaces the binding that says stale with b while world has no
+	// manifest and no lease; a *worldsync.BoundError otherwise.
+	Rebind(ctx context.Context, world string, stale, b worldsync.Binding) error
+	// BoundTo reads world's binding; worldsync.ErrNotFound when there is none.
+	BoundTo(ctx context.Context, world string) (worldsync.Binding, error)
 }
 
 var ErrTooManyInstances = errors.New("that group is at spec.maxInstances")
@@ -692,7 +697,12 @@ func (w KubeWriter) deleteObjectStoreWorld(ctx context.Context, world, name stri
 		return DeletedServer{}, err
 	}
 	if !haveServer && !haveWorld {
-		return DeletedServer{}, ErrNoSuchServer
+		// A binding alone is a key that no node took; the sweep removes it.
+		if _, err := w.Worlds.BoundTo(ctx, world); errors.Is(err, worldsync.ErrNotFound) {
+			return DeletedServer{}, ErrNoSuchServer
+		} else if err != nil {
+			return DeletedServer{}, err
+		}
 	}
 	// The marker first: a member deleted without it uploads its world at
 	// the stop, and that world would outlive a failed request.

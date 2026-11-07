@@ -123,21 +123,80 @@ func TestKeyWorldOnTheResumedMemberAnswersItsOwnKey(t *testing.T) {
 	}
 }
 
-func TestKeyWorldFinishesABindingThatFailed(t *testing.T) {
+func TestKeyWorldBindsBeforeItSetsTheKey(t *testing.T) {
 	worlds := &fakeWorlds{bindFail: errors.New("store down")}
 	w := keyWriter(t, worlds, roundsGroup(), roundMember("rounds-x7k2", nil))
 	if _, err := w.KeyWorld(context.Background(), caller("rounds-x7k2"), "round-7"); !errors.Is(err, ErrBindingFailed) {
 		t.Fatalf("err = %v, want ErrBindingFailed", err)
 	}
-	if got := getServer(t, w, "rounds-x7k2").Spec.WorldKey; got != "round-7" {
-		t.Fatalf("spec.worldKey = %q: the key comes before the binding", got)
+	if got := getServer(t, w, "rounds-x7k2").Spec.WorldKey; got != "" {
+		t.Fatalf("spec.worldKey = %q: an immutable key was set without its binding", got)
 	}
 	worlds.bindFail = nil
 	if _, err := w.KeyWorld(context.Background(), caller("rounds-x7k2"), "round-7"); err != nil {
 		t.Fatalf("the retry: %v", err)
 	}
-	if _, ok := worlds.bindings["minecraft/rounds/round-7"]; !ok {
-		t.Error("the retry wrote no binding")
+	if got := getServer(t, w, "rounds-x7k2").Spec.WorldKey; got != "round-7" {
+		t.Errorf("spec.worldKey after the retry = %q", got)
+	}
+}
+
+func TestKeyWorldFinishesAKeyTheNodeTookBeforeThePatch(t *testing.T) {
+	// The binding landed, the node agent keyed the slot (the world exists
+	// now), and the patch of spec.worldKey failed.
+	worlds := &fakeWorlds{exists: true, bindings: map[string]worldsync.Binding{
+		"minecraft/rounds/round-7": {Server: "rounds-x7k2", Pod: "minecraft/rounds-x7k2"},
+	}}
+	w := keyWriter(t, worlds, roundsGroup(), roundMember("rounds-x7k2", nil))
+	if _, err := w.KeyWorld(context.Background(), caller("rounds-x7k2"), "round-7"); err != nil {
+		t.Fatalf("KeyWorld: %v", err)
+	}
+	if got := getServer(t, w, "rounds-x7k2").Spec.WorldKey; got != "round-7" {
+		t.Errorf("spec.worldKey = %q", got)
+	}
+}
+
+func TestKeyWorldBoundToAnotherLiveServerLeavesTheKeyUnset(t *testing.T) {
+	// The other member's binding landed after this caller's list check saw
+	// no carrier: it names a live server that has not got its key yet.
+	worlds := &fakeWorlds{bindings: map[string]worldsync.Binding{
+		"minecraft/rounds/round-7": {Server: "rounds-wxyz", Pod: "minecraft/rounds-wxyz"},
+	}}
+	w := keyWriter(t, worlds, roundsGroup(), roundMember("rounds-x7k2", nil), roundMember("rounds-wxyz", nil))
+	if _, err := w.KeyWorld(context.Background(), caller("rounds-x7k2"), "round-7"); !errors.Is(err, ErrKeyTaken) {
+		t.Fatalf("err = %v, want ErrKeyTaken", err)
+	}
+	if got := getServer(t, w, "rounds-x7k2").Spec.WorldKey; got != "" {
+		t.Fatalf("spec.worldKey = %q on a refused caller", got)
+	}
+	if got := worlds.bindings["minecraft/rounds/round-7"].Server; got != "rounds-wxyz" {
+		t.Errorf("the live member's binding was replaced by %q", got)
+	}
+}
+
+func TestKeyWorldReplacesABindingLeftByAServerThatIsGone(t *testing.T) {
+	finished := roundMember("rounds-wxyz", func(s *spawneryv1alpha1.Server) { s.Status.Phase = string(phase.Finished) })
+	for name, others := range map[string][]client.Object{
+		"deleted":  nil,
+		"finished": {finished},
+	} {
+		t.Run(name, func(t *testing.T) {
+			worlds := &fakeWorlds{bindings: map[string]worldsync.Binding{
+				"minecraft/rounds/round-7": {Server: "rounds-wxyz", Pod: "minecraft/rounds-wxyz"},
+			}}
+			objs := append([]client.Object{roundsGroup(), roundMember("rounds-x7k2", nil)}, others...)
+			w := keyWriter(t, worlds, objs...)
+			if _, err := w.KeyWorld(context.Background(), caller("rounds-x7k2"), "round-7"); err != nil {
+				t.Fatalf("KeyWorld: %v", err)
+			}
+			want := worldsync.Binding{Server: "rounds-x7k2", Pod: "minecraft/rounds-x7k2"}
+			if got := worlds.bindings["minecraft/rounds/round-7"]; got != want {
+				t.Errorf("binding = %+v, want %+v", got, want)
+			}
+			if got := getServer(t, w, "rounds-x7k2").Spec.WorldKey; got != "round-7" {
+				t.Errorf("spec.worldKey = %q", got)
+			}
+		})
 	}
 }
 
@@ -292,5 +351,21 @@ func TestStopAcceptsAMemberThatKeyedItsWorld(t *testing.T) {
 	}
 	if err := w.StopServer(context.Background(), "minecraft", "rounds-wxyz"); !errors.Is(err, ErrNotAnInstance) {
 		t.Fatalf("stop of an unkeyed member: err = %v, want ErrNotAnInstance", err)
+	}
+}
+
+func TestDeleteOfAKeyThatOnlyHasABindingMarksItDeleted(t *testing.T) {
+	worlds := &fakeWorlds{bindings: map[string]worldsync.Binding{
+		"minecraft/rounds/round-7": {Server: "rounds-wxyz", Pod: "minecraft/rounds-wxyz"},
+	}}
+	w := keyWriter(t, worlds, roundsGroup())
+	if _, err := w.DeleteServer(context.Background(), "minecraft", "rounds", "round-7"); err != nil {
+		t.Fatalf("delete of a binding alone: %v", err)
+	}
+	if len(worlds.deleted) != 1 || worlds.deleted[0] != "minecraft/rounds/round-7" {
+		t.Fatalf("marked %v", worlds.deleted)
+	}
+	if _, err := w.DeleteServer(context.Background(), "minecraft", "rounds", "round-8"); !errors.Is(err, ErrNoSuchServer) {
+		t.Fatalf("delete of nothing: err = %v, want ErrNoSuchServer", err)
 	}
 }

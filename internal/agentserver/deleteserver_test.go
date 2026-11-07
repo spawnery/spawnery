@@ -94,10 +94,31 @@ func (f *fakeWorlds) Bind(_ context.Context, w string, b worldsync.Binding) erro
 		f.bindings = map[string]worldsync.Binding{}
 	}
 	if have, ok := f.bindings[w]; ok && have != b {
-		return worldsync.ErrBound
+		return &worldsync.BoundError{Have: have}
 	}
 	f.bindings[w] = b
 	return nil
+}
+
+// Rebind follows worldsync.ReplaceBinding: exists stands for a manifest or a
+// lease.
+func (f *fakeWorlds) Rebind(_ context.Context, w string, stale, b worldsync.Binding) error {
+	have, ok := f.bindings[w]
+	if !ok {
+		return worldsync.ErrNotFound
+	}
+	if have != stale || f.exists {
+		return &worldsync.BoundError{Have: have}
+	}
+	f.bindings[w] = b
+	return nil
+}
+
+func (f *fakeWorlds) BoundTo(_ context.Context, w string) (worldsync.Binding, error) {
+	if have, ok := f.bindings[w]; ok {
+		return have, nil
+	}
+	return worldsync.Binding{}, worldsync.ErrNotFound
 }
 
 func (f *fakeWorlds) DeletionPending(context.Context, string) (bool, error) { return f.pending, nil }

@@ -43,8 +43,8 @@ var (
 	ErrKeySet = errors.New("that server's world already has another key")
 	// ErrKeyTaken: the key holds a world, or another server carries it.
 	ErrKeyTaken = errors.New("that key is taken")
-	// ErrBindingFailed: the key is on the Server, the binding is not in the
-	// object store yet. The same request finishes it.
+	// ErrBindingFailed: the object store did not take the binding, and the
+	// Server carries no key. The same request can be asked again.
 	ErrBindingFailed = errors.New("the binding could not be written")
 )
 
@@ -58,10 +58,11 @@ type Caller struct {
 // patch yet. The requests are rare.
 var keying sync.Mutex
 
-// KeyWorld gives the caller's world a key: spec.worldKey on its Server
-// first, then the binding the node agent reads before it takes the world's
-// lease. The same key again is answered as a success and writes a missing
-// binding; another key is ErrKeySet.
+// KeyWorld gives the caller's world a key: first the binding the node agent
+// reads before it takes the world's lease, then spec.worldKey on its Server,
+// which is immutable once set. A refused binding therefore leaves the Server
+// unkeyed. The same key again is answered as a success; another key is
+// ErrKeySet.
 func (w KubeWriter) KeyWorld(ctx context.Context, caller Caller, key string) (string, error) {
 	keying.Lock()
 	defer keying.Unlock()
@@ -102,7 +103,7 @@ func (w KubeWriter) KeyWorld(ctx context.Context, caller Caller, key string) (st
 		// kept it, and nothing is left to take.
 		return world, nil
 	case srv.Spec.WorldKey == key:
-		return world, w.bind(ctx, world, binding)
+		return world, w.bind(ctx, world, binding, nil)
 	case srv.Spec.WorldKey != "":
 		return "", ErrKeySet
 	}
@@ -111,11 +112,6 @@ func (w KubeWriter) KeyWorld(ctx context.Context, caller Caller, key string) (st
 	}
 	if err := w.worldNotDeleting(ctx, world); err != nil {
 		return "", err
-	}
-	if exists, err := w.Worlds.Exists(ctx, world); err != nil {
-		return "", err
-	} else if exists {
-		return "", ErrKeyTaken
 	}
 	var all spawneryv1alpha1.ServerList
 	if err := w.claims().List(ctx, &all, client.InNamespace(caller.Namespace)); err != nil {
@@ -127,17 +123,43 @@ func (w KubeWriter) KeyWorld(ctx context.Context, caller Caller, key string) (st
 			return "", ErrKeyTaken
 		}
 	}
+	exists, err := w.Worlds.Exists(ctx, world)
+	if err != nil {
+		return "", err
+	}
+	if exists {
+		// An earlier request may have bound the world to this server, and its
+		// node agent keyed the slot before the key reached the Server.
+		have, err := w.Worlds.BoundTo(ctx, world)
+		switch {
+		case errors.Is(err, worldsync.ErrNotFound):
+			return "", ErrKeyTaken
+		case err != nil:
+			return "", err
+		case have != binding:
+			return "", ErrKeyTaken
+		}
+	} else if err := w.bind(ctx, world, binding, all.Items); err != nil {
+		return "", err
+	}
 
 	patch := client.MergeFrom(srv.DeepCopy())
 	srv.Spec.WorldKey = key
 	if err := w.Client.Patch(ctx, &srv, patch); err != nil {
 		return "", err
 	}
-	return world, w.bind(ctx, world, binding)
+	return world, nil
 }
 
-func (w KubeWriter) bind(ctx context.Context, world string, b worldsync.Binding) error {
+// bind writes b for world. A binding that names a server no longer live in
+// servers is left over from a request that never got its key onto that
+// server, and is replaced as long as no node took the world for it.
+func (w KubeWriter) bind(ctx context.Context, world string, b worldsync.Binding, servers []spawneryv1alpha1.Server) error {
 	err := w.Worlds.Bind(ctx, world, b)
+	var bound *worldsync.BoundError
+	if errors.As(err, &bound) && servers != nil && !liveServer(servers, bound.Have.Server) {
+		err = w.Worlds.Rebind(ctx, world, bound.Have, b)
+	}
 	switch {
 	case errors.Is(err, worldsync.ErrBound):
 		return ErrKeyTaken
@@ -145,6 +167,16 @@ func (w KubeWriter) bind(ctx context.Context, world string, b worldsync.Binding)
 		return errors.Join(ErrBindingFailed, err)
 	}
 	return nil
+}
+
+func liveServer(servers []spawneryv1alpha1.Server, name string) bool {
+	for i := range servers {
+		m := &servers[i]
+		if m.Name == name {
+			return m.DeletionTimestamp.IsZero() && !phase.Terminal(phase.Phase(m.Status.Phase))
+		}
+	}
+	return false
 }
 
 // keptMembers lists the live servers of g that carry key's world: the member
@@ -346,7 +378,7 @@ func (s *Server) answerKeyWorld(
 	case errors.Is(err, ErrBindingFailed):
 		logger.V(1).Info("could not write a world binding", "key", req.GetKey(), "reason", err.Error())
 		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
-			"the key is recorded but the object store did not take the binding; the same request finishes it")
+			"the object store did not take the key just now; ask again")
 	case err != nil:
 		logger.V(1).Info("could not key a world", "key", req.GetKey(), "reason", err.Error())
 		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,
