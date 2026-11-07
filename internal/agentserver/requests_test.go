@@ -248,6 +248,21 @@ func TestAGroupTargetPicksTheServerWithTheMostRoom(t *testing.T) {
 	}
 }
 
+func TestAResumedMemberIsReachableByNameOnly(t *testing.T) {
+	state := networkWith(nil, []*agentpb.ServerState{
+		{Name: "rounds-x7k2", Group: "rounds", Players: 90, Slots: 100, Registered: true},
+		{Name: "rounds-round-7", Group: "rounds", Players: 0, Slots: 100, Registered: true, WorldKey: "round-7", Resumed: true},
+	})
+	got, ok := resolveTarget(state, &agentpb.ConnectRequest{Target: &agentpb.ConnectRequest_Group{Group: "rounds"}})
+	if !ok || got != "rounds-x7k2" {
+		t.Errorf("group target = %q ok=%v, want rounds-x7k2: a resumed member is not the group's capacity", got, ok)
+	}
+	got, ok = resolveTarget(state, &agentpb.ConnectRequest{Target: &agentpb.ConnectRequest_Server{Server: "rounds-round-7"}})
+	if !ok || got != "rounds-round-7" {
+		t.Errorf("server target = %q ok=%v, want the resumed member by name", got, ok)
+	}
+}
+
 func TestAGroupWithNoRegisteredServerResolvesToNothing(t *testing.T) {
 	state := networkWith(nil, []*agentpb.ServerState{
 		{Name: "lobby-a", Group: "lobby", Registered: false},

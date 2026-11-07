@@ -387,7 +387,8 @@ func (s *Server) answerConnect(
 }
 
 // resolveTarget turns a request's target into one registered server name; for
-// a group, the registered member with the most free playable slots.
+// a group, the registered member with the most free playable slots. A member
+// resumed from a kept world is reachable by its name only.
 func resolveTarget(state *agentpb.NetworkState, req *agentpb.ConnectRequest) (string, bool) {
 	switch {
 	case req.GetServer() != "":
@@ -399,7 +400,7 @@ func resolveTarget(state *agentpb.NetworkState, req *agentpb.ConnectRequest) (st
 	case req.GetGroup() != "":
 		best, bestFree, bestRoom := "", -1, -1
 		for _, srv := range state.GetServers() {
-			if srv.GetGroup() != req.GetGroup() || !srv.GetRegistered() {
+			if srv.GetGroup() != req.GetGroup() || !srv.GetRegistered() || srv.GetResumed() {
 				continue
 			}
 			free, room := playableFree(srv), int(srv.GetSlots()-srv.GetPlayers())
