@@ -304,7 +304,7 @@ class AgentPlugin : JavaPlugin(), Listener {
      */
     private fun keyWorld(key: String): CompletionStage<Void> {
         val sync = worldSync
-        return connector.keyWorld(key).thenCompose { _ ->
+        return connector.keyWorld(key).thenCompose<Void> { _ ->
             if (sync == null || !standby) return@thenCompose CompletableFuture.completedFuture(null)
             val keyed = CompletableFuture<Void>()
             server.asyncScheduler.runNow(this) {
