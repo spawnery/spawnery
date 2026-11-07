@@ -1,0 +1,248 @@
+/*
+Copyright paul_wtf.
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://www.apache.org/licenses/LICENSE-2.0
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+*/
+
+package worldsync
+
+import (
+	"context"
+	"errors"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+const (
+	slotOf  = "ns/g/g-abcd"
+	kept    = "ns/g/round-7"
+	keptKey = "round-7"
+)
+
+func (h *harness) publishStandby(id, standby, pod string) string {
+	h.t.Helper()
+	target := filepath.Join(h.t.TempDir(), "mount")
+	if err := h.node(id).Publish(context.Background(), PublishRequest{
+		Standby: standby, Keep: []string{"worlds/world"}, Target: target, Pod: pod,
+	}); err != nil {
+		h.t.Fatal(err)
+	}
+	return target
+}
+
+func (h *harness) bindWorld(world, server, pod string) {
+	h.t.Helper()
+	if err := WriteBinding(context.Background(), h.st, "", world, Binding{Server: server, Pod: pod}); err != nil {
+		h.t.Fatal(err)
+	}
+}
+
+func (h *harness) askKey(target, key string) string {
+	h.t.Helper()
+	_ = os.Remove(filepath.Join(target, KeyDoneFile))
+	if err := os.WriteFile(filepath.Join(target, KeyRequestFile), []byte(key), 0o644); err != nil {
+		h.t.Fatal(err)
+	}
+	return strings.TrimSpace(h.waitFile(target, KeyDoneFile))
+}
+
+func TestAStandbySlotMakesNoStoreCalls(t *testing.T) {
+	h := newHarness(t)
+	counted := &countingStore{MemStore: h.st}
+	h.store = counted
+	target := h.publishStandby("a", slotOf, "ns/g-abcd")
+	if _, err := os.Stat(filepath.Join(target, ReadyFile)); err != nil {
+		t.Fatalf("a standby slot is not ready at once: %v", err)
+	}
+	writeFile(t, filepath.Join(target, "worlds/world/level.dat"), 5, h.now)
+	h.request(target, "1")
+	if got := h.waitFile(target, DoneFile); !strings.HasPrefix(got, "failed 1") {
+		t.Errorf("snapshot of a standby slot answered %q, want a failure", got)
+	}
+	h.unpublish("a", target)
+	h.node("a").Settle(context.Background())
+	if n := counted.calls(); n != 0 {
+		t.Errorf("a standby slot made %d store calls", n)
+	}
+	slot, _ := StandbySlot(slotOf)
+	if _, err := os.Stat(h.node("a").worldDir(slot)); !os.IsNotExist(err) {
+		t.Errorf("the slot's directory outlived its pod: %v", err)
+	}
+	if h.node("a").lookup(slot) != nil {
+		t.Error("the node still knows the slot")
+	}
+}
+
+func TestAStandbySlotTakesItsKeyAndSyncsFromThen(t *testing.T) {
+	h := newHarness(t)
+	h.bindWorld(kept, "g-abcd", "ns/g-abcd")
+	target := h.publishStandby("a", slotOf, "ns/g-abcd")
+	writeFile(t, filepath.Join(target, "worlds/world/level.dat"), 5, h.now)
+
+	if got := h.askKey(target, keptKey); got != keptKey {
+		t.Fatalf("key.done = %q, want %q", got, keptKey)
+	}
+	if _, _, err := ReadLease(context.Background(), h.st, WorldPrefix("", kept)); err != nil {
+		t.Fatalf("no lease on the kept world: %v", err)
+	}
+	if got := h.askKey(target, keptKey); got != keptKey {
+		t.Errorf("asked again: key.done = %q, want %q", got, keptKey)
+	}
+	if got := h.askKey(target, "other"); !strings.HasPrefix(got, "failed other") {
+		t.Errorf("another key: key.done = %q, want a failure", got)
+	}
+
+	h.request(target, "1")
+	if got := h.waitFile(target, DoneFile); strings.TrimSpace(got) != "1" {
+		t.Fatalf("snapshot done = %q", got)
+	}
+	h.unpublish("a", target)
+	h.node("a").Settle(context.Background())
+	m, _, err := ReadManifest(context.Background(), h.st, WorldPrefix("", kept))
+	if err != nil {
+		t.Fatalf("no manifest for the kept world: %v", err)
+	}
+	if len(m.Files) == 0 {
+		t.Error("the kept world's manifest lists no files")
+	}
+	if held, err := LeaseIsHeld(context.Background(), h.st, WorldPrefix("", kept), StaleAfter); held || err != nil {
+		t.Errorf("the lease outlived the final upload: held %v, %v", held, err)
+	}
+}
+
+func TestAKeyNeedsTheOperatorsBinding(t *testing.T) {
+	for name, bind := range map[string]func(h *harness){
+		"no binding":     func(*harness) {},
+		"another server": func(h *harness) { h.bindWorld(kept, "g-wxyz", "ns/g-abcd") },
+		"another pod":    func(h *harness) { h.bindWorld(kept, "g-abcd", "ns/g-abcd-old") },
+		"a deletion pending": func(h *harness) {
+			h.bindWorld(kept, "g-abcd", "ns/g-abcd")
+			_ = MarkDeleted(context.Background(), h.st, "", kept)
+		},
+		"a key that is a path": func(*harness) {},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h := newHarness(t)
+			bind(h)
+			target := h.publishStandby("a", slotOf, "ns/g-abcd")
+			key := keptKey
+			if name == "a key that is a path" {
+				key = "../g-wxyz"
+			}
+			if got := h.askKey(target, key); !strings.HasPrefix(got, "failed ") {
+				t.Fatalf("key.done = %q, want a failure", got)
+			}
+			if _, _, err := ReadLease(context.Background(), h.st, WorldPrefix("", kept)); !errors.Is(err, ErrNotFound) {
+				t.Errorf("a refused key left a lease: %v", err)
+			}
+			slot, _ := StandbySlot(slotOf)
+			if s := h.node("a").lookup(slot); s == nil || !s.Standby {
+				t.Error("a refused key moved the slot")
+			}
+		})
+	}
+}
+
+func TestAKeyThatHoldsAWorldIsRefused(t *testing.T) {
+	h := newHarness(t)
+	other, _ := h.publish("b", kept, "ns/other")
+	writeFile(t, filepath.Join(other, "worlds/world/level.dat"), 5, h.now)
+	h.unpublish("b", other)
+	h.node("b").Settle(context.Background())
+
+	h.bindWorld(kept, "g-abcd", "ns/g-abcd")
+	target := h.publishStandby("a", slotOf, "ns/g-abcd")
+	if got := h.askKey(target, keptKey); !strings.Contains(got, "already holds a world") {
+		t.Fatalf("key.done = %q, want a refusal", got)
+	}
+	if held, err := LeaseIsHeld(context.Background(), h.st, WorldPrefix("", kept), StaleAfter); held || err != nil {
+		t.Errorf("the refused key's lease was not released: held %v, %v", held, err)
+	}
+}
+
+func restartNode(h *harness, id string) *Node {
+	h.t.Helper()
+	old := h.node(id)
+	n, err := NewNode(old.cfg)
+	if err != nil {
+		h.t.Fatal(err)
+	}
+	if err := n.Resume(context.Background()); err != nil {
+		h.t.Fatal(err)
+	}
+	h.nodes[id] = n
+	return n
+}
+
+func TestARestartMidKeyingFinishesTheKey(t *testing.T) {
+	h := newHarness(t)
+	h.bindWorld(kept, "g-abcd", "ns/g-abcd")
+	target := h.publishStandby("a", slotOf, "ns/g-abcd")
+	// The lease was taken, then the node agent died before it saved the state.
+	if _, err := TakeLease(context.Background(), h.st, WorldPrefix("", kept),
+		Lease{Node: "a", Pod: "ns/g-abcd", RenewedAt: h.now}, StaleAfter); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(filepath.Join(target, KeyRequestFile), []byte(keptKey), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	restartNode(h, "a")
+	if got := strings.TrimSpace(h.waitFile(target, KeyDoneFile)); got != keptKey {
+		t.Fatalf("key.done = %q, want %q", got, keptKey)
+	}
+
+	// Saved, then died before the answer.
+	if err := os.Remove(filepath.Join(target, KeyDoneFile)); err != nil {
+		t.Fatal(err)
+	}
+	n := restartNode(h, "a")
+	if got := strings.TrimSpace(h.waitFile(target, KeyDoneFile)); got != keptKey {
+		t.Fatalf("after the second restart key.done = %q, want %q", got, keptKey)
+	}
+	if s := n.lookup(kept); s == nil || s.Standby || s.Target != target {
+		t.Fatalf("the resumed state = %+v", s)
+	}
+}
+
+func TestAResumedMemberOnTheSameNodeReusesTheSlot(t *testing.T) {
+	h := newHarness(t)
+	h.bindWorld(kept, "g-abcd", "ns/g-abcd")
+	target := h.publishStandby("a", slotOf, "ns/g-abcd")
+	writeFile(t, filepath.Join(target, "worlds/world/level.dat"), 5, h.now)
+	if got := h.askKey(target, keptKey); got != keptKey {
+		t.Fatalf("key.done = %q", got)
+	}
+	h.unpublish("a", target)
+	h.node("a").Settle(context.Background())
+
+	before := downloadsCounted(h.node("a"))
+	target2, err := h.publish("a", kept, "ns/g-round-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := os.Stat(filepath.Join(target2, ReadyFile)); err != nil {
+		t.Fatalf("not ready at once on the node that keyed the world: %v", err)
+	}
+	if downloadsCounted(h.node("a")) != before {
+		t.Error("a download ran for the slot's own copy")
+	}
+	slot, _ := StandbySlot(slotOf)
+	if got, want := h.mnt["a"].binds[target2], h.node("a").dataDir(slot); got != want {
+		t.Errorf("bound %q, want the slot's directory %q", got, want)
+	}
+	if _, err := os.Stat(filepath.Join(target2, "worlds/world/level.dat")); err != nil {
+		t.Errorf("the world is not there: %v", err)
+	}
+}

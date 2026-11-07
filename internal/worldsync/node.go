@@ -46,7 +46,19 @@ const (
 	// the first node agents parsed all of RequestFile as one decimal and
 	// ignored a request that held anything else.
 	DeadlineFile = prune.ControlDir + "/snapshot.deadline"
+	// KeyRequestFile holds the key a standby member asks its world to take.
+	// It is only a trigger: the node agent takes the key only when the
+	// operator's binding of that world names this member.
+	KeyRequestFile = prune.ControlDir + "/key.request"
+	// KeyDoneFile answers it with "<key>" or "failed <key> <reason>". The
+	// node agent answers a request only while no answer is there.
+	KeyDoneFile = prune.ControlDir + "/key.done"
 )
+
+// standbyPrefix marks a standby slot's directory. Keys and server names are
+// DNS labels, which hold no dot, so a slot never shares a directory with a
+// world.
+const standbyPrefix = "standby."
 
 var errPastDeadline = errors.New("the snapshot request is past the deadline the game server gave it")
 
@@ -72,7 +84,11 @@ type Config struct {
 }
 
 type PublishRequest struct {
+	// World names the world to sync; Standby, "<namespace>/<group>/<server>",
+	// asks instead for an empty slot that syncs nothing until it takes a key.
+	// Exactly one is set.
 	World   string
+	Standby string
 	Keep    []string
 	Replace []string
 	Target  string
@@ -312,7 +328,7 @@ func (n *Node) resumeControl(s *worldState) {
 		return
 	}
 	for _, f := range []string{ReadyFile, FailedFile} {
-		if err := lstatAt(n.dataDir(s.World), f); err == nil {
+		if err := lstatAt(n.dataDir(s.local()), f); err == nil {
 			return
 		}
 	}
@@ -330,7 +346,7 @@ func (n *Node) control(s *worldState, rel, content string) error {
 }
 
 func (n *Node) resetControl(s *worldState) error {
-	data := n.dataDir(s.World)
+	data := n.dataDir(s.local())
 	if err := os.MkdirAll(data, 0o755); err != nil {
 		return err
 	}
@@ -357,7 +373,7 @@ func (n *Node) wipeKept(s *worldState) error {
 	if err != nil {
 		return err
 	}
-	data := n.dataDir(s.World)
+	data := n.dataDir(s.local())
 	if _, err := os.Lstat(data); os.IsNotExist(err) {
 		return nil
 	}
@@ -376,7 +392,7 @@ func (n *Node) discardLocal(s *worldState) error {
 	if err := n.wipeKept(s); err != nil {
 		return err
 	}
-	if err := os.RemoveAll(filepath.Join(n.worldDir(s.World), "snapshots")); err != nil {
+	if err := os.RemoveAll(filepath.Join(n.worldDir(s.local()), "snapshots")); err != nil {
 		return err
 	}
 	s.forgetContent()
@@ -406,6 +422,12 @@ func (n *Node) lockIdle(ctx context.Context, world string) (*worldState, func(),
 }
 
 func (n *Node) Publish(ctx context.Context, req PublishRequest) error {
+	if req.Standby != "" {
+		if req.World != "" {
+			return errors.New("worldsync: a publish names a world or a standby slot, not both")
+		}
+		return n.publishStandby(req)
+	}
 	if err := checkWorld(req.World); err != nil {
 		return err
 	}
@@ -490,7 +512,7 @@ func (n *Node) shareWorld(s *worldState) error {
 	if err != nil {
 		return err
 	}
-	data := n.dataDir(s.World)
+	data := n.dataDir(s.local())
 	if err := os.MkdirAll(data, 0o755); err != nil {
 		return err
 	}
@@ -532,15 +554,19 @@ func (n *Node) readManifest(ctx context.Context, world string) (Manifest, string
 
 // takeLease returns ErrLeaseLost when another node holds the lease.
 func (n *Node) takeLease(ctx context.Context, s *worldState) (string, error) {
+	return n.takeLeaseOn(ctx, s.World, s)
+}
+
+func (n *Node) takeLeaseOn(ctx context.Context, world string, s *worldState) (string, error) {
 	c, cancel := n.call(ctx)
 	defer cancel()
-	etag, err := TakeLease(c, n.cfg.Store, n.prefix(s.World), n.lease(s), n.cfg.StaleAfter)
+	etag, err := TakeLease(c, n.cfg.Store, n.prefix(world), n.lease(s), n.cfg.StaleAfter)
 	var held *HeldError
 	if errors.As(err, &held) {
 		if held.Node != n.cfg.NodeID {
 			return "", fmt.Errorf("%w: %v", ErrLeaseLost, err)
 		}
-		return n.ownLease(ctx, s.World)
+		return n.ownLease(ctx, world)
 	}
 	return etag, err
 }
@@ -583,7 +609,7 @@ func (n *Node) ownLease(ctx context.Context, world string) (string, error) {
 // Snapshots not yet uploaded have changed the copy since that list, so only
 // the data directory counts then.
 func (n *Node) copyIntact(s *worldState) bool {
-	data := n.dataDir(s.World)
+	data := n.dataDir(s.local())
 	if len(s.Pending) > 0 || s.FinalPending {
 		_, err := os.Lstat(data)
 		return err == nil
@@ -622,7 +648,7 @@ func (n *Node) settleContent(ctx context.Context, s *worldState) (*Manifest, str
 		n.cfg.Log.Info("downloading the world again", "world", s.World, "reason", "files the state lists are missing from the local copy")
 	}
 	if len(s.Pending) > 0 || s.FinalPending {
-		dst, err := n.moveAside(s.World)
+		dst, err := n.moveAside(s)
 		if err != nil {
 			return nil, "", err
 		}
@@ -636,13 +662,13 @@ func (n *Node) settleContent(ctx context.Context, s *worldState) (*Manifest, str
 }
 
 func (n *Node) bind(s *worldState, target string) error {
-	if err := os.MkdirAll(n.dataDir(s.World), 0o755); err != nil {
+	if err := os.MkdirAll(n.dataDir(s.local()), 0o755); err != nil {
 		return err
 	}
 	if err := os.MkdirAll(target, 0o755); err != nil {
 		return err
 	}
-	if err := n.cfg.Mounter.Bind(n.dataDir(s.World), target); err != nil {
+	if err := n.cfg.Mounter.Bind(n.dataDir(s.local()), target); err != nil {
 		return err
 	}
 	n.setTarget(s, target)
@@ -658,7 +684,7 @@ func (n *Node) startDownload(s *worldState, m Manifest, etag string) {
 	d := &download{cancel: cancel, done: make(chan struct{})}
 	s.download = d
 	n.downloads.Add(1)
-	world, prefix, dir, gid := s.World, n.prefix(s.World), n.dataDir(s.World), s.gid()
+	world, prefix, dir, gid := s.World, n.prefix(s.World), n.dataDir(s.local()), s.gid()
 	go func() {
 		started := time.Now()
 		err := Download(ctx, n.cfg.Store, prefix, dir, m, n.cfg.Parallel, gid)
@@ -731,6 +757,12 @@ func (n *Node) unpublishLocked(s *worldState) error {
 		n.forget(s)
 		return nil
 	}
+	if s.Standby {
+		// Nothing of it was ever synced, and its key never came.
+		n.setTarget(s, "")
+		n.drop(s)
+		return nil
+	}
 	n.stopDownload(s)
 	n.setTarget(s, "")
 	if s.LeaseETag != "" && !s.Incomplete {
@@ -758,7 +790,7 @@ func (n *Node) snapshotBy(s *worldState, deadline time.Time) error {
 	if len(s.Pending) > 0 {
 		// Compare against the newest queued snapshot, not the uploaded one,
 		// so a file changed twice is copied for each change.
-		last, err := ReadSnap(n.snapDir(s.World, s.Pending[len(s.Pending)-1]))
+		last, err := ReadSnap(n.snapDir(s.local(), s.Pending[len(s.Pending)-1]))
 		if err != nil {
 			return err
 		}
@@ -769,9 +801,9 @@ func (n *Node) snapshotBy(s *worldState, deadline time.Time) error {
 	}
 	s.NextSeq++
 	seq := s.NextSeq
-	dir := n.snapDir(s.World, seq)
+	dir := n.snapDir(s.local(), seq)
 	_ = os.RemoveAll(dir)
-	if _, err := TakeSnapshot(n.dataDir(s.World), dir, keep, base, seq, n.cfg.Clock()); err != nil {
+	if _, err := TakeSnapshot(n.dataDir(s.local()), dir, keep, base, seq, n.cfg.Clock()); err != nil {
 		_ = os.RemoveAll(dir)
 		return err
 	}
@@ -830,6 +862,7 @@ func (n *Node) Run(ctx context.Context) {
 		}()
 	}
 	every(n.cfg.PollEvery, func() {
+		n.pollKeyRequests(ctx)
 		n.pollRequests()
 		n.kickUploads(ctx)
 	})
@@ -842,6 +875,7 @@ func (n *Node) Run(ctx context.Context) {
 // Settle runs one pass of every loop and waits for the uploads it started,
 // for tests.
 func (n *Node) Settle(ctx context.Context) {
+	n.pollKeyRequests(ctx)
 	n.pollRequests()
 	n.renewAll(ctx)
 	n.kickUploads(ctx)
@@ -894,6 +928,8 @@ func (n *Node) pollRequests() {
 		}
 		s.LastRequest = seq
 		switch {
+		case s.Standby:
+			err = errors.New("the world has no key, so nothing of it is saved")
 		case s.lost:
 			err = errors.New("this node lost the world's lease and no longer saves it")
 		case s.Incomplete:
@@ -1058,7 +1094,7 @@ func (n *Node) confirmLease(ctx context.Context, s *worldState) error {
 
 func (n *Node) prepareUpload(s *worldState) (*uploadJob, error) {
 	seq := s.Pending[0]
-	dir := n.snapDir(s.World, seq)
+	dir := n.snapDir(s.local(), seq)
 	snap, err := ReadSnap(dir)
 	if err != nil {
 		return nil, err
@@ -1299,7 +1335,7 @@ func (n *Node) dropScratch(s *worldState) {
 	if err != nil {
 		return
 	}
-	data := n.dataDir(s.World)
+	data := n.dataDir(s.local())
 	entries, _ := os.ReadDir(data)
 	for _, e := range entries {
 		name := e.Name()
@@ -1340,7 +1376,7 @@ func (n *Node) renewAll(ctx context.Context) {
 // unpublish finds it, but is never saved again.
 func (n *Node) orphan(s *worldState, why string) {
 	n.stopDownload(s)
-	dst, err := n.moveAside(s.World)
+	dst, err := n.moveAside(s)
 	if err != nil {
 		n.cfg.Log.Error(err, "could not move an orphaned world aside", "world", s.World)
 	}
@@ -1356,8 +1392,9 @@ func (n *Node) orphan(s *worldState, why string) {
 	n.mu.Unlock()
 }
 
-func (n *Node) moveAside(world string) (string, error) {
-	src := n.worldDir(world)
+func (n *Node) moveAside(s *worldState) (string, error) {
+	world := s.World
+	src := n.worldDir(s.local())
 	if _, err := os.Lstat(src); os.IsNotExist(err) {
 		return "", nil
 	}
@@ -1416,7 +1453,7 @@ func (n *Node) evict() {
 }
 
 func (n *Node) drop(s *worldState) {
-	if err := os.RemoveAll(n.worldDir(s.World)); err != nil {
+	if err := os.RemoveAll(n.worldDir(s.local())); err != nil {
 		n.cfg.Log.Error(err, "could not evict a cached world", "world", s.World)
 		return
 	}
