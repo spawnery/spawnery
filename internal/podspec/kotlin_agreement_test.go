@@ -103,14 +103,17 @@ func TestTheWorldSyncNamesAgreeWithThePaperAgent(t *testing.T) {
 	plugin := read("AgentPlugin.kt")
 
 	for constant, want := range map[string]string{
-		"ENV_ENABLED":   EnvWorldSync,
-		"ENV_INTERVAL":  EnvWorldSyncInterval,
-		"CONTROL_DIR":   prune.ControlDir,
-		"READY_FILE":    path.Base(worldsync.ReadyFile),
-		"FAILED_FILE":   path.Base(worldsync.FailedFile),
-		"REQUEST_FILE":  path.Base(worldsync.RequestFile),
-		"DONE_FILE":     path.Base(worldsync.DoneFile),
-		"DEADLINE_FILE": path.Base(worldsync.DeadlineFile),
+		"ENV_ENABLED":      EnvWorldSync,
+		"ENV_INTERVAL":     EnvWorldSyncInterval,
+		"CONTROL_DIR":      prune.ControlDir,
+		"READY_FILE":       path.Base(worldsync.ReadyFile),
+		"FAILED_FILE":      path.Base(worldsync.FailedFile),
+		"REQUEST_FILE":     path.Base(worldsync.RequestFile),
+		"DONE_FILE":        path.Base(worldsync.DoneFile),
+		"DEADLINE_FILE":    path.Base(worldsync.DeadlineFile),
+		"KEY_REQUEST_FILE": path.Base(worldsync.KeyRequestFile),
+		"KEY_DONE_FILE":    path.Base(worldsync.KeyDoneFile),
+		"STANDBY":          WorldSyncStandby,
 	} {
 		re := regexp.MustCompile(`(?m)^\s*const val ` + constant + `\s*=\s*"([^"]*)"\s*$`)
 		m := re.FindSubmatch(worldSync)
@@ -124,7 +127,7 @@ func TestTheWorldSyncNamesAgreeWithThePaperAgent(t *testing.T) {
 				constant, got, want)
 		}
 	}
-	for _, use := range []string{"WorldSync.ENV_ENABLED", "WorldSync.ENV_INTERVAL", "WorldSync.CONTROL_DIR"} {
+	for _, use := range []string{"WorldSync.ENV_ENABLED", "WorldSync.ENV_INTERVAL", "WorldSync.CONTROL_DIR", "WorldSync.STANDBY"} {
 		if !regexp.MustCompile(regexp.QuoteMeta(use)).Match(plugin) {
 			t.Errorf("AgentPlugin.kt no longer reads %s, so the constant this test checks is unused", use)
 		}

@@ -65,6 +65,15 @@ import java.util.Objects;
  *     Never true together with a non-empty {@link #node()}. False while the
  *     scheduler has not looked yet, once the pod is placed, and for a report
  *     from an operator older than this field.
+ * @param worldKey the key this member of an ephemeral group gave its world
+ *     with {@link SpawneryApi#keyWorld}, or {@code ""}: a world without a key,
+ *     any other kind of server, or a report from an operator older than this
+ *     field.
+ * @param resumed whether {@link SpawneryApi#startServer} started this member
+ *     of an ephemeral group to resume the world kept under {@link #worldKey()}.
+ *     Such a member stands outside its group: the proxies reach it by name and
+ *     never pick it for the group. False for a report from an operator older
+ *     than this field.
  */
 public record ServerInfo(
         String name,
@@ -81,7 +90,9 @@ public record ServerInfo(
         String node,
         int playableSlots,
         ServerResources resources,
-        boolean unschedulable) {
+        boolean unschedulable,
+        String worldKey,
+        boolean resumed) {
     public ServerInfo {
         Objects.requireNonNull(name, "name");
         Objects.requireNonNull(group, "group");
@@ -94,6 +105,28 @@ public record ServerInfo(
             playableSlots = slots;
         }
         resources = resources == null ? ServerResources.NONE : resources;
+        worldKey = worldKey == null ? "" : worldKey;
+    }
+
+    /** The record as it was before {@code worldKey} and {@code resumed}, which it reads as none and false. */
+    public ServerInfo(
+            String name,
+            String group,
+            ServerPhase phase,
+            int players,
+            int slots,
+            boolean registered,
+            String state,
+            Map<String, String> attributes,
+            String incarnation,
+            int number,
+            boolean held,
+            String node,
+            int playableSlots,
+            ServerResources resources,
+            boolean unschedulable) {
+        this(name, group, phase, players, slots, registered, state, attributes, incarnation, number, held, node,
+                playableSlots, resources, unschedulable, "", false);
     }
 
     /** The record as it was before {@code unschedulable}, which it reads as false. */

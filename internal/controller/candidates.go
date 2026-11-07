@@ -17,6 +17,7 @@ limitations under the License.
 package controller
 
 import (
+	"slices"
 	"sort"
 	"time"
 
@@ -68,6 +69,10 @@ type ServerView struct {
 	Retire bool
 	// Hold is spec.hold: nothing automatic removes this server.
 	Hold bool
+	// Resumed is spec.resumed: a member of an Ephemeral group that startServer
+	// created for a kept world. It stands outside the group's sizing and is
+	// never rolled; see withoutResumed.
+	Resumed bool
 	// Unschedulable: the Server's Ready condition says the scheduler cannot
 	// place its pod.
 	Unschedulable bool
@@ -319,7 +324,19 @@ type GroupTotals struct {
 	FreeSlots     int32
 }
 
-// AggregateGroup sums the views up for the group status. An empty podHash
+// withoutResumed drops the members startServer resumed from a kept world.
+// The sizing rule, the changeover and the failure streak of an Ephemeral
+// group read the rest: a resumed member is not capacity the group asked for,
+// and it is never rolled. Returns views itself when there is none to drop.
+func withoutResumed(views []ServerView) []ServerView {
+	if !slices.ContainsFunc(views, func(v ServerView) bool { return v.Resumed }) {
+		return views
+	}
+	return slices.DeleteFunc(slices.Clone(views), func(v ServerView) bool { return v.Resumed })
+}
+
+// AggregateGroup sums the views up for the group status. A resumed member
+// counts in Replicas, ReadyReplicas and OnlinePlayers but never in FreeSlots. An empty podHash
 // (Network unusable) compares nothing, so every Ready server contributes:
 // publishing the capacity that exists beats publishing zero.
 func AggregateGroup(views []ServerView, podHash string) GroupTotals {
@@ -332,7 +349,7 @@ func AggregateGroup(views []ServerView, podHash string) GroupTotals {
 		if !v.Stale {
 			t.OnlinePlayers += v.Players
 		}
-		if v.Phase == phase.Ready && v.Registered && !v.JoinsClosed &&
+		if v.Phase == phase.Ready && v.Registered && !v.JoinsClosed && !v.Resumed &&
 			!staleSpec(v, podHash) && !v.Stale {
 			t.FreeSlots += v.freeSeats()
 		}

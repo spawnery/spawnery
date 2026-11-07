@@ -12,6 +12,7 @@ import java.nio.file.Path
  */
 class WorldSyncBootstrap : PluginBootstrap {
     override fun bootstrap(context: BootstrapContext) {
+        // A standby member starts on an empty directory: nothing to wait for.
         if (System.getenv(WorldSync.ENV_ENABLED) != "1") return
         val sync = WorldSync(Path.of(System.getProperty("user.dir"), WorldSync.CONTROL_DIR))
         val started = monotonicMillis()

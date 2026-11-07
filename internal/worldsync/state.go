@@ -45,6 +45,17 @@ type worldState struct {
 	Incomplete bool `json:"incomplete,omitempty"`
 	// FinalPending: the snapshot at unpublish failed and is still owed.
 	FinalPending bool `json:"finalPending,omitempty"`
+	// Standby: a member of an Ephemeral group whose world has no key yet.
+	// World is then its slot, the store is never called for it, and its
+	// directory goes with its pod.
+	Standby bool `json:"standby,omitempty"`
+	// Server is the Server a standby slot belongs to, which the operator's
+	// binding must name before the slot may take a key.
+	Server string `json:"server,omitempty"`
+	// Slot is the directory the world lives in when that is not World's own:
+	// a standby slot that took a key keeps its directory, and so does the
+	// cache it leaves for the next start of that key on this node.
+	Slot string `json:"slot,omitempty"`
 
 	// lost: the lease is gone and a pod still runs on the copy, which
 	// now lies in lostDir.
@@ -62,6 +73,14 @@ type worldState struct {
 	policyRead bool
 	kept       ObjectCache
 	prunes     int
+}
+
+// local is the name of the directory the world lives in on this node.
+func (s *worldState) local() string {
+	if s.Slot != "" {
+		return s.Slot
+	}
+	return s.World
 }
 
 func (s *worldState) gid() int {
@@ -95,17 +114,18 @@ func (n *Node) dataOf(s *worldState) string {
 	if s.lostDir != "" {
 		return filepath.Join(s.lostDir, "data")
 	}
-	return n.dataDir(s.World)
+	return n.dataDir(s.local())
 }
 
 func (n *Node) saveState(s *worldState) error {
 	if s.lost {
 		return nil
 	}
-	return writeJSON(filepath.Join(n.worldDir(s.World), "state.json"), s)
+	return writeJSON(filepath.Join(n.worldDir(s.local()), "state.json"), s)
 }
 
-// loadStates reads worlds/<ns>/<group>/<key>/state.json only: a file of that
+// loadStates reads worlds/<ns>/<group>/<key>/state.json only (a standby
+// slot is a third segment of its own): a file of that
 // name deeper down belongs to a world's data.
 func (n *Node) loadStates() ([]*worldState, error) {
 	paths, err := filepath.Glob(filepath.Join(n.cfg.Root, "worlds", "*", "*", "*", "state.json"))
@@ -119,7 +139,7 @@ func (n *Node) loadStates() ([]*worldState, error) {
 			n.cfg.Log.Error(err, "skipping an unreadable world state", "path", p)
 			continue
 		}
-		if filepath.Dir(p) != n.worldDir(s.World) {
+		if filepath.Dir(p) != n.worldDir(s.local()) {
 			n.cfg.Log.Error(nil, "skipping a world state that names another world", "path", p, "world", s.World)
 			continue
 		}

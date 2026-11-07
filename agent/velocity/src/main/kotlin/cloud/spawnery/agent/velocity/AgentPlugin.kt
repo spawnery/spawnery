@@ -180,7 +180,7 @@ class AgentPlugin @Inject constructor(
 
         val directory = ServerDirectory(VelocityRegistry(proxy), ::warn)
         val players = VelocityPlayers(proxy)
-        val router = Router(directory)
+        val router = Router(directory) { name -> mirror.servers().any { it.name() == name && it.resumed() } }
         this.directory = directory
         this.router = router
         this.fallbackGroups = env.fallbackGroups

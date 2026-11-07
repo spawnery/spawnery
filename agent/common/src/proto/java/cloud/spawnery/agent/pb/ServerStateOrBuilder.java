@@ -269,4 +269,38 @@ java.lang.String defaultValue);
    * @return The unschedulable.
    */
   boolean getUnschedulable();
+
+  /**
+   * <pre>
+   * The key this member of an Ephemeral group gave its world through
+   * KeyWorldRequest; empty for every other server.
+   * </pre>
+   *
+   * <code>string world_key = 17;</code>
+   * @return The worldKey.
+   */
+  java.lang.String getWorldKey();
+  /**
+   * <pre>
+   * The key this member of an Ephemeral group gave its world through
+   * KeyWorldRequest; empty for every other server.
+   * </pre>
+   *
+   * <code>string world_key = 17;</code>
+   * @return The bytes for worldKey.
+   */
+  com.google.protobuf.ByteString
+      getWorldKeyBytes();
+
+  /**
+   * <pre>
+   * True for a member of an Ephemeral group that StartServerRequest started
+   * to resume a kept world. Such a member stands outside the group: it is
+   * reachable by its name and never picked for the group.
+   * </pre>
+   *
+   * <code>bool resumed = 18;</code>
+   * @return The resumed.
+   */
+  boolean getResumed();
 }

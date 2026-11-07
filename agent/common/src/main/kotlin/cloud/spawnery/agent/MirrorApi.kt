@@ -20,6 +20,7 @@ import cloud.spawnery.agent.api.SpawneryApi
 import java.util.Optional
 import java.time.Duration
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CompletionStage
 
 /** Shared by both platforms: nothing here may ask which side it is on. */
@@ -34,6 +35,8 @@ class MirrorApi(
     private val playable: ((Int) -> Unit)? = null,
     /** Null on a server. */
     private val transfers: TransferView? = null,
+    /** Null on a proxy: the server's side of keyWorld once the operator has said yes. */
+    private val keying: ((key: String) -> CompletionStage<Void>)? = null,
 ) : SpawneryApi {
     override fun self(): Self = self
 
@@ -101,6 +104,10 @@ class MirrorApi(
 
     override fun restoreWorld(group: String, key: String, generation: Long): CompletionStage<RestoredWorld> =
         connector.restoreWorld(group, key, generation)
+
+    override fun keyWorld(key: String): CompletionStage<Void> =
+        keying?.invoke(key)
+            ?: CompletableFuture.failedFuture(UnsupportedOperationException("this is a proxy; a proxy has no world to key"))
 
     override fun announce(state: String, attributes: Map<String, String>): CompletionStage<Void> =
         connector.announce(state, attributes)

@@ -54,3 +54,19 @@ func TestNameAcceptsAUUID(t *testing.T) {
 		t.Fatalf("a UUID key was refused: %v", err)
 	}
 }
+
+func TestKeptNameRefusesTheRandomSuffixShape(t *testing.T) {
+	for _, key := range []string{"abcd", "x7k2", "2345"} {
+		if _, err := instance.KeptName("rounds", key); err == nil {
+			t.Errorf("key %q was accepted; it could name a server the group creates itself", key)
+		}
+	}
+	for _, key := range []string{"abc", "abcde", "ab-d", "abci", "round-7", "3f2b1c8a-9d4e-4f11-b2a6-77c0de1234ab"} {
+		if got, err := instance.KeptName("rounds", key); err != nil || got != "rounds-"+key {
+			t.Errorf("key %q: %q, %v", key, got, err)
+		}
+	}
+	if _, err := instance.KeptName("rounds", "C0FFEE"); err == nil {
+		t.Error("KeptName skipped Name's checks")
+	}
+}

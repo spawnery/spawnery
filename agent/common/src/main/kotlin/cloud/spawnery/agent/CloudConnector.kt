@@ -21,6 +21,7 @@ import cloud.spawnery.agent.pb.ExecuteRequest
 import cloud.spawnery.agent.pb.ForceStopRequest
 import cloud.spawnery.agent.pb.ListRestorePointsRequest
 import cloud.spawnery.agent.pb.RequestError
+import cloud.spawnery.agent.pb.KeyWorldRequest
 import cloud.spawnery.agent.pb.RestoreWorldRequest
 import cloud.spawnery.agent.pb.RetireRequest
 import cloud.spawnery.agent.pb.ScaleRequest
@@ -225,6 +226,17 @@ class CloudConnector(
             )
         }
 
+    /** Answers with the world's name, "<namespace>/<group>/<key>". */
+    fun keyWorld(key: String): CompletionStage<String> =
+        requests.start<String>(RESTORE_TIMEOUT_MILLIS) { id ->
+            sendRequest(
+                CloudRequest.newBuilder()
+                    .setId(id)
+                    .setKeyWorld(KeyWorldRequest.newBuilder().setKey(key))
+                    .build(),
+            )
+        }
+
     /**
      * What this server last said about itself, re-sent on every new stream:
      * the operator forgets it with the session that made it.
@@ -342,6 +354,7 @@ class CloudConnector(
                 response.id,
                 RestoredWorld(response.restoreWorld.generation, response.restoreWorld.restoredFrom),
             )
+            response.hasKeyWorld() -> requests.complete(response.id, response.keyWorld.world)
             response.hasStopBoost() -> requests.complete(response.id, response.stopBoost.removed)
             response.hasAnnounce() -> requests.complete(response.id, null)
             response.hasAcceptJoins() -> requests.complete(response.id, null)

@@ -34,6 +34,7 @@ import (
 	"github.com/spawnery/spawnery/internal/agentpb"
 	"github.com/spawnery/spawnery/internal/grpcauth"
 	"github.com/spawnery/spawnery/internal/podspec"
+	"github.com/spawnery/spawnery/internal/worldsync"
 )
 
 func testScheme(t *testing.T) *runtime.Scheme {
@@ -80,7 +81,44 @@ type fakeWorlds struct {
 	exists   bool
 	pending  bool
 	markFail error
+	bindFail error
 	deleted  []string
+	bindings map[string]worldsync.Binding
+}
+
+func (f *fakeWorlds) Bind(_ context.Context, w string, b worldsync.Binding) error {
+	if f.bindFail != nil {
+		return f.bindFail
+	}
+	if f.bindings == nil {
+		f.bindings = map[string]worldsync.Binding{}
+	}
+	if have, ok := f.bindings[w]; ok && have != b {
+		return &worldsync.BoundError{Have: have}
+	}
+	f.bindings[w] = b
+	return nil
+}
+
+// Rebind follows worldsync.ReplaceBinding: exists stands for a manifest or a
+// lease.
+func (f *fakeWorlds) Rebind(_ context.Context, w string, stale, b worldsync.Binding) error {
+	have, ok := f.bindings[w]
+	if !ok {
+		return worldsync.ErrNotFound
+	}
+	if have != stale || f.exists {
+		return &worldsync.BoundError{Have: have}
+	}
+	f.bindings[w] = b
+	return nil
+}
+
+func (f *fakeWorlds) BoundTo(_ context.Context, w string) (worldsync.Binding, error) {
+	if have, ok := f.bindings[w]; ok {
+		return have, nil
+	}
+	return worldsync.Binding{}, worldsync.ErrNotFound
 }
 
 func (f *fakeWorlds) DeletionPending(context.Context, string) (bool, error) { return f.pending, nil }

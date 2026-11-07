@@ -32,6 +32,23 @@ class RouterTest {
     }
 
     @Test
+    fun `a resumed member is never picked for its group`() {
+        val registry = FakeRegistry()
+        val directory = ServerDirectory(registry) { _, _ -> }
+        directory.apply(
+            listOf(
+                Backend("rounds-round-7", "10.0.0.1:25565", "rounds"),
+                Backend("rounds-x7k2", "10.0.0.2:25565", "rounds"),
+            ),
+        )
+        fakeServer(registry, "rounds-x7k2").players = players(5)
+        val router = Router(directory) { it == "rounds-round-7" }
+
+        assertEquals("rounds-x7k2", router.choose(listOf("rounds"))?.serverInfo?.name)
+        assertNull(router.choose(listOf("rounds"), excluding = setOf("rounds-x7k2")))
+    }
+
+    @Test
     fun `an empty group is skipped and the next one is tried`() {
         val registry = FakeRegistry()
         val directory = ServerDirectory(registry) { _, _ -> }

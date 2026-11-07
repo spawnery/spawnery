@@ -30,6 +30,7 @@ message spawnery.agent.v1alpha1.CloudRequest 14 force_stop spawnery.agent.v1alph
 message spawnery.agent.v1alpha1.CloudRequest 15 execute spawnery.agent.v1alpha1.ExecuteRequest oneof request
 message spawnery.agent.v1alpha1.CloudRequest 16 list_restore_points spawnery.agent.v1alpha1.ListRestorePointsRequest oneof request
 message spawnery.agent.v1alpha1.CloudRequest 17 restore_world spawnery.agent.v1alpha1.RestoreWorldRequest oneof request
+message spawnery.agent.v1alpha1.CloudRequest 18 key_world spawnery.agent.v1alpha1.KeyWorldRequest oneof request
 message spawnery.agent.v1alpha1.CloudResponse 1 id uint64
 message spawnery.agent.v1alpha1.CloudResponse 2 connect spawnery.agent.v1alpha1.ConnectResult oneof result
 message spawnery.agent.v1alpha1.CloudResponse 3 error spawnery.agent.v1alpha1.RequestError oneof result
@@ -48,6 +49,7 @@ message spawnery.agent.v1alpha1.CloudResponse 15 force_stop spawnery.agent.v1alp
 message spawnery.agent.v1alpha1.CloudResponse 16 execute spawnery.agent.v1alpha1.ExecuteResult oneof result
 message spawnery.agent.v1alpha1.CloudResponse 17 list_restore_points spawnery.agent.v1alpha1.ListRestorePointsResult oneof result
 message spawnery.agent.v1alpha1.CloudResponse 18 restore_world spawnery.agent.v1alpha1.RestoreWorldResult oneof result
+message spawnery.agent.v1alpha1.CloudResponse 19 key_world spawnery.agent.v1alpha1.KeyWorldResult oneof result
 message spawnery.agent.v1alpha1.ConnectRequest 1 player_uuid string
 message spawnery.agent.v1alpha1.ConnectRequest 2 server string oneof target
 message spawnery.agent.v1alpha1.ConnectRequest 3 group string oneof target
@@ -119,6 +121,8 @@ message spawnery.agent.v1alpha1.InstanceStatus 13 draining bool
 message spawnery.agent.v1alpha1.InstanceStatus 14 usage spawnery.agent.v1alpha1.ResourceUsage
 message spawnery.agent.v1alpha1.InstanceStatus 15 node string
 message spawnery.agent.v1alpha1.InstanceStatus 16 playable_slots int32
+message spawnery.agent.v1alpha1.KeyWorldRequest 1 key string
+message spawnery.agent.v1alpha1.KeyWorldResult 1 world string
 message spawnery.agent.v1alpha1.ListRestorePointsRequest 1 group string
 message spawnery.agent.v1alpha1.ListRestorePointsRequest 2 key string
 message spawnery.agent.v1alpha1.ListRestorePointsResult 1 points repeated spawnery.agent.v1alpha1.RestorePoint
@@ -234,6 +238,8 @@ message spawnery.agent.v1alpha1.ServerState 13 playable_slots int32
 message spawnery.agent.v1alpha1.ServerState 14 joins_closed bool
 message spawnery.agent.v1alpha1.ServerState 15 resources spawnery.agent.v1alpha1.StartResources
 message spawnery.agent.v1alpha1.ServerState 16 unschedulable bool
+message spawnery.agent.v1alpha1.ServerState 17 world_key string
+message spawnery.agent.v1alpha1.ServerState 18 resumed bool
 message spawnery.agent.v1alpha1.SessionDeadline 1 renew_after_seconds int32
 message spawnery.agent.v1alpha1.SessionDeadline 2 hard_deadline_seconds int32
 message spawnery.agent.v1alpha1.SetReady 1 ready bool

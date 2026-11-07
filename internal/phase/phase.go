@@ -132,8 +132,9 @@ type Inputs struct {
 	// PodTerminal also covers CrashLoopBackOff past the operator's tolerance.
 	PodTerminal         bool
 	GroupHasReadyServer bool
-	// HoldsWorld: a member of an OnDemand group, whose pod holds its world (the
-	// claim, or the lease in the object store) for as long as it exists.
+	// HoldsWorld: a member of an OnDemand group, or a member of an Ephemeral
+	// group that keyed its world, whose pod holds its world (the claim, or the
+	// lease in the object store) for as long as it exists.
 	HoldsWorld bool
 
 	// StartupDeadlineReached bounds the current attempt to become playable, not

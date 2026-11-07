@@ -161,6 +161,7 @@ func TestWorldKey(t *testing.T) {
 		{"ordinal twelve", spawneryv1alpha1.ServerSpec{Ordinal: ptr.To[int32](12)}, "12"},
 		{"neither", spawneryv1alpha1.ServerSpec{}, ""},
 		{"both", spawneryv1alpha1.ServerSpec{Key: "c0ffee", Ordinal: ptr.To[int32](1)}, "c0ffee"},
+		{"world key", spawneryv1alpha1.ServerSpec{WorldKey: "round-7"}, "round-7"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -195,5 +196,115 @@ func TestAPersistentObjectStoreHashIgnoresTheOrdinal(t *testing.T) {
 	}
 	if a == c {
 		t.Error("ObjectStore and Claim groups hash alike")
+	}
+}
+
+func keptRoundsGroup(g *spawneryv1alpha1.ServerGroup) {
+	g.Spec.MaxInstances = ptr.To[int32](20)
+	g.Spec.Storage = &spawneryv1alpha1.StorageSpec{
+		Size: resource.MustParse("2Gi"), Backend: spawneryv1alpha1.StorageBackendObjectStore,
+		Keep: []string{"world"},
+	}
+}
+
+// A group that gains storage rolls: its members' pods are built once, so
+// the ones already running keep their volume until the changed hash replaces
+// them.
+func TestAnEphemeralGroupGainingStorageMovesItsHash(t *testing.T) {
+	net, group := testNetwork(), testGroup()
+	before, err := DesiredServerHash(net, group, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keptRoundsGroup(group)
+	after, err := DesiredServerHash(net, group, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == after {
+		t.Error("an Ephemeral group that gained storage hashes as before, so its running members would never get the standby volume")
+	}
+}
+
+func TestAnUnkeyedEphemeralMemberGetsAStandbyVolume(t *testing.T) {
+	net, group := testNetwork(), testGroup()
+	keptRoundsGroup(group)
+	srv := testServer()
+	pod, err := BuildServerPod(net, group, srv, testEndpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := volumeNamed(pod, DataVolumeName)
+	if v == nil || v.CSI == nil || v.CSI.Driver != WorldSyncDriver {
+		t.Fatalf("data volume = %+v, want the world sync CSI volume", v)
+	}
+	if got, want := v.CSI.VolumeAttributes[WorldSyncAttrStandby], srv.Namespace+"/"+group.Name+"/"+srv.Name; got != want {
+		t.Errorf("standby = %q, want %q", got, want)
+	}
+	if _, ok := v.CSI.VolumeAttributes[WorldSyncAttrWorld]; ok {
+		t.Error("a standby volume names a world")
+	}
+	if got := v.CSI.VolumeAttributes[WorldSyncAttrKeep]; got != "world" {
+		t.Errorf("keep = %q", got)
+	}
+	if got := envValue(pod, EnvWorldSync); got != WorldSyncStandby {
+		t.Errorf("SPAWNERY_WORLD_SYNC = %q, want %q", got, WorldSyncStandby)
+	}
+}
+
+func TestAKeyedEphemeralMemberRendersTheOnDemandWorld(t *testing.T) {
+	net, group := testNetwork(), testGroup()
+	keptRoundsGroup(group)
+	srv := testServer()
+	srv.Name = group.Name + "-round-7"
+	srv.Spec.WorldKey = "round-7"
+	srv.Spec.Resumed = true
+	pod, err := BuildServerPod(net, group, srv, testEndpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	v := volumeNamed(pod, DataVolumeName)
+	if v == nil || v.CSI == nil {
+		t.Fatalf("data volume = %+v, want a CSI inline volume", v)
+	}
+	if got, want := v.CSI.VolumeAttributes[WorldSyncAttrWorld], srv.Namespace+"/"+group.Name+"/round-7"; got != want {
+		t.Errorf("world = %q, want %q", got, want)
+	}
+	if _, ok := v.CSI.VolumeAttributes[WorldSyncAttrStandby]; ok {
+		t.Error("a keyed member carries the standby attribute")
+	}
+	if envValue(pod, EnvWorldSync) != "1" {
+		t.Error("SPAWNERY_WORLD_SYNC is not 1")
+	}
+}
+
+func TestAnEphemeralGroupWithoutStorageKeepsItsHash(t *testing.T) {
+	group := goldenEphemeralServerGroup()
+	group.Spec.Storage = nil
+	got, err := DesiredServerHash(goldenNetwork(), group, goldenConfigValues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != goldenEphemeralServerDigest {
+		t.Fatalf("hash = %q, want the pinned %q", got, goldenEphemeralServerDigest)
+	}
+	pod, err := BuildServerPod(goldenNetwork(), group, &spawneryv1alpha1.Server{}, goldenAgentEndpoint)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if v := volumeNamed(pod, DataVolumeName); v == nil || v.EmptyDir == nil {
+		t.Errorf("data volume = %+v, want an emptyDir", v)
+	}
+	if envValue(pod, EnvWorldSync) != "" {
+		t.Error("an ephemeral member without storage carries SPAWNERY_WORLD_SYNC")
+	}
+
+	keptRoundsGroup(group)
+	withStorage, err := DesiredServerHash(goldenNetwork(), group, goldenConfigValues)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if withStorage == got {
+		t.Error("adding storage to an ephemeral group leaves its hash alone; its members would keep their emptyDir")
 	}
 }

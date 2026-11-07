@@ -113,6 +113,15 @@ group and the key because a stopped member is nothing but its world. It reaches
 on-demand members only, and the chart's admission policy holds the operator to
 exactly those claims.
 
+`keyWorld(key)` **keeps this server's world**, on a member of an ephemeral
+group with `storage`. From then on the world is saved like a private
+server's, and `startServer(group, key)` with this server's group resumes it
+later on a server of its own, which the proxies reach by name only. The key is
+set once, and the world lives until `deleteServer(group, key)`
+([keeping a round](../guides/object-store-worlds.md#keeping-a-round-of-an-ephemeral-group)).
+`ServerInfo.worldKey()` and `resumed()` show which servers keep or resumed a
+world.
+
 `restorePoints(group, key)` and `restoreWorld(group, key, generation)`
 take a private server's world back to an older generation, for a group
 whose worlds live in the object store and keep a history

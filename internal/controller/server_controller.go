@@ -290,7 +290,8 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				"the group keeps its worlds in an object store (spec.storage.backend ObjectStore), "+
 					"and this operator runs without --world-sync; no pod is created until it does")
 			createPod = false
-		case podspec.WorldKey(srv) == "":
+		// An Ephemeral member without a key runs on a standby directory.
+		case podspec.WorldKey(srv) == "" && !group.IsEphemeral():
 			setAccepted(srv, false, ReasonServerKeyMissing,
 				"a member of a group that keeps its worlds in an object store needs a world name "+
 					"(spec.key for an on-demand member, spec.ordinal for a persistent server); "+
@@ -371,7 +372,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 
 	claimBinding := claim != nil && claim.Status.Phase != corev1.ClaimBound
 	in := r.collectInputs(srv, group, pod, podFound, nameStillHeld || nameConflict, claimBinding)
-	in.HoldsWorld = srv.Spec.Key != ""
+	in.HoldsWorld = holdsWorld(srv)
 	current := phase.Phase(srv.Status.Phase)
 	if current == "" {
 		current = phase.Pending
@@ -446,6 +447,13 @@ func persistedServer(err error) error {
 // names the class as the first thing to check, not as the cause. A driver that
 // fails the resize later says so only in the claim's conditions, read by
 // resizeConditionError. Both land on status.storageResizeError.
+// holdsWorld reports whether a Server's pod holds a world the next start of
+// its key needs: an on-demand member, or an Ephemeral member that keyed its
+// world.
+func holdsWorld(srv *spawneryv1alpha1.Server) bool {
+	return srv.Spec.Key != "" || srv.Spec.WorldKey != ""
+}
+
 func (r *ServerReconciler) growClaim(
 	ctx context.Context,
 	group *spawneryv1alpha1.ServerGroup,
