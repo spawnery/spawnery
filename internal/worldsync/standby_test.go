@@ -279,3 +279,44 @@ func TestAStandbySlotWaitsForTheCacheOfAWorldKeptUnderItsName(t *testing.T) {
 		t.Errorf("the kept world is not in the store: %v", err)
 	}
 }
+
+func TestAKeyWhoseLeaseAnotherNodeHoldsFails(t *testing.T) {
+	h := newHarness(t)
+	h.bindWorld(kept, "g-abcd", "ns/g-abcd")
+	if _, err := TakeLease(context.Background(), h.st, WorldPrefix("", kept),
+		Lease{Node: "b", Pod: "ns/other", RenewedAt: h.now}, StaleAfter); err != nil {
+		t.Fatal(err)
+	}
+	target := h.publishStandby("a", slotOf, "ns/g-abcd")
+	if got := h.askKey(target, keptKey); !strings.HasPrefix(got, "failed "+keptKey) {
+		t.Fatalf("key.done = %q, want a failure", got)
+	}
+	if l, _, err := ReadLease(context.Background(), h.st, WorldPrefix("", kept)); err != nil || l.Node != "b" {
+		t.Errorf("lease = %+v, %v; want node b's untouched", l, err)
+	}
+	slot, _ := StandbySlot(slotOf)
+	if s := h.node("a").lookup(slot); s == nil || !s.Standby {
+		t.Error("a refused key moved the slot")
+	}
+}
+
+func TestAKeyWhoseManifestCannotBeReadFailsAndReleasesTheLease(t *testing.T) {
+	h := newHarness(t)
+	h.bindWorld(kept, "g-abcd", "ns/g-abcd")
+	h.store = &failingKeys{MemStore: h.st, match: func(key string) bool { return key == WorldPrefix("", kept)+ManifestName }}
+	target := h.publishStandby("a", slotOf, "ns/g-abcd")
+	if got := h.askKey(target, keptKey); !strings.HasPrefix(got, "failed "+keptKey) || !strings.Contains(got, "manifest") {
+		t.Fatalf("key.done = %q, want a failure naming the manifest", got)
+	}
+	l, _, err := ReadLease(context.Background(), h.st, WorldPrefix("", kept))
+	if err != nil {
+		t.Fatalf("no lease left behind to read: %v", err)
+	}
+	if l.Node != "" {
+		t.Errorf("lease = %+v, want it released", l)
+	}
+	slot, _ := StandbySlot(slotOf)
+	if s := h.node("a").lookup(slot); s == nil || !s.Standby {
+		t.Error("a refused key moved the slot")
+	}
+}
