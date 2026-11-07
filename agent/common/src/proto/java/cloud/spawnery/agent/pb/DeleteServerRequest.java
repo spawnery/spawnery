@@ -8,15 +8,17 @@ package cloud.spawnery.agent.pb;
 /**
  * <pre>
  * DeleteServerRequest deletes a member of an OnDemand group for good: its
- * server, if one is running, and its world.
+ * server, if one is running, and its world. For an Ephemeral group it deletes
+ * the world kept under the key and the member that carries it, if one runs.
  *
  * A running member is stopped as StopServerRequest stops one, and its claim is
  * deleted at once; Kubernetes keeps the claim until the pod no longer uses it.
  * The answer comes when both deletions are accepted.
  *
  * NOT_FOUND for a group this network does not have, and for a key with
- * neither a server nor a world; REFUSED for a group that is not OnDemand, a
- * key no name can be built from, and a claim this operator did not make.
+ * neither a server nor a world; REFUSED for a Persistent group, an Ephemeral
+ * group without storage, a key no name can be built from, and a claim this
+ * operator did not make.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.DeleteServerRequest}
@@ -314,15 +316,17 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * DeleteServerRequest deletes a member of an OnDemand group for good: its
-   * server, if one is running, and its world.
+   * server, if one is running, and its world. For an Ephemeral group it deletes
+   * the world kept under the key and the member that carries it, if one runs.
    *
    * A running member is stopped as StopServerRequest stops one, and its claim is
    * deleted at once; Kubernetes keeps the claim until the pod no longer uses it.
    * The answer comes when both deletions are accepted.
    *
    * NOT_FOUND for a group this network does not have, and for a key with
-   * neither a server nor a world; REFUSED for a group that is not OnDemand, a
-   * key no name can be built from, and a claim this operator did not make.
+   * neither a server nor a world; REFUSED for a Persistent group, an Ephemeral
+   * group without storage, a key no name can be built from, and a claim this
+   * operator did not make.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.DeleteServerRequest}

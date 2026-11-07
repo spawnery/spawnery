@@ -79,6 +79,7 @@ private static final long serialVersionUID = 0L;
     EXECUTE(15),
     LIST_RESTORE_POINTS(16),
     RESTORE_WORLD(17),
+    KEY_WORLD(18),
     REQUEST_NOT_SET(0);
     private final int value;
     private RequestCase(int value) {
@@ -112,6 +113,7 @@ private static final long serialVersionUID = 0L;
         case 15: return EXECUTE;
         case 16: return LIST_RESTORE_POINTS;
         case 17: return RESTORE_WORLD;
+        case 18: return KEY_WORLD;
         case 0: return REQUEST_NOT_SET;
         default: return null;
       }
@@ -634,6 +636,37 @@ private static final long serialVersionUID = 0L;
     return cloud.spawnery.agent.pb.RestoreWorldRequest.getDefaultInstance();
   }
 
+  public static final int KEY_WORLD_FIELD_NUMBER = 18;
+  /**
+   * <code>.spawnery.agent.v1alpha1.KeyWorldRequest key_world = 18;</code>
+   * @return Whether the keyWorld field is set.
+   */
+  @java.lang.Override
+  public boolean hasKeyWorld() {
+    return requestCase_ == 18;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.KeyWorldRequest key_world = 18;</code>
+   * @return The keyWorld.
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.KeyWorldRequest getKeyWorld() {
+    if (requestCase_ == 18) {
+       return (cloud.spawnery.agent.pb.KeyWorldRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.KeyWorldRequest.getDefaultInstance();
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.KeyWorldRequest key_world = 18;</code>
+   */
+  @java.lang.Override
+  public cloud.spawnery.agent.pb.KeyWorldRequestOrBuilder getKeyWorldOrBuilder() {
+    if (requestCase_ == 18) {
+       return (cloud.spawnery.agent.pb.KeyWorldRequest) request_;
+    }
+    return cloud.spawnery.agent.pb.KeyWorldRequest.getDefaultInstance();
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -698,6 +731,9 @@ private static final long serialVersionUID = 0L;
     }
     if (requestCase_ == 17) {
       output.writeMessage(17, (cloud.spawnery.agent.pb.RestoreWorldRequest) request_);
+    }
+    if (requestCase_ == 18) {
+      output.writeMessage(18, (cloud.spawnery.agent.pb.KeyWorldRequest) request_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -770,6 +806,10 @@ private static final long serialVersionUID = 0L;
     if (requestCase_ == 17) {
       size += com.google.protobuf.CodedOutputStream
         .computeMessageSize(17, (cloud.spawnery.agent.pb.RestoreWorldRequest) request_);
+    }
+    if (requestCase_ == 18) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeMessageSize(18, (cloud.spawnery.agent.pb.KeyWorldRequest) request_);
     }
     return size;
   }
@@ -863,6 +903,10 @@ private static final long serialVersionUID = 0L;
         if (!getRestoreWorld()
             .equals(other.getRestoreWorld())) return false;
         break;
+      case 18:
+        if (!getKeyWorld()
+            .equals(other.getKeyWorld())) return false;
+        break;
       case 0:
       default:
     }
@@ -944,6 +988,10 @@ private static final long serialVersionUID = 0L;
       case 17:
         hash = (37 * hash) + RESTORE_WORLD_FIELD_NUMBER;
         hash = (53 * hash) + getRestoreWorld().hashCode();
+        break;
+      case 18:
+        hash = (37 * hash) + KEY_WORLD_FIELD_NUMBER;
+        hash = (53 * hash) + getKeyWorld().hashCode();
         break;
       case 0:
       default:
@@ -1137,6 +1185,9 @@ private static final long serialVersionUID = 0L;
       if (restoreWorldBuilder_ != null) {
         restoreWorldBuilder_.clear();
       }
+      if (keyWorldBuilder_ != null) {
+        keyWorldBuilder_.clear();
+      }
       requestCase_ = 0;
       request_ = null;
       return this;
@@ -1245,6 +1296,10 @@ private static final long serialVersionUID = 0L;
           restoreWorldBuilder_ != null) {
         result.request_ = restoreWorldBuilder_.build();
       }
+      if (requestCase_ == 18 &&
+          keyWorldBuilder_ != null) {
+        result.request_ = keyWorldBuilder_.build();
+      }
     }
 
     @java.lang.Override
@@ -1325,6 +1380,10 @@ private static final long serialVersionUID = 0L;
         }
         case RESTORE_WORLD: {
           mergeRestoreWorld(other.getRestoreWorld());
+          break;
+        }
+        case KEY_WORLD: {
+          mergeKeyWorld(other.getKeyWorld());
           break;
         }
         case REQUEST_NOT_SET: {
@@ -1474,6 +1533,13 @@ private static final long serialVersionUID = 0L;
               requestCase_ = 17;
               break;
             } // case 138
+            case 146: {
+              input.readMessage(
+                  internalGetKeyWorldFieldBuilder().getBuilder(),
+                  extensionRegistry);
+              requestCase_ = 18;
+              break;
+            } // case 146
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -3808,6 +3874,148 @@ private static final long serialVersionUID = 0L;
       requestCase_ = 17;
       onChanged();
       return restoreWorldBuilder_;
+    }
+
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.KeyWorldRequest, cloud.spawnery.agent.pb.KeyWorldRequest.Builder, cloud.spawnery.agent.pb.KeyWorldRequestOrBuilder> keyWorldBuilder_;
+    /**
+     * <code>.spawnery.agent.v1alpha1.KeyWorldRequest key_world = 18;</code>
+     * @return Whether the keyWorld field is set.
+     */
+    @java.lang.Override
+    public boolean hasKeyWorld() {
+      return requestCase_ == 18;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.KeyWorldRequest key_world = 18;</code>
+     * @return The keyWorld.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.KeyWorldRequest getKeyWorld() {
+      if (keyWorldBuilder_ == null) {
+        if (requestCase_ == 18) {
+          return (cloud.spawnery.agent.pb.KeyWorldRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.KeyWorldRequest.getDefaultInstance();
+      } else {
+        if (requestCase_ == 18) {
+          return keyWorldBuilder_.getMessage();
+        }
+        return cloud.spawnery.agent.pb.KeyWorldRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.KeyWorldRequest key_world = 18;</code>
+     */
+    public Builder setKeyWorld(cloud.spawnery.agent.pb.KeyWorldRequest value) {
+      if (keyWorldBuilder_ == null) {
+        if (value == null) {
+          throw new NullPointerException();
+        }
+        request_ = value;
+        onChanged();
+      } else {
+        keyWorldBuilder_.setMessage(value);
+      }
+      requestCase_ = 18;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.KeyWorldRequest key_world = 18;</code>
+     */
+    public Builder setKeyWorld(
+        cloud.spawnery.agent.pb.KeyWorldRequest.Builder builderForValue) {
+      if (keyWorldBuilder_ == null) {
+        request_ = builderForValue.build();
+        onChanged();
+      } else {
+        keyWorldBuilder_.setMessage(builderForValue.build());
+      }
+      requestCase_ = 18;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.KeyWorldRequest key_world = 18;</code>
+     */
+    public Builder mergeKeyWorld(cloud.spawnery.agent.pb.KeyWorldRequest value) {
+      if (keyWorldBuilder_ == null) {
+        if (requestCase_ == 18 &&
+            request_ != cloud.spawnery.agent.pb.KeyWorldRequest.getDefaultInstance()) {
+          request_ = cloud.spawnery.agent.pb.KeyWorldRequest.newBuilder((cloud.spawnery.agent.pb.KeyWorldRequest) request_)
+              .mergeFrom(value).buildPartial();
+        } else {
+          request_ = value;
+        }
+        onChanged();
+      } else {
+        if (requestCase_ == 18) {
+          keyWorldBuilder_.mergeFrom(value);
+        } else {
+          keyWorldBuilder_.setMessage(value);
+        }
+      }
+      requestCase_ = 18;
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.KeyWorldRequest key_world = 18;</code>
+     */
+    public Builder clearKeyWorld() {
+      if (keyWorldBuilder_ == null) {
+        if (requestCase_ == 18) {
+          requestCase_ = 0;
+          request_ = null;
+          onChanged();
+        }
+      } else {
+        if (requestCase_ == 18) {
+          requestCase_ = 0;
+          request_ = null;
+        }
+        keyWorldBuilder_.clear();
+      }
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.KeyWorldRequest key_world = 18;</code>
+     */
+    public cloud.spawnery.agent.pb.KeyWorldRequest.Builder getKeyWorldBuilder() {
+      return internalGetKeyWorldFieldBuilder().getBuilder();
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.KeyWorldRequest key_world = 18;</code>
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.KeyWorldRequestOrBuilder getKeyWorldOrBuilder() {
+      if ((requestCase_ == 18) && (keyWorldBuilder_ != null)) {
+        return keyWorldBuilder_.getMessageOrBuilder();
+      } else {
+        if (requestCase_ == 18) {
+          return (cloud.spawnery.agent.pb.KeyWorldRequest) request_;
+        }
+        return cloud.spawnery.agent.pb.KeyWorldRequest.getDefaultInstance();
+      }
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.KeyWorldRequest key_world = 18;</code>
+     */
+    private com.google.protobuf.SingleFieldBuilder<
+        cloud.spawnery.agent.pb.KeyWorldRequest, cloud.spawnery.agent.pb.KeyWorldRequest.Builder, cloud.spawnery.agent.pb.KeyWorldRequestOrBuilder> 
+        internalGetKeyWorldFieldBuilder() {
+      if (keyWorldBuilder_ == null) {
+        if (!(requestCase_ == 18)) {
+          request_ = cloud.spawnery.agent.pb.KeyWorldRequest.getDefaultInstance();
+        }
+        keyWorldBuilder_ = new com.google.protobuf.SingleFieldBuilder<
+            cloud.spawnery.agent.pb.KeyWorldRequest, cloud.spawnery.agent.pb.KeyWorldRequest.Builder, cloud.spawnery.agent.pb.KeyWorldRequestOrBuilder>(
+                (cloud.spawnery.agent.pb.KeyWorldRequest) request_,
+                getParentForChildren(),
+                isClean());
+        request_ = null;
+      }
+      requestCase_ = 18;
+      onChanged();
+      return keyWorldBuilder_;
     }
 
     // @@protoc_insertion_point(builder_scope:spawnery.agent.v1alpha1.CloudRequest)

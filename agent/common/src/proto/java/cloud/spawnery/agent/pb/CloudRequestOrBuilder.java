@@ -256,5 +256,20 @@ public interface CloudRequestOrBuilder extends
    */
   cloud.spawnery.agent.pb.RestoreWorldRequestOrBuilder getRestoreWorldOrBuilder();
 
+  /**
+   * <code>.spawnery.agent.v1alpha1.KeyWorldRequest key_world = 18;</code>
+   * @return Whether the keyWorld field is set.
+   */
+  boolean hasKeyWorld();
+  /**
+   * <code>.spawnery.agent.v1alpha1.KeyWorldRequest key_world = 18;</code>
+   * @return The keyWorld.
+   */
+  cloud.spawnery.agent.pb.KeyWorldRequest getKeyWorld();
+  /**
+   * <code>.spawnery.agent.v1alpha1.KeyWorldRequest key_world = 18;</code>
+   */
+  cloud.spawnery.agent.pb.KeyWorldRequestOrBuilder getKeyWorldOrBuilder();
+
   cloud.spawnery.agent.pb.CloudRequest.RequestCase getRequestCase();
 }

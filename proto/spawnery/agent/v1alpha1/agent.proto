@@ -113,6 +113,7 @@ message CloudRequest {
     ExecuteRequest execute = 15;
     ListRestorePointsRequest list_restore_points = 16;
     RestoreWorldRequest restore_world = 17;
+    KeyWorldRequest key_world = 18;
   }
 }
 
@@ -139,6 +140,7 @@ message CloudResponse {
     ExecuteResult execute = 16;
     ListRestorePointsResult list_restore_points = 17;
     RestoreWorldResult restore_world = 18;
+    KeyWorldResult key_world = 19;
   }
 }
 
@@ -400,11 +402,15 @@ message AnnounceRequest {
 message AnnounceResult {}
 
 // StartServerRequest asks for the member of an OnDemand group that carries
-// this key.
+// this key, or resumes the world a member of an Ephemeral group kept under
+// this key (KeyWorldRequest).
 //
 // The key is the caller's name for a world: the operator composes
 // "<group>-<key>", and that server is where this key's world is, every time.
 // Asking twice while it runs is answered, not refused (see already_running).
+// For an Ephemeral group, the member that kept the world counts as running
+// while it is still up, and the answer names it. A key without a kept world
+// is NOT_FOUND there: an Ephemeral group starts no empty worlds by key.
 //
 // "<group>-<key>" becomes a server and pod name, so it must be a DNS label of
 // at most 63 characters: a UUID key leaves 26 for the group name. A key or
@@ -447,13 +453,14 @@ message StartServerResult {
   bool resources_understood = 4;
 }
 
-// StopServerRequest deletes one member of an OnDemand group.
+// StopServerRequest deletes one member of an OnDemand group, or a member of an
+// Ephemeral group that kept its world under a key.
 //
 // Its players are moved through the proxies within the group's drain timeout
-// and the pod goes. The world stays on its claim, and the next start of the
-// same key finds it.
+// and the pod goes. The world stays on its claim or in the object store, and
+// the next start of the same key finds it.
 //
-// REFUSED for a server that is not a member of an OnDemand group.
+// REFUSED for any other server.
 message StopServerRequest {
   string server = 1;
 }
@@ -466,15 +473,17 @@ message StopServerResult {
 }
 
 // DeleteServerRequest deletes a member of an OnDemand group for good: its
-// server, if one is running, and its world.
+// server, if one is running, and its world. For an Ephemeral group it deletes
+// the world kept under the key and the member that carries it, if one runs.
 //
 // A running member is stopped as StopServerRequest stops one, and its claim is
 // deleted at once; Kubernetes keeps the claim until the pod no longer uses it.
 // The answer comes when both deletions are accepted.
 //
 // NOT_FOUND for a group this network does not have, and for a key with
-// neither a server nor a world; REFUSED for a group that is not OnDemand, a
-// key no name can be built from, and a claim this operator did not make.
+// neither a server nor a world; REFUSED for a Persistent group, an Ephemeral
+// group without storage, a key no name can be built from, and a claim this
+// operator did not make.
 message DeleteServerRequest {
   string group = 1;
   string key = 2;
@@ -528,6 +537,25 @@ message RestoreWorldRequest {
 message RestoreWorldResult {
   int64 generation = 1;
   int64 restored_from = 2;
+}
+
+// KeyWorldRequest is a member of an Ephemeral group whose group keeps worlds
+// in the object store giving its own world a key. From the answer on, its
+// world is synchronised to the object store under that key, and a later
+// StartServerRequest with the same group and key resumes it on a new member.
+//
+// Refused from a proxy, and for a server that is not such a member. The key
+// is set once: the same key again succeeds, another one is REFUSED. A key
+// that already holds a world, that another member carries, or whose world is
+// still being deleted is REFUSED or UNAVAILABLE.
+message KeyWorldRequest {
+  string key = 1;
+}
+
+// KeyWorldResult names the world as the object store holds it.
+message KeyWorldResult {
+  // "<namespace>/<group>/<key>".
+  string world = 1;
 }
 
 // CloudEvent is something that happened, on its way to somebody's chat.
@@ -781,6 +809,13 @@ message ServerState {
   // true together with node. False before the scheduler has looked, once the
   // pod is placed, and from an operator older than this field.
   bool unschedulable = 16;
+  // The key this member of an Ephemeral group gave its world through
+  // KeyWorldRequest; empty for every other server.
+  string world_key = 17;
+  // True for a member of an Ephemeral group that StartServerRequest started
+  // to resume a kept world. Such a member stands outside the group: it is
+  // reachable by its name and never picked for the group.
+  bool resumed = 18;
 }
 
 // ProxyState is one proxy pod as the operator last saw it.
