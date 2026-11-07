@@ -343,6 +343,29 @@ func TestDeleteOfAKeptWorldFindsItsCarrierByKey(t *testing.T) {
 	}
 }
 
+func TestDeleteOfAKeptWorldDeletesEveryCarrier(t *testing.T) {
+	failed := roundMember("rounds-x7k2", func(s *spawneryv1alpha1.Server) {
+		s.Spec.WorldKey = "round-7"
+		s.Status.Phase = string(phase.Failed)
+	})
+	resumed := roundMember("rounds-round-7", func(s *spawneryv1alpha1.Server) {
+		s.Spec.WorldKey, s.Spec.Resumed = "round-7", true
+	})
+	w := keyWriter(t, &fakeWorlds{exists: true}, roundsGroup(), failed, resumed)
+	got, err := w.DeleteServer(context.Background(), "minecraft", "rounds", "round-7")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.Name != "rounds-round-7" {
+		t.Errorf("answer names %q, want the member that still runs", got.Name)
+	}
+	for _, name := range []string{"rounds-x7k2", "rounds-round-7"} {
+		if getServer(t, w, name) != nil {
+			t.Errorf("%s still carries the deleted world", name)
+		}
+	}
+}
+
 func TestStopAcceptsAMemberThatKeyedItsWorld(t *testing.T) {
 	adopted := roundMember("rounds-x7k2", func(s *spawneryv1alpha1.Server) { s.Spec.WorldKey = "round-7" })
 	w := keyWriter(t, &fakeWorlds{}, roundsGroup(), adopted, roundMember("rounds-wxyz", nil))

@@ -636,9 +636,9 @@ func (w KubeWriter) DeleteServer(ctx context.Context, namespace, group, key stri
 				return DeletedServer{}, err
 			}
 		} else if srv.Spec.GroupRef.Name == group && srv.Spec.Key == key {
-			return w.deleteObjectStoreWorld(ctx, namespace+"/"+group+"/"+key, name, &srv)
+			return w.deleteObjectStoreWorld(ctx, namespace+"/"+group+"/"+key, name, srv)
 		}
-		return w.deleteObjectStoreWorld(ctx, namespace+"/"+group+"/"+key, name, nil)
+		return w.deleteObjectStoreWorld(ctx, namespace+"/"+group+"/"+key, name)
 	}
 
 	var claim corev1.PersistentVolumeClaim
@@ -684,14 +684,13 @@ func (w KubeWriter) DeleteServer(ctx context.Context, namespace, group, key stri
 	return DeletedServer{Name: name, World: haveClaim}, nil
 }
 
-// deleteObjectStoreWorld marks world deleted and deletes srv, the server
-// that carries it, when there is one. name is what the answer calls the
-// member.
-func (w KubeWriter) deleteObjectStoreWorld(ctx context.Context, world, name string, srv *spawneryv1alpha1.Server) (DeletedServer, error) {
+// deleteObjectStoreWorld marks world deleted and deletes srvs, the servers
+// that carry it. name is what the answer calls the member.
+func (w KubeWriter) deleteObjectStoreWorld(ctx context.Context, world, name string, srvs ...spawneryv1alpha1.Server) (DeletedServer, error) {
 	if w.Worlds == nil {
 		return DeletedServer{}, ErrWorldSyncOff
 	}
-	haveServer := srv != nil
+	haveServer := len(srvs) > 0
 	haveWorld, err := w.Worlds.Exists(ctx, world)
 	if err != nil {
 		return DeletedServer{}, err
@@ -709,8 +708,8 @@ func (w KubeWriter) deleteObjectStoreWorld(ctx context.Context, world, name stri
 	if err := w.Worlds.MarkDeleted(ctx, world); err != nil {
 		return DeletedServer{}, err
 	}
-	if haveServer {
-		if err := w.Client.Delete(ctx, srv); err != nil && !apierrors.IsNotFound(err) {
+	for i := range srvs {
+		if err := w.Client.Delete(ctx, &srvs[i]); err != nil && !apierrors.IsNotFound(err) {
 			return DeletedServer{}, err
 		}
 	}

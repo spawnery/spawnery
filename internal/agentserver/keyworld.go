@@ -307,9 +307,9 @@ func (w KubeWriter) keptOccupant(ctx context.Context, g *spawneryv1alpha1.Server
 	return runningMember(&existing), nil
 }
 
-// deleteKeptWorld marks the world kept under key deleted and deletes the
-// live server that carries it, whether the member that keyed it or the one
-// resumed for it.
+// deleteKeptWorld marks the world kept under key deleted and deletes every
+// server that carries it, the member that keyed it and the one resumed for
+// it.
 func (w KubeWriter) deleteKeptWorld(ctx context.Context, g *spawneryv1alpha1.ServerGroup, key string) (DeletedServer, error) {
 	name, err := instance.KeptName(g.Name, key)
 	if err != nil {
@@ -319,15 +319,21 @@ func (w KubeWriter) deleteKeptWorld(ctx context.Context, g *spawneryv1alpha1.Ser
 	if err != nil {
 		return DeletedServer{}, err
 	}
-	var carrier *spawneryv1alpha1.Server
-	for i := range carriers {
-		if carriers[i].DeletionTimestamp.IsZero() {
-			carrier = &carriers[i]
-			name = carrier.Name
-			break
+	// A failed member that keyed the world and the member resumed for it can
+	// both be there; every one of them goes, or a running one keeps playing on
+	// a deleted world. The answer names one that still runs.
+	var live []spawneryv1alpha1.Server
+	named := false
+	for _, m := range carriers {
+		if !m.DeletionTimestamp.IsZero() {
+			continue
+		}
+		live = append(live, m)
+		if !named || !phase.Terminal(phase.Phase(m.Status.Phase)) {
+			name, named = m.Name, !phase.Terminal(phase.Phase(m.Status.Phase))
 		}
 	}
-	return w.deleteObjectStoreWorld(ctx, g.Namespace+"/"+g.Name+"/"+key, name, carrier)
+	return w.deleteObjectStoreWorld(ctx, g.Namespace+"/"+g.Name+"/"+key, name, live...)
 }
 
 func keyedWorld(reqID uint64, world string) *agentpb.CloudResponse {
