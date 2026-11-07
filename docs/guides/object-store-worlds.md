@@ -326,13 +326,27 @@ spec:
     keep: [world]
 ```
 
+Before adding `storage` to an ephemeral group that already runs:
+
+- Run the operator with `--world-sync`. Without it, the operator refuses every
+  member of the group and creates no pod for any of them.
+- Roll out the node agent, `spawnery-worldsync`, 0.35.0 or later. An older one
+  does not know the standby volume, and every member's pod waits in
+  `ContainerCreating`.
+- Move the group to a game image, and the proxies to a Velocity image, of
+  0.35.0 or later. An older Paper agent has no `keyWorld`. An older Velocity
+  agent does not know which members were resumed and sends players who join
+  the group to them as to any other member.
+
+Adding `storage` changes the group's pods and rolls it, so update both first.
+
 The game plugin decides which rounds to keep. It calls `keyWorld(key)` on the
 server that runs the round
 ([what a plugin can do](../plugin-api/what-a-plugin-can-do.md)):
 
-1. The operator records the key on the `Server` as `spec.worldKey` and writes a
-   binding, `<namespace>/<group>/<key>/binding.json`, that names the server and
-   its pod.
+1. The operator writes a binding, `<namespace>/<group>/<key>/binding.json`,
+   that names the server and its pod, and then records the key on the
+   `Server` as `spec.worldKey`.
 2. The agent asks the node agent for the key. The node agent takes the key only
    when the binding names its own server, the key holds no world yet and no
    deletion is pending; it takes the world's lease and syncs the directory the
@@ -377,9 +391,7 @@ Things to know:
 - The standby directory is on the node agent's host path, not in the pod's
   ephemeral storage, so the kubelet neither counts nor limits it.
 - `storage` cannot be removed from an ephemeral group once set, and every
-  member then needs the node agent: an operator without `--world-sync` starts
-  none of them.
-- Adding `storage` to a running ephemeral group changes its pods and rolls it.
+  member then needs the node agent.
 - `restorePoints` and `restoreWorld` stay for on-demand groups.
 
 ## Moving existing worlds in
