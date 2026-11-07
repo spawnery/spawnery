@@ -93,9 +93,9 @@ func WriteBinding(ctx context.Context, st Store, base, world string, b Binding) 
 }
 
 // ReplaceBinding overwrites the binding that says stale with b, only while
-// the world has neither a manifest nor a lease. A node agent takes the lease
-// before it keys a slot onto the world, so without one the stale binding was
-// never acted on. Anything else is a *BoundError.
+// the world has neither a manifest nor a lease that names a node. A node
+// agent takes the lease before it keys a slot onto the world, so without one
+// the stale binding was never acted on. Anything else is a *BoundError.
 func ReplaceBinding(ctx context.Context, st Store, base, world string, stale, b Binding) error {
 	if err := checkWorld(world); err != nil {
 		return err
@@ -108,12 +108,15 @@ func ReplaceBinding(ctx context.Context, st Store, base, world string, stale, b 
 	if have != stale {
 		return &BoundError{Have: have}
 	}
-	for _, name := range []string{ManifestName, LeaseName} {
-		if ok, err := exists(ctx, st, prefix+name); err != nil {
-			return err
-		} else if ok {
-			return &BoundError{Have: have}
-		}
+	if ok, err := exists(ctx, st, prefix+ManifestName); err != nil {
+		return err
+	} else if ok {
+		return &BoundError{Have: have}
+	}
+	if ok, err := leaseTaken(ctx, st, prefix); err != nil {
+		return err
+	} else if ok {
+		return &BoundError{Have: have}
 	}
 	data, err := json.Marshal(b)
 	if err != nil {

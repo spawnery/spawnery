@@ -117,6 +117,20 @@ func LeaseIsHeld(ctx context.Context, st Store, prefix string, staleAfter time.D
 	return leaseHeld(l, info, staleAfter)
 }
 
+// leaseTaken is a lease that names a node, stale or not. A released lease
+// stays behind as an empty object, also where the node never wrote a world
+// (a key it was refused), and so says nothing about a world.
+func leaseTaken(ctx context.Context, st Store, prefix string) (bool, error) {
+	l, _, err := ReadLease(ctx, st, prefix)
+	if errors.Is(err, ErrNotFound) {
+		return false, nil
+	}
+	if err != nil {
+		return false, err
+	}
+	return l.Node != "", nil
+}
+
 func leaseHeld(l Lease, info ObjectInfo, staleAfter time.Duration) (bool, error) {
 	if l.Node == "" {
 		return false, nil

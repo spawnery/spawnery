@@ -22,6 +22,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 	"testing"
 )
 
@@ -318,5 +319,34 @@ func TestAKeyWhoseManifestCannotBeReadFailsAndReleasesTheLease(t *testing.T) {
 	slot, _ := StandbySlot(slotOf)
 	if s := h.node("a").lookup(slot); s == nil || !s.Standby {
 		t.Error("a refused key moved the slot")
+	}
+}
+
+func TestAFailedKeyLeavesTheKeyFreeForTheNextAttempt(t *testing.T) {
+	h := newHarness(t)
+	h.bindWorld(kept, "g-abcd", "ns/g-abcd")
+	var down atomic.Bool
+	down.Store(true)
+	manifest := WorldPrefix("", kept) + ManifestName
+	h.store = &failingKeys{MemStore: h.st, match: func(key string) bool { return down.Load() && key == manifest }}
+	target := h.publishStandby("a", slotOf, "ns/g-abcd")
+	if got := h.askKey(target, keptKey); !strings.HasPrefix(got, "failed "+keptKey) {
+		t.Fatalf("key.done = %q, want a failure", got)
+	}
+	worlds := BucketWorlds{Store: h.st}
+	if exists, err := worlds.Exists(context.Background(), kept); err != nil || exists {
+		t.Fatalf("Exists = %v, %v; a released lease with no manifest reads as a world", exists, err)
+	}
+	if err := ReplaceBinding(context.Background(), h.st, "", kept,
+		Binding{Server: "g-abcd", Pod: "ns/g-abcd"}, Binding{Server: "g-abcd", Pod: "ns/g-abcd"}); err != nil {
+		t.Fatalf("a released lease blocks replacing the binding: %v", err)
+	}
+
+	down.Store(false)
+	if got := h.askKey(target, keptKey); got != keptKey {
+		t.Fatalf("second key.done = %q, want %q", got, keptKey)
+	}
+	if exists, err := worlds.Exists(context.Background(), kept); err != nil || !exists {
+		t.Fatalf("Exists = %v, %v after the world was keyed", exists, err)
 	}
 }

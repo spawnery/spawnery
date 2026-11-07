@@ -71,7 +71,8 @@ type WorldDeleter interface {
 	// world; a *worldsync.BoundError when one names another server.
 	Bind(ctx context.Context, world string, b worldsync.Binding) error
 	// Rebind replaces the binding that says stale with b while world has no
-	// manifest and no lease; a *worldsync.BoundError otherwise.
+	// manifest and no lease that names a node; a *worldsync.BoundError
+	// otherwise.
 	Rebind(ctx context.Context, world string, stale, b worldsync.Binding) error
 	// BoundTo reads world's binding; worldsync.ErrNotFound when there is none.
 	BoundTo(ctx context.Context, world string) (worldsync.Binding, error)

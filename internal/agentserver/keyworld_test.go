@@ -406,3 +406,51 @@ func TestDeleteOfAKeyThatOnlyHasABindingMarksItDeleted(t *testing.T) {
 		t.Fatalf("delete of nothing: err = %v, want ErrNoSuchServer", err)
 	}
 }
+
+// releasedLeaseBucket is the bucket a refused keying leaves: the binding of
+// a member that is gone and the empty lease the node released.
+func releasedLeaseBucket(t *testing.T) worldsync.BucketWorlds {
+	t.Helper()
+	ctx := context.Background()
+	st := worldsync.NewMemStore(time.Now)
+	world := "minecraft/rounds/round-7"
+	if err := worldsync.WriteBinding(ctx, st, "", world, worldsync.Binding{Server: "rounds-gone", Pod: "minecraft/rounds-gone"}); err != nil {
+		t.Fatal(err)
+	}
+	prefix := worldsync.WorldPrefix("", world)
+	etag, err := worldsync.TakeLease(ctx, st, prefix, worldsync.Lease{Node: "a", RenewedAt: time.Now()}, worldsync.StaleAfter)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := worldsync.ReleaseLease(ctx, st, prefix, etag); err != nil {
+		t.Fatal(err)
+	}
+	return worldsync.BucketWorlds{Store: st}
+}
+
+func TestKeyWorldTakesAKeyWhoseKeyingWasRefused(t *testing.T) {
+	c := fakeClient(t, roundsGroup(), roundMember("rounds-x7k2", nil))
+	w := KubeWriter{Client: c, Reader: c, Clock: time.Now, Worlds: releasedLeaseBucket(t)}
+	world, err := w.KeyWorld(context.Background(), caller("rounds-x7k2"), "round-7")
+	if err != nil || world != "minecraft/rounds/round-7" {
+		t.Fatalf("KeyWorld = %q, %v", world, err)
+	}
+	if got := getServer(t, w, "rounds-x7k2").Spec.WorldKey; got != "round-7" {
+		t.Errorf("spec.worldKey = %q", got)
+	}
+}
+
+func TestStartOfAKeyWithAReleasedLeaseAndNoManifestIsNotFound(t *testing.T) {
+	c := fakeClient(t, roundsGroup())
+	w := KubeWriter{Client: c, Reader: c, Clock: time.Now, Worlds: releasedLeaseBucket(t)}
+	s := &Server{opts: Options{Writer: w}, requestRate: newRequestLimiter(time.Now)}
+	resp := s.answerStartServer(context.Background(), logr.Discard(),
+		grpcauth.Identity{Namespace: "minecraft", PodName: "gateway-0", Role: agent.RoleProxy},
+		1, &agentpb.StartServerRequest{Group: "rounds", Key: "round-7"})
+	if resp.GetError().GetReason() != agentpb.RequestError_NOT_FOUND {
+		t.Fatalf("reason = %v, want NOT_FOUND", resp.GetError().GetReason())
+	}
+	if getServer(t, w, "rounds-round-7") != nil {
+		t.Error("a member was created for a key with no manifest")
+	}
+}

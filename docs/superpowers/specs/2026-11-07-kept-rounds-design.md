@@ -69,9 +69,10 @@ pending, no world exists and no other live `Server` carries the key or the
 name. It writes the binding with `If-None-Match: *` first and patches the
 immutable `spec.worldKey` only once the binding names the caller, so a refused
 caller keeps no key; a binding that fails answers `UNAVAILABLE`. A binding
-that names a server no longer live, on a world with no manifest and no lease,
-is left over from a request that never finished and is replaced with
-`If-Match`. A process-wide mutex keeps two members from taking one key at
+that names a server no longer live, on a world with no manifest and no lease
+that names a node, is left over from a request that never finished and is
+replaced with `If-Match`. A released lease is an empty object that stays
+behind, also after a keying the node refused, so it counts as no world. A process-wide mutex keeps two members from taking one key at
 once. `StartServer` on such a group answers the live member that carries
 the key, `NOT_FOUND` without a world, and otherwise creates `<group>-<key>` with
 `worldKey` and `resumed`, counting only live resumed members against

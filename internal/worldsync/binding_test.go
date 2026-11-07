@@ -49,7 +49,10 @@ func TestReplaceBindingOnlyWhileNothingTookTheWorld(t *testing.T) {
 		replace bool
 	}{
 		"binding only": {stale: old, replace: true},
-		"a lease is there": {stale: old, setup: func(t *testing.T, st *MemStore) {
+		"a lease names a node": {stale: old, setup: func(t *testing.T, st *MemStore) {
+			_, _ = put(t, st, WorldPrefix("", kept)+LeaseName, `{"node":"b"}`, PutCondition{})
+		}},
+		"a released lease": {stale: old, replace: true, setup: func(t *testing.T, st *MemStore) {
 			_, _ = put(t, st, WorldPrefix("", kept)+LeaseName, "{}", PutCondition{})
 		}},
 		"a manifest": {stale: old, setup: func(t *testing.T, st *MemStore) {
