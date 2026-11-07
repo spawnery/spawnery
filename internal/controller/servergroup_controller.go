@@ -315,7 +315,7 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if attemptHash == "" {
 			attemptHash = hashOfAttempt(streakKey)
 		}
-		countViews, requiredOrdinals = ofAttempt(views, attemptHash), 0
+		countViews, requiredOrdinals = ofAttempt(withoutResumed(views), attemptHash), 0
 	}
 	failures, newestFailure := CountFailures(countViews,
 		group.Status.ConsecutiveFailures, lastFailure, requiredOrdinals)
@@ -551,8 +551,8 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 			return ctrl.Result{}, err
 		}
 	}
-	if group.IsOnDemand() {
-		if err := r.sweepOnDemand(ctx, group, views, servers); err != nil {
+	if group.IsOnDemand() || group.IsEphemeral() {
+		if err := r.sweepFinishedMembers(ctx, group, views, servers); err != nil {
 			return ctrl.Result{}, err
 		}
 	}
@@ -696,10 +696,13 @@ func (r *ServerGroupReconciler) size(
 		}
 	case group.IsEphemeral():
 		if group.Spec.Scaling != nil {
-			own := ownServerChangeover(views, podHash, int32(len(pendingCreates)), group.UpdateWhenEmpty(), was)
+			// Resumed members stand outside the sizing; condemned() below still
+			// sees them.
+			sized := withoutResumed(views)
+			own := ownServerChangeover(sized, podHash, int32(len(pendingCreates)), group.UpdateWhenEmpty(), was)
 			self.State = own
 			decision = DecideSize(ScalingInputs{
-				Views:         views,
+				Views:         sized,
 				MinReplicas:   group.Spec.Scaling.MinReplicas,
 				Boost:         boosts.Add,
 				Pinned:        boosts.Pinned,
@@ -942,6 +945,10 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, 
 		if v.Unschedulable {
 			unschedulable = append(unschedulable, v.Name)
 		}
+		// A resumed member is neither rolled nor a replacement.
+		if v.Resumed {
+			continue
+		}
 		// An on-demand member of an earlier spec is not a replacement in flight:
 		// nothing rolls it, so counting it would hold the condition True forever.
 		// A failed server was replaced when it failed.
@@ -1083,6 +1090,7 @@ func (r *ServerGroupReconciler) collectViews(
 			PodHash:       srv.Spec.PodHash,
 			Retire:        srv.Spec.Retire,
 			Hold:          srv.Spec.Hold,
+			Resumed:       srv.Spec.Resumed,
 			CreatedAt:     srv.CreationTimestamp.Time,
 			Unschedulable: netstate.Unschedulable(srv),
 			// Without a readable live pod there is nothing to condemn: no pod, or one

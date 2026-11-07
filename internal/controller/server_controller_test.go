@@ -2981,3 +2981,21 @@ func TestAForceStopShortensAGracePeriodAlreadyRunning(t *testing.T) {
 		t.Errorf("deletionGracePeriodSeconds = %v, want 1 after the force-stop", ptr.Deref(g, -1))
 	}
 }
+
+func TestAKeyedEphemeralMemberHoldsItsWorld(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		spec spawneryv1alpha1.ServerSpec
+		want bool
+	}{
+		{"unkeyed ephemeral member", spawneryv1alpha1.ServerSpec{}, false},
+		{"on-demand member", spawneryv1alpha1.ServerSpec{Key: "c0ffee"}, true},
+		{"keyed ephemeral member", spawneryv1alpha1.ServerSpec{WorldKey: "round-7"}, true},
+		{"resumed member", spawneryv1alpha1.ServerSpec{WorldKey: "round-7", Resumed: true}, true},
+		{"persistent server", spawneryv1alpha1.ServerSpec{Ordinal: ptr.To[int32](0)}, false},
+	} {
+		if got := holdsWorld(&spawneryv1alpha1.Server{Spec: tc.spec}); got != tc.want {
+			t.Errorf("%s: holdsWorld = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
