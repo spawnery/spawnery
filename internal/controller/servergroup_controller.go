@@ -46,6 +46,7 @@ import (
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
 	boostpkg "github.com/spawnery/spawnery/internal/boost"
+	"github.com/spawnery/spawnery/internal/instance"
 	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
@@ -53,21 +54,18 @@ import (
 	"github.com/spawnery/spawnery/internal/worldsync"
 )
 
-// nameSuffixAlphabet avoids characters that are easy to misread in a terminal.
-const nameSuffixAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"
-
 // networkRetryInterval is how long the group waits before looking for a
 // missing Network again.
 const networkRetryInterval = 30 * time.Second
 
 // NewServerName builds a unique ephemeral server name below the group prefix.
 func NewServerName(group string) string {
-	buf := make([]byte, 4)
+	buf := make([]byte, instance.SuffixLength)
 	// crypto/rand.Read never fails on the platforms we support.
 	_, _ = rand.Read(buf)
 	suffix := make([]byte, len(buf))
 	for i, b := range buf {
-		suffix[i] = nameSuffixAlphabet[int(b)%len(nameSuffixAlphabet)]
+		suffix[i] = instance.SuffixAlphabet[int(b)%len(instance.SuffixAlphabet)]
 	}
 	return fmt.Sprintf("%s-%s", group, suffix)
 }
