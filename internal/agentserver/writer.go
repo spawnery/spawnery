@@ -67,6 +67,9 @@ type WorldDeleter interface {
 	Exists(ctx context.Context, world string) (bool, error)
 	MarkDeleted(ctx context.Context, world string) error
 	DeletionPending(ctx context.Context, world string) (bool, error)
+	// Bind writes the binding that lets a node agent key a standby slot onto
+	// world; worldsync.ErrBound when one names another server.
+	Bind(ctx context.Context, world string, b worldsync.Binding) error
 }
 
 var ErrTooManyInstances = errors.New("that group is at spec.maxInstances")
@@ -140,11 +143,15 @@ type ClusterWriter interface {
 	// group does not allow are ErrNoMemberResources or a *ResourceRefusal.
 	StartServer(ctx context.Context, namespace, group, key string, req *agentpb.StartResources) (StartedServer, error)
 
-	// StopServer deletes one member of an OnDemand group and returns
-	// ErrNotAnInstance for any other server.
+	// StopServer deletes one member of an OnDemand group, or a member of an
+	// Ephemeral group that keyed its world, and returns ErrNotAnInstance for
+	// any other server.
 	StopServer(ctx context.Context, namespace, name string) error
+	// KeyWorld gives the calling server's world a key; see keyworld.go.
+	KeyWorld(ctx context.Context, caller Caller, key string) (string, error)
 	// DeleteServer deletes a member of an OnDemand group for good: its server
-	// if one exists, and its world claim. It returns ErrNoSuchGroup,
+	// if one exists, and its world claim; for an Ephemeral group, the world
+	// kept under key and the server that carries it. It returns ErrNoSuchGroup,
 	// ErrGroupNotOnDemand, instance.ErrBadKey, ErrForeignClaim, ErrUnkeyedWorld, and
 	// ErrNoSuchServer when neither a server nor a world is there.
 	DeleteServer(ctx context.Context, namespace, group, key string) (DeletedServer, error)
@@ -435,21 +442,15 @@ func (w KubeWriter) StartServer(
 		}
 		return StartedServer{}, err
 	}
+	if g.IsEphemeral() && g.UsesObjectStore() {
+		return w.resumeKept(ctx, &g, key, req)
+	}
 	if !g.IsOnDemand() {
 		return StartedServer{}, ErrGroupNotOnDemand
 	}
 	if g.UsesObjectStore() {
-		// The node agent would refuse the volume until the sweep is done, and
-		// the pod would wait in ContainerCreating past its startup deadline.
-		if w.Worlds == nil {
-			return StartedServer{}, ErrWorldSyncOff
-		}
-		pending, err := w.Worlds.DeletionPending(ctx, namespace+"/"+group+"/"+key)
-		if err != nil {
+		if err := w.worldNotDeleting(ctx, namespace+"/"+group+"/"+key); err != nil {
 			return StartedServer{}, err
-		}
-		if pending {
-			return StartedServer{}, ErrWorldDeleting
 		}
 	} else {
 		// A pod created now would mount a claim on its way out.
@@ -594,7 +595,7 @@ func (w KubeWriter) StopServer(ctx context.Context, namespace, name string) erro
 		}
 		return err
 	}
-	if !netstate.IsPrivateServer(&srv) {
+	if !netstate.IsPrivateServer(&srv) && srv.Spec.WorldKey == "" {
 		return ErrNotAnInstance
 	}
 	if err := w.Client.Delete(ctx, &srv); err != nil && !apierrors.IsNotFound(err) {
@@ -617,11 +618,22 @@ func (w KubeWriter) DeleteServer(ctx context.Context, namespace, group, key stri
 		}
 		return DeletedServer{}, err
 	}
+	if g.IsEphemeral() && g.UsesObjectStore() {
+		return w.deleteKeptWorld(ctx, &g, key)
+	}
 	if !g.IsOnDemand() {
 		return DeletedServer{}, ErrGroupNotOnDemand
 	}
 	if g.UsesObjectStore() {
-		return w.deleteObjectStoreWorld(ctx, namespace, group, key, name)
+		var srv spawneryv1alpha1.Server
+		if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &srv); err != nil {
+			if !apierrors.IsNotFound(err) {
+				return DeletedServer{}, err
+			}
+		} else if srv.Spec.GroupRef.Name == group && srv.Spec.Key == key {
+			return w.deleteObjectStoreWorld(ctx, namespace+"/"+group+"/"+key, name, &srv)
+		}
+		return w.deleteObjectStoreWorld(ctx, namespace+"/"+group+"/"+key, name, nil)
 	}
 
 	var claim corev1.PersistentVolumeClaim
@@ -667,22 +679,14 @@ func (w KubeWriter) DeleteServer(ctx context.Context, namespace, group, key stri
 	return DeletedServer{Name: name, World: haveClaim}, nil
 }
 
-func (w KubeWriter) deleteObjectStoreWorld(ctx context.Context, namespace, group, key, name string) (DeletedServer, error) {
+// deleteObjectStoreWorld marks world deleted and deletes srv, the server
+// that carries it, when there is one. name is what the answer calls the
+// member.
+func (w KubeWriter) deleteObjectStoreWorld(ctx context.Context, world, name string, srv *spawneryv1alpha1.Server) (DeletedServer, error) {
 	if w.Worlds == nil {
 		return DeletedServer{}, ErrWorldSyncOff
 	}
-	world := namespace + "/" + group + "/" + key
-	var srv spawneryv1alpha1.Server
-	haveServer := true
-	if err := w.Client.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &srv); err != nil {
-		if !apierrors.IsNotFound(err) {
-			return DeletedServer{}, err
-		}
-		haveServer = false
-	}
-	if haveServer && (srv.Spec.GroupRef.Name != group || srv.Spec.Key != key) {
-		haveServer = false
-	}
+	haveServer := srv != nil
 	haveWorld, err := w.Worlds.Exists(ctx, world)
 	if err != nil {
 		return DeletedServer{}, err
@@ -696,9 +700,26 @@ func (w KubeWriter) deleteObjectStoreWorld(ctx context.Context, namespace, group
 		return DeletedServer{}, err
 	}
 	if haveServer {
-		if err := w.Client.Delete(ctx, &srv); err != nil && !apierrors.IsNotFound(err) {
+		if err := w.Client.Delete(ctx, srv); err != nil && !apierrors.IsNotFound(err) {
 			return DeletedServer{}, err
 		}
 	}
 	return DeletedServer{Name: name, World: haveWorld}, nil
+}
+
+// worldNotDeleting is the check before a start of a world in the object
+// store: the node agent would refuse the volume until the sweep is done, and
+// the pod would wait in ContainerCreating past its startup deadline.
+func (w KubeWriter) worldNotDeleting(ctx context.Context, world string) error {
+	if w.Worlds == nil {
+		return ErrWorldSyncOff
+	}
+	pending, err := w.Worlds.DeletionPending(ctx, world)
+	if err != nil {
+		return err
+	}
+	if pending {
+		return ErrWorldDeleting
+	}
+	return nil
 }
