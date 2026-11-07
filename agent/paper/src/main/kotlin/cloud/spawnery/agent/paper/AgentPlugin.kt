@@ -33,10 +33,13 @@ import org.bukkit.event.server.ServerLoadEvent
 import org.bukkit.plugin.java.JavaPlugin
 import java.nio.file.Files
 import java.nio.file.Path
+import java.util.Optional
 import java.util.concurrent.CompletableFuture
+import java.util.concurrent.CompletionStage
 import java.util.concurrent.Executors
 import java.util.concurrent.ScheduledExecutorService
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.logging.Level
 
 /**
@@ -94,22 +97,31 @@ class AgentPlugin : JavaPlugin(), Listener {
     private lateinit var scheduler: ScheduledExecutorService
     private var loop: SessionLoop<ServerMessage, OperatorToServer>? = null
 
+    private val standby = System.getenv(WorldSync.ENV_ENABLED) == WorldSync.STANDBY
     private val worldSync: WorldSync? =
-        if (System.getenv(WorldSync.ENV_ENABLED) == "1") {
+        if (System.getenv(WorldSync.ENV_ENABLED) == "1" || standby) {
             WorldSync(Path.of(System.getProperty("user.dir"), WorldSync.CONTROL_DIR))
         } else {
             null
         }
     private var snapshotSeq = 0L
     private var snapshotInFlight = false
+    private val snapshotsStarted = AtomicBoolean(false)
+
+    /** The key this run's world took, set once the node agent confirmed it. */
+    @Volatile
+    private var worldKey: String? = worldSync?.takeIf { standby }?.keyed()
 
     private val platform by lazy { Platforms.detect(this, server.javaClass.classLoader) }
     private val tickSampler = TickSampler({ platform.ticks() }, state::sampleTicks) { e ->
         logger.log(Level.WARNING, "spawnery could not read the tick rate; this is logged once", e)
     }
 
+    /** A standby member snapshots only once its world took a key. */
     private fun startSnapshots() {
         val sync = worldSync ?: return
+        if (standby && worldKey == null) return
+        if (!snapshotsStarted.compareAndSet(false, true)) return
         snapshotSeq = sync.nextSequence() - 1
         val millis = WorldSync.parseInterval(System.getenv(WorldSync.ENV_INTERVAL)) ?: DEFAULT_SNAPSHOT_MILLIS
         val ticks = millis / 50
@@ -199,8 +211,14 @@ class AgentPlugin : JavaPlugin(), Listener {
                     override fun group(): String = System.getenv("SPAWNERY_GROUP") ?: ""
                     override fun network(): String = System.getenv("SPAWNERY_NETWORK") ?: ""
                     override fun slots(): Int = state.slots
+                    override fun worldKey(): Optional<String> = Optional.ofNullable(
+                        worldKey ?: mirror.servers().firstOrNull { it.name() == name() }?.worldKey()?.ifEmpty { null },
+                    )
                 }
-                val api = MirrorApi(mirror, self, connector, events, readiness, state::setPlayable)
+                val api = MirrorApi(
+                    mirror, self, connector, events, readiness, state::setPlayable,
+                    keying = ::keyWorld,
+                )
                 Spawnery.install(api)
                 // Paper accepts a Brigadier node only inside the COMMANDS
                 // lifecycle event; a direct call from onEnable throws.
@@ -277,6 +295,43 @@ class AgentPlugin : JavaPlugin(), Listener {
         }
     }
 
+    /**
+     * The operator records the key and binds the world to this server; on a
+     * standby member the node agent then takes the world under the key, and
+     * snapshots start with one at once. A member that is not on standby only
+     * hears the operator's answer: a resumed member already syncs under its
+     * key, and any other is refused by the operator.
+     */
+    private fun keyWorld(key: String): CompletionStage<Void> {
+        val sync = worldSync
+        return connector.keyWorld(key).thenCompose { _ ->
+            if (sync == null || !standby) return@thenCompose CompletableFuture.completedFuture(null)
+            val keyed = CompletableFuture<Void>()
+            server.asyncScheduler.runNow(this) {
+                try {
+                    sync.requestKey(key)
+                    when (val outcome = sync.awaitKey(key, KEY_WAIT_MILLIS)) {
+                        WorldSync.Outcome.Ready -> {
+                            worldKey = key
+                            startSnapshots()
+                            server.globalRegionScheduler.execute(this, Runnable { snapshot(sync) })
+                            keyed.complete(null)
+                        }
+                        is WorldSync.Outcome.Failed -> keyed.completeExceptionally(
+                            IllegalStateException("UNAVAILABLE: the node did not take the key: ${outcome.reason}"),
+                        )
+                        WorldSync.Outcome.TimedOut -> keyed.completeExceptionally(
+                            IllegalStateException("UNAVAILABLE: the node did not answer the key within ${KEY_WAIT_MILLIS / 1000} s"),
+                        )
+                    }
+                } catch (t: Throwable) {
+                    keyed.completeExceptionally(t)
+                }
+            }
+            keyed
+        }
+    }
+
     /** Sent only when the answer changes: EventInterest is a state. */
     private fun reportInterest(wanted: Boolean) {
         if (lastInterest == wanted) return
@@ -334,6 +389,9 @@ class AgentPlugin : JavaPlugin(), Listener {
         const val SAMPLE_TICKS = 20L
 
         const val SNAPSHOT_WAIT_MILLIS = 60 * 1000L
+
+        // The node agent answers a key at its next poll, after a few store calls.
+        const val KEY_WAIT_MILLIS = 30 * 1000L
         const val DEFAULT_SNAPSHOT_MILLIS = 5 * 60 * 1000L
     }
 }

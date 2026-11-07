@@ -95,4 +95,19 @@ class RecordCompatibilityTest {
                 ServerResources.NONE);
         assertEquals(false, server.unschedulable());
     }
+
+    @Test
+    void thePreWorldKeyConstructorStillBuildsAndReadsAsNoKeptWorld() {
+        ServerInfo server = new ServerInfo("lobby-a", "lobby", ServerPhase.READY, 1, 20, true, "", Map.of(), "", 0, false, "node-1", 20,
+                ServerResources.NONE, false);
+        assertEquals("", server.worldKey());
+        assertEquals(false, server.resumed());
+    }
+
+    @Test
+    void aNullWorldKeyReadsAsEmpty() {
+        ServerInfo server = new ServerInfo("rounds-a", "rounds", ServerPhase.READY, 1, 20, true, "", Map.of(), "", 0, false, "node-1", 20,
+                ServerResources.NONE, false, null, false);
+        assertEquals("", server.worldKey());
+    }
 }

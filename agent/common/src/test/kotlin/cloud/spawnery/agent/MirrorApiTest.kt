@@ -11,6 +11,9 @@ import cloud.spawnery.agent.pb.ProxyState
 import cloud.spawnery.agent.pb.RosterEntry
 import cloud.spawnery.agent.pb.ServerState
 import java.util.UUID
+import java.util.concurrent.CompletableFuture
+import java.util.concurrent.ExecutionException
+import java.util.concurrent.TimeUnit
 import kotlin.test.Test
 import kotlin.test.assertEquals
 import kotlin.test.assertFalse
@@ -62,6 +65,41 @@ class MirrorApiTest {
 
     private fun api(self: Self, state: NetworkState = aRichState()): MirrorApi =
         MirrorApi(NetworkMirror().also { it.apply(state) }, self, connector(), CloudEvents())
+
+    @Test
+    fun `keyWorld on a proxy fails without asking the operator`() {
+        val stage = api(proxySelf()).keyWorld("round-7").toCompletableFuture()
+
+        val failure = assertFailsWith<ExecutionException> { stage.get(1, TimeUnit.SECONDS) }
+        assertTrue(failure.cause is UnsupportedOperationException, "${failure.cause}")
+        assertTrue(requested.isEmpty())
+    }
+
+    @Test
+    fun `keyWorld on a server hands the key to the server's side`() {
+        val keyed = mutableListOf<String>()
+        val api = MirrorApi(NetworkMirror(), serverSelf(), connector(), CloudEvents(), keying = { key ->
+            keyed += key
+            CompletableFuture.completedFuture(null)
+        })
+
+        api.keyWorld("round-7").toCompletableFuture().get(1, TimeUnit.SECONDS)
+        assertEquals(listOf("round-7"), keyed)
+    }
+
+    @Test
+    fun `a server's kept world reaches the mirror`() {
+        val state = NetworkState.newBuilder()
+            .addServers(
+                ServerState.newBuilder().setName("rounds-round-7").setGroup("rounds").setPhase("Ready")
+                    .setWorldKey("round-7").setResumed(true),
+            )
+            .build()
+        val server = api(serverSelf(), state).server("rounds-round-7").orElseThrow()
+
+        assertEquals("round-7", server.worldKey())
+        assertTrue(server.resumed())
+    }
 
     @Test
     fun `a lookup by name finds what the list holds`() {
