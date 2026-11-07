@@ -58,6 +58,11 @@ func (n *Node) publishStandby(req PublishRequest) error {
 	}
 	unlock := n.lock(name)
 	defer unlock()
+	if !ok {
+		if err := n.dropSlotCache(slot); err != nil {
+			return err
+		}
+	}
 	s := n.state(name)
 	if s.Target == req.Target {
 		s.Group = req.Group
@@ -94,6 +99,43 @@ func (n *Node) publishStandby(req PublishRequest) error {
 	}
 	s.LastUsed = n.cfg.Clock()
 	return n.saveState(s)
+}
+
+// dropSlotCache frees a slot's directory that a world keyed in it still
+// uses as its cache, which happens when a new member has the name of one
+// that kept its world on this node. The cache goes only once it owes the
+// store nothing; until then the slot is unavailable. It runs under the
+// slot's lock.
+func (n *Node) dropSlotCache(slot string) error {
+	var world string
+	n.mu.Lock()
+	for w, s := range n.worlds {
+		if s.Slot == slot {
+			world = w
+			break
+		}
+	}
+	n.mu.Unlock()
+	if world == "" {
+		return nil
+	}
+	unlock, ok := n.tryLock(world)
+	if !ok {
+		return fmt.Errorf("%w: world %s in this slot is busy", ErrUnavailable, world)
+	}
+	defer unlock()
+	s := n.lookup(world)
+	if s == nil || s.Slot != slot {
+		return nil
+	}
+	if !idle(s) {
+		return fmt.Errorf("%w: world %s in this slot is in use or not fully uploaded", ErrUnavailable, world)
+	}
+	n.drop(s)
+	if n.lookup(world) != nil {
+		return fmt.Errorf("%w: could not drop the cache of world %s in this slot", ErrUnavailable, world)
+	}
+	return nil
 }
 
 // pollKeyRequests answers the key requests of mounted members: a standby

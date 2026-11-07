@@ -246,3 +246,36 @@ func TestAResumedMemberOnTheSameNodeReusesTheSlot(t *testing.T) {
 		t.Errorf("the world is not there: %v", err)
 	}
 }
+
+func TestAStandbySlotWaitsForTheCacheOfAWorldKeptUnderItsName(t *testing.T) {
+	h := newHarness(t)
+	h.bindWorld(kept, "g-abcd", "ns/g-abcd")
+	first := h.publishStandby("a", slotOf, "ns/g-abcd")
+	writeFile(t, filepath.Join(first, "worlds/world/level.dat"), 5, h.now)
+	if got := h.askKey(first, keptKey); got != keptKey {
+		t.Fatalf("key.done = %q", got)
+	}
+
+	// A new member of the same name while the kept world is still in use.
+	again := filepath.Join(t.TempDir(), "mount")
+	req := PublishRequest{Standby: slotOf, Keep: []string{"worlds/world"}, Target: again, Pod: "ns/g-abcd"}
+	if err := h.node("a").Publish(context.Background(), req); !errors.Is(err, ErrUnavailable) {
+		t.Fatalf("publish over a kept world's cache: err = %v, want ErrUnavailable", err)
+	}
+	if _, err := os.Stat(filepath.Join(first, "worlds/world/level.dat")); err != nil {
+		t.Fatalf("the kept world's files went with the refused publish: %v", err)
+	}
+
+	// Once the world is uploaded and idle, its cache gives way.
+	h.unpublish("a", first)
+	h.node("a").Settle(context.Background())
+	if err := h.node("a").Publish(context.Background(), req); err != nil {
+		t.Fatalf("publish once the cache is idle: %v", err)
+	}
+	if h.node("a").lookup(kept) != nil {
+		t.Error("the node still knows a cache whose directory went to the new slot")
+	}
+	if _, _, err := ReadManifest(context.Background(), h.st, WorldPrefix("", kept)); err != nil {
+		t.Errorf("the kept world is not in the store: %v", err)
+	}
+}
