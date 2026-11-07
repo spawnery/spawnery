@@ -179,11 +179,12 @@ func liveServer(servers []spawneryv1alpha1.Server, name string) bool {
 	return false
 }
 
-// keptMembers lists the live servers of g that carry key's world: the member
-// that keyed it while it still runs, or the one resumed for it.
+// keptMembers lists the servers of g that carry key's world: the member that
+// keyed it and the one resumed for it. It reads past the cache, which may
+// not show a key KeyWorld has just set.
 func (w KubeWriter) keptMembers(ctx context.Context, g *spawneryv1alpha1.ServerGroup, key string) ([]spawneryv1alpha1.Server, *spawneryv1alpha1.ServerList, error) {
 	var all spawneryv1alpha1.ServerList
-	if err := w.Client.List(ctx, &all, client.InNamespace(g.Namespace)); err != nil {
+	if err := w.claims().List(ctx, &all, client.InNamespace(g.Namespace)); err != nil {
 		return nil, nil, err
 	}
 	var out []spawneryv1alpha1.Server

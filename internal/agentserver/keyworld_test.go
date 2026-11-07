@@ -272,6 +272,20 @@ func TestStartOfAKeptWorldAnswersTheMemberThatKeyedIt(t *testing.T) {
 	}
 }
 
+func TestStartOfAKeptWorldReadsTheKeyPastTheCache(t *testing.T) {
+	// The cache has not seen the key KeyWorld just set.
+	cached := fakeClient(t, roundsGroup(), roundMember("rounds-x7k2", nil))
+	direct := fakeClient(t, roundsGroup(), roundMember("rounds-x7k2", func(s *spawneryv1alpha1.Server) { s.Spec.WorldKey = "round-7" }))
+	w := KubeWriter{Client: cached, Reader: direct, Clock: time.Now, Worlds: &fakeWorlds{exists: true}}
+	got, err := w.StartServer(context.Background(), "minecraft", "rounds", "round-7", nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.AlreadyRunning || got.Name != "rounds-x7k2" {
+		t.Fatalf("got %+v, want the member that keyed the world", got)
+	}
+}
+
 func TestStartOfAKeptWorldResumesIt(t *testing.T) {
 	finished := roundMember("rounds-x7k2", func(s *spawneryv1alpha1.Server) {
 		s.Spec.WorldKey = "round-7"
