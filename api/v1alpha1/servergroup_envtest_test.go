@@ -734,10 +734,10 @@ func TestServerGroupStorageReplaceRefusals(t *testing.T) {
 	}
 }
 
-func TestObjectStoreBackendNeedsAWorldKeepingTypeAndKeep(t *testing.T) {
+func TestObjectStoreBackendNeedsKeep(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
-	const msg = "storage.backend ObjectStore needs type OnDemand or Persistent, and storage.keep"
+	const msg = "storage.backend ObjectStore needs storage.keep"
 
 	p := persistentGroup(ns, "object-store-persistent")
 	p.Spec.Storage.Backend = spawneryv1alpha1.StorageBackendObjectStore
@@ -1014,5 +1014,86 @@ func TestPersistentUpdateTakesOnlyStrategy(t *testing.T) {
 				t.Fatalf("maxUnavailable not defaulted to 1: %+v", got.Spec.Update)
 			}
 		})
+	}
+}
+
+func keptRoundsGroup(ns, name string) *spawneryv1alpha1.ServerGroup {
+	g := ephemeralGroup(ns, name)
+	g.Spec.MaxInstances = ptr.To[int32](20)
+	g.Spec.Storage = &spawneryv1alpha1.StorageSpec{
+		Backend: spawneryv1alpha1.StorageBackendObjectStore,
+		Size:    resource.MustParse("2Gi"),
+		Keep:    []string{"world"},
+	}
+	return g
+}
+
+func TestEphemeralStorageRules(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	cases := map[string]struct {
+		change func(*spawneryv1alpha1.ServerGroup)
+		msg    string
+	}{
+		"accepted": {func(*spawneryv1alpha1.ServerGroup) {}, ""},
+		"claim backend": {func(g *spawneryv1alpha1.ServerGroup) {
+			g.Spec.Storage.Backend = spawneryv1alpha1.StorageBackendClaim
+		}, "spec.storage on type Ephemeral needs backend ObjectStore and keep"},
+		"no backend": {func(g *spawneryv1alpha1.ServerGroup) {
+			g.Spec.Storage.Backend = ""
+		}, "spec.storage on type Ephemeral needs backend ObjectStore and keep"},
+		"no keep": {func(g *spawneryv1alpha1.ServerGroup) {
+			g.Spec.Storage.Keep = nil
+		}, "spec.storage on type Ephemeral needs backend ObjectStore and keep"},
+		"no maxInstances": {func(g *spawneryv1alpha1.ServerGroup) {
+			g.Spec.MaxInstances = nil
+		}, "spec.maxInstances is required for type Ephemeral with spec.storage"},
+		"maxInstances without storage": {func(g *spawneryv1alpha1.ServerGroup) {
+			g.Spec.Storage = nil
+		}, "spec.maxInstances is only allowed for type OnDemand, and for type Ephemeral with spec.storage"},
+		"memberResources": {func(g *spawneryv1alpha1.ServerGroup) {
+			g.Spec.MemberResources = &spawneryv1alpha1.MemberResourcesSpec{
+				Max: corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("4Gi")},
+			}
+		}, "spec.memberResources is only allowed for type OnDemand"},
+	}
+	i := 0
+	for name, tc := range cases {
+		i++
+		t.Run(name, func(t *testing.T) {
+			g := keptRoundsGroup(ns, fmt.Sprintf("kept-%d", i))
+			tc.change(g)
+			err := c.Create(ctx, g)
+			switch {
+			case tc.msg == "" && err != nil:
+				t.Fatalf("create: %v", err)
+			case tc.msg != "" && (err == nil || !strings.Contains(err.Error(), tc.msg)):
+				t.Fatalf("err = %v, want %q", err, tc.msg)
+			}
+		})
+	}
+}
+
+func TestEphemeralStorageCannotBeRemoved(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	plain := ephemeralGroup(ns, "gains-storage")
+	if err := c.Create(ctx, plain); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	withStorage := keptRoundsGroup(ns, "gains-storage")
+	plain.Spec.Storage = withStorage.Spec.Storage
+	plain.Spec.MaxInstances = withStorage.Spec.MaxInstances
+	if err := c.Update(ctx, plain); err != nil {
+		t.Fatalf("adding storage to an ephemeral group: %v", err)
+	}
+
+	plain.Spec.Storage = nil
+	plain.Spec.MaxInstances = nil
+	const msg = "spec.storage cannot be removed from type Ephemeral"
+	if err := c.Update(ctx, plain); err == nil || !strings.Contains(err.Error(), msg) {
+		t.Fatalf("removing storage: err = %v, want %q", err, msg)
 	}
 }

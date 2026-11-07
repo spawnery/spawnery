@@ -26,6 +26,10 @@ import (
 // and owned by a ServerGroup and is not meant to be edited by hand.
 // +kubebuilder:validation:XValidation:rule="has(self.resources) == has(oldSelf.resources) && (!has(self.resources) || self.resources == oldSelf.resources)",message="spec.resources is immutable"
 // +kubebuilder:validation:XValidation:rule="has(self.heap) == has(oldSelf.heap) && (!has(self.heap) || self.heap == oldSelf.heap)",message="spec.heap is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(self.key) || !has(self.worldKey)",message="spec.key and spec.worldKey are mutually exclusive"
+// +kubebuilder:validation:XValidation:rule="!has(oldSelf.worldKey) || (has(self.worldKey) && self.worldKey == oldSelf.worldKey)",message="spec.worldKey cannot be changed or removed once set"
+// +kubebuilder:validation:XValidation:rule="(has(self.resumed) && self.resumed) == (has(oldSelf.resumed) && oldSelf.resumed)",message="spec.resumed is immutable"
+// +kubebuilder:validation:XValidation:rule="!has(self.resumed) || !self.resumed || has(self.worldKey)",message="spec.resumed needs spec.worldKey"
 type ServerSpec struct {
 	// GroupRef names the owning ServerGroup.
 	GroupRef ObjectRef `json:"groupRef"`
@@ -42,6 +46,20 @@ type ServerSpec struct {
 	// is gone.
 	// +optional
 	Key string `json:"key,omitempty"`
+
+	// WorldKey is the key a member of an Ephemeral group gave its world
+	// through keyWorld. From then on its world is synchronised to the object
+	// store under that key, like an OnDemand member's, and a later
+	// startServer with the same key resumes it. Set once, never changed.
+	// +kubebuilder:validation:MaxLength=253
+	// +optional
+	WorldKey string `json:"worldKey,omitempty"`
+
+	// Resumed marks a member of an Ephemeral group that startServer created
+	// to resume a kept world. It stands outside the group's sizing, is never
+	// routed to by group and is never rolled. Set at creation, never changed.
+	// +optional
+	Resumed bool `json:"resumed,omitempty"`
 
 	// Number is which of its group's servers this is, counted the way a
 	// person counts: the second hub is 2. The group assigns it once, at

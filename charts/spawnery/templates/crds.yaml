@@ -3930,7 +3930,9 @@ spec:
 
                   A fleet ceiling, not a per-player quota. Zero closes the group: new
                   starts are refused and every world stays where it is. Required, with no
-                  default.
+                  default, for type OnDemand and for type Ephemeral with storage, where it
+                  bounds only the members startServer resumed from a kept world; the
+                  group's own members stay sized by spec.scaling.
                 format: int32
                 minimum: 0
                 type: integer
@@ -5273,7 +5275,9 @@ spec:
               storage:
                 description: |-
                   Storage configures where members' worlds live: a claim per member, or
-                  the object store with backend ObjectStore. Persistent and OnDemand only.
+                  the object store with backend ObjectStore. On an Ephemeral group it
+                  needs backend ObjectStore and lets a member keep its world under a key;
+                  once set there, it cannot be removed.
                 properties:
                   accessModes:
                     default:
@@ -5303,8 +5307,9 @@ spec:
                       default, keeps it on a PersistentVolumeClaim per member. ObjectStore
                       keeps it in the object store configured for the operator (chart value
                       worldSync) and gives /data from a directory on the node that runs the
-                      member; it needs type OnDemand or Persistent and keep, and
-                      synchronises exactly what keep matches. It also needs spawnery's game images 0.24.3 or later,
+                      member; it needs keep and synchronises exactly what keep matches. On
+                      an Ephemeral group it is the only backend, and only members that gave
+                      their world a key through keyWorld use it. It also needs spawnery's game images 0.24.3 or later,
                       whose bootstrapper holds the server until the world is on disk and
                       whose entrypoint leaves the node agent's files alone: an older or a
                       custom image starts on a half-downloaded world and can corrupt it, or
@@ -5526,8 +5531,15 @@ spec:
             x-kubernetes-validations:
             - message: spec.type is immutable
               rule: self.type == oldSelf.type
-            - message: spec.storage is not allowed for type Ephemeral
-              rule: self.type != 'Ephemeral' || !has(self.storage)
+            - message: spec.storage on type Ephemeral needs backend ObjectStore and
+                keep
+              rule: self.type != 'Ephemeral' || !has(self.storage) || (has(self.storage.backend)
+                && self.storage.backend == 'ObjectStore' && has(self.storage.keep))
+            - message: spec.maxInstances is required for type Ephemeral with spec.storage
+              rule: self.type != 'Ephemeral' || !has(self.storage) || has(self.maxInstances)
+            - message: 'spec.storage cannot be removed from type Ephemeral: kept worlds
+                would lose their resumed members'' volumes'
+              rule: self.type != 'Ephemeral' || !has(oldSelf.storage) || has(self.storage)
             - message: spec.replicas is not allowed for type Ephemeral
               rule: self.type != 'Ephemeral' || !has(self.replicas)
             - message: spec.scaling is required for type Ephemeral
@@ -5559,8 +5571,10 @@ spec:
               rule: self.type != 'OnDemand' || has(self.storage)
             - message: spec.maxInstances is required for type OnDemand
               rule: self.type != 'OnDemand' || has(self.maxInstances)
-            - message: spec.maxInstances is only allowed for type OnDemand
-              rule: self.type == 'OnDemand' || !has(self.maxInstances)
+            - message: spec.maxInstances is only allowed for type OnDemand, and for
+                type Ephemeral with spec.storage
+              rule: self.type == 'OnDemand' || (self.type == 'Ephemeral' && has(self.storage))
+                || !has(self.maxInstances)
             - message: spec.changeoverStage is not allowed for type OnDemand
               rule: self.type != 'OnDemand' || !has(self.changeoverStage) || self.changeoverStage
                 == 0
@@ -5577,11 +5591,9 @@ spec:
             - message: storage.accessModes is immutable
               rule: '!has(self.storage) || !has(oldSelf.storage) || self.storage.accessModes
                 == oldSelf.storage.accessModes'
-            - message: storage.backend ObjectStore needs type OnDemand or Persistent,
-                and storage.keep
+            - message: storage.backend ObjectStore needs storage.keep
               rule: '!has(self.storage) || !has(self.storage.backend) || self.storage.backend
-                != ''ObjectStore'' || ((self.type == ''OnDemand'' || self.type ==
-                ''Persistent'') && has(self.storage.keep))'
+                != ''ObjectStore'' || has(self.storage.keep)'
             - message: 'storage.backend is immutable for type Persistent: a new backend
                 would start every ordinal on a world it does not hold; see the persistent-worlds
                 guide for moving a world'
@@ -5951,6 +5963,12 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
+              resumed:
+                description: |-
+                  Resumed marks a member of an Ephemeral group that startServer created
+                  to resume a kept world. It stands outside the group's sizing, is never
+                  routed to by group and is never rolled. Set at creation, never changed.
+                type: boolean
               retire:
                 description: |-
                   Retire asks this server to stop taking joins and empty out, without its
@@ -5959,6 +5977,14 @@ spec:
                   request. A server counts against spec.update.maxUnavailable while this
                   is true.
                 type: boolean
+              worldKey:
+                description: |-
+                  WorldKey is the key a member of an Ephemeral group gave its world
+                  through keyWorld. From then on its world is synchronised to the object
+                  store under that key, like an OnDemand member's, and a later
+                  startServer with the same key resumes it. Set once, never changed.
+                maxLength: 253
+                type: string
             required:
             - groupRef
             type: object
@@ -5969,6 +5995,16 @@ spec:
             - message: spec.heap is immutable
               rule: has(self.heap) == has(oldSelf.heap) && (!has(self.heap) || self.heap
                 == oldSelf.heap)
+            - message: spec.key and spec.worldKey are mutually exclusive
+              rule: '!has(self.key) || !has(self.worldKey)'
+            - message: spec.worldKey cannot be changed or removed once set
+              rule: '!has(oldSelf.worldKey) || (has(self.worldKey) && self.worldKey
+                == oldSelf.worldKey)'
+            - message: spec.resumed is immutable
+              rule: (has(self.resumed) && self.resumed) == (has(oldSelf.resumed) &&
+                oldSelf.resumed)
+            - message: spec.resumed needs spec.worldKey
+              rule: '!has(self.resumed) || !self.resumed || has(self.worldKey)'
           status:
             description: ServerStatus is the observed state of a Server.
             properties:

@@ -200,6 +200,12 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
+              resumed:
+                description: |-
+                  Resumed marks a member of an Ephemeral group that startServer created
+                  to resume a kept world. It stands outside the group's sizing, is never
+                  routed to by group and is never rolled. Set at creation, never changed.
+                type: boolean
               retire:
                 description: |-
                   Retire asks this server to stop taking joins and empty out, without its
@@ -208,6 +214,14 @@ spec:
                   request. A server counts against spec.update.maxUnavailable while this
                   is true.
                 type: boolean
+              worldKey:
+                description: |-
+                  WorldKey is the key a member of an Ephemeral group gave its world
+                  through keyWorld. From then on its world is synchronised to the object
+                  store under that key, like an OnDemand member's, and a later
+                  startServer with the same key resumes it. Set once, never changed.
+                maxLength: 253
+                type: string
             required:
             - groupRef
             type: object
@@ -218,6 +232,16 @@ spec:
             - message: spec.heap is immutable
               rule: has(self.heap) == has(oldSelf.heap) && (!has(self.heap) || self.heap
                 == oldSelf.heap)
+            - message: spec.key and spec.worldKey are mutually exclusive
+              rule: '!has(self.key) || !has(self.worldKey)'
+            - message: spec.worldKey cannot be changed or removed once set
+              rule: '!has(oldSelf.worldKey) || (has(self.worldKey) && self.worldKey
+                == oldSelf.worldKey)'
+            - message: spec.resumed is immutable
+              rule: (has(self.resumed) && self.resumed) == (has(oldSelf.resumed) &&
+                oldSelf.resumed)
+            - message: spec.resumed needs spec.worldKey
+              rule: '!has(self.resumed) || !self.resumed || has(self.worldKey)'
           status:
             description: ServerStatus is the observed state of a Server.
             properties:
