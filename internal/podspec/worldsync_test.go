@@ -207,6 +207,25 @@ func keptRoundsGroup(g *spawneryv1alpha1.ServerGroup) {
 	}
 }
 
+// A group that gains storage rolls: its members' pods are built once, so
+// the ones already running keep their volume until the changed hash replaces
+// them.
+func TestAnEphemeralGroupGainingStorageMovesItsHash(t *testing.T) {
+	net, group := testNetwork(), testGroup()
+	before, err := DesiredServerHash(net, group, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	keptRoundsGroup(group)
+	after, err := DesiredServerHash(net, group, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before == after {
+		t.Error("an Ephemeral group that gained storage hashes as before, so its running members would never get the standby volume")
+	}
+}
+
 func TestAnUnkeyedEphemeralMemberGetsAStandbyVolume(t *testing.T) {
 	net, group := testNetwork(), testGroup()
 	keptRoundsGroup(group)
