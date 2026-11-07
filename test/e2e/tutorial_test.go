@@ -799,6 +799,185 @@ func TestTutorialTransferOnDrain(t *testing.T) {
 	})
 }
 
+// TestTutorialPersistentWhenEmpty holds a player on a Persistent WhenEmpty
+// group's only ordinal, changes the group's spec, and checks that the
+// occupied ordinal keeps its pod for a minute with the group reporting
+// WaitingForEmpty, then restarts on the new spec once the player has left.
+func TestTutorialPersistentWhenEmpty(t *testing.T) {
+	if os.Getenv("SPAWNERY_E2E_TUTORIAL") != "1" {
+		t.Skip("set SPAWNERY_E2E_TUTORIAL=1; hack/e2e-tutorial.sh does this nightly")
+	}
+	joinPath, err := exec.LookPath("spawnery-join")
+	if err != nil {
+		t.Fatalf("spawnery-join not on PATH (%v); the dev shell carries it, run this through nix develop", err)
+	}
+
+	applyManifest(t, tutorialManifest)
+
+	const keepGroup = "keep"
+	const keepServer = keepGroup + "-0"
+	gatewayKey := client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialProxyGroup}
+	keepKey := client.ObjectKey{Namespace: tutorialNamespace, Name: keepGroup}
+	serverKey := client.ObjectKey{Namespace: tutorialNamespace, Name: keepServer}
+
+	var lobby spawneryv1alpha1.ServerGroup
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialServerGroup}, &lobby); err != nil {
+		t.Fatalf("get ServerGroup: %v", err)
+	}
+	keep := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: tutorialNamespace, Name: keepGroup},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef: lobby.Spec.NetworkRef,
+			Type:       spawneryv1alpha1.ServerGroupPersistent,
+			Image:      lobby.Spec.Image,
+			MaxPlayers: 20,
+			Replicas:   ptr.To[int32](1),
+			Update:     &spawneryv1alpha1.UpdateSpec{Strategy: spawneryv1alpha1.UpdateWhenEmpty},
+			Storage:    &spawneryv1alpha1.StorageSpec{Size: resource.MustParse("1Gi")},
+			// The nightly runner has 4 vCPUs; a third server at the Network's 500m does not fit.
+			Resources: &corev1.ResourceRequirements{
+				Requests: corev1.ResourceList{corev1.ResourceCPU: resource.MustParse("100m"), corev1.ResourceMemory: resource.MustParse("2Gi")},
+				Limits:   corev1.ResourceList{corev1.ResourceMemory: resource.MustParse("2Gi")},
+			},
+		},
+	}
+	if err := k8s.Create(ctx, keep); err != nil {
+		t.Fatalf("create ServerGroup %s: %v", keepGroup, err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(ctx, &spawneryv1alpha1.ServerGroup{ObjectMeta: keep.ObjectMeta}) })
+
+	var gateway spawneryv1alpha1.ProxyGroup
+	if err := k8s.Get(ctx, gatewayKey, &gateway); err != nil {
+		t.Fatalf("get ProxyGroup: %v", err)
+	}
+	fallbackBefore := append([]string(nil), gateway.Spec.Routing.FallbackGroups...)
+	gatewayPatch := client.MergeFrom(gateway.DeepCopy())
+	gateway.Spec.Routing.FallbackGroups = []string{keepGroup}
+	if err := k8s.Patch(ctx, &gateway, gatewayPatch); err != nil {
+		t.Fatalf("patch ProxyGroup: %v", err)
+	}
+	t.Cleanup(func() {
+		var now spawneryv1alpha1.ProxyGroup
+		if err := k8s.Get(ctx, gatewayKey, &now); err != nil {
+			return
+		}
+		back := client.MergeFrom(now.DeepCopy())
+		now.Spec.Routing.FallbackGroups = fallbackBefore
+		_ = k8s.Patch(ctx, &now, back)
+	})
+
+	gatewayPods := func() ([]corev1.Pod, error) {
+		var list corev1.PodList
+		err := k8s.List(ctx, &list, client.InNamespace(tutorialNamespace),
+			client.MatchingLabels{podspec.LabelGroup: tutorialProxyGroup, podspec.LabelRole: podspec.RoleProxy})
+		return list.Items, err
+	}
+
+	eventuallyIn(t, tutorialOperatorNamespace, 6*time.Minute, keepServer+" Ready and every gateway pod on "+keepGroup, func() (bool, string) {
+		var s spawneryv1alpha1.Server
+		if err := k8s.Get(ctx, serverKey, &s); err != nil {
+			return false, err.Error()
+		}
+		pods, err := gatewayPods()
+		if err != nil {
+			return false, err.Error()
+		}
+		current := 0
+		for _, p := range pods {
+			if p.DeletionTimestamp == nil && podReady(&p) && envValue(&p, podspec.ProxyContainerName, podspec.EnvFallbackGroups) == keepGroup {
+				current++
+			}
+		}
+		return s.Status.Phase == string(phase.Ready) && len(pods) > 0 && current == len(pods),
+			fmt.Sprintf("%s phase %q; gateway pods %d, on %s %d", keepServer, s.Status.Phase, len(pods), keepGroup, current)
+	})
+
+	// No observable says an agent has applied a sync; the 30 s resync is what delivers the change.
+	time.Sleep(35 * time.Second)
+
+	const hold = 10 * time.Minute
+	player := startHeldJoin(t, joinPath, fmt.Sprintf("we%04d", time.Now().UnixNano()%10000), hold)
+	t.Cleanup(player.stop)
+	if _, server := whereIs(t, player, gatewayPods); server != keepServer {
+		t.Fatalf("%s landed on %s, want %s: the gateway's only fallback group is %s", player.username, server, keepServer, keepGroup)
+	}
+
+	eventuallyIn(t, tutorialOperatorNamespace, 45*time.Second, "the operator to count the player on "+keepServer, func() (bool, string) {
+		var s spawneryv1alpha1.Server
+		if err := k8s.Get(ctx, serverKey, &s); err != nil {
+			return false, err.Error()
+		}
+		return s.Status.Players == 1, fmt.Sprintf("status.players %d", s.Status.Players)
+	})
+
+	var before spawneryv1alpha1.Server
+	if err := k8s.Get(ctx, serverKey, &before); err != nil {
+		t.Fatalf("get Server %s: %v", keepServer, err)
+	}
+	var podBefore corev1.Pod
+	if err := k8s.Get(ctx, serverKey, &podBefore); err != nil {
+		t.Fatalf("get pod %s: %v", keepServer, err)
+	}
+
+	if err := k8s.Get(ctx, keepKey, keep); err != nil {
+		t.Fatalf("get ServerGroup %s: %v", keepGroup, err)
+	}
+	rollPatch := client.MergeFrom(keep.DeepCopy())
+	keep.Spec.Env = append(keep.Spec.Env, corev1.EnvVar{Name: "E2E_ROLL", Value: "1"})
+	if err := k8s.Patch(ctx, keep, rollPatch); err != nil {
+		t.Fatalf("patch ServerGroup %s: %v", keepGroup, err)
+	}
+
+	waiting := func() (bool, string) {
+		var g spawneryv1alpha1.ServerGroup
+		if err := k8s.Get(ctx, keepKey, &g); err != nil {
+			return false, err.Error()
+		}
+		progressing := meta.FindStatusCondition(g.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
+		reason := ""
+		if progressing != nil {
+			reason = progressing.Reason
+		}
+		return reason == spawneryv1alpha1.ReasonWaitingForEmpty && g.Status.Changeover == spawneryv1alpha1.ChangeoverDeferred,
+			fmt.Sprintf("Progressing reason %q, changeover %q", reason, g.Status.Changeover)
+	}
+	eventuallyIn(t, tutorialOperatorNamespace, 2*time.Minute, keepGroup+" to report WaitingForEmpty", waiting)
+
+	for end := time.Now().Add(60 * time.Second); time.Now().Before(end); time.Sleep(5 * time.Second) {
+		var s spawneryv1alpha1.Server
+		if err := k8s.Get(ctx, serverKey, &s); err != nil {
+			t.Fatalf("get Server %s while the player is on it: %v", keepServer, err)
+		}
+		var pod corev1.Pod
+		if err := k8s.Get(ctx, serverKey, &pod); err != nil {
+			t.Fatalf("get pod %s while the player is on it: %v", keepServer, err)
+		}
+		if s.UID != before.UID || pod.UID != podBefore.UID || s.Spec.PodHash != before.Spec.PodHash {
+			t.Fatalf("%s was replaced while %s was on it: server %s -> %s, pod %s -> %s, podHash %q -> %q",
+				keepServer, player.username, before.UID, s.UID, podBefore.UID, pod.UID, before.Spec.PodHash, s.Spec.PodHash)
+		}
+		if ok, seen := waiting(); !ok {
+			t.Fatalf("%s stopped waiting for the player to leave: %s", keepGroup, seen)
+		}
+	}
+
+	player.stop()
+
+	eventuallyIn(t, tutorialOperatorNamespace, 6*time.Minute, keepServer+" on the new spec and Ready", func() (bool, string) {
+		var s spawneryv1alpha1.Server
+		if err := k8s.Get(ctx, serverKey, &s); err != nil {
+			return false, err.Error()
+		}
+		var pod corev1.Pod
+		if err := k8s.Get(ctx, serverKey, &pod); err != nil {
+			return false, err.Error()
+		}
+		return s.Spec.PodHash != before.Spec.PodHash && pod.UID != podBefore.UID && s.Status.Phase == string(phase.Ready) && podReady(&pod),
+			fmt.Sprintf("podHash %q (was %q), pod %s (was %s), phase %q, players %d",
+				s.Spec.PodHash, before.Spec.PodHash, pod.UID, podBefore.UID, s.Status.Phase, s.Status.Players)
+	})
+}
+
 // TestTutorialJoinPermission puts a vip group ahead of the lobby in the
 // gateway's fallback list. The test images carry no LuckPerms, so nobody
 // holds a node: with Required the player lands in the lobby without the vip

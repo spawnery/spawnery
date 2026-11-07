@@ -1,7 +1,9 @@
 # Worlds in an object store
 
 An on-demand group whose worlds live in an S3 bucket instead of on a claim per
-member. It joins the Network of `config/samples/network.yaml`, and the
+member. A persistent group can use the same backend; see [Worlds in the object
+store](persistent-worlds.md#worlds-in-the-object-store). The example below
+joins the Network of `config/samples/network.yaml`, and the
 installation needs the chart's `worldSync` values first (below):
 
 ```yaml
@@ -115,9 +117,9 @@ which is the form the node agent sends. Requests use path-style addressing.
 
 ## What the group needs
 
-The API refuses `ObjectStore` without `type: OnDemand` and `keep`. `keep` is
-exactly what is synced, so list every level directory and every plugin
-directory that holds state. Paper 26.3, which the example's image runs, keeps
+The API refuses `ObjectStore` without `type: OnDemand` or `type: Persistent`,
+and without `keep`. `keep` is exactly what is synced, so list every level
+directory and every plugin directory that holds state. Paper 26.3, which the example's image runs, keeps
 all dimensions of a world inside its level directory
 (`world/dimensions/minecraft/the_nether` and `.../the_end`) and moves the
 `world_nether` and `world_the_end` directories of older versions in there at
@@ -143,10 +145,11 @@ start. The operator cannot tell which agent an image
 carries.
 
 `size`, `storageClassName`, `accessModes` and `annotations` stay valid and are
-ignored, so a group can switch back to `Claim` without touching the immutable
+ignored, so an on-demand group can switch back to `Claim` without touching the immutable
 fields. Switching either way moves no data: claims stay where they are, and so
 does the bucket. A running member keeps the backend it started with, and the
 switch reaches it at its next start.
+A persistent group cannot switch at all, because `backend` is immutable there.
 
 The node agent gives what it writes to the pod's `fsGroup`, which spawnery's
 server pods always set.
@@ -371,14 +374,18 @@ spec:
           emptyDir: {}
 ```
 
-The world name is `<namespace>/<group>/<key>`, the claim `<group>-<key>-data`.
+The world name of an on-demand member is `<namespace>/<group>/<key>`, the claim
+`<group>-<key>-data`. For a persistent group the third segment is the ordinal,
+in decimal: `<namespace>/<group>/<ordinal>`, the claim `<group>-<ordinal>-data`.
 The import copies the world into `/tmp` before uploading it, so the `emptyDir`
 needs room for one world.
 
 Import every world before the group switches to `ObjectStore`, with its member
 stopped. A member that starts under `ObjectStore` before its import begins an
 empty world, and once that world has uploaded, the import refuses the key.
-There is no export in this version.
+There is no export in this version. The steps for a persistent group are in
+[Moving a world onto the object
+store](persistent-worlds.md#moving-a-world-onto-the-object-store).
 
 ## Watching it
 
@@ -398,7 +405,7 @@ traffic, CPU and memory from the kubelet's cAdvisor series.
 
 - `storage.size` is not enforced on the node directory. A world can use as
   much of the node's disk as it writes.
-- Only `OnDemand` groups.
+- Restore (`restorePoints`, `restoreWorld`) is for `OnDemand` groups only.
 - The cache is per node. A start on another node downloads the world even if a
   third node holds a current copy. A cache nobody uses is evicted after 24
   hours, or earlier, oldest first, when the node directory's filesystem has

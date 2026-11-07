@@ -81,6 +81,25 @@ func TestPodHashIgnoresReplicas(t *testing.T) {
 	}
 }
 
+func TestPodHashIgnoresSpecUpdate(t *testing.T) {
+	net, group := testNetwork(), testGroup()
+	group.Spec.Type = spawneryv1alpha1.ServerGroupPersistent
+	group.Spec.Scaling = nil
+	group.Spec.Storage = &spawneryv1alpha1.StorageSpec{Size: resource.MustParse("6Gi")}
+	before, err := DesiredServerHash(net, group, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	group.Spec.Update = &spawneryv1alpha1.UpdateSpec{Strategy: spawneryv1alpha1.UpdateWhenEmpty}
+	after, err := DesiredServerHash(net, group, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before != after {
+		t.Error("hash moved when only spec.update changed")
+	}
+}
+
 // Otherwise the rollout would read a fresh pod as stale against itself.
 func TestPodHashMatchesWhatTheOperatorStamped(t *testing.T) {
 	net, group := testNetwork(), testProxyGroup()

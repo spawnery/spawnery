@@ -1811,14 +1811,15 @@ spec:
                       default, keeps it on a PersistentVolumeClaim per member. ObjectStore
                       keeps it in the object store configured for the operator (chart value
                       worldSync) and gives /data from a directory on the node that runs the
-                      member; it needs type OnDemand and keep, and synchronises exactly what
-                      keep matches. It also needs spawnery's game images 0.24.3 or later,
+                      member; it needs type OnDemand or Persistent and keep, and
+                      synchronises exactly what keep matches. It also needs spawnery's game images 0.24.3 or later,
                       whose bootstrapper holds the server until the world is on disk and
                       whose entrypoint leaves the node agent's files alone: an older or a
                       custom image starts on a half-downloaded world and can corrupt it, or
                       fails to resume a world at all. Size, storageClassName, accessModes and
                       annotations are ignored under ObjectStore and stay valid for switching
-                      back. The backend may change either way; nothing is moved across.
+                      back. The backend is immutable on a Persistent group and may change
+                      either way on an OnDemand one; nothing is moved across.
                     enum:
                     - Claim
                     - ObjectStore
@@ -1981,7 +1982,9 @@ spec:
                 - OnDemand
                 type: string
               update:
-                description: Update configures the rolling update. Ephemeral only.
+                description: |-
+                  Update configures the rolling update. Ephemeral groups take all of it,
+                  Persistent groups only strategy, OnDemand groups refuse it.
                 properties:
                   maxStaleSeconds:
                     default: 0
@@ -2039,8 +2042,17 @@ spec:
               rule: self.type != 'Ephemeral' || has(self.scaling)
             - message: spec.scaling is not allowed for type Persistent
               rule: self.type != 'Persistent' || !has(self.scaling)
-            - message: spec.update is not allowed for type Persistent
-              rule: self.type != 'Persistent' || !has(self.update)
+            - message: 'spec.update.maxUnavailable must be 1 for type Persistent:
+                one ordinal is down at a time'
+              rule: self.type != 'Persistent' || !has(self.update) || !has(self.update.maxUnavailable)
+                || self.update.maxUnavailable == 1
+            - message: 'spec.update.maxStaleSeconds must be 0 for type Persistent:
+                a persistent server is never drained for staleness'
+              rule: self.type != 'Persistent' || !has(self.update) || !has(self.update.maxStaleSeconds)
+                || self.update.maxStaleSeconds == 0
+            - message: 'spec.update.minAvailable is not allowed for type Persistent:
+                a persistent group builds no extra server'
+              rule: self.type != 'Persistent' || !has(self.update) || !has(self.update.minAvailable)
             - message: spec.storage is required for type Persistent
               rule: self.type != 'Persistent' || has(self.storage)
             - message: spec.replicas is required for type Persistent
@@ -2073,9 +2085,17 @@ spec:
             - message: storage.accessModes is immutable
               rule: '!has(self.storage) || !has(oldSelf.storage) || self.storage.accessModes
                 == oldSelf.storage.accessModes'
-            - message: storage.backend ObjectStore needs type OnDemand and storage.keep
+            - message: storage.backend ObjectStore needs type OnDemand or Persistent,
+                and storage.keep
               rule: '!has(self.storage) || !has(self.storage.backend) || self.storage.backend
-                != ''ObjectStore'' || (self.type == ''OnDemand'' && has(self.storage.keep))'
+                != ''ObjectStore'' || ((self.type == ''OnDemand'' || self.type ==
+                ''Persistent'') && has(self.storage.keep))'
+            - message: 'storage.backend is immutable for type Persistent: a new backend
+                would start every ordinal on a world it does not hold; see the persistent-worlds
+                guide for moving a world'
+              rule: 'self.type != ''Persistent'' || ((has(self.storage) && has(self.storage.backend)
+                ? self.storage.backend : ''Claim'') == (has(oldSelf.storage) && has(oldSelf.storage.backend)
+                ? oldSelf.storage.backend : ''Claim''))'
             - message: spec.memberResources is only allowed for type OnDemand
               rule: self.type == 'OnDemand' || !has(self.memberResources)
             - message: spec.playableSlots must be between 1 and spec.maxPlayers

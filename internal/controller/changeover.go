@@ -288,7 +288,10 @@ func ownServerChangeover(views []ServerView, podHash string, pendingCreates int3
 
 // ownPersistentChangeover begins with the first stale takedown; a current
 // ordinal added meanwhile does not begin it.
-func ownPersistentChangeover(views []ServerView, podHash string, pendingDeletes map[string]bool, replicas int32, was spawneryv1alpha1.ChangeoverState) spawneryv1alpha1.ChangeoverState {
+func ownPersistentChangeover(views []ServerView, podHash string, pendingDeletes map[string]bool, replicas int32, whenEmpty bool, was spawneryv1alpha1.ChangeoverState) spawneryv1alpha1.ChangeoverState {
+	if whenEmpty {
+		return ownPersistentWhenEmptyChangeover(views, podHash, pendingDeletes, replicas)
+	}
 	stale, takedown := false, false
 	for _, v := range views {
 		if v.Hold || !staleSpec(v, podHash) {
@@ -308,6 +311,37 @@ func ownPersistentChangeover(views []ServerView, podHash string, pendingDeletes 
 		return spawneryv1alpha1.ChangeoverBegun
 	default:
 		return spawneryv1alpha1.ChangeoverWaiting
+	}
+}
+
+func ownPersistentWhenEmptyChangeover(views []ServerView, podHash string, pendingDeletes map[string]bool, replicas int32) spawneryv1alpha1.ChangeoverState {
+	stale, takedown, waiting := false, false, false
+	for _, v := range views {
+		if v.Hold || !staleSpec(v, podHash) || phase.Terminal(v.Phase) {
+			continue
+		}
+		stale = true
+		if v.Ordinal == nil {
+			continue
+		}
+		switch {
+		case *v.Ordinal >= replicas:
+			waiting = true
+		case v.leaving() || pendingDeletes[v.Name]:
+			takedown = true
+		case v.knownEmpty():
+			waiting = true
+		}
+	}
+	switch {
+	case !stale:
+		return spawneryv1alpha1.ChangeoverNone
+	case takedown:
+		return spawneryv1alpha1.ChangeoverBegun
+	case waiting:
+		return spawneryv1alpha1.ChangeoverWaiting
+	default:
+		return spawneryv1alpha1.ChangeoverDeferred
 	}
 }
 

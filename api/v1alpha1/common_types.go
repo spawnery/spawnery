@@ -152,6 +152,9 @@ const (
 	ReasonServersStarting        = "ServersStarting"
 	ReasonReplacingServers       = "ReplacingServers"
 	ReasonAtDesiredState         = "AtDesiredState"
+	// ReasonWaitingForEmpty: a WhenEmpty persistent group has stale
+	// servers, and every one still has players.
+	ReasonWaitingForEmpty = "WaitingForEmpty"
 	// ReasonRetireeStuck says a server carrying spec.retire has failed, and is
 	// therefore holding an update slot until its retention window ends.
 	ReasonRetireeStuck         = "RetireeFailedAndHoldsTheBudget"
@@ -242,9 +245,11 @@ const (
 	// ChangeoverBegun means the group has a server or pod of the current
 	// generation beside stale ones: it holds a place until the changeover ends.
 	ChangeoverBegun ChangeoverState = "Begun"
-	// ChangeoverDeferred means the group's new generation stands and its
-	// remaining stale servers or pods wait only for their players: it holds
-	// no place in the network's budget and gates no later stage.
+	// ChangeoverDeferred means the group waits only for players. For an
+	// ephemeral or proxy group, the new generation stands and the stale ones
+	// wait for their players; for a persistent group, every stale ordinal
+	// waits for its players. Either way it holds no place in the network's
+	// budget and gates no later stage.
 	ChangeoverDeferred ChangeoverState = "Deferred"
 )
 

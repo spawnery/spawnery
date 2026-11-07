@@ -241,13 +241,6 @@ func TestServerGroupCELRejections(t *testing.T) {
 			},
 		},
 		{
-			name: "persistent with update",
-			base: persistentGroup,
-			mutate: func(g *spawneryv1alpha1.ServerGroup) {
-				g.Spec.Update = &spawneryv1alpha1.UpdateSpec{MaxUnavailable: 1}
-			},
-		},
-		{
 			name: "persistent without storage",
 			base: persistentGroup,
 			mutate: func(g *spawneryv1alpha1.ServerGroup) {
@@ -741,16 +734,19 @@ func TestServerGroupStorageReplaceRefusals(t *testing.T) {
 	}
 }
 
-func TestObjectStoreBackendNeedsOnDemandAndKeep(t *testing.T) {
+func TestObjectStoreBackendNeedsAWorldKeepingTypeAndKeep(t *testing.T) {
 	c, ctx := testenv.Client(t)
 	ns := testenv.Namespace(t, ctx, c)
-	const msg = "storage.backend ObjectStore needs type OnDemand and storage.keep"
+	const msg = "storage.backend ObjectStore needs type OnDemand or Persistent, and storage.keep"
 
 	p := persistentGroup(ns, "object-store-persistent")
 	p.Spec.Storage.Backend = spawneryv1alpha1.StorageBackendObjectStore
-	p.Spec.Storage.Keep = []string{"world"}
 	if err := c.Create(ctx, p); err == nil || !strings.Contains(err.Error(), msg) {
-		t.Fatalf("persistent group with ObjectStore: err = %v, want %q", err, msg)
+		t.Fatalf("persistent group without keep: err = %v, want %q", err, msg)
+	}
+	p.Spec.Storage.Keep = []string{"world"}
+	if err := c.Create(ctx, p); err != nil {
+		t.Fatalf("persistent group with keep: %v", err)
 	}
 
 	o := onDemandGroup(ns, "object-store-no-keep")
@@ -762,6 +758,47 @@ func TestObjectStoreBackendNeedsOnDemandAndKeep(t *testing.T) {
 	o.Spec.Storage.Keep = []string{"world"}
 	if err := c.Create(ctx, o); err != nil {
 		t.Fatalf("on-demand group with keep: %v", err)
+	}
+}
+
+func TestPersistentBackendIsImmutable(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	const msg = "storage.backend is immutable for type Persistent"
+
+	cases := []struct {
+		name    string
+		from    spawneryv1alpha1.StorageBackend
+		to      spawneryv1alpha1.StorageBackend
+		other   bool
+		wantErr bool
+	}{
+		{name: "Claim to ObjectStore", from: spawneryv1alpha1.StorageBackendClaim, to: spawneryv1alpha1.StorageBackendObjectStore, wantErr: true},
+		{name: "ObjectStore to Claim", from: spawneryv1alpha1.StorageBackendObjectStore, to: spawneryv1alpha1.StorageBackendClaim, wantErr: true},
+		{name: "absent to ObjectStore", to: spawneryv1alpha1.StorageBackendObjectStore, wantErr: true},
+		{name: "absent to Claim", to: spawneryv1alpha1.StorageBackendClaim},
+		{name: "ObjectStore, other field changed", from: spawneryv1alpha1.StorageBackendObjectStore, to: spawneryv1alpha1.StorageBackendObjectStore, other: true},
+	}
+	for i, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			ns := testenv.Namespace(t, ctx, c)
+			g := persistentGroup(ns, fmt.Sprintf("immutable-%d", i))
+			g.Spec.Storage.Backend = tc.from
+			g.Spec.Storage.Keep = []string{"world"}
+			if err := c.Create(ctx, g); err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			g.Spec.Storage.Backend = tc.to
+			if tc.other {
+				g.Spec.MaxPlayers++
+			}
+			err := c.Update(ctx, g)
+			switch {
+			case tc.wantErr && (err == nil || !strings.Contains(err.Error(), msg)):
+				t.Fatalf("err = %v, want %q", err, msg)
+			case !tc.wantErr && err != nil:
+				t.Fatalf("update: %v", err)
+			}
+		})
 	}
 }
 
@@ -932,6 +969,49 @@ func TestMemberResourcesNeedsAMemoryCeilingAboveNonHeap(t *testing.T) {
 			}
 			if err == nil || !strings.Contains(err.Error(), tc.wantErr) {
 				t.Fatalf("err = %v, want it to contain %q", err, tc.wantErr)
+			}
+		})
+	}
+}
+
+func TestPersistentUpdateTakesOnlyStrategy(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	tests := []struct {
+		name    string
+		group   func(ns, name string) *spawneryv1alpha1.ServerGroup
+		update  *spawneryv1alpha1.UpdateSpec
+		wantErr string
+	}{
+		{"WhenEmpty", persistentGroup, &spawneryv1alpha1.UpdateSpec{Strategy: spawneryv1alpha1.UpdateWhenEmpty}, ""},
+		{"RollingUpdate", persistentGroup, &spawneryv1alpha1.UpdateSpec{Strategy: spawneryv1alpha1.UpdateRollingUpdate}, ""},
+		{"empty update", persistentGroup, &spawneryv1alpha1.UpdateSpec{}, ""},
+		{"maxUnavailable 2", persistentGroup, &spawneryv1alpha1.UpdateSpec{Strategy: spawneryv1alpha1.UpdateWhenEmpty, MaxUnavailable: 2}, "maxUnavailable must be 1 for type Persistent"},
+		{"maxStaleSeconds", persistentGroup, &spawneryv1alpha1.UpdateSpec{MaxStaleSeconds: 60}, "maxStaleSeconds must be 0 for type Persistent"},
+		{"minAvailable", persistentGroup, &spawneryv1alpha1.UpdateSpec{Strategy: spawneryv1alpha1.UpdateWhenEmpty, MinAvailable: ptr.To[int32](1)}, "minAvailable is not allowed for type Persistent"},
+		{"on-demand", onDemandGroup, &spawneryv1alpha1.UpdateSpec{Strategy: spawneryv1alpha1.UpdateWhenEmpty}, "spec.update is not allowed for type OnDemand"},
+	}
+	for i, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			g := tt.group(ns, fmt.Sprintf("update-%d", i))
+			g.Spec.Update = tt.update
+			err := c.Create(ctx, g)
+			if tt.wantErr != "" {
+				if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+					t.Fatalf("create: got %v, want error containing %q", err, tt.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("create: %v", err)
+			}
+			var got spawneryv1alpha1.ServerGroup
+			if err := c.Get(ctx, client.ObjectKeyFromObject(g), &got); err != nil {
+				t.Fatalf("get: %v", err)
+			}
+			if tt.name == "WhenEmpty" && (got.Spec.Update == nil || got.Spec.Update.MaxUnavailable != 1) {
+				t.Fatalf("maxUnavailable not defaulted to 1: %+v", got.Spec.Update)
 			}
 		})
 	}

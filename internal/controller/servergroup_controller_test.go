@@ -2670,6 +2670,13 @@ func TestNodeDrainingConditionNamesTheNode(t *testing.T) {
 // than edited from the fixture's.
 func (f *fixture) createPersistentGroup(t *testing.T, name string, replicas int32) *spawneryv1alpha1.ServerGroup {
 	t.Helper()
+	return f.createPersistentGroupWithStorage(t, name, replicas,
+		&spawneryv1alpha1.StorageSpec{Size: resource.MustParse("10Gi")})
+}
+
+func (f *fixture) createPersistentGroupWithStorage(t *testing.T, name string, replicas int32,
+	storage *spawneryv1alpha1.StorageSpec) *spawneryv1alpha1.ServerGroup {
+	t.Helper()
 	group := &spawneryv1alpha1.ServerGroup{
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: f.ns},
 		Spec: spawneryv1alpha1.ServerGroupSpec{
@@ -2681,7 +2688,7 @@ func (f *fixture) createPersistentGroup(t *testing.T, name string, replicas int3
 			TerminationGracePeriodSeconds: 60,
 			FailedRetentionSeconds:        3600,
 			Drain:                         &spawneryv1alpha1.DrainSpec{TimeoutSeconds: 60},
-			Storage:                       &spawneryv1alpha1.StorageSpec{Size: resource.MustParse("10Gi")},
+			Storage:                       storage,
 		},
 	}
 	if err := f.c.Create(f.ctx, group); err != nil {
@@ -4312,5 +4319,86 @@ func TestCollectViewsResolvesThePlayableFigure(t *testing.T) {
 	views, _, _ = r.collectViews(f.ctx, f.group)
 	if views[0].Playable != 12 {
 		t.Errorf("Playable = %d, want the plugin's 12", views[0].Playable)
+	}
+}
+
+func TestReportProgressingWaitingForEmpty(t *testing.T) {
+	ord := func(i int32) *int32 { return &i }
+	stale := func(i int32, players int32) ServerView {
+		return ServerView{Name: fmt.Sprintf("w-%d", i), Ordinal: ord(i), PodHash: "old", Phase: phase.Ready, Players: players}
+	}
+	const waiting = "stale servers wait for their players to leave: "
+	for _, tc := range []struct {
+		name     string
+		strategy spawneryv1alpha1.UpdateStrategy
+		views    []ServerView
+		wait     ChangeoverWait
+		reason   string
+		message  string
+	}{
+		{
+			name:     "two stale occupied",
+			strategy: spawneryv1alpha1.UpdateWhenEmpty,
+			views:    []ServerView{stale(1, 1), stale(0, 3)},
+			reason:   spawneryv1alpha1.ReasonWaitingForEmpty,
+			message:  waiting + "w-0 has 3 players, w-1 has 1 player",
+		},
+		{
+			name:     "untrusted count",
+			strategy: spawneryv1alpha1.UpdateWhenEmpty,
+			views: []ServerView{
+				{Name: "w-0", Ordinal: ord(0), PodHash: "old", Phase: phase.Ready, Stale: true, WasRegistered: true},
+				stale(1, 1),
+			},
+			reason:  spawneryv1alpha1.ReasonWaitingForEmpty,
+			message: waiting + "w-0 has an unknown number of players, w-1 has 1 player",
+		},
+		{
+			name:     "one stale empty beside an occupied one",
+			strategy: spawneryv1alpha1.UpdateWhenEmpty,
+			views:    []ServerView{stale(0, 0), stale(1, 2)},
+			reason:   spawneryv1alpha1.ReasonReplacingServers,
+		},
+		{
+			name:     "a current server is starting",
+			strategy: spawneryv1alpha1.UpdateWhenEmpty,
+			views: []ServerView{
+				stale(0, 2),
+				{Name: "w-1", Ordinal: ord(1), PodHash: "current", Phase: phase.Starting},
+			},
+			reason: spawneryv1alpha1.ReasonServersStarting,
+		},
+		{
+			name:     "rolling update",
+			strategy: spawneryv1alpha1.UpdateRollingUpdate,
+			views:    []ServerView{stale(0, 3), stale(1, 1)},
+			reason:   spawneryv1alpha1.ReasonReplacingServers,
+		},
+		{
+			name:     "an earlier stage wins",
+			strategy: spawneryv1alpha1.UpdateWhenEmpty,
+			views:    []ServerView{stale(0, 3), stale(1, 1)},
+			wait:     ChangeoverWait{Reason: spawneryv1alpha1.ReasonWaitingForEarlierStage, Message: "stage"},
+			reason:   spawneryv1alpha1.ReasonWaitingForEarlierStage,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			group := &spawneryv1alpha1.ServerGroup{
+				ObjectMeta: metav1.ObjectMeta{Name: "w"},
+				Spec: spawneryv1alpha1.ServerGroupSpec{
+					Type:     spawneryv1alpha1.ServerGroupPersistent,
+					Replicas: ptr.To(int32(2)),
+					Update:   &spawneryv1alpha1.UpdateSpec{Strategy: tc.strategy},
+				},
+			}
+			reportProgressing(group, tc.views, "current", tc.wait, FloorReport{})
+			got := meta.FindStatusCondition(group.Status.Conditions, spawneryv1alpha1.ConditionProgressing)
+			if got == nil || got.Status != metav1.ConditionTrue || got.Reason != tc.reason {
+				t.Fatalf("Progressing = %+v, want True/%s", got, tc.reason)
+			}
+			if tc.message != "" && got.Message != tc.message {
+				t.Errorf("message = %q, want %q", got.Message, tc.message)
+			}
+		})
 	}
 }

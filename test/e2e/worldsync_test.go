@@ -29,6 +29,9 @@ import (
 
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/api/resource"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
@@ -172,6 +175,110 @@ func TestAnObjectStoreWorldTravelsBetweenNodes(t *testing.T) {
 		}
 		return false, "still stored: " + strings.ReplaceAll(strings.TrimSpace(listing), "\n", "; ")
 	})
+}
+
+// TestAPersistentObjectStoreWorldTravelsBetweenNodes keeps the world of a
+// Persistent group's ordinal 0 in the object store, writes a marker into it,
+// deletes the Server after cordoning its node, and reads the marker once the
+// group has made the ordinal again on another node.
+func TestAPersistentObjectStoreWorldTravelsBetweenNodes(t *testing.T) {
+	if os.Getenv(worldSyncGate) != "1" {
+		t.Skipf("set %s=1 to run the object-store path; hack/e2e-worldsync.sh does", worldSyncGate)
+	}
+
+	applyManifest(t, worldSyncManifest)
+
+	const group = "persistent-world"
+	server := group + "-0"
+	prefix := fmt.Sprintf("%s/%s/0/", worldSyncNamespace, group)
+
+	var onDemand spawneryv1alpha1.ServerGroup
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: worldSyncNamespace, Name: worldSyncGroup}, &onDemand); err != nil {
+		t.Fatalf("get ServerGroup %s: %v", worldSyncGroup, err)
+	}
+	persistent := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Namespace: worldSyncNamespace, Name: group},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			NetworkRef: onDemand.Spec.NetworkRef,
+			Type:       spawneryv1alpha1.ServerGroupPersistent,
+			Image:      onDemand.Spec.Image,
+			MaxPlayers: 10,
+			Replicas:   ptr.To[int32](1),
+			Storage: &spawneryv1alpha1.StorageSpec{
+				Size:    resource.MustParse("1Gi"),
+				Backend: spawneryv1alpha1.StorageBackendObjectStore,
+				Keep:    []string{"world"},
+			},
+		},
+	}
+	if err := k8s.Create(ctx, persistent); err != nil {
+		t.Fatalf("create ServerGroup %s: %v", group, err)
+	}
+	t.Cleanup(func() { _ = k8s.Delete(ctx, &spawneryv1alpha1.ServerGroup{ObjectMeta: persistent.ObjectMeta}) })
+
+	waitReady(t, worldSyncNamespace, server, "the first start")
+
+	firstPod := getPod(t, worldSyncNamespace, server)
+	node := firstPod.Spec.NodeName
+	if node == "" {
+		t.Fatalf("pod %s is Ready but names no node", server)
+	}
+	assertWorldGroupWritable(t, firstPod)
+
+	marker := fmt.Sprintf("worldsync-e2e %d", time.Now().UnixNano())
+	writeMarker(t, worldSyncNamespace, server, marker)
+
+	if out, err := exec.Command("kubectl", "cordon", node).CombinedOutput(); err != nil {
+		t.Fatalf("cordon %s: %v\n%s", node, err, out)
+	}
+	t.Cleanup(func() {
+		if out, err := exec.Command("kubectl", "uncordon", node).CombinedOutput(); err != nil {
+			t.Logf("uncordon %s: %v\n%s", node, err, out)
+		}
+	})
+
+	var first spawneryv1alpha1.Server
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: worldSyncNamespace, Name: server}, &first); err != nil {
+		t.Fatalf("get Server %s: %v", server, err)
+	}
+	if err := k8s.Delete(ctx, &first); err != nil {
+		t.Fatalf("delete Server %s: %v", server, err)
+	}
+
+	eventually(t, 5*time.Minute, "the group to make "+server+" again", func() (bool, string) {
+		var now spawneryv1alpha1.Server
+		err := k8s.Get(ctx, client.ObjectKey{Namespace: worldSyncNamespace, Name: server}, &now)
+		if apierrors.IsNotFound(err) {
+			return false, "not made again yet"
+		}
+		if err != nil {
+			return false, err.Error()
+		}
+		if now.UID == first.UID {
+			return false, "still the deleted Server, phase " + now.Status.Phase
+		}
+		return true, ""
+	})
+
+	waitReady(t, worldSyncNamespace, server, "the second start")
+
+	secondPod := getPod(t, worldSyncNamespace, server)
+	if secondPod.Spec.NodeName == node {
+		t.Fatalf("%s ran on %s again, though that node was cordoned: this run proves nothing "+
+			"about a world travelling between nodes", server, node)
+	}
+
+	if got := readMarker(t, worldSyncNamespace, server); got != marker {
+		t.Fatalf("the world of %s came back on %s with %q, want %q", server, secondPod.Spec.NodeName, got, marker)
+	}
+
+	listing, err := listStore(prefix)
+	if err != nil {
+		t.Fatalf("list the store: %v", err)
+	}
+	if !strings.Contains(listing, "manifest.json") {
+		t.Fatalf("%s holds no manifest.json after the world was uploaded and downloaded: %q", prefix, listing)
+	}
 }
 
 func getPod(t *testing.T, namespace, name string) *corev1.Pod {

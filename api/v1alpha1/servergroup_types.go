@@ -107,7 +107,8 @@ type ScalingSpec struct {
 	ScaleDownStabilizationSeconds int32 `json:"scaleDownStabilizationSeconds,omitempty"`
 }
 
-// UpdateStrategy is how a changeover replaces stale servers.
+// UpdateStrategy is how a changeover replaces stale servers. A persistent
+// group restarts a stale ordinal in place, one at a time.
 // +kubebuilder:validation:Enum=RollingUpdate;WhenEmpty
 type UpdateStrategy string
 
@@ -120,7 +121,8 @@ const (
 	UpdateWhenEmpty UpdateStrategy = "WhenEmpty"
 )
 
-// UpdateSpec controls the rolling update of ephemeral groups.
+// UpdateSpec controls how an ephemeral group rolls out a new generation. A
+// persistent group takes only the strategy.
 // +kubebuilder:validation:XValidation:rule="!has(self.strategy) || self.strategy != 'WhenEmpty' || !has(self.maxStaleSeconds) || self.maxStaleSeconds == 0",message="spec.update.maxStaleSeconds must be 0 with strategy WhenEmpty: it drains the occupied servers WhenEmpty leaves alone"
 type UpdateSpec struct {
 	// Strategy is how stale servers are replaced.
@@ -211,14 +213,15 @@ type StorageSpec struct {
 	// default, keeps it on a PersistentVolumeClaim per member. ObjectStore
 	// keeps it in the object store configured for the operator (chart value
 	// worldSync) and gives /data from a directory on the node that runs the
-	// member; it needs type OnDemand and keep, and synchronises exactly what
-	// keep matches. It also needs spawnery's game images 0.24.3 or later,
+	// member; it needs type OnDemand or Persistent and keep, and
+	// synchronises exactly what keep matches. It also needs spawnery's game images 0.24.3 or later,
 	// whose bootstrapper holds the server until the world is on disk and
 	// whose entrypoint leaves the node agent's files alone: an older or a
 	// custom image starts on a half-downloaded world and can corrupt it, or
 	// fails to resume a world at all. Size, storageClassName, accessModes and
 	// annotations are ignored under ObjectStore and stay valid for switching
-	// back. The backend may change either way; nothing is moved across.
+	// back. The backend is immutable on a Persistent group and may change
+	// either way on an OnDemand one; nothing is moved across.
 	// +kubebuilder:validation:Enum=Claim;ObjectStore
 	// +optional
 	Backend StorageBackend `json:"backend,omitempty"`
@@ -313,7 +316,9 @@ type MemberResourcesSpec struct {
 // +kubebuilder:validation:XValidation:rule="self.type != 'Ephemeral' || !has(self.replicas)",message="spec.replicas is not allowed for type Ephemeral"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Ephemeral' || has(self.scaling)",message="spec.scaling is required for type Ephemeral"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.scaling)",message="spec.scaling is not allowed for type Persistent"
-// +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.update)",message="spec.update is not allowed for type Persistent"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.update) || !has(self.update.maxUnavailable) || self.update.maxUnavailable == 1",message="spec.update.maxUnavailable must be 1 for type Persistent: one ordinal is down at a time"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.update) || !has(self.update.maxStaleSeconds) || self.update.maxStaleSeconds == 0",message="spec.update.maxStaleSeconds must be 0 for type Persistent: a persistent server is never drained for staleness"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.update) || !has(self.update.minAvailable)",message="spec.update.minAvailable is not allowed for type Persistent: a persistent group builds no extra server"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || has(self.storage)",message="spec.storage is required for type Persistent"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || has(self.replicas)",message="spec.replicas is required for type Persistent"
 // +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || !has(self.scaling)",message="spec.scaling is not allowed for type OnDemand"
@@ -327,7 +332,8 @@ type MemberResourcesSpec struct {
 // +kubebuilder:validation:XValidation:rule="!has(self.update) || !has(self.update.minAvailable) || !has(self.scaling) || self.update.minAvailable < self.scaling.maxReplicas",message="spec.update.minAvailable must be less than spec.scaling.maxReplicas: keeping the floor needs room for one extra server"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || (has(self.storage.storageClassName) == has(oldSelf.storage.storageClassName) && (!has(self.storage.storageClassName) || self.storage.storageClassName == oldSelf.storage.storageClassName))",message="storage.storageClassName is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || self.storage.accessModes == oldSelf.storage.accessModes",message="storage.accessModes is immutable"
-// +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(self.storage.backend) || self.storage.backend != 'ObjectStore' || (self.type == 'OnDemand' && has(self.storage.keep))",message="storage.backend ObjectStore needs type OnDemand and storage.keep"
+// +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(self.storage.backend) || self.storage.backend != 'ObjectStore' || ((self.type == 'OnDemand' || self.type == 'Persistent') && has(self.storage.keep))",message="storage.backend ObjectStore needs type OnDemand or Persistent, and storage.keep"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || ((has(self.storage) && has(self.storage.backend) ? self.storage.backend : 'Claim') == (has(oldSelf.storage) && has(oldSelf.storage.backend) ? oldSelf.storage.backend : 'Claim'))",message="storage.backend is immutable for type Persistent: a new backend would start every ordinal on a world it does not hold; see the persistent-worlds guide for moving a world"
 // +kubebuilder:validation:XValidation:rule="self.type == 'OnDemand' || !has(self.memberResources)",message="spec.memberResources is only allowed for type OnDemand"
 // +kubebuilder:validation:XValidation:rule="!has(self.playableSlots) || (self.playableSlots >= 1 && self.playableSlots <= self.maxPlayers)",message="spec.playableSlots must be between 1 and spec.maxPlayers"
 type ServerGroupSpec struct {
@@ -487,7 +493,8 @@ type ServerGroupSpec struct {
 	// +optional
 	ChangeoverStage int32 `json:"changeoverStage,omitempty"`
 
-	// Update configures the rolling update. Ephemeral only.
+	// Update configures the rolling update. Ephemeral groups take all of it,
+	// Persistent groups only strategy, OnDemand groups refuse it.
 	// +optional
 	Update *UpdateSpec `json:"update,omitempty"`
 

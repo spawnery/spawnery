@@ -19,6 +19,7 @@ package controller
 import (
 	"testing"
 
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/utils/ptr"
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
@@ -141,5 +142,59 @@ func TestMinAvailableBuildsAnExtraServerBeforeRetiring(t *testing.T) {
 		if !f.server(name).Spec.Retire {
 			t.Errorf("%s still not retired once the extra server is Ready", name)
 		}
+	}
+}
+
+func TestAPersistentWhenEmptyGroupKeepsAnOccupiedOrdinal(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "world", 1)
+	f.reconcileNamedGroup(t, r, "world")
+	f.readyAllServersOf(t, "world")
+	w := f.serverGroup(t, "world")
+	w.Spec.Update = &spawneryv1alpha1.UpdateSpec{Strategy: spawneryv1alpha1.UpdateWhenEmpty}
+	if err := f.c.Update(f.ctx, w); err != nil {
+		t.Fatalf("update ServerGroup world: %v", err)
+	}
+	oldHash := f.server("world-0").Spec.PodHash
+	f.reportPlayersOn(t, "world-0", 2)
+	f.setImage(t, "world", nextImage)
+	f.reconcileNamedGroup(t, r, "world")
+	f.reconcileNamedGroup(t, r, "world")
+
+	if srv := f.server("world-0"); !srv.DeletionTimestamp.IsZero() || srv.Status.Phase == string(phase.Draining) {
+		t.Fatalf("occupied world-0 is being taken down")
+	}
+	if c := f.progressing(t, "world"); c.Reason != spawneryv1alpha1.ReasonWaitingForEmpty ||
+		c.Message != "stale servers wait for their players to leave: world-0 has 2 players" {
+		t.Fatalf("world Progressing = %s %q", c.Reason, c.Message)
+	}
+	if got := f.serverGroup(t, "world").Status.Changeover; got != spawneryv1alpha1.ChangeoverDeferred {
+		t.Fatalf("world status.changeover = %q, want Deferred", got)
+	}
+
+	f.reportPlayersOn(t, "world-0", 0)
+	f.reconcileNamedGroup(t, r, "world")
+	if srv, present := f.serverIfPresent("world-0"); present && srv.DeletionTimestamp.IsZero() &&
+		srv.Status.Phase != string(phase.Draining) {
+		t.Fatalf("emptied world-0 phase %s is not being taken down", srv.Status.Phase)
+	}
+
+	if old, present := f.serverIfPresent("world-0"); present {
+		old.Finalizers = nil
+		if err := f.c.Update(f.ctx, old); err != nil && !apierrors.IsNotFound(err) {
+			t.Fatalf("drop finalizers of world-0: %v", err)
+		}
+	}
+	f.reconcileNamedGroup(t, r, "world")
+	f.reconcileNamedGroup(t, r, "world")
+	srv, present := f.serverIfPresent("world-0")
+	if !present {
+		t.Fatalf("world-0 was not created again")
+	}
+	if srv.Spec.PodHash == "" || srv.Spec.PodHash == oldHash ||
+		srv.Spec.GroupGeneration != f.serverGroup(t, "world").Generation {
+		t.Fatalf("world-0 podHash %q (was %q), generation %d: not the group's new spec",
+			srv.Spec.PodHash, oldHash, srv.Spec.GroupGeneration)
 	}
 }

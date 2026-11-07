@@ -78,7 +78,7 @@ const ReasonServerClaimRejected = "ServerClaimRejected"
 const ReasonWorldSyncOff = "WorldSyncOff"
 
 // ReasonServerKeyMissing marks a member of an ObjectStore group with an empty
-// spec.key, which would leave its world without a name.
+// world name: neither spec.key nor spec.ordinal.
 const ReasonServerKeyMissing = "ServerKeyMissing"
 
 // These mirror the kubebuilder defaults on ServerGroupSpec, for a Server whose
@@ -290,10 +290,11 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 				"the group keeps its worlds in an object store (spec.storage.backend ObjectStore), "+
 					"and this operator runs without --world-sync; no pod is created until it does")
 			createPod = false
-		case srv.Spec.Key == "":
+		case podspec.WorldKey(srv) == "":
 			setAccepted(srv, false, ReasonServerKeyMissing,
-				"a member of a group that keeps its worlds in an object store needs spec.key, "+
-					"which names the world; no pod is created without it")
+				"a member of a group that keeps its worlds in an object store needs a world name "+
+					"(spec.key for an on-demand member, spec.ordinal for a persistent server); "+
+					"no pod is created without it")
 			createPod = false
 		}
 	}

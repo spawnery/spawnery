@@ -344,6 +344,75 @@ func TestAPersistentGroupWaitsForItsStage(t *testing.T) {
 	}
 }
 
+func TestAPersistentWhenEmptyGroupDefersAndStillWaitsForItsStage(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+	f.createPersistentGroup(t, "world", 1)
+	f.createEphemeralGroupLike(t, "late")
+	for _, name := range []string{"lobby", "world", "late"} {
+		f.reconcileNamedGroup(t, r, name)
+		f.readyAllServersOf(t, name)
+	}
+	f.setStage(t, "world", 10)
+	f.setStage(t, "late", 20)
+	w := f.serverGroup(t, "world")
+	w.Spec.Update = &spawneryv1alpha1.UpdateSpec{Strategy: spawneryv1alpha1.UpdateWhenEmpty}
+	if err := f.c.Update(f.ctx, w); err != nil {
+		t.Fatalf("update ServerGroup world: %v", err)
+	}
+	f.reportPlayersOn(t, "world-0", 2)
+	for _, name := range []string{"lobby", "world", "late"} {
+		f.setImage(t, name, nextImage)
+	}
+	for _, name := range []string{"lobby", "world", "late"} {
+		f.reconcileNamedGroup(t, r, name)
+	}
+
+	if got := f.serverGroup(t, "world").Status.Changeover; got != spawneryv1alpha1.ChangeoverDeferred {
+		t.Fatalf("world status.changeover = %q with players on it, want Deferred", got)
+	}
+	if srv := f.server("world-0"); !srv.DeletionTimestamp.IsZero() || srv.Status.Phase == string(phase.Draining) {
+		t.Fatalf("occupied world-0 is being taken down")
+	}
+
+	f.reportPlayersOn(t, "world-0", 0)
+	f.reconcileNamedGroup(t, r, "world")
+
+	if got := f.serverGroup(t, "world").Status.Changeover; got != spawneryv1alpha1.ChangeoverWaiting {
+		t.Fatalf("world status.changeover = %q once empty, want Waiting", got)
+	}
+	if srv := f.server("world-0"); !srv.DeletionTimestamp.IsZero() || srv.Status.Phase == string(phase.Draining) {
+		t.Fatalf("world-0 is being taken down while stage 0 is in flight")
+	}
+	if c := f.progressing(t, "world"); c.Reason != spawneryv1alpha1.ReasonWaitingForEarlierStage ||
+		c.Message != "waiting for stage 0: lobby" {
+		t.Fatalf("world Progressing = %s %q", c.Reason, c.Message)
+	}
+
+	f.reportPlayersOn(t, "world-0", 2)
+	f.finishChangeover(t, r, "lobby")
+	f.reconcileNamedGroup(t, r, "world")
+	if got := f.serverGroup(t, "world").Status.Changeover; got != spawneryv1alpha1.ChangeoverDeferred {
+		t.Fatalf("world status.changeover = %q with players back on it, want Deferred", got)
+	}
+	f.reconcileNamedGroup(t, r, "late")
+	if c := f.progressing(t, "late"); c.Reason == spawneryv1alpha1.ReasonWaitingForEarlierStage ||
+		strings.Contains(c.Message, "world") {
+		t.Fatalf("late is held by the deferred world: %s %q", c.Reason, c.Message)
+	}
+
+	f.reportPlayersOn(t, "world-0", 0)
+	f.reconcileNamedGroup(t, r, "world")
+
+	if srv, present := f.serverIfPresent("world-0"); present && srv.DeletionTimestamp.IsZero() &&
+		srv.Status.Phase != string(phase.Draining) {
+		t.Fatalf("world-0 phase %s is not being taken down once lobby is through", srv.Status.Phase)
+	}
+	if got := f.serverGroup(t, "world").Status.Changeover; got != spawneryv1alpha1.ChangeoverBegun {
+		t.Fatalf("world status.changeover = %q, want Begun", got)
+	}
+}
+
 func TestABegunPersistentGroupStaysBegunWhileItsNetworkIsUnusable(t *testing.T) {
 	f := newFixture(t)
 	r := groupReconciler(f)

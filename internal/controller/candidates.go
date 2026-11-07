@@ -23,6 +23,10 @@ import (
 	"github.com/spawnery/spawnery/internal/phase"
 )
 
+func (v ServerView) knownEmpty() bool {
+	return v.Players == 0 && !v.Stale
+}
+
 // ServerView is everything the group logic needs about one server, as a value
 // so the selection rules stay pure.
 type ServerView struct {

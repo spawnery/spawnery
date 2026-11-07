@@ -735,7 +735,7 @@ func (r *ServerGroupReconciler) size(
 		// No size can be decided: members exist because somebody asked for them
 		// by name. The persistent path would read the nil spec.replicas as zero.
 	default:
-		own := ownPersistentChangeover(views, podHash, pendingDeletes, group.DesiredReplicas(), was)
+		own := ownPersistentChangeover(views, podHash, pendingDeletes, group.DesiredReplicas(), group.UpdateWhenEmpty(), was)
 		self.State = own
 		refused := changeoverRefused(siblings, budget, self)
 		decision = DecidePersistentSize(PersistentInputs{
@@ -745,6 +745,7 @@ func (r *ServerGroupReconciler) size(
 			Views:             views,
 			PendingCreates:    pendingCreates,
 			PendingDeletes:    pendingDeletes,
+			WhenEmpty:         group.UpdateWhenEmpty(),
 			ChangeoverRefused: refused,
 		})
 		decision.ChangeoverWaiting = refused
@@ -931,6 +932,9 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, 
 	// Reached when a readiness loss beats the retirement in phase.Decide. Named,
 	// because the remedy is deleting that server.
 	var stuck, unschedulable []string
+	whenEmpty := group.Spec.Type == spawneryv1alpha1.ServerGroupPersistent && group.UpdateWhenEmpty()
+	replicas := group.DesiredReplicas()
+	var occupied []ServerView
 	for _, v := range views {
 		if v.Retire && v.Phase == phase.Failed {
 			stuck = append(stuck, v.Name)
@@ -943,6 +947,9 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, 
 		// A failed server was replaced when it failed.
 		if !group.IsOnDemand() && staleSpec(v, podHash) && !v.Hold && v.Phase != phase.Failed {
 			older++
+			if whenEmpty && v.Ordinal != nil && *v.Ordinal < replicas && !v.leaving() && !v.knownEmpty() {
+				occupied = append(occupied, v)
+			}
 			continue
 		}
 		if v.Phase == phase.Pending || v.Phase == phase.Starting {
@@ -982,6 +989,22 @@ func reportProgressing(group *spawneryv1alpha1.ServerGroup, views []ServerView, 
 		if older > 0 {
 			condition.Message += fmt.Sprintf("; %d of an earlier spec are still being replaced", older)
 		}
+	case older > 0 && int32(len(occupied)) == older:
+		sort.Slice(occupied, func(i, j int) bool { return occupied[i].Name < occupied[j].Name })
+		parts := make([]string, len(occupied))
+		for i, v := range occupied {
+			switch {
+			case v.Stale:
+				parts[i] = v.Name + " has an unknown number of players"
+			case v.Players == 1:
+				parts[i] = v.Name + " has 1 player"
+			default:
+				parts[i] = fmt.Sprintf("%s has %d players", v.Name, v.Players)
+			}
+		}
+		condition.Status = metav1.ConditionTrue
+		condition.Reason = spawneryv1alpha1.ReasonWaitingForEmpty
+		condition.Message = "stale servers wait for their players to leave: " + strings.Join(parts, ", ")
 	case older > 0:
 		condition.Status = metav1.ConditionTrue
 		condition.Reason = spawneryv1alpha1.ReasonReplacingServers
