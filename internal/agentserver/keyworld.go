@@ -96,11 +96,14 @@ func (w KubeWriter) KeyWorld(ctx context.Context, caller Caller, key string) (st
 	world := caller.Namespace + "/" + g.Name + "/" + key
 	binding := worldsync.Binding{Server: srv.Name, Pod: caller.Namespace + "/" + caller.Pod}
 
-	switch srv.Spec.WorldKey {
-	case key:
+	switch {
+	case srv.Spec.WorldKey == key && srv.Spec.Resumed:
+		// It mounts the world by its key; the binding names the member that
+		// kept it, and nothing is left to take.
+		return world, nil
+	case srv.Spec.WorldKey == key:
 		return world, w.bind(ctx, world, binding)
-	case "":
-	default:
+	case srv.Spec.WorldKey != "":
 		return "", ErrKeySet
 	}
 	if !srv.DeletionTimestamp.IsZero() || phase.Terminal(phase.Phase(srv.Status.Phase)) {

@@ -107,6 +107,22 @@ func TestKeyWorldSetsTheKeyThenBindsAndIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestKeyWorldOnTheResumedMemberAnswersItsOwnKey(t *testing.T) {
+	worlds := &fakeWorlds{exists: true, bindings: map[string]worldsync.Binding{
+		"minecraft/rounds/round-7": {Server: "rounds-x7k2", Pod: "minecraft/rounds-x7k2"},
+	}}
+	resumed := roundMember("rounds-round-7", func(s *spawneryv1alpha1.Server) {
+		s.Spec.WorldKey, s.Spec.Resumed = "round-7", true
+	})
+	w := keyWriter(t, worlds, roundsGroup(), resumed)
+	if world, err := w.KeyWorld(context.Background(), caller("rounds-round-7"), "round-7"); err != nil || world != "minecraft/rounds/round-7" {
+		t.Fatalf("KeyWorld = %q, %v", world, err)
+	}
+	if _, err := w.KeyWorld(context.Background(), caller("rounds-round-7"), "round-8"); !errors.Is(err, ErrKeySet) {
+		t.Fatalf("another key: err = %v, want ErrKeySet", err)
+	}
+}
+
 func TestKeyWorldFinishesABindingThatFailed(t *testing.T) {
 	worlds := &fakeWorlds{bindFail: errors.New("store down")}
 	w := keyWriter(t, worlds, roundsGroup(), roundMember("rounds-x7k2", nil))
