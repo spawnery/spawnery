@@ -151,6 +151,7 @@ type Server struct {
 	sessions *sessions
 	// requestRate is a bucket separate from grpcauth's; see requestLimiter.
 	requestRate *requestLimiter
+	pending     *pendingMoves
 	executions  executions
 	addr        atomic.Pointer[string]
 }
@@ -175,7 +176,14 @@ func New(opts Options) *Server {
 	if opts.Writer == nil {
 		panic("agentserver: no cluster writer")
 	}
-	return &Server{opts: opts, sessions: newSessions(), requestRate: newRequestLimiter(opts.Clock)}
+	return &Server{
+		opts:        opts,
+		sessions:    newSessions(),
+		requestRate: newRequestLimiter(opts.Clock),
+		// A move reaches Status.Players one report and one reconcile later,
+		// so a single interval could forget it before the count has it.
+		pending: newPendingMoves(opts.Clock, 3*opts.ReportInterval),
+	}
 }
 
 // Addr is empty until Start has bound the listener.
