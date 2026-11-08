@@ -88,7 +88,7 @@ class Drain(
     /**
      * Starts one move, and reports whether there was anywhere to send them.
      *
-     * Chosen per player, so drained players spread across [toGroups]. Every
+     * Chosen per player by each group's routing strategy. Every
      * draining server is excluded, or [landed] would bounce the player on.
      * [fromServer] is added explicitly because a concurrent [resynced] may
      * have dropped it from `current`.

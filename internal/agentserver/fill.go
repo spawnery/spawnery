@@ -173,3 +173,9 @@ func (p *pendingMoves) expire(key pendingKey, now time.Time) {
 	}
 	p.moves[key] = live
 }
+
+// A move reaches Status.Players one report and one reconcile after it
+// happens, and the reconcile can come a full lag late.
+func pendingMoveTTL(report, lag time.Duration) time.Duration {
+	return max(3*report, report+2*lag)
+}

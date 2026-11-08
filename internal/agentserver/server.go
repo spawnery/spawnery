@@ -133,7 +133,10 @@ type Options struct {
 	// ExecuteWait zero means ExecuteWait.
 	ExecuteWait    time.Duration
 	ReportInterval time.Duration
-	RenewAfter     time.Duration
+	// ReconcileLag is how long the Server reconciler can take to publish a
+	// report; zero counts none.
+	ReconcileLag time.Duration
+	RenewAfter   time.Duration
 	// HardDeadline must be above RenewAfter, or a well-behaved agent would be
 	// cut off mid-renewal.
 	HardDeadline time.Duration
@@ -180,9 +183,7 @@ func New(opts Options) *Server {
 		opts:        opts,
 		sessions:    newSessions(),
 		requestRate: newRequestLimiter(opts.Clock),
-		// A move reaches Status.Players one report and one reconcile later,
-		// so a single interval could forget it before the count has it.
-		pending: newPendingMoves(opts.Clock, 3*opts.ReportInterval),
+		pending:     newPendingMoves(opts.Clock, pendingMoveTTL(opts.ReportInterval, opts.ReconcileLag)),
 	}
 }
 

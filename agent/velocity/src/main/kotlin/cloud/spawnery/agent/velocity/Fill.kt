@@ -118,7 +118,6 @@ class SentTally(
         state - sentAt < marginNanos && now - sentAt < maxAgeNanos
 }
 
-/** What [Router] needs to fill a group: the network's counts and this proxy's own sends. */
 class FillSource(val mirror: NetworkMirror, val tally: SentTally) {
     internal fun fills(group: String): Boolean = mirror.routing(group) == Routing.FILL
 

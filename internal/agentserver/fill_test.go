@@ -81,3 +81,18 @@ func TestPendingMovesExpireAfterTheTTL(t *testing.T) {
 		t.Errorf("count at t0+15s = %d, want 0", got)
 	}
 }
+
+func TestPendingMoveTTLCoversTheReconcileLag(t *testing.T) {
+	cases := []struct {
+		report, lag, want time.Duration
+	}{
+		{5 * time.Second, 5 * time.Second, 15 * time.Second},
+		{time.Second, 5 * time.Second, 11 * time.Second},
+		{time.Second, 0, 3 * time.Second},
+	}
+	for _, tc := range cases {
+		if got := pendingMoveTTL(tc.report, tc.lag); got != tc.want {
+			t.Errorf("pendingMoveTTL(%v, %v) = %v, want %v", tc.report, tc.lag, got, tc.want)
+		}
+	}
+}
