@@ -1016,3 +1016,46 @@ func TestPersistentUpdateTakesOnlyStrategy(t *testing.T) {
 		})
 	}
 }
+
+func TestRoutingIsRefusedOnAnOnDemandGroup(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	g := onDemandGroup(ns, "od-routing")
+	g.Spec.Routing = &spawneryv1alpha1.ServerRoutingSpec{Strategy: spawneryv1alpha1.RoutingFill}
+	err := c.Create(ctx, g)
+	if err == nil || !strings.Contains(err.Error(), "spec.routing is not allowed for type OnDemand") {
+		t.Fatalf("create = %v, want the routing refusal", err)
+	}
+}
+
+func TestRoutingFillIsAcceptedOnAnEphemeralGroup(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	g := ephemeralGroup(ns, "fill")
+	g.Spec.Routing = &spawneryv1alpha1.ServerRoutingSpec{Strategy: spawneryv1alpha1.RoutingFill}
+	if err := c.Create(ctx, g); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	var got spawneryv1alpha1.ServerGroup
+	if err := c.Get(ctx, client.ObjectKeyFromObject(g), &got); err != nil {
+		t.Fatal(err)
+	}
+	if got.RoutingStrategy() != spawneryv1alpha1.RoutingFill {
+		t.Fatalf("strategy = %q, want Fill", got.RoutingStrategy())
+	}
+
+	bad := ephemeralGroup(ns, "pack")
+	bad.Spec.Routing = &spawneryv1alpha1.ServerRoutingSpec{Strategy: "Pack"}
+	if err := c.Create(ctx, bad); err == nil {
+		t.Fatal("strategy Pack was accepted")
+	}
+}
+
+func TestRoutingDefaultsToSpread(t *testing.T) {
+	g := &spawneryv1alpha1.ServerGroup{}
+	if g.RoutingStrategy() != spawneryv1alpha1.RoutingSpread {
+		t.Fatalf("nil routing = %q, want Spread", g.RoutingStrategy())
+	}
+}

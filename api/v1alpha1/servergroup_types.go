@@ -107,6 +107,28 @@ type ScalingSpec struct {
 	ScaleDownStabilizationSeconds int32 `json:"scaleDownStabilizationSeconds,omitempty"`
 }
 
+// RoutingStrategy is how the proxies pick a server for a joining player.
+// +kubebuilder:validation:Enum=Spread;Fill
+type RoutingStrategy string
+
+const (
+	// RoutingSpread sends a player to the least-loaded server.
+	RoutingSpread RoutingStrategy = "Spread"
+	// RoutingFill sends a player to the fullest server that still has room, so
+	// the others empty and the autoscaler can retire them.
+	RoutingFill RoutingStrategy = "Fill"
+)
+
+// ServerRoutingSpec controls how players are routed into the group's servers.
+type ServerRoutingSpec struct {
+	// Strategy is the routing rule. Fill packs players onto as few servers as
+	// possible and leaves the rest empty for scale-down. Proxy images need the
+	// release that ships Fill, or they keep spreading.
+	// +kubebuilder:default=Spread
+	// +optional
+	Strategy RoutingStrategy `json:"strategy,omitempty"`
+}
+
 // UpdateStrategy is how a changeover replaces stale servers. A persistent
 // group restarts a stale ordinal in place, one at a time.
 // +kubebuilder:validation:Enum=RollingUpdate;WhenEmpty
@@ -323,6 +345,7 @@ type MemberResourcesSpec struct {
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || has(self.replicas)",message="spec.replicas is required for type Persistent"
 // +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || !has(self.scaling)",message="spec.scaling is not allowed for type OnDemand"
 // +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || !has(self.replicas)",message="spec.replicas is not allowed for type OnDemand"
+// +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || !has(self.routing)",message="spec.routing is not allowed for type OnDemand: its members are addressed by name, not routed into"
 // +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || !has(self.update)",message="spec.update is not allowed for type OnDemand"
 // +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || has(self.storage)",message="spec.storage is required for type OnDemand"
 // +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || has(self.maxInstances)",message="spec.maxInstances is required for type OnDemand"
@@ -498,6 +521,11 @@ type ServerGroupSpec struct {
 	// +optional
 	Update *UpdateSpec `json:"update,omitempty"`
 
+	// Routing configures how players are routed into the group's servers.
+	// Not for type OnDemand.
+	// +optional
+	Routing *ServerRoutingSpec `json:"routing,omitempty"`
+
 	// Storage configures where members' worlds live: a claim per member, or
 	// the object store with backend ObjectStore. Persistent and OnDemand only.
 	// +optional
@@ -641,6 +669,13 @@ type ServerGroupList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []ServerGroup `json:"items"`
+}
+
+func (g *ServerGroup) RoutingStrategy() RoutingStrategy {
+	if g.Spec.Routing == nil || g.Spec.Routing.Strategy == "" {
+		return RoutingSpread
+	}
+	return g.Spec.Routing.Strategy
 }
 
 func (g *ServerGroup) IsEphemeral() bool {
