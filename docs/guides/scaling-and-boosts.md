@@ -237,9 +237,10 @@ it. The demand rule itself is unchanged. Players already on a server are never
 moved to make this happen.
 
 This applies wherever the operator or a proxy picks a server of the group: the
-first join, the fallback after a kick, a drain, and a plugin's `connect` to
-the group. Ties go to the lowest server number, so every proxy and the operator
-make the same choice. During a rolling update, a server of the group's current
+first join, the fallback after a kick, a drain or rescue, and a plugin's
+`connect` to the group. Ties go to the lowest server number, so every proxy and
+the operator make the same choice. In a persistent group, ordinal 0 carries
+number 0 and ranks after every numbered server. During a rolling update, a server of the group's current
 spec is preferred over a stale one, so fill does not keep feeding the servers a
 `WhenEmpty` update is waiting to see empty.
 
@@ -263,11 +264,11 @@ at 21 as well.
 
 ### Counts and bursts
 
-A burst of arrivals does not read one stale count and land on one server. Each
-proxy adds the players it has just sent to a server's count until a state
-arrives that includes them (10 s after the send, 2 minutes at most), and the
-operator does the same for its own connects for three report intervals, 15 s by
-default. Several choosers acting at once can still overshoot the fill line by a
+Each proxy adds the players it has just sent to a server's count until a state
+arrives that was applied at least 10 s after the send, or for 2 minutes at
+most. That way a burst of arrivals lands on several servers instead of reading
+one stale count. The operator does the same for its own connects, for three
+report intervals, 15 s by default. Several choosers acting at once can still overshoot the fill line by a
 few players, which the buffer is there for.
 
 ### Versions
