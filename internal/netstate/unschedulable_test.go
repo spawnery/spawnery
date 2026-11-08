@@ -136,13 +136,13 @@ func TestAnUnschedulableOnDemandMemberReachesProxiesAndNotBackends(t *testing.T)
 // Everything a report moves, which a fresh picture is not worth a push for.
 func TestVisibleIgnoresWhatReportsMove(t *testing.T) {
 	base := readyServer("ns", "lobby-a", "lobby", 0, 100)
-	want := netstate.Visible(base, "node-1")
+	want := netstate.Visible(base, "node-1", "")
 
 	moved := base.DeepCopy()
 	moved.Status.Players = 40
 	moved.Status.Slots = 120
 	moved.Status.PlayableSlots = 80
-	if got := netstate.Visible(moved, "node-1"); !proto.Equal(got, want) {
+	if got := netstate.Visible(moved, "node-1", ""); !proto.Equal(got, want) {
 		t.Errorf("players, slots and playable slots moved the visible state: %v vs %v", got, want)
 	}
 }
@@ -150,7 +150,7 @@ func TestVisibleIgnoresWhatReportsMove(t *testing.T) {
 func TestVisibleFollowsWhatALifecycleChangeMoves(t *testing.T) {
 	base := readyServer("ns", "lobby-a", "lobby", 0, 100)
 	base.Status.PodUID = "pod-1"
-	want := netstate.Visible(base, "node-1")
+	want := netstate.Visible(base, "node-1", "")
 
 	changes := map[string]func(*spawneryv1alpha1.Server) string{
 		"phase":      func(s *spawneryv1alpha1.Server) string { s.Status.Phase = "Retiring"; return "node-1" },
@@ -168,7 +168,7 @@ func TestVisibleFollowsWhatALifecycleChangeMoves(t *testing.T) {
 		t.Run(name, func(t *testing.T) {
 			srv := base.DeepCopy()
 			node := change(srv)
-			if proto.Equal(netstate.Visible(srv, node), want) {
+			if proto.Equal(netstate.Visible(srv, node, ""), want) {
 				t.Errorf("a change of %s left the visible state as it was", name)
 			}
 		})
@@ -207,7 +207,7 @@ func TestVisibleAgreesWithBuildOnceTheReportedFieldsAreBlanked(t *testing.T) {
 	built := proto.Clone(stateOf(t, got, "lobby-a")).(*agentpb.ServerState)
 	built.Players, built.Slots, built.PlayableSlots = 0, 0, 0
 	built.State, built.Attributes, built.JoinsClosed = "", nil, false
-	if want := netstate.Visible(srv, "node-2"); !proto.Equal(built, want) {
+	if want := netstate.Visible(srv, "node-2", ""); !proto.Equal(built, want) {
 		t.Errorf("Build with the reported fields blanked = %v, Visible = %v", built, want)
 	}
 }

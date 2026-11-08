@@ -282,6 +282,9 @@ func (r *ServerGroupReconciler) Reconcile(ctx context.Context, req ctrl.Request)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
+		if podHash != "" && r.Agents != nil {
+			r.Agents.SetDesiredServerHash(group.Namespace, group.Name, podHash)
+		}
 
 		// Adoption stamps the current hash on servers that predate spec.podHash;
 		// staleSpec never nominates a hashless view, so this orders no takedown.
