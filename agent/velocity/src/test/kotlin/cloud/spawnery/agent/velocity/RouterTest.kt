@@ -193,9 +193,109 @@ class RouterTest {
         assertNull(router.choose(listOf("vip")) { _, _ -> false })
     }
 
+    @Test
+    fun `a Fill group sends the next player to the fullest server below its line`() {
+        val registry = FakeRegistry()
+        val directory = lobby(registry, "lobby-1", "lobby-2", "lobby-3")
+        val mirror = mirrorOf(
+            setOf("lobby"),
+            Reported("lobby-1", players = 3, slots = 20, line = 16, number = 1),
+            Reported("lobby-2", players = 10, slots = 20, line = 16, number = 2),
+            Reported("lobby-3", players = 16, slots = 20, line = 16, number = 3),
+        )
+        val tally = frozenTally(mirror)
+        val router = Router(directory, FillSource(mirror, tally))
+
+        val chosen = router.choose(listOf("lobby"))
+
+        assertEquals("lobby-2", chosen?.serverInfo?.name)
+        assertEquals(1, tally.pending("lobby-2"))
+    }
+
+    @Test
+    fun `two proxies with the same mirror pick the same server`() {
+        val mirror = mirrorOf(
+            setOf("lobby"),
+            Reported("lobby-1", players = 5, slots = 20, line = 16, number = 1),
+            Reported("lobby-2", players = 4, slots = 20, line = 16, number = 2),
+        )
+        val registryA = FakeRegistry()
+        val routerA = Router(lobby(registryA, "lobby-1", "lobby-2"), FillSource(mirror, frozenTally(mirror)))
+        fakeServer(registryA, "lobby-1").players = players(2)
+        val registryB = FakeRegistry()
+        val routerB = Router(lobby(registryB, "lobby-1", "lobby-2"), FillSource(mirror, frozenTally(mirror)))
+        fakeServer(registryB, "lobby-2").players = players(3)
+
+        assertEquals("lobby-1", routerA.choose(listOf("lobby"))?.serverInfo?.name)
+        assertEquals("lobby-1", routerB.choose(listOf("lobby"))?.serverInfo?.name)
+    }
+
+    @Test
+    fun `a burst never puts more than maxPlayers on one server while another has room`() {
+        val registry = FakeRegistry()
+        val directory = lobby(registry, "lobby-1", "lobby-2")
+        val mirror = mirrorOf(
+            setOf("lobby"),
+            Reported("lobby-1", players = 7, slots = 10, line = 8, number = 1),
+            Reported("lobby-2", players = 0, slots = 10, line = 8, number = 2),
+        )
+        val router = Router(directory, FillSource(mirror, frozenTally(mirror)))
+
+        val sent = List(13) { router.choose(listOf("lobby"))?.serverInfo?.name }.groupingBy { it }.eachCount()
+
+        assertEquals(mapOf("lobby-1" to 3, "lobby-2" to 10), sent)
+    }
+
+    @Test
+    fun `a sent player who has connected here is counted once`() {
+        val registry = FakeRegistry()
+        val directory = lobby(registry, "lobby-1", "lobby-2")
+        val mirror = mirrorOf(
+            setOf("lobby"),
+            Reported("lobby-1", players = 0, slots = 10, line = 8, number = 1),
+            Reported("lobby-2", players = 0, slots = 10, line = 8, number = 2),
+        )
+        val router = Router(directory, FillSource(mirror, frozenTally(mirror)))
+
+        val sent = List(9) {
+            val name = router.choose(listOf("lobby"))!!.serverInfo.name
+            val server = fakeServer(registry, name)
+            server.players = server.players + dummyPlayer
+            name
+        }
+
+        assertEquals(List(8) { "lobby-1" } + "lobby-2", sent)
+    }
+
+    @Test
+    fun `a Spread group is chosen exactly as before`() {
+        val registry = FakeRegistry()
+        val directory = lobby(registry, "lobby-1", "lobby-2")
+        fakeServer(registry, "lobby-1").players = players(3)
+        fakeServer(registry, "lobby-2").players = players(1)
+        val mirror = mirrorOf(
+            emptySet(),
+            Reported("lobby-1", players = 10, slots = 20, number = 1),
+            Reported("lobby-2", players = 1, slots = 20, number = 2),
+        )
+        val tally = frozenTally(mirror)
+        val router = Router(directory, FillSource(mirror, tally))
+
+        val chosen = router.choose(listOf("lobby"))
+
+        assertEquals("lobby-2", chosen?.serverInfo?.name)
+        assertEquals(0, tally.pending("lobby-2"))
+    }
+
     private companion object {
         fun fakeServer(registry: FakeRegistry, name: String): FakeServer =
             registry.server(name) as FakeServer
+
+        fun lobby(registry: FakeRegistry, vararg names: String): ServerDirectory {
+            val directory = ServerDirectory(registry) { _, _ -> }
+            directory.apply(names.mapIndexed { i, name -> Backend(name, "10.0.0.${i + 1}:25565", "lobby") })
+            return directory
+        }
 
         val dummyPlayer: Player = Proxy.newProxyInstance(
             Player::class.java.classLoader,
