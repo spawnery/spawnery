@@ -222,4 +222,15 @@ java.lang.String defaultValue);
    * @return The pinnedUntilUnix.
    */
   long getPinnedUntilUnix();
+
+  /**
+   * <code>.spawnery.agent.v1alpha1.GroupState.RoutingStrategy routing_strategy = 16;</code>
+   * @return The enum numeric value on the wire for routingStrategy.
+   */
+  int getRoutingStrategyValue();
+  /**
+   * <code>.spawnery.agent.v1alpha1.GroupState.RoutingStrategy routing_strategy = 16;</code>
+   * @return The routingStrategy.
+   */
+  cloud.spawnery.agent.pb.GroupState.RoutingStrategy getRoutingStrategy();
 }

@@ -36,6 +36,7 @@ private static final long serialVersionUID = 0L;
     kind_ = 0;
     displayName_ = "";
     joinPermission_ = "";
+    routingStrategy_ = 0;
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -215,6 +216,129 @@ private static final long serialVersionUID = 0L;
     }
 
     // @@protoc_insertion_point(enum_scope:spawnery.agent.v1alpha1.GroupState.Kind)
+  }
+
+  /**
+   * <pre>
+   * How the proxy picks among this group's servers for a new player.
+   * ROUTING_SPREAD is also what an operator older than this field sends;
+   * read an absent strategy as spread.
+   * </pre>
+   *
+   * Protobuf enum {@code spawnery.agent.v1alpha1.GroupState.RoutingStrategy}
+   */
+  public enum RoutingStrategy
+      implements com.google.protobuf.ProtocolMessageEnum {
+    /**
+     * <code>ROUTING_SPREAD = 0;</code>
+     */
+    ROUTING_SPREAD(0),
+    /**
+     * <code>ROUTING_FILL = 1;</code>
+     */
+    ROUTING_FILL(1),
+    UNRECOGNIZED(-1),
+    ;
+
+    static {
+      com.google.protobuf.RuntimeVersion.validateProtobufGencodeVersion(
+        com.google.protobuf.RuntimeVersion.RuntimeDomain.PUBLIC,
+        /* major= */ 4,
+        /* minor= */ 35,
+        /* patch= */ 1,
+        /* suffix= */ "",
+        "RoutingStrategy");
+    }
+    /**
+     * <code>ROUTING_SPREAD = 0;</code>
+     */
+    public static final int ROUTING_SPREAD_VALUE = 0;
+    /**
+     * <code>ROUTING_FILL = 1;</code>
+     */
+    public static final int ROUTING_FILL_VALUE = 1;
+
+
+    public final int getNumber() {
+      if (this == UNRECOGNIZED) {
+        throw new java.lang.IllegalArgumentException(
+            "Can't get the number of an unknown enum value.");
+      }
+      return value;
+    }
+
+    /**
+     * @param value The numeric wire value of the corresponding enum entry.
+     * @return The enum associated with the given numeric wire value.
+     * @deprecated Use {@link #forNumber(int)} instead.
+     */
+    @java.lang.Deprecated
+    public static RoutingStrategy valueOf(int value) {
+      return forNumber(value);
+    }
+
+    /**
+     * @param value The numeric wire value of the corresponding enum entry.
+     * @return The enum associated with the given numeric wire value.
+     */
+    public static RoutingStrategy forNumber(int value) {
+      switch (value) {
+        case 0: return ROUTING_SPREAD;
+        case 1: return ROUTING_FILL;
+        default: return null;
+      }
+    }
+
+    public static com.google.protobuf.Internal.EnumLiteMap<RoutingStrategy>
+        internalGetValueMap() {
+      return internalValueMap;
+    }
+    private static final com.google.protobuf.Internal.EnumLiteMap<
+        RoutingStrategy> internalValueMap =
+          new com.google.protobuf.Internal.EnumLiteMap<RoutingStrategy>() {
+            public RoutingStrategy findValueByNumber(int number) {
+              return RoutingStrategy.forNumber(number);
+            }
+          };
+
+    public final com.google.protobuf.Descriptors.EnumValueDescriptor
+        getValueDescriptor() {
+      if (this == UNRECOGNIZED) {
+        throw new java.lang.IllegalStateException(
+            "Can't get the descriptor of an unrecognized enum value.");
+      }
+      return getDescriptor().getValue(ordinal());
+    }
+    public final com.google.protobuf.Descriptors.EnumDescriptor
+        getDescriptorForType() {
+      return getDescriptor();
+    }
+    public static com.google.protobuf.Descriptors.EnumDescriptor
+        getDescriptor() {
+      return cloud.spawnery.agent.pb.GroupState.getDescriptor().getEnumType(1);
+    }
+
+    private static final RoutingStrategy[] VALUES = values();
+
+    public static RoutingStrategy valueOf(
+        com.google.protobuf.Descriptors.EnumValueDescriptor desc) {
+      if (desc.getType() != getDescriptor()) {
+        throw new java.lang.IllegalArgumentException(
+          "EnumValueDescriptor is not for this type.");
+      }
+      if (desc.getIndex() == -1) {
+        return UNRECOGNIZED;
+      }
+      return VALUES[desc.getIndex()];
+    }
+
+    private final int value;
+
+    private RoutingStrategy(int value) {
+      this.value = value;
+    }
+
+    // @@protoc_insertion_point(enum_scope:spawnery.agent.v1alpha1.GroupState.RoutingStrategy)
   }
 
   public static final int NAME_FIELD_NUMBER = 1;
@@ -608,6 +732,24 @@ java.lang.String defaultValue) {
     return pinnedUntilUnix_;
   }
 
+  public static final int ROUTING_STRATEGY_FIELD_NUMBER = 16;
+  private int routingStrategy_ = 0;
+  /**
+   * <code>.spawnery.agent.v1alpha1.GroupState.RoutingStrategy routing_strategy = 16;</code>
+   * @return The enum numeric value on the wire for routingStrategy.
+   */
+  @java.lang.Override public int getRoutingStrategyValue() {
+    return routingStrategy_;
+  }
+  /**
+   * <code>.spawnery.agent.v1alpha1.GroupState.RoutingStrategy routing_strategy = 16;</code>
+   * @return The routingStrategy.
+   */
+  @java.lang.Override public cloud.spawnery.agent.pb.GroupState.RoutingStrategy getRoutingStrategy() {
+    cloud.spawnery.agent.pb.GroupState.RoutingStrategy result = cloud.spawnery.agent.pb.GroupState.RoutingStrategy.forNumber(routingStrategy_);
+    return result == null ? cloud.spawnery.agent.pb.GroupState.RoutingStrategy.UNRECOGNIZED : result;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -669,6 +811,9 @@ java.lang.String defaultValue) {
     }
     if (pinnedUntilUnix_ != 0L) {
       output.writeInt64(15, pinnedUntilUnix_);
+    }
+    if (routingStrategy_ != cloud.spawnery.agent.pb.GroupState.RoutingStrategy.ROUTING_SPREAD.getNumber()) {
+      output.writeEnum(16, routingStrategy_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -737,6 +882,10 @@ java.lang.String defaultValue) {
       size += com.google.protobuf.CodedOutputStream
         .computeInt64Size(15, pinnedUntilUnix_);
     }
+    if (routingStrategy_ != cloud.spawnery.agent.pb.GroupState.RoutingStrategy.ROUTING_SPREAD.getNumber()) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeEnumSize(16, routingStrategy_);
+    }
     return size;
   }
   @java.lang.Override
@@ -790,6 +939,7 @@ java.lang.String defaultValue) {
         != other.getPinnedReplicas()) return false;
     if (getPinnedUntilUnix()
         != other.getPinnedUntilUnix()) return false;
+    if (routingStrategy_ != other.routingStrategy_) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -837,6 +987,8 @@ java.lang.String defaultValue) {
     hash = (37 * hash) + PINNED_UNTIL_UNIX_FIELD_NUMBER;
     hash = (53 * hash) + com.google.protobuf.Internal.hashLong(
         getPinnedUntilUnix());
+    hash = (37 * hash) + ROUTING_STRATEGY_FIELD_NUMBER;
+    hash = (53 * hash) + routingStrategy_;
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -1009,6 +1161,7 @@ java.lang.String defaultValue) {
       pinned_ = false;
       pinnedReplicas_ = 0;
       pinnedUntilUnix_ = 0L;
+      routingStrategy_ = 0;
       return this;
     }
 
@@ -1088,6 +1241,9 @@ java.lang.String defaultValue) {
       if (((from_bitField0_ & 0x00004000) != 0)) {
         result.pinnedUntilUnix_ = pinnedUntilUnix_;
       }
+      if (((from_bitField0_ & 0x00008000) != 0)) {
+        result.routingStrategy_ = routingStrategy_;
+      }
     }
 
     @java.lang.Override
@@ -1152,6 +1308,9 @@ java.lang.String defaultValue) {
       }
       if (other.getPinnedUntilUnix() != 0L) {
         setPinnedUntilUnix(other.getPinnedUntilUnix());
+      }
+      if (other.routingStrategy_ != 0) {
+        setRoutingStrategyValue(other.getRoutingStrategyValue());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -1258,6 +1417,11 @@ java.lang.String defaultValue) {
               bitField0_ |= 0x00004000;
               break;
             } // case 120
+            case 128: {
+              routingStrategy_ = input.readEnum();
+              bitField0_ |= 0x00008000;
+              break;
+            } // case 128
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2152,6 +2316,58 @@ java.lang.String defaultValue) {
     public Builder clearPinnedUntilUnix() {
       bitField0_ = (bitField0_ & ~0x00004000);
       pinnedUntilUnix_ = 0L;
+      onChanged();
+      return this;
+    }
+
+    private int routingStrategy_ = 0;
+    /**
+     * <code>.spawnery.agent.v1alpha1.GroupState.RoutingStrategy routing_strategy = 16;</code>
+     * @return The enum numeric value on the wire for routingStrategy.
+     */
+    @java.lang.Override public int getRoutingStrategyValue() {
+      return routingStrategy_;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.GroupState.RoutingStrategy routing_strategy = 16;</code>
+     * @param value The enum numeric value on the wire for routingStrategy to set.
+     * @return This builder for chaining.
+     */
+    public Builder setRoutingStrategyValue(int value) {
+      routingStrategy_ = value;
+      bitField0_ |= 0x00008000;
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.GroupState.RoutingStrategy routing_strategy = 16;</code>
+     * @return The routingStrategy.
+     */
+    @java.lang.Override
+    public cloud.spawnery.agent.pb.GroupState.RoutingStrategy getRoutingStrategy() {
+      cloud.spawnery.agent.pb.GroupState.RoutingStrategy result = cloud.spawnery.agent.pb.GroupState.RoutingStrategy.forNumber(routingStrategy_);
+      return result == null ? cloud.spawnery.agent.pb.GroupState.RoutingStrategy.UNRECOGNIZED : result;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.GroupState.RoutingStrategy routing_strategy = 16;</code>
+     * @param value The routingStrategy to set.
+     * @throws IllegalArgumentException if UNRECOGNIZED is provided.
+     * @return This builder for chaining.
+     */
+    public Builder setRoutingStrategy(cloud.spawnery.agent.pb.GroupState.RoutingStrategy value) {
+      if (value == null) { throw new NullPointerException(); }
+      bitField0_ |= 0x00008000;
+      routingStrategy_ = value.getNumber();
+      onChanged();
+      return this;
+    }
+    /**
+     * <code>.spawnery.agent.v1alpha1.GroupState.RoutingStrategy routing_strategy = 16;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearRoutingStrategy() {
+      bitField0_ = (bitField0_ & ~0x00008000);
+      routingStrategy_ = 0;
       onChanged();
       return this;
     }

@@ -269,4 +269,15 @@ java.lang.String defaultValue);
    * @return The unschedulable.
    */
   boolean getUnschedulable();
+
+  /**
+   * <pre>
+   * True when the server's pod hash differs from its group's current one.
+   * False when either is unknown, and from an operator older than this field.
+   * </pre>
+   *
+   * <code>bool stale = 17;</code>
+   * @return The stale.
+   */
+  boolean getStale();
 }

@@ -91,6 +91,7 @@ message spawnery.agent.v1alpha1.GroupState 12 join_permission_deny_only bool
 message spawnery.agent.v1alpha1.GroupState 13 pinned bool
 message spawnery.agent.v1alpha1.GroupState 14 pinned_replicas int32
 message spawnery.agent.v1alpha1.GroupState 15 pinned_until_unix int64
+message spawnery.agent.v1alpha1.GroupState 16 routing_strategy spawnery.agent.v1alpha1.GroupState.RoutingStrategy
 message spawnery.agent.v1alpha1.GroupStatus 1 name string
 message spawnery.agent.v1alpha1.GroupStatus 2 kind spawnery.agent.v1alpha1.GroupState.Kind
 message spawnery.agent.v1alpha1.GroupStatus 3 phase string
@@ -234,6 +235,7 @@ message spawnery.agent.v1alpha1.ServerState 13 playable_slots int32
 message spawnery.agent.v1alpha1.ServerState 14 joins_closed bool
 message spawnery.agent.v1alpha1.ServerState 15 resources spawnery.agent.v1alpha1.StartResources
 message spawnery.agent.v1alpha1.ServerState 16 unschedulable bool
+message spawnery.agent.v1alpha1.ServerState 17 stale bool
 message spawnery.agent.v1alpha1.SessionDeadline 1 renew_after_seconds int32
 message spawnery.agent.v1alpha1.SessionDeadline 2 hard_deadline_seconds int32
 message spawnery.agent.v1alpha1.SetReady 1 ready bool
@@ -278,6 +280,8 @@ enum spawnery.agent.v1alpha1.GroupState.Kind 1 EPHEMERAL
 enum spawnery.agent.v1alpha1.GroupState.Kind 2 PERSISTENT
 enum spawnery.agent.v1alpha1.GroupState.Kind 3 PROXY
 enum spawnery.agent.v1alpha1.GroupState.Kind 4 ON_DEMAND
+enum spawnery.agent.v1alpha1.GroupState.RoutingStrategy 0 ROUTING_SPREAD
+enum spawnery.agent.v1alpha1.GroupState.RoutingStrategy 1 ROUTING_FILL
 enum spawnery.agent.v1alpha1.RequestError.Reason 0 REASON_UNSPECIFIED
 enum spawnery.agent.v1alpha1.RequestError.Reason 1 NOT_FOUND
 enum spawnery.agent.v1alpha1.RequestError.Reason 2 REFUSED
