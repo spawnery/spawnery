@@ -1,0 +1,34 @@
+# The kept-round run's group, applied after worldsync.yaml and in its
+# namespace, so it uses that network and proxy. A round-based Ephemeral group
+# whose members keep nothing unless one of them gives its world a key.
+#
+# One member at a time: a member that ends is replaced, and a resumed member
+# then runs next to the replacement, two real servers on a kind node.
+apiVersion: spawnery.cloud/v1alpha1
+kind: ServerGroup
+metadata:
+  name: rounds
+  namespace: minecraft-ws
+spec:
+  networkRef:
+    name: production
+  type: Ephemeral
+  image: ghcr.io/spawnery/purpur:26.3-0.34.0
+  maxPlayers: 10
+  maxInstances: 1
+  resources:
+    requests:
+      cpu: 250m
+      memory: 1536Mi
+    limits:
+      memory: 1536Mi
+  scaling:
+    minReplicas: 1
+    maxReplicas: 1
+    spareSlots: 0
+  storage:
+    # Ignored under ObjectStore, but required by the schema.
+    size: 1Gi
+    backend: ObjectStore
+    keep:
+      - world

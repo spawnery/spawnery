@@ -112,8 +112,10 @@ manifest, restart mid-keying, cache reuse); CSI standby in a foreign
 namespace; `KeyWorld`, `StartServer`, `StopServer` and `DeleteServer` on fake
 clients; routing; the Kotlin control file names.
 
-End to end, not automated in this change, because the key has to come from a
-game server's own session and needs the Paper agent: on the world-sync kind
-cluster, start an ephemeral group with storage, have a test plugin call
-`keyWorld`, end the round, `startServer` the key on another node and find the
-world's files, then `deleteServer` and see the bucket swept.
+End to end, `TestAKeptRoundComesBackOnAnotherNode` in `hack/e2e-worldsync.sh`'s
+run: an ephemeral group with storage on the world-sync kind cluster, a member
+whose world stays out of the store until it is keyed, `keyWorld` over a session
+bound to that member's pod, the control files the Paper agent would write, the
+pod deleted, `startServer` of the key on another node with the world's files,
+then `deleteServer` and the prefix swept. The game plugin that would ask for
+the key is the consumer's and is not part of it.

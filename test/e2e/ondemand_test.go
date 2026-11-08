@@ -380,6 +380,30 @@ type proxySession struct {
 func openProxySession(t *testing.T, pod *corev1.Pod) *proxySession {
 	t.Helper()
 
+	conn, closeConn := dialAgentPort(t)
+	streamCtx := metadata.AppendToOutgoingContext(ctx, "authorization",
+		"Bearer "+agentToken(t, pod, podspec.ProxyServiceAccountName))
+	stream, err := agentpb.NewAgentServiceClient(conn).ProxySession(streamCtx)
+	if err != nil {
+		closeConn()
+		t.Fatalf("open a ProxySession as %s: %v", pod.Name, err)
+	}
+
+	s := &proxySession{stream: stream, close: closeConn}
+
+	// The operator sends nothing before it has authenticated the token.
+	if _, err := s.recv(t, 30*time.Second); err != nil {
+		s.close()
+		t.Fatalf("the operator sent nothing on the session of %s: %v", pod.Name, err)
+	}
+	return s
+}
+
+// dialAgentPort connects to the operator's agent port as an agent would,
+// verifying the operator against the CA it hands its agents.
+func dialAgentPort(t *testing.T) (*grpc.ClientConn, func()) {
+	t.Helper()
+
 	addr, stopForward := forwardAgentPort(t)
 	ca, serverName := operatorServingIdentity(t)
 
@@ -398,29 +422,10 @@ func openProxySession(t *testing.T, pod *corev1.Pod) *proxySession {
 		stopForward()
 		t.Fatalf("dial the operator at %s: %v", addr, err)
 	}
-
-	streamCtx := metadata.AppendToOutgoingContext(ctx, "authorization", "Bearer "+proxyToken(t, pod))
-	stream, err := agentpb.NewAgentServiceClient(conn).ProxySession(streamCtx)
-	if err != nil {
+	return conn, func() {
 		_ = conn.Close()
 		stopForward()
-		t.Fatalf("open a ProxySession as %s: %v", pod.Name, err)
 	}
-
-	s := &proxySession{
-		stream: stream,
-		close: func() {
-			_ = conn.Close()
-			stopForward()
-		},
-	}
-
-	// The operator sends nothing before it has authenticated the token.
-	if _, err := s.recv(t, 30*time.Second); err != nil {
-		s.close()
-		t.Fatalf("the operator sent nothing on the session of %s: %v", pod.Name, err)
-	}
-	return s
 }
 
 func startServer(t *testing.T, proxy *corev1.Pod, group, key string) *agentpb.StartServerResult {
@@ -542,22 +547,22 @@ type mintedToken struct {
 // session reaches the operator from the port-forward's 127.0.0.1, and a fresh
 // token per session misses its review cache each time, which its per-address
 // limit (grpcauth.PeerBurst, one more per grpcauth.PeerRefill) soon refuses.
-var proxyTokens = struct {
+var agentTokens = struct {
 	sync.Mutex
 	byPod map[types.UID]mintedToken
 }{byPod: map[types.UID]mintedToken{}}
 
-// proxyToken returns what the proxy's own projected volume would hold: a
-// token for the proxy ServiceAccount, in the agent audience, bound to that pod.
-func proxyToken(t *testing.T, pod *corev1.Pod) string {
+// agentToken returns what the pod's own projected volume would hold: a token
+// for serviceAccount, in the agent audience, bound to that pod.
+func agentToken(t *testing.T, pod *corev1.Pod, serviceAccount string) string {
 	t.Helper()
-	proxyTokens.Lock()
-	defer proxyTokens.Unlock()
-	if m, ok := proxyTokens.byPod[pod.UID]; ok && time.Until(m.expires) > 10*time.Minute {
+	agentTokens.Lock()
+	defer agentTokens.Unlock()
+	if m, ok := agentTokens.byPod[pod.UID]; ok && time.Until(m.expires) > 10*time.Minute {
 		return m.token
 	}
 	tr, err := clientset.CoreV1().ServiceAccounts(pod.Namespace).CreateToken(ctx,
-		podspec.ProxyServiceAccountName,
+		serviceAccount,
 		&authnv1.TokenRequest{Spec: authnv1.TokenRequestSpec{
 			Audiences:         []string{podspec.AgentTokenAudience},
 			ExpirationSeconds: ptr.To(int64(3600)),
@@ -566,9 +571,9 @@ func proxyToken(t *testing.T, pod *corev1.Pod) string {
 			},
 		}}, metav1.CreateOptions{})
 	if err != nil {
-		t.Fatalf("mint a proxy token bound to %s: %v", pod.Name, err)
+		t.Fatalf("mint a %s token bound to %s: %v", serviceAccount, pod.Name, err)
 	}
-	proxyTokens.byPod[pod.UID] = mintedToken{token: tr.Status.Token, expires: tr.Status.ExpirationTimestamp.Time}
+	agentTokens.byPod[pod.UID] = mintedToken{token: tr.Status.Token, expires: tr.Status.ExpirationTimestamp.Time}
 	return tr.Status.Token
 }
 
