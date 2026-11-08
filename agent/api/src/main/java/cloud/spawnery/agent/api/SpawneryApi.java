@@ -115,6 +115,11 @@ public interface SpawneryApi {
      * <p><b>Asynchronous on both platforms</b>, although a proxy could answer
      * locally, so that the same code compiles on either side.
      *
+     * <p>For a {@link Target.Group}, the group's {@code spec.routing.strategy}
+     * decides which server: {@code Spread} (the default) takes the one with the
+     * most free playable seats, {@code Fill} the fullest one still below its
+     * playable slots.
+     *
      * <p>The operator does not know permissions. A player sent to a group
      * whose join permission refuses them is still answered {@code ordered},
      * and is then refused by the proxy or the server.

@@ -203,6 +203,79 @@ One server per pass, never one that might be carrying players, and among the
 eligible ones those that never took a player go first, then the youngest. A
 server that had players on it is the last thing this group gives up.
 
+## Letting a spare server empty
+
+Under the default routing, a group that scaled up can stay up for hours. The
+demand rule above removes a server only after it has been empty for
+`scaleDownStabilizationSeconds` without a break, and every arrival goes to the
+server with the fewest players, which is the spare one. Where visits are short,
+as in a lobby that players pass through on the way to a game, somebody arrives
+before the window ends, every time. Measured on one network over two weeks, a
+lobby group of two servers stayed at two for up to three hours with one to six
+players in total; the median visit lasted 52 s and 87 % lasted under five
+minutes.
+
+`spec.routing.strategy: Fill` changes where arrivals go. The default is
+`Spread`, the behaviour described so far.
+
+```yaml
+spec:
+  maxPlayers: 40
+  playableSlots: 32
+  routing:
+    strategy: Fill
+  scaling:
+    spareSlots: 12
+```
+
+With `Fill`, an arriving player goes to the server with the most players among
+those still below their playable slots. When every server is at or above that
+line, the player goes to the server with the most room below `maxPlayers`, so a
+full group spreads its overflow. The spare server stops receiving players, and
+as the ones it has leave it reaches zero and the ordinary scale-down removes
+it. The demand rule itself is unchanged. Players already on a server are never
+moved to make this happen.
+
+This applies wherever the operator or a proxy picks a server of the group: the
+first join, the fallback after a kick, a drain, and a plugin's `connect` to
+the group. Ties go to the lowest server number, so every proxy and the operator
+make the same choice. During a rolling update, a server of the group's current
+spec is preferred over a stale one, so fill does not keep feeding the servers a
+`WhenEmpty` update is waiting to see empty.
+
+Changing the strategy restarts nothing. `OnDemand` groups refuse `spec.routing`,
+because players are never routed into their members.
+
+### Why set `playableSlots`
+
+Fill sends players to a server until it reaches its playable slots, which is
+`maxPlayers` if you set no `playableSlots`. The proxies learn player counts up
+to about 35 s late, and a party can arrive together or pick a server by name,
+so a server will take a few players more than the line. The seats between
+`playableSlots` and `maxPlayers` absorb them. A group that sets no
+`playableSlots` fills to `maxPlayers` and has no such buffer, so set one.
+
+Setting it also shrinks the capacity `spareSlots` counts in, so lower
+`spareSlots` by the same amount to scale up at the same point. A group with
+`maxPlayers: 40` and `spareSlots: 20` orders its next server once one server
+holds 21 players. With `playableSlots: 32` and `spareSlots: 12` it orders it
+at 21 as well.
+
+### Counts and bursts
+
+A burst of arrivals does not read one stale count and land on one server. Each
+proxy adds the players it has just sent to a server's count until a state
+arrives that includes them (10 s after the send, 2 minutes at most), and the
+operator does the same for its own connects for three report intervals, 15 s by
+default. Several choosers acting at once can still overshoot the fill line by a
+few players, which the buffer is there for.
+
+### Versions
+
+The proxy images must carry the release that adds `spec.routing`. An older proxy
+ignores the field and spreads, and an older operator never sends it, so a new
+proxy spreads too.
+
 ## Choosing the three numbers
 
 `spareSlots` is a headroom in *seats*, so read it as: how many people may join
