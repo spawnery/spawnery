@@ -442,6 +442,30 @@ func TestBuildCarriesAServersNumber(t *testing.T) {
 	}
 }
 
+func TestBuildCarriesAKeptWorld(t *testing.T) {
+	keyed := readyServer("ns", "rounds-x7k2", "rounds", 3, 100)
+	keyed.Spec.WorldKey = "round-7"
+	resumed := readyServer("ns", "rounds-round-7", "rounds", 0, 100)
+	resumed.Spec.WorldKey, resumed.Spec.Resumed = "round-8", true
+	src, _ := source(t, ephemeralGroup("ns", "rounds"), keyed, resumed)
+	for _, audience := range []netstate.Audience{netstate.ForProxies, netstate.ForServers} {
+		got, err := src.Build(context.Background(), "ns", audience)
+		if err != nil {
+			t.Fatalf("Build: %v", err)
+		}
+		byName := map[string]*agentpb.ServerState{}
+		for _, s := range got.GetServers() {
+			byName[s.GetName()] = s
+		}
+		if s := byName["rounds-x7k2"]; s.GetWorldKey() != "round-7" || s.GetResumed() {
+			t.Errorf("keyed member = %+v", s)
+		}
+		if s := byName["rounds-round-7"]; s.GetWorldKey() != "round-8" || !s.GetResumed() {
+			t.Errorf("resumed member = %+v", s)
+		}
+	}
+}
+
 func TestOnDemandMembersReachProxiesOnly(t *testing.T) {
 	src, _ := source(t,
 		onDemandGroup("ns", "private-servers"),

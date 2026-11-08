@@ -174,3 +174,43 @@ func TestImportRefusesAMalformedWorld(t *testing.T) {
 		t.Fatalf("the refused import wrote %v", keys)
 	}
 }
+
+func standbyReq(t *testing.T, ns, standby string) *csi.NodePublishVolumeRequest {
+	req := publishReq(t, ns, "")
+	delete(req.VolumeContext, "world")
+	req.VolumeContext["standby"] = standby
+	return req
+}
+
+func TestAPodCannotTakeAStandbySlotOfAnotherNamespace(t *testing.T) {
+	s, _ := csiFor(t)
+	_, err := s.NodePublishVolume(context.Background(), standbyReq(t, "attacker", "victim/g/g-abcd"))
+	if status.Code(err) != codes.PermissionDenied {
+		t.Fatalf("code = %v, want PermissionDenied", status.Code(err))
+	}
+}
+
+func TestAVolumeNamesAWorldOrAStandbySlot(t *testing.T) {
+	s, _ := csiFor(t)
+	req := standbyReq(t, "ns", "ns/g/g-abcd")
+	req.VolumeContext["world"] = "ns/g/k"
+	if _, err := s.NodePublishVolume(context.Background(), req); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("both: code = %v, want InvalidArgument", status.Code(err))
+	}
+	if _, err := s.NodePublishVolume(context.Background(), standbyReq(t, "ns", "ns/g")); status.Code(err) != codes.InvalidArgument {
+		t.Fatalf("a malformed slot: code = %v, want InvalidArgument", status.Code(err))
+	}
+}
+
+func TestAStandbySlotIsPublishedOverCSI(t *testing.T) {
+	s, _ := csiFor(t)
+	req := standbyReq(t, "ns", "ns/g/g-abcd")
+	if _, err := s.NodePublishVolume(context.Background(), req); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := s.NodeUnpublishVolume(context.Background(), &csi.NodeUnpublishVolumeRequest{
+		VolumeId: req.VolumeId, TargetPath: req.TargetPath,
+	}); err != nil {
+		t.Fatal(err)
+	}
+}

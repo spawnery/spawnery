@@ -22,11 +22,34 @@ package instance
 import (
 	"errors"
 	"fmt"
+	"strings"
 
 	"k8s.io/apimachinery/pkg/util/validation"
 )
 
 var ErrBadKey = errors.New("that key cannot be part of a server name")
+
+// SuffixAlphabet and SuffixLength shape the random suffix of an Ephemeral
+// group's own members. The alphabet avoids characters that are easy to
+// misread in a terminal.
+const (
+	SuffixAlphabet = "abcdefghjkmnpqrstuvwxyz23456789"
+	SuffixLength   = 4
+)
+
+// KeptName composes the member of an Ephemeral group that resumes the world
+// kept under key. It refuses a key of the random suffix's shape, which would
+// name a server the group may create on its own.
+func KeptName(group, key string) (string, error) {
+	name, err := Name(group, key)
+	if err != nil {
+		return "", err
+	}
+	if len(key) == SuffixLength && strings.Trim(key, SuffixAlphabet) == "" {
+		return "", fmt.Errorf("%w: %q has the shape of the random suffix the group's own servers carry", ErrBadKey, key)
+	}
+	return name, nil
+}
 
 // MaxNameLength is what a Server's name may be, because it is a DNS label and
 // the pod that carries it is named from it.

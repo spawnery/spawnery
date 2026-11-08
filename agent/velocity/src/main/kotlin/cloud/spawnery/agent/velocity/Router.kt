@@ -12,7 +12,14 @@ import com.velocitypowered.api.proxy.server.RegisteredServer
  * It balances by this proxy's own view of `playersConnected`, so several
  * proxies are even per proxy and not necessarily across the network.
  */
-class Router(private val directory: ServerDirectory) {
+class Router(
+    private val directory: ServerDirectory,
+    /**
+     * Whether a server stands outside its group and is reached by name only:
+     * a member resumed from a kept world. Never picked for its group.
+     */
+    private val standsApart: (server: String) -> Boolean = { false },
+) {
     /**
      * @param excluding server names never returned, compared
      *   case-insensitively. [Drain] passes every draining server, [Rescue]
@@ -26,6 +33,7 @@ class Router(private val directory: ServerDirectory) {
         for (group in groups) {
             val candidates = directory.inGroup(group)
                 .filter { candidate -> excluding.none { candidate.serverInfo.name.equals(it, ignoreCase = true) } }
+                .filter { candidate -> !standsApart(candidate.serverInfo.name) }
                 .filter { candidate -> mayJoin(candidate.serverInfo.name, group) }
             // Emptiness after the exclusion and the join rule, so a group either
             // one empties falls through to the next group.

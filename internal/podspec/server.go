@@ -296,7 +296,7 @@ func BuildServerPod(
 			{Name: "SPAWNERY_GROUP", Value: group.Name},
 			{Name: "SPAWNERY_SERVER", Value: srv.Name},
 			{Name: EnvOperatorEndpoint, Value: agentEndpoint},
-		}, heapEnv(srv)...), substitutionEnv(group.Spec.Substitution)...), keepEnv(group.Spec.Storage)...), replaceEnv(group.Spec.Storage)...), worldSyncEnv(group)...), group.Spec.Env...),
+		}, heapEnv(srv)...), substitutionEnv(group.Spec.Substitution)...), keepEnv(group.Spec.Storage)...), replaceEnv(group.Spec.Storage)...), worldSyncEnv(group, srv)...), group.Spec.Env...),
 		VolumeMounts: mounts,
 		// Readiness only: a liveness restart would kick every player, whereas the
 		// state machine deregisters on a red readiness probe.

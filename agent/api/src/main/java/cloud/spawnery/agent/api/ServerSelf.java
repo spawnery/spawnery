@@ -16,6 +16,8 @@ limitations under the License.
 
 package cloud.spawnery.agent.api;
 
+import java.util.Optional;
+
 /** A Paper backend's view of itself. */
 public non-sealed interface ServerSelf extends Self {
     /**
@@ -23,4 +25,14 @@ public non-sealed interface ServerSelf extends Self {
      * {@code spec.maxPlayers}, which is also what the agent reports upward.
      */
     int slots();
+
+    /**
+     * The key this server gave its world with {@link SpawneryApi#keyWorld},
+     * or empty: no key yet, or a server that cannot keep its world. A
+     * server that {@link SpawneryApi#startServer} started to resume a kept
+     * world reports that world's key.
+     */
+    default Optional<String> worldKey() {
+        return Optional.empty();
+    }
 }

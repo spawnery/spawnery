@@ -53,13 +53,13 @@ type BucketWorlds struct {
 	Base  string
 }
 
-// Exists counts the lease too: a node takes it at the mount, long before
-// the first manifest of a new world lands.
+// Exists counts a lease that names a node too: a node takes it at the mount,
+// long before the first manifest of a new world lands.
 func (b BucketWorlds) Exists(ctx context.Context, world string) (bool, error) {
 	if ok, err := WorldExists(ctx, b.Store, b.Base, world); ok || err != nil {
 		return ok, err
 	}
-	return exists(ctx, b.Store, WorldPrefix(b.Base, world)+LeaseName)
+	return leaseTaken(ctx, b.Store, WorldPrefix(b.Base, world))
 }
 
 func (b BucketWorlds) MarkDeleted(ctx context.Context, world string) error {

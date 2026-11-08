@@ -8,11 +8,15 @@ package cloud.spawnery.agent.pb;
 /**
  * <pre>
  * StartServerRequest asks for the member of an OnDemand group that carries
- * this key.
+ * this key, or resumes the world a member of an Ephemeral group kept under
+ * this key (KeyWorldRequest).
  *
  * The key is the caller's name for a world: the operator composes
  * "&lt;group&gt;-&lt;key&gt;", and that server is where this key's world is, every time.
  * Asking twice while it runs is answered, not refused (see already_running).
+ * For an Ephemeral group, the member that kept the world counts as running
+ * while it is still up, and the answer names it. A key without a kept world
+ * is NOT_FOUND there: an Ephemeral group starts no empty worlds by key.
  *
  * "&lt;group&gt;-&lt;key&gt;" becomes a server and pod name, so it must be a DNS label of
  * at most 63 characters: a UUID key leaves 26 for the group name. A key or
@@ -357,11 +361,15 @@ private static final long serialVersionUID = 0L;
   /**
    * <pre>
    * StartServerRequest asks for the member of an OnDemand group that carries
-   * this key.
+   * this key, or resumes the world a member of an Ephemeral group kept under
+   * this key (KeyWorldRequest).
    *
    * The key is the caller's name for a world: the operator composes
    * "&lt;group&gt;-&lt;key&gt;", and that server is where this key's world is, every time.
    * Asking twice while it runs is answered, not refused (see already_running).
+   * For an Ephemeral group, the member that kept the world counts as running
+   * while it is still up, and the answer names it. A key without a kept world
+   * is NOT_FOUND there: an Ephemeral group starts no empty worlds by key.
    *
    * "&lt;group&gt;-&lt;key&gt;" becomes a server and pod name, so it must be a DNS label of
    * at most 63 characters: a UUID key leaves 26 for the group name. A key or

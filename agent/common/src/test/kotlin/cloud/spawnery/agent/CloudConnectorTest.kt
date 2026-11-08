@@ -16,6 +16,7 @@ import cloud.spawnery.agent.pb.GroupState
 import cloud.spawnery.agent.pb.ListRestorePointsResult
 import cloud.spawnery.agent.pb.RequestError
 import cloud.spawnery.agent.pb.RestorePoint as PbRestorePoint
+import cloud.spawnery.agent.pb.KeyWorldResult
 import cloud.spawnery.agent.pb.RestoreWorldResult
 import cloud.spawnery.agent.pb.ScaleResult as PbScaleResult
 import cloud.spawnery.agent.pb.StartResources
@@ -696,6 +697,17 @@ class CloudConnectorTest {
         }
 
         assertTrue(stage.toCompletableFuture().get(1, TimeUnit.SECONDS).settling())
+    }
+
+    @Test
+    fun `keyWorld sends the key and reads the world back`() {
+        val connector = connector()
+        val stage = connector.keyWorld("round-7")
+
+        assertEquals("round-7", requested.single().keyWorld.key)
+        answer(connector) { setKeyWorld(KeyWorldResult.newBuilder().setWorld("minecraft/rounds/round-7")) }
+
+        assertEquals("minecraft/rounds/round-7", stage.toCompletableFuture().get(1, TimeUnit.SECONDS))
     }
 
     @Test

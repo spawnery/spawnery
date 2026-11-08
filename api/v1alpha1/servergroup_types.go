@@ -213,8 +213,9 @@ type StorageSpec struct {
 	// default, keeps it on a PersistentVolumeClaim per member. ObjectStore
 	// keeps it in the object store configured for the operator (chart value
 	// worldSync) and gives /data from a directory on the node that runs the
-	// member; it needs type OnDemand or Persistent and keep, and
-	// synchronises exactly what keep matches. It also needs spawnery's game images 0.24.3 or later,
+	// member; it needs keep and synchronises exactly what keep matches. On
+	// an Ephemeral group it is the only backend, and only members that gave
+	// their world a key through keyWorld use it. It also needs spawnery's game images 0.24.3 or later,
 	// whose bootstrapper holds the server until the world is on disk and
 	// whose entrypoint leaves the node agent's files alone: an older or a
 	// custom image starts on a half-downloaded world and can corrupt it, or
@@ -312,7 +313,9 @@ type MemberResourcesSpec struct {
 
 // ServerGroupSpec describes a group of Minecraft servers.
 // +kubebuilder:validation:XValidation:rule="self.type == oldSelf.type",message="spec.type is immutable"
-// +kubebuilder:validation:XValidation:rule="self.type != 'Ephemeral' || !has(self.storage)",message="spec.storage is not allowed for type Ephemeral"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Ephemeral' || !has(self.storage) || (has(self.storage.backend) && self.storage.backend == 'ObjectStore' && has(self.storage.keep))",message="spec.storage on type Ephemeral needs backend ObjectStore and keep"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Ephemeral' || !has(self.storage) || has(self.maxInstances)",message="spec.maxInstances is required for type Ephemeral with spec.storage"
+// +kubebuilder:validation:XValidation:rule="self.type != 'Ephemeral' || !has(oldSelf.storage) || has(self.storage)",message="spec.storage cannot be removed from type Ephemeral: kept worlds would lose their resumed members' volumes"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Ephemeral' || !has(self.replicas)",message="spec.replicas is not allowed for type Ephemeral"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Ephemeral' || has(self.scaling)",message="spec.scaling is required for type Ephemeral"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || !has(self.scaling)",message="spec.scaling is not allowed for type Persistent"
@@ -326,13 +329,13 @@ type MemberResourcesSpec struct {
 // +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || !has(self.update)",message="spec.update is not allowed for type OnDemand"
 // +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || has(self.storage)",message="spec.storage is required for type OnDemand"
 // +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || has(self.maxInstances)",message="spec.maxInstances is required for type OnDemand"
-// +kubebuilder:validation:XValidation:rule="self.type == 'OnDemand' || !has(self.maxInstances)",message="spec.maxInstances is only allowed for type OnDemand"
+// +kubebuilder:validation:XValidation:rule="self.type == 'OnDemand' || (self.type == 'Ephemeral' && has(self.storage)) || !has(self.maxInstances)",message="spec.maxInstances is only allowed for type OnDemand, and for type Ephemeral with spec.storage"
 // +kubebuilder:validation:XValidation:rule="self.type != 'OnDemand' || !has(self.changeoverStage) || self.changeoverStage == 0",message="spec.changeoverStage is not allowed for type OnDemand"
 // +kubebuilder:validation:XValidation:rule="!has(self.scaling) || self.scaling.minReplicas <= self.scaling.maxReplicas",message="scaling.minReplicas must not exceed scaling.maxReplicas"
 // +kubebuilder:validation:XValidation:rule="!has(self.update) || !has(self.update.minAvailable) || !has(self.scaling) || self.update.minAvailable < self.scaling.maxReplicas",message="spec.update.minAvailable must be less than spec.scaling.maxReplicas: keeping the floor needs room for one extra server"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || (has(self.storage.storageClassName) == has(oldSelf.storage.storageClassName) && (!has(self.storage.storageClassName) || self.storage.storageClassName == oldSelf.storage.storageClassName))",message="storage.storageClassName is immutable"
 // +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(oldSelf.storage) || self.storage.accessModes == oldSelf.storage.accessModes",message="storage.accessModes is immutable"
-// +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(self.storage.backend) || self.storage.backend != 'ObjectStore' || ((self.type == 'OnDemand' || self.type == 'Persistent') && has(self.storage.keep))",message="storage.backend ObjectStore needs type OnDemand or Persistent, and storage.keep"
+// +kubebuilder:validation:XValidation:rule="!has(self.storage) || !has(self.storage.backend) || self.storage.backend != 'ObjectStore' || has(self.storage.keep)",message="storage.backend ObjectStore needs storage.keep"
 // +kubebuilder:validation:XValidation:rule="self.type != 'Persistent' || ((has(self.storage) && has(self.storage.backend) ? self.storage.backend : 'Claim') == (has(oldSelf.storage) && has(oldSelf.storage.backend) ? oldSelf.storage.backend : 'Claim'))",message="storage.backend is immutable for type Persistent: a new backend would start every ordinal on a world it does not hold; see the persistent-worlds guide for moving a world"
 // +kubebuilder:validation:XValidation:rule="self.type == 'OnDemand' || !has(self.memberResources)",message="spec.memberResources is only allowed for type OnDemand"
 // +kubebuilder:validation:XValidation:rule="!has(self.playableSlots) || (self.playableSlots >= 1 && self.playableSlots <= self.maxPlayers)",message="spec.playableSlots must be between 1 and spec.maxPlayers"
@@ -391,7 +394,9 @@ type ServerGroupSpec struct {
 	//
 	// A fleet ceiling, not a per-player quota. Zero closes the group: new
 	// starts are refused and every world stays where it is. Required, with no
-	// default.
+	// default, for type OnDemand and for type Ephemeral with storage, where it
+	// bounds only the members startServer resumed from a kept world; the
+	// group's own members stay sized by spec.scaling.
 	// +kubebuilder:validation:Minimum=0
 	// +optional
 	MaxInstances *int32 `json:"maxInstances,omitempty"`
@@ -499,7 +504,9 @@ type ServerGroupSpec struct {
 	Update *UpdateSpec `json:"update,omitempty"`
 
 	// Storage configures where members' worlds live: a claim per member, or
-	// the object store with backend ObjectStore. Persistent and OnDemand only.
+	// the object store with backend ObjectStore. On an Ephemeral group it
+	// needs backend ObjectStore and lets a member keep its world under a key;
+	// once set there, it cannot be removed.
 	// +optional
 	Storage *StorageSpec `json:"storage,omitempty"`
 

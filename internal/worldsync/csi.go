@@ -41,6 +41,9 @@ const (
 	AttrWorld       = "world"
 	AttrKeep        = "keep"
 	AttrReplace     = "replace"
+	// AttrStandby replaces AttrWorld for a member whose world has no key yet:
+	// "<namespace>/<group>/<server>".
+	AttrStandby = "standby"
 )
 
 type CSIServer struct {
@@ -101,12 +104,19 @@ func (s *CSIServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishV
 	if vc[ctxEphemeral] != "true" {
 		return nil, status.Error(codes.InvalidArgument, "only inline ephemeral volumes are served")
 	}
-	world, ns := vc[AttrWorld], vc[ctxPodNamespace]
-	if err := checkWorld(world); err != nil {
+	world, standby, ns := vc[AttrWorld], vc[AttrStandby], vc[ctxPodNamespace]
+	named := world
+	switch {
+	case world != "" && standby != "":
+		return nil, status.Error(codes.InvalidArgument, "a volume names a world or a standby slot, not both")
+	case standby != "":
+		named = standby
+	}
+	if err := checkWorld(named); err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	if strings.Split(world, "/")[0] != ns {
-		return nil, status.Errorf(codes.PermissionDenied, "a pod in namespace %q asked for world %q", ns, world)
+	if strings.Split(named, "/")[0] != ns {
+		return nil, status.Errorf(codes.PermissionDenied, "a pod in namespace %q asked for world %q", ns, named)
 	}
 	if vc[AttrKeep] == "" {
 		return nil, status.Error(codes.InvalidArgument, "the keep attribute is empty")
@@ -126,7 +136,7 @@ func (s *CSIServer) NodePublishVolume(ctx context.Context, req *csi.NodePublishV
 	if err != nil {
 		return nil, status.Error(codes.InvalidArgument, err.Error())
 	}
-	err = s.node.Publish(ctx, PublishRequest{World: world, Keep: keep, Replace: replace, Target: req.GetTargetPath(), Pod: ns + "/" + vc[ctxPodName], Group: group})
+	err = s.node.Publish(ctx, PublishRequest{World: world, Standby: standby, Keep: keep, Replace: replace, Target: req.GetTargetPath(), Pod: ns + "/" + vc[ctxPodName], Group: group})
 	switch {
 	case errors.Is(err, ErrUnavailable):
 		return nil, status.Error(codes.Unavailable, err.Error())

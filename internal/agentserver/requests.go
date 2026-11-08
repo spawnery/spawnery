@@ -192,6 +192,8 @@ func (s *Server) answerCloudRequest(
 		return s.answerListRestorePoints(ctx, logger, id, req.GetId(), req.GetListRestorePoints())
 	case req.GetRestoreWorld() != nil:
 		return s.answerRestoreWorld(ctx, logger, id, req.GetId(), req.GetRestoreWorld())
+	case req.GetKeyWorld() != nil:
+		return s.answerKeyWorld(ctx, logger, id, req.GetId(), req.GetKeyWorld())
 	default:
 		return refuse(req.GetId(), agentpb.RequestError_REASON_UNSPECIFIED,
 			"this operator does not know that request")
@@ -385,7 +387,8 @@ func (s *Server) answerConnect(
 }
 
 // resolveTarget turns a request's target into one registered server name; for
-// a group, the registered member with the most free playable slots.
+// a group, the registered member with the most free playable slots. A member
+// resumed from a kept world is reachable by its name only.
 func resolveTarget(state *agentpb.NetworkState, req *agentpb.ConnectRequest) (string, bool) {
 	switch {
 	case req.GetServer() != "":
@@ -397,7 +400,7 @@ func resolveTarget(state *agentpb.NetworkState, req *agentpb.ConnectRequest) (st
 	case req.GetGroup() != "":
 		best, bestFree, bestRoom := "", -1, -1
 		for _, srv := range state.GetServers() {
-			if srv.GetGroup() != req.GetGroup() || !srv.GetRegistered() {
+			if srv.GetGroup() != req.GetGroup() || !srv.GetRegistered() || srv.GetResumed() {
 				continue
 			}
 			free, room := playableFree(srv), int(srv.GetSlots()-srv.GetPlayers())
@@ -682,6 +685,9 @@ func (s *Server) answerStartServer(
 	case errors.Is(err, ErrWorldSyncOff):
 		return refuse(reqID, agentpb.RequestError_REFUSED,
 			"that group keeps its worlds in an object store, and this operator runs without --world-sync")
+	case errors.Is(err, ErrNoWorld):
+		return refuse(reqID, agentpb.RequestError_NOT_FOUND,
+			"that group keeps no world under that key; a member keeps one with keyWorld")
 	case err != nil:
 		logger.V(1).Info("could not start an on-demand server", "reason", err.Error())
 		return refuse(reqID, agentpb.RequestError_UNAVAILABLE,

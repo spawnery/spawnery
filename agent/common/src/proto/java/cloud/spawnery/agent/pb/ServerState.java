@@ -38,6 +38,7 @@ private static final long serialVersionUID = 0L;
     state_ = "";
     incarnation_ = "";
     node_ = "";
+    worldKey_ = "";
   }
 
   public static final com.google.protobuf.Descriptors.Descriptor
@@ -589,6 +590,72 @@ java.lang.String defaultValue) {
     return unschedulable_;
   }
 
+  public static final int WORLD_KEY_FIELD_NUMBER = 17;
+  @SuppressWarnings("serial")
+  private volatile java.lang.Object worldKey_ = "";
+  /**
+   * <pre>
+   * The key this member of an Ephemeral group gave its world through
+   * KeyWorldRequest; empty for every other server.
+   * </pre>
+   *
+   * <code>string world_key = 17;</code>
+   * @return The worldKey.
+   */
+  @java.lang.Override
+  public java.lang.String getWorldKey() {
+    java.lang.Object ref = worldKey_;
+    if (ref instanceof java.lang.String) {
+      return (java.lang.String) ref;
+    } else {
+      com.google.protobuf.ByteString bs = 
+          (com.google.protobuf.ByteString) ref;
+      java.lang.String s = bs.toStringUtf8();
+      worldKey_ = s;
+      return s;
+    }
+  }
+  /**
+   * <pre>
+   * The key this member of an Ephemeral group gave its world through
+   * KeyWorldRequest; empty for every other server.
+   * </pre>
+   *
+   * <code>string world_key = 17;</code>
+   * @return The bytes for worldKey.
+   */
+  @java.lang.Override
+  public com.google.protobuf.ByteString
+      getWorldKeyBytes() {
+    java.lang.Object ref = worldKey_;
+    if (ref instanceof java.lang.String) {
+      com.google.protobuf.ByteString b = 
+          com.google.protobuf.ByteString.copyFromUtf8(
+              (java.lang.String) ref);
+      worldKey_ = b;
+      return b;
+    } else {
+      return (com.google.protobuf.ByteString) ref;
+    }
+  }
+
+  public static final int RESUMED_FIELD_NUMBER = 18;
+  private boolean resumed_ = false;
+  /**
+   * <pre>
+   * True for a member of an Ephemeral group that StartServerRequest started
+   * to resume a kept world. Such a member stands outside the group: it is
+   * reachable by its name and never picked for the group.
+   * </pre>
+   *
+   * <code>bool resumed = 18;</code>
+   * @return The resumed.
+   */
+  @java.lang.Override
+  public boolean getResumed() {
+    return resumed_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -653,6 +720,12 @@ java.lang.String defaultValue) {
     }
     if (unschedulable_ != false) {
       output.writeBool(16, unschedulable_);
+    }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(worldKey_)) {
+      com.google.protobuf.GeneratedMessage.writeString(output, 17, worldKey_);
+    }
+    if (resumed_ != false) {
+      output.writeBool(18, resumed_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -722,6 +795,13 @@ java.lang.String defaultValue) {
       size += com.google.protobuf.CodedOutputStream
         .computeBoolSize(16, unschedulable_);
     }
+    if (!com.google.protobuf.GeneratedMessage.isStringEmpty(worldKey_)) {
+      size += com.google.protobuf.GeneratedMessage.computeStringSize(17, worldKey_);
+    }
+    if (resumed_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(18, resumed_);
+    }
     return size;
   }
   @java.lang.Override
@@ -781,6 +861,10 @@ java.lang.String defaultValue) {
     }
     if (getUnschedulable()
         != other.getUnschedulable()) return false;
+    if (!getWorldKey()
+        .equals(other.getWorldKey())) return false;
+    if (getResumed()
+        != other.getResumed()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -832,6 +916,11 @@ java.lang.String defaultValue) {
     hash = (37 * hash) + UNSCHEDULABLE_FIELD_NUMBER;
     hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
         getUnschedulable());
+    hash = (37 * hash) + WORLD_KEY_FIELD_NUMBER;
+    hash = (53 * hash) + getWorldKey().hashCode();
+    hash = (37 * hash) + RESUMED_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getResumed());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -1015,6 +1104,8 @@ java.lang.String defaultValue) {
         resourcesBuilder_ = null;
       }
       unschedulable_ = false;
+      worldKey_ = "";
+      resumed_ = false;
       return this;
     }
 
@@ -1101,6 +1192,12 @@ java.lang.String defaultValue) {
       if (((from_bitField0_ & 0x00008000) != 0)) {
         result.unschedulable_ = unschedulable_;
       }
+      if (((from_bitField0_ & 0x00010000) != 0)) {
+        result.worldKey_ = worldKey_;
+      }
+      if (((from_bitField0_ & 0x00020000) != 0)) {
+        result.resumed_ = resumed_;
+      }
       result.bitField0_ |= to_bitField0_;
     }
 
@@ -1175,6 +1272,14 @@ java.lang.String defaultValue) {
       }
       if (other.getUnschedulable() != false) {
         setUnschedulable(other.getUnschedulable());
+      }
+      if (!other.getWorldKey().isEmpty()) {
+        worldKey_ = other.worldKey_;
+        bitField0_ |= 0x00010000;
+        onChanged();
+      }
+      if (other.getResumed() != false) {
+        setResumed(other.getResumed());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -1288,6 +1393,16 @@ java.lang.String defaultValue) {
               bitField0_ |= 0x00008000;
               break;
             } // case 128
+            case 138: {
+              worldKey_ = input.readStringRequireUtf8();
+              bitField0_ |= 0x00010000;
+              break;
+            } // case 138
+            case 144: {
+              resumed_ = input.readBool();
+              bitField0_ |= 0x00020000;
+              break;
+            } // case 144
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2489,6 +2604,153 @@ java.lang.String defaultValue) {
     public Builder clearUnschedulable() {
       bitField0_ = (bitField0_ & ~0x00008000);
       unschedulable_ = false;
+      onChanged();
+      return this;
+    }
+
+    private java.lang.Object worldKey_ = "";
+    /**
+     * <pre>
+     * The key this member of an Ephemeral group gave its world through
+     * KeyWorldRequest; empty for every other server.
+     * </pre>
+     *
+     * <code>string world_key = 17;</code>
+     * @return The worldKey.
+     */
+    public java.lang.String getWorldKey() {
+      java.lang.Object ref = worldKey_;
+      if (!(ref instanceof java.lang.String)) {
+        com.google.protobuf.ByteString bs =
+            (com.google.protobuf.ByteString) ref;
+        java.lang.String s = bs.toStringUtf8();
+        worldKey_ = s;
+        return s;
+      } else {
+        return (java.lang.String) ref;
+      }
+    }
+    /**
+     * <pre>
+     * The key this member of an Ephemeral group gave its world through
+     * KeyWorldRequest; empty for every other server.
+     * </pre>
+     *
+     * <code>string world_key = 17;</code>
+     * @return The bytes for worldKey.
+     */
+    public com.google.protobuf.ByteString
+        getWorldKeyBytes() {
+      java.lang.Object ref = worldKey_;
+      if (ref instanceof String) {
+        com.google.protobuf.ByteString b = 
+            com.google.protobuf.ByteString.copyFromUtf8(
+                (java.lang.String) ref);
+        worldKey_ = b;
+        return b;
+      } else {
+        return (com.google.protobuf.ByteString) ref;
+      }
+    }
+    /**
+     * <pre>
+     * The key this member of an Ephemeral group gave its world through
+     * KeyWorldRequest; empty for every other server.
+     * </pre>
+     *
+     * <code>string world_key = 17;</code>
+     * @param value The worldKey to set.
+     * @return This builder for chaining.
+     */
+    public Builder setWorldKey(
+        java.lang.String value) {
+      if (value == null) { throw new NullPointerException(); }
+      worldKey_ = value;
+      bitField0_ |= 0x00010000;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * The key this member of an Ephemeral group gave its world through
+     * KeyWorldRequest; empty for every other server.
+     * </pre>
+     *
+     * <code>string world_key = 17;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearWorldKey() {
+      worldKey_ = getDefaultInstance().getWorldKey();
+      bitField0_ = (bitField0_ & ~0x00010000);
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * The key this member of an Ephemeral group gave its world through
+     * KeyWorldRequest; empty for every other server.
+     * </pre>
+     *
+     * <code>string world_key = 17;</code>
+     * @param value The bytes for worldKey to set.
+     * @return This builder for chaining.
+     */
+    public Builder setWorldKeyBytes(
+        com.google.protobuf.ByteString value) {
+      if (value == null) { throw new NullPointerException(); }
+      checkByteStringIsUtf8(value);
+      worldKey_ = value;
+      bitField0_ |= 0x00010000;
+      onChanged();
+      return this;
+    }
+
+    private boolean resumed_ ;
+    /**
+     * <pre>
+     * True for a member of an Ephemeral group that StartServerRequest started
+     * to resume a kept world. Such a member stands outside the group: it is
+     * reachable by its name and never picked for the group.
+     * </pre>
+     *
+     * <code>bool resumed = 18;</code>
+     * @return The resumed.
+     */
+    @java.lang.Override
+    public boolean getResumed() {
+      return resumed_;
+    }
+    /**
+     * <pre>
+     * True for a member of an Ephemeral group that StartServerRequest started
+     * to resume a kept world. Such a member stands outside the group: it is
+     * reachable by its name and never picked for the group.
+     * </pre>
+     *
+     * <code>bool resumed = 18;</code>
+     * @param value The resumed to set.
+     * @return This builder for chaining.
+     */
+    public Builder setResumed(boolean value) {
+
+      resumed_ = value;
+      bitField0_ |= 0x00020000;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * True for a member of an Ephemeral group that StartServerRequest started
+     * to resume a kept world. Such a member stands outside the group: it is
+     * reachable by its name and never picked for the group.
+     * </pre>
+     *
+     * <code>bool resumed = 18;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearResumed() {
+      bitField0_ = (bitField0_ & ~0x00020000);
+      resumed_ = false;
       onChanged();
       return this;
     }

@@ -61,7 +61,7 @@ type RestorePoints struct {
 // answersOffTheLoop is true for the requests that wait on the object store,
 // which would hold a session's loop for as long.
 func answersOffTheLoop(req *agentpb.CloudRequest) bool {
-	return req.GetListRestorePoints() != nil || req.GetRestoreWorld() != nil
+	return req.GetListRestorePoints() != nil || req.GetRestoreWorld() != nil || req.GetKeyWorld() != nil
 }
 
 // restoreTimeout ends a restore long before the lease it holds goes stale. The

@@ -251,6 +251,8 @@ func serverState(srv *spawneryv1alpha1.Server, node string, announced agent.Anno
 		Held:          srv.Spec.Hold,
 		Node:          node,
 		Resources:     ToStartResources(srv.Spec.Resources, srv.Spec.Heap),
+		WorldKey:      srv.Spec.WorldKey,
+		Resumed:       srv.Spec.Resumed,
 		// Cleared by a node: the status can lag the bind by one reconcile, and
 		// the two fields never both say yes.
 		Unschedulable: node == "" && Unschedulable(srv),

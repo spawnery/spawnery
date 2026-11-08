@@ -27,7 +27,16 @@ import (
 
 type countingStore struct {
 	*MemStore
-	gets, heads, puts, deletes atomic.Int64
+	gets, heads, puts, deletes, lists atomic.Int64
+}
+
+func (c *countingStore) List(ctx context.Context, prefix string) ([]string, error) {
+	c.lists.Add(1)
+	return c.MemStore.List(ctx, prefix)
+}
+
+func (c *countingStore) calls() int64 {
+	return c.gets.Load() + c.heads.Load() + c.puts.Load() + c.deletes.Load() + c.lists.Load()
 }
 
 func (c *countingStore) Get(ctx context.Context, key string) (io.ReadCloser, ObjectInfo, error) {

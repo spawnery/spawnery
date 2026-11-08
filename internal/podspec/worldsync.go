@@ -33,24 +33,42 @@ const (
 	WorldSyncAttrWorld   = "world"
 	WorldSyncAttrKeep    = "keep"
 	WorldSyncAttrReplace = "replace"
+	WorldSyncAttrStandby = "standby"
 	EnvWorldSync         = "SPAWNERY_WORLD_SYNC"
 	EnvWorldSyncInterval = "SPAWNERY_WORLD_SYNC_INTERVAL"
+	// WorldSyncStandby is EnvWorldSync for a member of an Ephemeral group
+	// whose world has no key yet: the node gives it an empty directory and
+	// the store sees nothing of it until keyWorld.
+	WorldSyncStandby = "standby"
 )
 
 func WorldKey(srv *spawneryv1alpha1.Server) string {
 	switch {
 	case srv.Spec.Key != "":
 		return srv.Spec.Key
+	case srv.Spec.WorldKey != "":
+		return srv.Spec.WorldKey
 	case srv.Spec.Ordinal != nil:
 		return strconv.Itoa(int(*srv.Spec.Ordinal))
 	}
 	return ""
 }
 
+// standby reports whether a member gets an unsynchronised directory: a member
+// of an Ephemeral group whose world has no key. Keyed later through keyWorld,
+// the same pod keeps that directory and the node agent starts syncing it.
+func standby(group *spawneryv1alpha1.ServerGroup, srv *spawneryv1alpha1.Server) bool {
+	return group.IsEphemeral() && srv.Spec.WorldKey == ""
+}
+
 func worldSyncVolume(group *spawneryv1alpha1.ServerGroup, srv *spawneryv1alpha1.Server) corev1.Volume {
 	attrs := map[string]string{
-		WorldSyncAttrWorld: srv.Namespace + "/" + group.Name + "/" + WorldKey(srv),
-		WorldSyncAttrKeep:  strings.Join(group.Spec.Storage.Keep, "\n"),
+		WorldSyncAttrKeep: strings.Join(group.Spec.Storage.Keep, "\n"),
+	}
+	if standby(group, srv) {
+		attrs[WorldSyncAttrStandby] = srv.Namespace + "/" + group.Name + "/" + srv.Name
+	} else {
+		attrs[WorldSyncAttrWorld] = srv.Namespace + "/" + group.Name + "/" + WorldKey(srv)
 	}
 	if len(group.Spec.Storage.Replace) > 0 {
 		attrs[WorldSyncAttrReplace] = strings.Join(group.Spec.Storage.Replace, "\n")
@@ -64,9 +82,12 @@ func worldSyncVolume(group *spawneryv1alpha1.ServerGroup, srv *spawneryv1alpha1.
 	}
 }
 
-func worldSyncEnv(group *spawneryv1alpha1.ServerGroup) []corev1.EnvVar {
+func worldSyncEnv(group *spawneryv1alpha1.ServerGroup, srv *spawneryv1alpha1.Server) []corev1.EnvVar {
 	if !group.UsesObjectStore() {
 		return nil
+	}
+	if standby(group, srv) {
+		return []corev1.EnvVar{{Name: EnvWorldSync, Value: WorldSyncStandby}}
 	}
 	return []corev1.EnvVar{{Name: EnvWorldSync, Value: "1"}}
 }

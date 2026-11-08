@@ -7,13 +7,14 @@ package cloud.spawnery.agent.pb;
 
 /**
  * <pre>
- * StopServerRequest deletes one member of an OnDemand group.
+ * StopServerRequest deletes one member of an OnDemand group, or a member of an
+ * Ephemeral group that kept its world under a key.
  *
  * Its players are moved through the proxies within the group's drain timeout
- * and the pod goes. The world stays on its claim, and the next start of the
- * same key finds it.
+ * and the pod goes. The world stays on its claim or in the object store, and
+ * the next start of the same key finds it.
  *
- * REFUSED for a server that is not a member of an OnDemand group.
+ * REFUSED for any other server.
  * </pre>
  *
  * Protobuf type {@code spawnery.agent.v1alpha1.StopServerRequest}
@@ -260,13 +261,14 @@ private static final long serialVersionUID = 0L;
   }
   /**
    * <pre>
-   * StopServerRequest deletes one member of an OnDemand group.
+   * StopServerRequest deletes one member of an OnDemand group, or a member of an
+   * Ephemeral group that kept its world under a key.
    *
    * Its players are moved through the proxies within the group's drain timeout
-   * and the pod goes. The world stays on its claim, and the next start of the
-   * same key finds it.
+   * and the pod goes. The world stays on its claim or in the object store, and
+   * the next start of the same key finds it.
    *
-   * REFUSED for a server that is not a member of an OnDemand group.
+   * REFUSED for any other server.
    * </pre>
    *
    * Protobuf type {@code spawnery.agent.v1alpha1.StopServerRequest}

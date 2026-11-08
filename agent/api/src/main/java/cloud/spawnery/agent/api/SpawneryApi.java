@@ -237,7 +237,14 @@ public interface SpawneryApi {
      * <p>The key names a world and not a server: the operator composes the
      * server's name from the group and the key, and the same key later finds
      * the same world. Only a group of type {@code OnDemand} has members to
-     * ask for; anything else fails.
+     * ask for, with one exception: on an ephemeral group with
+     * {@code storage}, this resumes the world a member kept with
+     * {@link #keyWorld}. The member it starts stands outside the group's
+     * sizing, is reached by its name only, and counts against the group's
+     * {@code maxInstances}; while the member that kept the world still runs,
+     * the answer names that one with {@link StartedServer#alreadyRunning()}
+     * set. A key that keeps no world there fails with {@code NOT_FOUND}.
+     * Anything else fails.
      *
      * <p><b>The stage completing means the server was asked for, not that it
      * can take players.</b> It starts out as any server does; watch
@@ -319,9 +326,12 @@ public interface SpawneryApi {
      * on its way out succeeds too, so a second press of the same button is not
      * an error.
      *
-     * <p>It fails with {@code REFUSED} for a server that is not a member of an
-     * on-demand group, which is what keeps a wrong name from taking down a
-     * lobby, and with {@code NOT_FOUND} for a name this network does not have.
+     * <p>It also stops a member of an ephemeral group that kept its world with
+     * {@link #keyWorld}; that world stays in the object store.
+     *
+     * <p>It fails with {@code REFUSED} for any other server, which is what
+     * keeps a wrong name from taking down a lobby, and with {@code NOT_FOUND}
+     * for a name this network does not have.
      * The failure has the shape {@link #startServer} describes, the timeout and
      * the renewed stream included. Asking again after either is safe, but a
      * stop that was in fact carried out may answer {@code NOT_FOUND} the second
@@ -334,7 +344,10 @@ public interface SpawneryApi {
      * {@link #stopServer} does, and deletes its world. There is no undo.
      *
      * <p>Group and key as {@link #startServer} takes them, because a stopped
-     * server's world is all that is left of it. The stage completes when the
+     * server's world is all that is left of it. On an ephemeral group with
+     * {@code storage} it deletes the world kept under the key with
+     * {@link #keyWorld}, and stops the server that carries it, if one runs.
+     * Such a world lives until this is called; nothing expires it. The stage completes when the
      * deletion is under way; a {@link #startServer} of the same key answers
      * {@code UNAVAILABLE} until the world is gone, and then starts an empty
      * one.
@@ -348,6 +361,37 @@ public interface SpawneryApi {
      * world is gone.
      */
     CompletionStage<Void> deleteServer(String group, String key);
+
+    /**
+     * Keeps this server's world under a key: from now on it is saved to the
+     * object store like a private server's, and {@link #startServer} with
+     * this server's group and the same key resumes it later on a new server.
+     *
+     * <p>Only for a member of an ephemeral group whose {@code storage} keeps
+     * worlds in the object store; a member that never calls it never touches
+     * the store. The key is set once: asking again with the same key
+     * succeeds, another key fails. A key may not have the shape of the random
+     * suffix the group gives its own servers (four characters of
+     * {@code abcdefghjkmnpqrstuvwxyz23456789}), since {@code <group>-<key>}
+     * is the name of the server that resumes it.
+     *
+     * <p>The stage completes once the node holds the world under the key and
+     * the agent has asked for the first snapshot; that snapshot reaches the
+     * object store shortly after. From then on the world is saved every
+     * snapshot interval and when the server stops.
+     *
+     * <p>It fails with {@code REFUSED} for a proxy, a server of another kind of
+     * group, a key no name can be built from, a key that already holds a
+     * world or that another server carries, and a second key; with
+     * {@code UNAVAILABLE} while a world under that key is still being deleted
+     * and when the operator could not write the key just now. Asking again
+     * after either is safe. The failure has the shape {@link #startServer}
+     * describes, except that the stage times out after 75 seconds rather
+     * than ten.
+     *
+     * <p>Agents older than 0.35.0 do not have this method.
+     */
+    CompletionStage<Void> keyWorld(String key);
 
     /**
      * Lists the generations of a private server's world that

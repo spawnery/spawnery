@@ -184,3 +184,65 @@ func TestServerWithoutResourcesCannotGainThem(t *testing.T) {
 		t.Fatalf("adding spec.resources: err = %v, want 'spec.resources is immutable'", err)
 	}
 }
+
+func TestServerWorldKeyRules(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	both := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "both", Namespace: ns},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "rounds"},
+			Key:      "a", WorldKey: "a",
+		},
+	}
+	if err := c.Create(ctx, both); err == nil || !strings.Contains(err.Error(), "spec.key and spec.worldKey are mutually exclusive") {
+		t.Fatalf("key and worldKey: err = %v", err)
+	}
+	resumedNoKey := &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: "resumed-no-key", Namespace: ns},
+		Spec: spawneryv1alpha1.ServerSpec{
+			GroupRef: spawneryv1alpha1.ObjectRef{Name: "rounds"},
+			Resumed:  true,
+		},
+	}
+	if err := c.Create(ctx, resumedNoKey); err == nil || !strings.Contains(err.Error(), "spec.resumed needs spec.worldKey") {
+		t.Fatalf("resumed without worldKey: err = %v", err)
+	}
+
+	key := types.NamespacedName{Name: "rounds-abcde", Namespace: ns}
+	if err := c.Create(ctx, &spawneryv1alpha1.Server{
+		ObjectMeta: metav1.ObjectMeta{Name: key.Name, Namespace: ns},
+		Spec:       spawneryv1alpha1.ServerSpec{GroupRef: spawneryv1alpha1.ObjectRef{Name: "rounds"}},
+	}); err != nil {
+		t.Fatalf("create: %v", err)
+	}
+	get := func() *spawneryv1alpha1.Server {
+		s := &spawneryv1alpha1.Server{}
+		if err := c.Get(ctx, key, s); err != nil {
+			t.Fatalf("get: %v", err)
+		}
+		return s
+	}
+	s := get()
+	s.Spec.WorldKey = "first"
+	if err := c.Update(ctx, s); err != nil {
+		t.Fatalf("setting worldKey once: %v", err)
+	}
+	const setOnce = "spec.worldKey cannot be changed or removed once set"
+	s = get()
+	s.Spec.WorldKey = "second"
+	if err := c.Update(ctx, s); err == nil || !strings.Contains(err.Error(), setOnce) {
+		t.Fatalf("changing worldKey: err = %v, want %q", err, setOnce)
+	}
+	s = get()
+	s.Spec.WorldKey = ""
+	if err := c.Update(ctx, s); err == nil || !strings.Contains(err.Error(), setOnce) {
+		t.Fatalf("removing worldKey: err = %v, want %q", err, setOnce)
+	}
+	s = get()
+	s.Spec.Resumed = true
+	if err := c.Update(ctx, s); err == nil || !strings.Contains(err.Error(), "spec.resumed is immutable") {
+		t.Fatalf("setting resumed later: err = %v", err)
+	}
+}

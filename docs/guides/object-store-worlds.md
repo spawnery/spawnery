@@ -2,7 +2,9 @@
 
 An on-demand group whose worlds live in an S3 bucket instead of on a claim per
 member. A persistent group can use the same backend; see [Worlds in the object
-store](persistent-worlds.md#worlds-in-the-object-store). The example below
+store](persistent-worlds.md#worlds-in-the-object-store). An ephemeral group
+uses it to keep single rounds; see [Keeping a round of an ephemeral
+group](#keeping-a-round-of-an-ephemeral-group). The example below
 joins the Network of `config/samples/network.yaml`, and the
 installation needs the chart's `worldSync` values first (below):
 
@@ -117,8 +119,8 @@ which is the form the node agent sends. Requests use path-style addressing.
 
 ## What the group needs
 
-The API refuses `ObjectStore` without `type: OnDemand` or `type: Persistent`,
-and without `keep`. `keep` is exactly what is synced, so list every level
+The API refuses `ObjectStore` without `keep`. An `Ephemeral` group accepts no
+other backend. `keep` is exactly what is synced, so list every level
 directory and every plugin directory that holds state. Paper 26.3, which the example's image runs, keeps
 all dimensions of a world inside its level directory
 (`world/dimensions/minecraft/the_nether` and `.../the_end`) and moves the
@@ -301,6 +303,96 @@ mid-restore, the world stays held until that lease goes stale after 10
 minutes, and starts and further restores answer `UNAVAILABLE` meanwhile. Each
 restore records the event `WorldRestored` on the group and counts in
 `spawnery_world_restores_total`.
+
+## Keeping a round of an ephemeral group
+
+An ephemeral group stays sized by `spareSlots`, and its servers start on an
+empty world as before. With `storage`, a running member can keep its world
+under a key, and a later `startServer` with the same group and key resumes that
+world on a new server:
+
+```yaml
+spec:
+  type: Ephemeral
+  scaling:
+    minReplicas: 1
+    maxReplicas: 20
+    spareSlots: 16
+  # Bounds only the servers startServer resumed; required with storage.
+  maxInstances: 10
+  storage:
+    backend: ObjectStore
+    size: 2Gi
+    keep: [world]
+```
+
+Before adding `storage` to an ephemeral group that already runs:
+
+- Run the operator with `--world-sync`. Without it, the operator refuses every
+  member of the group and creates no pod for any of them.
+- Roll out the node agent, `spawnery-worldsync`, 0.35.0 or later. An older one
+  does not know the standby volume, and every member's pod waits in
+  `ContainerCreating`.
+- Move the group to a game image, and the proxies to a Velocity image, of
+  0.35.0 or later. An older Paper agent has no `keyWorld`. An older Velocity
+  agent does not know which members were resumed and sends players who join
+  the group to them as to any other member.
+
+Adding `storage` changes the group's pods and rolls it, so update both first.
+
+The game plugin decides which rounds to keep. It calls `keyWorld(key)` on the
+server that runs the round
+([what a plugin can do](../plugin-api/what-a-plugin-can-do.md)):
+
+1. The operator writes a binding, `<namespace>/<group>/<key>/binding.json`,
+   that names the server and its pod, and then records the key on the
+   `Server` as `spec.worldKey`.
+2. The agent asks the node agent for the key. The node agent takes the key only
+   when the binding names its own server, the key holds no world yet and no
+   deletion is pending; it takes the world's lease and syncs the directory the
+   server already runs on.
+3. The agent takes the first snapshot at once. From then on the world is saved
+   every snapshot interval and once more when the server stops, as for an
+   on-demand member.
+
+A member that never calls `keyWorld` makes no call to the bucket. Its `/data`
+is a directory on the node in standby: the pod's volume names the slot
+(`standby: <namespace>/<group>/<server>`) instead of a world, and the
+directory is deleted when the pod ends.
+
+`startServer(group, key)` then:
+
+- names the member that kept the world, with `alreadyRunning`, while that one
+  still runs;
+- otherwise creates `<group>-<key>` with `spec.worldKey` and `spec.resumed`,
+  which mounts the world as an on-demand member does;
+- answers `NOT_FOUND` for a key without a world: an ephemeral group starts no
+  empty world by key.
+
+A resumed server stands outside the group. The sizing rule, the free slots,
+the rolling update and the failure streak ignore it, it is never rolled, and
+the proxies reach it by name only, never as a pick for the group. Only resumed
+servers count against `maxInstances`. When it finishes, the group deletes its
+`Server`; its world stays. `stopServer` stops it, or the member that kept a
+world, and `deleteServer(group, key)` deletes the world and the server that
+carries it.
+
+A key is set once. It has to make `<group>-<key>` a valid server name, and it
+may not have the shape of the random suffix the group gives its own servers
+(four characters of `abcdefghjkmnpqrstuvwxyz23456789`).
+
+Things to know:
+
+- A kept world lives until `deleteServer`. Nothing expires it.
+- A resume after the node of the kept server died waits in
+  `ContainerCreating` until that node's lease goes stale, up to 10 minutes.
+- A server that is drained or rolled is not resumed by itself; the plugin asks
+  again.
+- The standby directory is on the node agent's host path, not in the pod's
+  ephemeral storage, so the kubelet neither counts nor limits it.
+- `storage` cannot be removed from an ephemeral group once set, and every
+  member then needs the node agent.
+- `restorePoints` and `restoreWorld` stay for on-demand groups.
 
 ## Moving existing worlds in
 
