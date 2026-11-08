@@ -98,6 +98,9 @@ func fillKeyOf(c fillCandidate) fillKey {
 type pendingMoves struct {
 	clock func() time.Time
 	ttl   time.Duration
+	// afterChoose runs between a reserve's choice and its record; a test
+	// holds it to make a second chooser arrive inside that window.
+	afterChoose func()
 
 	mu    sync.Mutex
 	moves map[pendingKey][]time.Time
@@ -112,8 +115,38 @@ func newPendingMoves(clock func() time.Time, ttl time.Duration) *pendingMoves {
 func (p *pendingMoves) add(namespace, server string) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
+	p.addLocked(namespace, server, p.clock())
+}
+
+func (p *pendingMoves) count(namespace, server string) int32 {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return p.countLocked(namespace, server, p.clock())
+}
+
+// reserve runs choose against the tally and records the server it returns
+// when move is true, under one lock, so two sessions cannot both read a
+// server's last seat as free.
+func (p *pendingMoves) reserve(
+	namespace string,
+	choose func(count func(server string) int32) (server string, move bool),
+) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
 
 	now := p.clock()
+	server, move := choose(func(server string) int32 {
+		return p.countLocked(namespace, server, now)
+	})
+	if p.afterChoose != nil {
+		p.afterChoose()
+	}
+	if move {
+		p.addLocked(namespace, server, now)
+	}
+}
+
+func (p *pendingMoves) addLocked(namespace, server string, now time.Time) {
 	for key := range p.moves {
 		p.expire(key, now)
 	}
@@ -121,12 +154,9 @@ func (p *pendingMoves) add(namespace, server string) {
 	p.moves[key] = append(p.moves[key], now)
 }
 
-func (p *pendingMoves) count(namespace, server string) int32 {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-
+func (p *pendingMoves) countLocked(namespace, server string, now time.Time) int32 {
 	key := pendingKey{namespace, server}
-	p.expire(key, p.clock())
+	p.expire(key, now)
 	return int32(len(p.moves[key]))
 }
 

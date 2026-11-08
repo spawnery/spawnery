@@ -366,9 +366,20 @@ func (s *Server) answerConnect(
 			"the members of an on-demand group are addressed by name, because each one belongs to somebody")
 	}
 
-	target, ok := resolveTarget(state, req, func(server string) int32 {
-		return s.pending.count(id.Namespace, server)
-	})
+	var (
+		target      string
+		ok, already bool
+	)
+	choose := func(pending func(server string) int32) (string, bool) {
+		target, ok = resolveTarget(state, req, pending)
+		already = ok && player.GetServer() == target
+		return target, ok && !already
+	}
+	if fillsGroup(state, req.GetGroup()) {
+		s.pending.reserve(id.Namespace, choose)
+	} else {
+		choose(noTally)
+	}
 	if !ok {
 		if id.Role != agent.RoleProxy && s.namesAPrivateServer(ctx, id.Namespace, req) {
 			return refuse(reqID, agentpb.RequestError_REFUSED,
@@ -378,13 +389,10 @@ func (s *Server) answerConnect(
 			"no server or group by that name is on this network")
 	}
 
-	if player.GetServer() == target {
+	if already {
 		return connected(reqID, &agentpb.ConnectResult{AlreadyThere: true, Target: target})
 	}
 
-	if fillsGroup(state, req.GetGroup()) {
-		s.pending.add(id.Namespace, target)
-	}
 	s.opts.Proxies.Move(id.Namespace, req.GetPlayerUuid(), target)
 	return connected(reqID, &agentpb.ConnectResult{Ordered: true, Target: target})
 }
@@ -438,6 +446,8 @@ func resolveTarget(
 	}
 	return "", false
 }
+
+func noTally(string) int32 { return 0 }
 
 func playableFree(srv *agentpb.ServerState) int {
 	return max(0, int(playableSlots(srv)-srv.GetPlayers()))

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -222,12 +223,14 @@ func TestAGroupTargetNeverOpensAPrivateServer(t *testing.T) {
 }
 
 // routedGroupFixture is a group of the given strategy with two registered
-// servers of 10 slots and 8 playable, holding 7 and 0 players, and ten
-// players on a proxy's roster elsewhere. connect asks a proxy's move of one of
-// them to the group and returns the target.
-func routedGroupFixture(t *testing.T, strategy spawneryv1alpha1.RoutingStrategy) (
+// servers of 10 slots and the given playable slots, lobby-a holding the given
+// players and lobby-b none, and ten players on a proxy's roster elsewhere.
+// connect asks a proxy's move of one of them to the group and returns the
+// target.
+func routedGroupFixture(t *testing.T, strategy spawneryv1alpha1.RoutingStrategy, onA, playable int32) (
 	connect func(player string) string,
 	players []string,
+	s *Server,
 ) {
 	t.Helper()
 	scheme := runtime.NewScheme()
@@ -247,7 +250,7 @@ func routedGroupFixture(t *testing.T, strategy spawneryv1alpha1.RoutingStrategy)
 			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},
 			Spec:       spawneryv1alpha1.ServerSpec{GroupRef: spawneryv1alpha1.ObjectRef{Name: "lobby"}},
 			Status: spawneryv1alpha1.ServerStatus{
-				Phase: "Ready", Players: players, Slots: 10, PlayableSlots: 8, Registered: true,
+				Phase: "Ready", Players: players, Slots: 10, PlayableSlots: playable, Registered: true,
 			},
 		}
 	}
@@ -265,13 +268,13 @@ func routedGroupFixture(t *testing.T, strategy spawneryv1alpha1.RoutingStrategy)
 	}
 
 	clock := func() time.Time { return time.Unix(1000, 0) }
-	s := &Server{
+	s = &Server{
 		opts: Options{
 			Agents:  registry,
 			Proxies: stubFleet{},
 			State: netstate.Source{
 				Reader: fake.NewClientBuilder().WithScheme(scheme).
-					WithObjects(group, member("lobby-a", 7), member("lobby-b", 0)).Build(),
+					WithObjects(group, member("lobby-a", onA), member("lobby-b", 0)).Build(),
 				Agents: registry,
 			},
 			Clock: clock,
@@ -289,15 +292,15 @@ func routedGroupFixture(t *testing.T, strategy spawneryv1alpha1.RoutingStrategy)
 			}},
 		})
 		if !got.GetConnect().GetOrdered() {
-			t.Fatalf("connect %s: response = %+v, want a move ordered", player, got)
+			t.Errorf("connect %s: response = %+v, want a move ordered", player, got)
 		}
 		return got.GetConnect().GetTarget()
 	}
-	return connect, players
+	return connect, players, s
 }
 
 func TestAPartyConnectedToAFillGroupNeverPassesMaxPlayers(t *testing.T) {
-	connect, party := routedGroupFixture(t, spawneryv1alpha1.RoutingFill)
+	connect, party, _ := routedGroupFixture(t, spawneryv1alpha1.RoutingFill, 7, 8)
 
 	onServer := map[string]int{"lobby-a": 7, "lobby-b": 0}
 	var targets []string
@@ -317,8 +320,54 @@ func TestAPartyConnectedToAFillGroupNeverPassesMaxPlayers(t *testing.T) {
 	}
 }
 
+func TestTwoSessionsConnectingAtOnceCannotBothTakeTheLastSeat(t *testing.T) {
+	connect, party, s := routedGroupFixture(t, spawneryv1alpha1.RoutingFill, 9, 0)
+
+	chosen, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	s.pending.afterChoose = func() {
+		once.Do(func() {
+			close(chosen)
+			<-release
+		})
+	}
+
+	targets := make([]string, 2)
+	var first, second sync.WaitGroup
+	first.Add(1)
+	go func() { defer first.Done(); targets[0] = connect(party[0]) }()
+	select {
+	case <-chosen:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the first connect never reached the tally")
+	}
+	second.Add(1)
+	secondDone := make(chan struct{})
+	go func() { defer second.Done(); defer close(secondDone); targets[1] = connect(party[1]) }()
+	// Long enough for the second connect to finish if nothing holds it back;
+	// with the tally locked it cannot, and the wait only delays the test.
+	select {
+	case <-secondDone:
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	first.Wait()
+	second.Wait()
+
+	onA := 9
+	for _, target := range targets {
+		if target == "lobby-a" {
+			onA++
+		}
+	}
+	if onA > 10 {
+		t.Errorf("lobby-a holds %d, past its 10 slots, while lobby-b was empty; targets were %v", onA, targets)
+	}
+}
+
 func TestASpreadGroupStillPicksTheMostFreeSlots(t *testing.T) {
-	connect, party := routedGroupFixture(t, spawneryv1alpha1.RoutingSpread)
+	connect, party, _ := routedGroupFixture(t, spawneryv1alpha1.RoutingSpread, 7, 8)
 
 	for _, player := range party {
 		if got := connect(player); got != "lobby-b" {
