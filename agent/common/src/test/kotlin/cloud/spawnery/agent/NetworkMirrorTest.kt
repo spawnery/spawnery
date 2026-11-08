@@ -45,6 +45,63 @@ private fun state(
 
 class NetworkMirrorTest {
     @Test
+    fun `a Fill group reads as FILL and a group without the field as SPREAD`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder()
+                .addGroups(GroupState.newBuilder().setName("packed").setRoutingStrategy(GroupState.RoutingStrategy.ROUTING_FILL))
+                .addGroups(GroupState.newBuilder().setName("plain"))
+                .addGroups(GroupState.newBuilder().setName("future").setRoutingStrategyValue(99))
+                .build(),
+        )
+        assertEquals(Routing.FILL, mirror.routing("packed"))
+        assertEquals(Routing.SPREAD, mirror.routing("plain"))
+        assertEquals(Routing.SPREAD, mirror.routing("future"))
+        assertEquals(Routing.SPREAD, mirror.routing("nowhere"))
+    }
+
+    @Test
+    fun `fillView resolves an unset playable figure to slots`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder()
+                .addServers(ServerState.newBuilder().setName("a-1").setPlayers(3).setSlots(20).setNumber(1))
+                .addServers(ServerState.newBuilder().setName("a-2").setSlots(20).setPlayableSlots(12))
+                .addServers(ServerState.newBuilder().setName("a-3").setSlots(20).setPlayableSlots(50))
+                .build(),
+        )
+        assertEquals(FillView(players = 3, slots = 20, line = 20, stale = false, number = 1), mirror.fillView("a-1"))
+        assertEquals(12, mirror.fillView("a-2")?.line)
+        assertEquals(20, mirror.fillView("a-3")?.line)
+        assertNull(mirror.fillView("missing"))
+    }
+
+    @Test
+    fun `fillView carries the stale flag`() {
+        val mirror = NetworkMirror()
+        mirror.apply(
+            NetworkState.newBuilder()
+                .addServers(ServerState.newBuilder().setName("a-1").setSlots(20).setStale(true))
+                .addServers(ServerState.newBuilder().setName("a-2").setSlots(20))
+                .build(),
+        )
+        assertTrue(mirror.fillView("a-1")!!.stale)
+        assertFalse(mirror.fillView("a-2")!!.stale)
+    }
+
+    @Test
+    fun `appliedAt moves with every state`() {
+        var now = 100L
+        val mirror = NetworkMirror { now }
+        assertEquals(0L, mirror.appliedAtNanos())
+        mirror.apply(NetworkState.getDefaultInstance())
+        assertEquals(100L, mirror.appliedAtNanos())
+        now = 250L
+        mirror.apply(NetworkState.getDefaultInstance())
+        assertEquals(250L, mirror.appliedAtNanos())
+    }
+
+    @Test
     fun `a group's kind is found by name, and a group not in the picture is unknown`() {
         val mirror = NetworkMirror()
         mirror.apply(
