@@ -1410,7 +1410,7 @@ func TestReadyContributionReadsTheSameDoorAsAggregateGroup(t *testing.T) {
 func TestProvisionalCapacityDoesNotCreditAServerTheProxiesDropped(t *testing.T) {
 	dropped := ServerView{
 		Name: "a", Phase: phase.Starting, Slots: 80, Players: 5,
-		WasRegistered: true, Registered: false,
+		WasRegistered: true, Registered: false, ReadinessLosses: 1,
 	}
 	if got := provisionalCapacity(dropped, 80); got != 0 {
 		t.Errorf("provisionalCapacity = %d, want 0 for a server the proxies dropped", got)
@@ -1941,5 +1941,47 @@ func TestLoweringMaxReplicasWithoutAPinRetiresNoOccupiedServer(t *testing.T) {
 	})
 	if got.Surplus != 2 || len(got.Delete) != 0 || len(got.Retire) != 0 {
 		t.Errorf("Surplus = %d, Delete = %v, Retire = %v; want the surplus reported and nothing taken", got.Surplus, got.Delete, got.Retire)
+	}
+}
+
+// Each state is what collectViews reads for a new server on its way to Ready,
+// in order. The Server controller persists wasRegistered before it tells the
+// proxies and writes registered only afterwards, so one state shows the first
+// without the second.
+func TestDecideSizeOrdersOneServerForTheWholeStartOfANewOne(t *testing.T) {
+	busy := ready("busy", 4, 8)
+	busy.Playable = 7
+	reported := ServerView{Name: "new", Phase: phase.Starting, Slots: 8, Playable: 7}
+	intent := reported
+	intent.WasRegistered = true
+	up := intent
+	up.Phase, up.Registered = phase.Ready, true
+
+	for _, tc := range []struct {
+		name    string
+		pending int32
+		view    *ServerView
+	}{
+		{name: "created, not in the cache yet", pending: 1},
+		{name: "no pod yet", view: &ServerView{Name: "new", Phase: phase.Pending, Stale: true}},
+		{name: "pod running, agent not heard from", view: &ServerView{Name: "new", Phase: phase.Starting, Stale: true}},
+		{name: "agent reported its seats", view: &reported},
+		{name: "registration intent persisted, proxies not told yet", view: &intent},
+		{name: "Ready and registered", view: &up},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			views := []ServerView{busy}
+			if tc.view != nil {
+				views = append(views, *tc.view)
+			}
+			got := DecideSize(ScalingInputs{
+				Views: views, PendingCreates: tc.pending,
+				MinReplicas: 1, MaxReplicas: 10,
+				SpareSlots: 4, MaxPlayers: 8, PlayableSlots: 7,
+			})
+			if got.Create != 0 {
+				t.Errorf("Create = %d, want 0: the new server's 7 seats cover the 4 spare", got.Create)
+			}
+		})
 	}
 }
