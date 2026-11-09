@@ -20,7 +20,7 @@ spec:
   networkRef:
     name: production
   type: Ephemeral
-  image: ghcr.io/spawnery/purpur:26.3-0.34.0
+  image: ghcr.io/spawnery/purpur:26.3-0.36.0
   maxPlayers: 50
   drain:
     timeoutSeconds: 60
@@ -273,7 +273,7 @@ few players, which the buffer is there for.
 
 ### Versions
 
-The proxy images must carry the release that adds `spec.routing`. An older proxy
+Fill needs operator and proxy images of 0.36.0 or later. An older proxy
 ignores the field and spreads, and an older operator never sends it, so a new
 proxy spreads too.
 
