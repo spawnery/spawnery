@@ -100,9 +100,9 @@ class SnapshotWaitTest {
         var now = 1_000L
         val outcome = SnapshotWait.freeze(
             listOf(CompletableFuture.completedFuture(null)),
-            deadline = now + 10,
+            deadline = now + 60_000,
             clock = { now },
-            flush = { now += 30_000 },
+            flush = { now += 120_000 },
             copy = { error("a copy asked for after the deadline") },
         )
         assertEquals(WorldSync.Outcome.Failed("no time left for the copy after the saves and the flush"), outcome)
