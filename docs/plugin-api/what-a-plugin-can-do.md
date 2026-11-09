@@ -13,8 +13,11 @@ api.connect(player.getUniqueId(), Target.group("lobby"))
 ```
 
 `Target.server(...)` says exactly where. `Target.group(...)` says "wherever
-that group has room" and lets the operator pick, which it can do better than
-you can: it compares every backend's occupancy without racing the mirror.
+that group has room", and the group's `spec.routing.strategy` decides which
+server: Spread picks the one with the most free playable seats, Fill the
+fullest server below its playable slots. The operator makes the pick, which it
+can do better than you can: it compares every backend's occupancy without
+racing the mirror.
 
 **It returns a `CompletionStage` on both platforms**, including the proxy where
 it need not. Following the platform would make this synchronous on one side

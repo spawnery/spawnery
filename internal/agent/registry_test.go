@@ -1100,3 +1100,24 @@ func TestAServerAgentHasNoVoiceRelayState(t *testing.T) {
 		t.Fatalf("a server agent's state = %v, want not reported", got)
 	}
 }
+
+func TestTheDesiredHashIsRememberedPerGroup(t *testing.T) {
+	reg, _ := newTestRegistry()
+	if got := reg.DesiredServerHash("ns", "lobby"); got != "" {
+		t.Fatalf("hash before any write = %q, want empty", got)
+	}
+	reg.SetDesiredServerHash("ns", "lobby", "h1")
+	if got := reg.DesiredServerHash("ns", "lobby"); got != "h1" {
+		t.Errorf("hash = %q, want h1", got)
+	}
+	if got := reg.DesiredServerHash("other", "lobby"); got != "" {
+		t.Errorf("same group name in another namespace = %q, want empty", got)
+	}
+	if got := reg.DesiredServerHash("ns", "arena"); got != "" {
+		t.Errorf("another group = %q, want empty", got)
+	}
+	reg.SetDesiredServerHash("ns", "lobby", "h2")
+	if got := reg.DesiredServerHash("ns", "lobby"); got != "h2" {
+		t.Errorf("hash after overwrite = %q, want h2", got)
+	}
+}

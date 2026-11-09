@@ -14,7 +14,11 @@ import java.util.UUID
 /** For the agent's login check; not published through the plugin API. */
 data class GroupAdmission(val playableSlots: Int, val enforce: Boolean)
 
-class NetworkMirror {
+enum class Routing { SPREAD, FILL }
+
+data class FillView(val players: Int, val slots: Int, val line: Int, val stale: Boolean, val number: Int)
+
+class NetworkMirror(private val clock: () -> Long = System::nanoTime) {
     private data class Snapshot(
         val groups: List<Group>,
         val servers: List<ServerInfo>,
@@ -28,6 +32,9 @@ class NetworkMirror {
         val joinRules: Map<String, JoinRule> = emptyMap(),
         val playersById: Map<UUID, CloudPlayer> = emptyMap(),
         val groupNames: Set<String> = emptySet(),
+        val routings: Map<String, Routing> = emptyMap(),
+        val fillViews: Map<String, FillView> = emptyMap(),
+        val appliedAtNanos: Long = 0L,
     )
 
     // Swapped whole and never locked, so a read never mixes two states and never blocks.
@@ -90,6 +97,14 @@ class NetworkMirror {
             proxies = state.proxiesList.map {
                 ProxyInfo(it.name, it.group, it.ready, it.draining, it.players, it.node)
             },
+            routings = state.groupsList.associate {
+                it.name to if (it.routingStrategy == GroupState.RoutingStrategy.ROUTING_FILL) Routing.FILL else Routing.SPREAD
+            },
+            fillViews = state.serversList.associate {
+                val line = if (it.playableSlots in 1..it.slots) it.playableSlots else it.slots
+                it.name to FillView(it.players, it.slots, line, it.stale, it.number)
+            },
+            appliedAtNanos = clock(),
             groupNames = state.groupsList.mapTo(HashSet()) { it.name },
             players = players,
             playersById = HashMap<UUID, CloudPlayer>(players.size * 2).apply {
@@ -120,6 +135,12 @@ class NetworkMirror {
 
     /** Whether [joinRule]'s null means "no rule" rather than "not in the picture". */
     fun knowsGroup(group: String): Boolean = group in snapshot.groupNames
+
+    fun routing(group: String): Routing = snapshot.routings[group] ?: Routing.SPREAD
+
+    fun fillView(name: String): FillView? = snapshot.fillViews[name]
+
+    fun appliedAtNanos(): Long = snapshot.appliedAtNanos
 
     fun groupKind(name: String): Group.Kind =
         snapshot.groups.firstOrNull { it.name() == name }?.kind() ?: Group.Kind.UNKNOWN

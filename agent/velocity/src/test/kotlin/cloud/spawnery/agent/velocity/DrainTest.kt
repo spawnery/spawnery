@@ -300,6 +300,29 @@ class DrainTest {
         assertEquals(listOf("alice" to "lobby-1"), players.moves)
     }
 
+    @Test
+    fun `draining a full server into a Fill group never overfills one target`() {
+        val mirror = mirrorOf(
+            setOf("lobby"),
+            Reported("lobby-1", players = 6, slots = 10, line = 8, number = 1),
+            Reported("lobby-2", players = 0, slots = 10, line = 8, number = 2),
+        )
+        val router = Router(
+            directory(
+                Backend("lobby-1", "10.0.0.1:25565", "lobby"),
+                Backend("lobby-2", "10.0.0.2:25565", "lobby"),
+            ),
+            FillSource(mirror, frozenTally(mirror)),
+        )
+        val players = FakePlayers(List(12) { FakePlayer("p$it", "hub-1") })
+        val drain = Drain(players, router, { _, _ -> })
+
+        drain.run("hub-1", listOf("lobby"))
+
+        val moved = players.moves.groupingBy { it.second }.eachCount()
+        assertEquals(mapOf("lobby-1" to 3, "lobby-2" to 9), moved)
+    }
+
     private companion object {
         fun directory(vararg backends: Backend): ServerDirectory {
             val directory = ServerDirectory(FakeRegistry()) { _, _ -> }

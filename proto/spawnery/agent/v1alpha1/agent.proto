@@ -733,6 +733,14 @@ message GroupState {
   int32 pinned_replicas = 14;
   // When the pin ends, on the operator's clock; 0 for a pin without an end.
   int64 pinned_until_unix = 15;
+  // How the proxy picks among this group's servers for a new player.
+  // ROUTING_SPREAD is also what an operator older than this field sends;
+  // read an absent strategy as spread.
+  enum RoutingStrategy {
+    ROUTING_SPREAD = 0;
+    ROUTING_FILL = 1;
+  }
+  RoutingStrategy routing_strategy = 16;
 }
 
 // ServerState is one backend as the operator last observed it.
@@ -781,6 +789,9 @@ message ServerState {
   // true together with node. False before the scheduler has looked, once the
   // pod is placed, and from an operator older than this field.
   bool unschedulable = 16;
+  // True when the server's pod hash differs from its group's current one.
+  // False when either is unknown, and from an operator older than this field.
+  bool stale = 17;
 }
 
 // ProxyState is one proxy pod as the operator last saw it.

@@ -589,6 +589,22 @@ java.lang.String defaultValue) {
     return unschedulable_;
   }
 
+  public static final int STALE_FIELD_NUMBER = 17;
+  private boolean stale_ = false;
+  /**
+   * <pre>
+   * True when the server's pod hash differs from its group's current one.
+   * False when either is unknown, and from an operator older than this field.
+   * </pre>
+   *
+   * <code>bool stale = 17;</code>
+   * @return The stale.
+   */
+  @java.lang.Override
+  public boolean getStale() {
+    return stale_;
+  }
+
   private byte memoizedIsInitialized = -1;
   @java.lang.Override
   public final boolean isInitialized() {
@@ -653,6 +669,9 @@ java.lang.String defaultValue) {
     }
     if (unschedulable_ != false) {
       output.writeBool(16, unschedulable_);
+    }
+    if (stale_ != false) {
+      output.writeBool(17, stale_);
     }
     getUnknownFields().writeTo(output);
   }
@@ -722,6 +741,10 @@ java.lang.String defaultValue) {
       size += com.google.protobuf.CodedOutputStream
         .computeBoolSize(16, unschedulable_);
     }
+    if (stale_ != false) {
+      size += com.google.protobuf.CodedOutputStream
+        .computeBoolSize(17, stale_);
+    }
     return size;
   }
   @java.lang.Override
@@ -781,6 +804,8 @@ java.lang.String defaultValue) {
     }
     if (getUnschedulable()
         != other.getUnschedulable()) return false;
+    if (getStale()
+        != other.getStale()) return false;
     if (!getUnknownFields().equals(other.getUnknownFields())) return false;
     return true;
   }
@@ -832,6 +857,9 @@ java.lang.String defaultValue) {
     hash = (37 * hash) + UNSCHEDULABLE_FIELD_NUMBER;
     hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
         getUnschedulable());
+    hash = (37 * hash) + STALE_FIELD_NUMBER;
+    hash = (53 * hash) + com.google.protobuf.Internal.hashBoolean(
+        getStale());
     hash = (29 * hash) + getUnknownFields().hashCode();
     memoizedHashCode = hash;
     return hash;
@@ -1015,6 +1043,7 @@ java.lang.String defaultValue) {
         resourcesBuilder_ = null;
       }
       unschedulable_ = false;
+      stale_ = false;
       return this;
     }
 
@@ -1101,6 +1130,9 @@ java.lang.String defaultValue) {
       if (((from_bitField0_ & 0x00008000) != 0)) {
         result.unschedulable_ = unschedulable_;
       }
+      if (((from_bitField0_ & 0x00010000) != 0)) {
+        result.stale_ = stale_;
+      }
       result.bitField0_ |= to_bitField0_;
     }
 
@@ -1175,6 +1207,9 @@ java.lang.String defaultValue) {
       }
       if (other.getUnschedulable() != false) {
         setUnschedulable(other.getUnschedulable());
+      }
+      if (other.getStale() != false) {
+        setStale(other.getStale());
       }
       this.mergeUnknownFields(other.getUnknownFields());
       onChanged();
@@ -1288,6 +1323,11 @@ java.lang.String defaultValue) {
               bitField0_ |= 0x00008000;
               break;
             } // case 128
+            case 136: {
+              stale_ = input.readBool();
+              bitField0_ |= 0x00010000;
+              break;
+            } // case 136
             default: {
               if (!super.parseUnknownField(input, extensionRegistry, tag)) {
                 done = true; // was an endgroup tag
@@ -2489,6 +2529,53 @@ java.lang.String defaultValue) {
     public Builder clearUnschedulable() {
       bitField0_ = (bitField0_ & ~0x00008000);
       unschedulable_ = false;
+      onChanged();
+      return this;
+    }
+
+    private boolean stale_ ;
+    /**
+     * <pre>
+     * True when the server's pod hash differs from its group's current one.
+     * False when either is unknown, and from an operator older than this field.
+     * </pre>
+     *
+     * <code>bool stale = 17;</code>
+     * @return The stale.
+     */
+    @java.lang.Override
+    public boolean getStale() {
+      return stale_;
+    }
+    /**
+     * <pre>
+     * True when the server's pod hash differs from its group's current one.
+     * False when either is unknown, and from an operator older than this field.
+     * </pre>
+     *
+     * <code>bool stale = 17;</code>
+     * @param value The stale to set.
+     * @return This builder for chaining.
+     */
+    public Builder setStale(boolean value) {
+
+      stale_ = value;
+      bitField0_ |= 0x00010000;
+      onChanged();
+      return this;
+    }
+    /**
+     * <pre>
+     * True when the server's pod hash differs from its group's current one.
+     * False when either is unknown, and from an operator older than this field.
+     * </pre>
+     *
+     * <code>bool stale = 17;</code>
+     * @return This builder for chaining.
+     */
+    public Builder clearStale() {
+      bitField0_ = (bitField0_ & ~0x00010000);
+      stale_ = false;
       onChanged();
       return this;
     }

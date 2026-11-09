@@ -773,6 +773,22 @@ spec:
                       More info: https://kubernetes.io/docs/concepts/configuration/manage-resources-containers/
                     type: object
                 type: object
+              routing:
+                description: |-
+                  Routing configures how players are routed into the group's servers.
+                  Not for type OnDemand.
+                properties:
+                  strategy:
+                    default: Spread
+                    description: |-
+                      Strategy is the routing rule. Fill packs players onto as few servers as
+                      possible and leaves the rest empty for scale-down. Proxy images need the
+                      release that ships Fill, or they keep spreading.
+                    enum:
+                    - Spread
+                    - Fill
+                    type: string
+                type: object
               scaling:
                 description: |-
                   Scaling configures slot-based scaling. Ephemeral only. Editing it
@@ -2061,6 +2077,9 @@ spec:
               rule: self.type != 'OnDemand' || !has(self.scaling)
             - message: spec.replicas is not allowed for type OnDemand
               rule: self.type != 'OnDemand' || !has(self.replicas)
+            - message: 'spec.routing is not allowed for type OnDemand: its members
+                are addressed by name, not routed into'
+              rule: self.type != 'OnDemand' || !has(self.routing)
             - message: spec.update is not allowed for type OnDemand
               rule: self.type != 'OnDemand' || !has(self.update)
             - message: spec.storage is required for type OnDemand

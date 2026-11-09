@@ -366,7 +366,20 @@ func (s *Server) answerConnect(
 			"the members of an on-demand group are addressed by name, because each one belongs to somebody")
 	}
 
-	target, ok := resolveTarget(state, req)
+	var (
+		target      string
+		ok, already bool
+	)
+	choose := func(pending func(server string) int32) (string, bool) {
+		target, ok = resolveTarget(state, req, pending)
+		already = ok && player.GetServer() == target
+		return target, ok && !already
+	}
+	if fillsGroup(state, req.GetGroup()) {
+		s.pending.reserve(id.Namespace, choose)
+	} else {
+		choose(noTally)
+	}
 	if !ok {
 		if id.Role != agent.RoleProxy && s.namesAPrivateServer(ctx, id.Namespace, req) {
 			return refuse(reqID, agentpb.RequestError_REFUSED,
@@ -376,7 +389,7 @@ func (s *Server) answerConnect(
 			"no server or group by that name is on this network")
 	}
 
-	if player.GetServer() == target {
+	if already {
 		return connected(reqID, &agentpb.ConnectResult{AlreadyThere: true, Target: target})
 	}
 
@@ -385,8 +398,14 @@ func (s *Server) answerConnect(
 }
 
 // resolveTarget turns a request's target into one registered server name; for
-// a group, the registered member with the most free playable slots.
-func resolveTarget(state *agentpb.NetworkState, req *agentpb.ConnectRequest) (string, bool) {
+// a group, the registered member with the most free playable slots, or under
+// Fill the one chooseFill picks. pending is the operator's own tally of players
+// sent to a server and not yet in its count; only Fill reads it.
+func resolveTarget(
+	state *agentpb.NetworkState,
+	req *agentpb.ConnectRequest,
+	pending func(server string) int32,
+) (string, bool) {
 	switch {
 	case req.GetServer() != "":
 		for _, srv := range state.GetServers() {
@@ -394,6 +413,22 @@ func resolveTarget(state *agentpb.NetworkState, req *agentpb.ConnectRequest) (st
 				return srv.GetName(), true
 			}
 		}
+	case fillsGroup(state, req.GetGroup()):
+		var cands []fillCandidate
+		for _, srv := range state.GetServers() {
+			if srv.GetGroup() != req.GetGroup() || !srv.GetRegistered() {
+				continue
+			}
+			cands = append(cands, fillCandidate{
+				Name:    srv.GetName(),
+				Players: srv.GetPlayers() + pending(srv.GetName()),
+				Slots:   srv.GetSlots(),
+				Line:    playableSlots(srv),
+				Number:  srv.GetNumber(),
+				Stale:   srv.GetStale(),
+			})
+		}
+		return chooseFill(cands)
 	case req.GetGroup() != "":
 		best, bestFree, bestRoom := "", -1, -1
 		for _, srv := range state.GetServers() {
@@ -412,12 +447,30 @@ func resolveTarget(state *agentpb.NetworkState, req *agentpb.ConnectRequest) (st
 	return "", false
 }
 
+func noTally(string) int32 { return 0 }
+
 func playableFree(srv *agentpb.ServerState) int {
+	return max(0, int(playableSlots(srv)-srv.GetPlayers()))
+}
+
+func playableSlots(srv *agentpb.ServerState) int32 {
 	playable := srv.GetPlayableSlots()
 	if playable <= 0 || playable > srv.GetSlots() {
 		playable = srv.GetSlots()
 	}
-	return max(0, int(playable-srv.GetPlayers()))
+	return playable
+}
+
+func fillsGroup(state *agentpb.NetworkState, group string) bool {
+	if group == "" {
+		return false
+	}
+	for _, g := range state.GetGroups() {
+		if g.GetName() == group {
+			return g.GetRoutingStrategy() == agentpb.GroupState_ROUTING_FILL
+		}
+	}
+	return false
 }
 
 // namesAPrivateServer reports whether the server a request names is a member

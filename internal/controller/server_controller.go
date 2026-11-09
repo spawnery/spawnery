@@ -423,7 +423,11 @@ func (r *ServerReconciler) noteVisible(srv *spawneryv1alpha1.Server, pod *corev1
 	if pod != nil && pod.Name == srv.Status.PodName {
 		node = pod.Spec.NodeName
 	}
-	if r.visible.note(client.ObjectKeyFromObject(srv), netstate.Visible(srv, node)) {
+	want := ""
+	if r.Agents != nil {
+		want = r.Agents.DesiredServerHash(srv.Namespace, srv.Spec.GroupRef.Name)
+	}
+	if r.visible.note(client.ObjectKeyFromObject(srv), netstate.Visible(srv, node, want)) {
 		r.State.Changed(srv.Namespace)
 	}
 }

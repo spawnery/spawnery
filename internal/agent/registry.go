@@ -173,6 +173,7 @@ type Registry struct {
 	reportInterval time.Duration
 	startedAt      time.Time
 	servingAt      time.Time
+	desiredHash    map[string]string
 }
 
 // New creates a registry. startedAt is when the operator process came up; an
@@ -180,6 +181,7 @@ type Registry struct {
 func New(clock func() time.Time, reportInterval time.Duration, startedAt time.Time) *Registry {
 	return &Registry{
 		entries:        make(map[string]*entry),
+		desiredHash:    make(map[string]string),
 		now:            clock,
 		reportInterval: reportInterval,
 		startedAt:      startedAt,
@@ -712,4 +714,20 @@ func (r *Registry) Lookup(key string) Snapshot {
 		snap.EmptyFor = now.Sub(e.emptySince)
 	}
 	return snap
+}
+
+// SetDesiredServerHash remembers the spec hash the group's servers should
+// carry, as the group's reconcile computed it.
+func (r *Registry) SetDesiredServerHash(namespace, group, hash string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.desiredHash[namespace+"/"+group] = hash
+}
+
+// DesiredServerHash is the last hash SetDesiredServerHash stored for the
+// group, empty when none was.
+func (r *Registry) DesiredServerHash(namespace, group string) string {
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.desiredHash[namespace+"/"+group]
 }

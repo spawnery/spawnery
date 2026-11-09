@@ -1270,6 +1270,296 @@ func TestTutorialCloudCommands(t *testing.T) {
 	})
 }
 
+// TestTutorialFillRouting scales the lobby to a second server with held
+// joins, lets some of them go while short visits keep arriving, and checks
+// where the visits land: under Fill on the first server, so the spare empties
+// and the demand rule removes it; under Spread on the spare, which stays.
+func TestTutorialFillRouting(t *testing.T) {
+	if os.Getenv("SPAWNERY_E2E_TUTORIAL") != "1" {
+		t.Skip("set SPAWNERY_E2E_TUTORIAL=1; hack/e2e-tutorial.sh does this nightly")
+	}
+	joinPath, err := exec.LookPath("spawnery-join")
+	if err != nil {
+		t.Fatalf("spawnery-join not on PATH (%v); the dev shell carries it, run this through nix develop", err)
+	}
+
+	applyManifest(t, tutorialManifest)
+
+	gatewayKey := client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialProxyGroup}
+	lobbyKey := client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialServerGroup}
+
+	var gateway spawneryv1alpha1.ProxyGroup
+	if err := k8s.Get(ctx, gatewayKey, &gateway); err != nil {
+		t.Fatalf("get ProxyGroup: %v", err)
+	}
+	replicasBefore := gateway.Spec.Replicas
+	gatewayPatch := client.MergeFrom(gateway.DeepCopy())
+	gateway.Spec.Replicas = 2
+	if err := k8s.Patch(ctx, &gateway, gatewayPatch); err != nil {
+		t.Fatalf("patch ProxyGroup: %v", err)
+	}
+	t.Cleanup(func() {
+		var now spawneryv1alpha1.ProxyGroup
+		if err := k8s.Get(ctx, gatewayKey, &now); err != nil {
+			return
+		}
+		back := client.MergeFrom(now.DeepCopy())
+		now.Spec.Replicas = replicasBefore
+		_ = k8s.Patch(ctx, &now, back)
+	})
+
+	var lobby spawneryv1alpha1.ServerGroup
+	if err := k8s.Get(ctx, lobbyKey, &lobby); err != nil {
+		t.Fatalf("get ServerGroup: %v", err)
+	}
+	lobbyBefore := lobby.DeepCopy()
+	lobbyPatch := client.MergeFrom(lobby.DeepCopy())
+	// Two residents and a visitor fit on one server without ordering a second
+	// (7-3 >= 4); two more players order it (7-4 < 4). The fill line of 7 stays
+	// above the 6 a proxy can count on the first server while its view lags:
+	// four held joins and a visitor, plus that visitor again in its own tally.
+	lobby.Spec.MaxPlayers = 8
+	lobby.Spec.PlayableSlots = ptr.To[int32](7)
+	scaling := spawneryv1alpha1.ScalingSpec{}
+	if lobby.Spec.Scaling != nil {
+		scaling = *lobby.Spec.Scaling.DeepCopy()
+	}
+	scaling.MinReplicas = 1
+	scaling.MaxReplicas = 3
+	scaling.SpareSlots = 4
+	scaling.ScaleDownStabilizationSeconds = 60
+	lobby.Spec.Scaling = &scaling
+	lobby.Spec.Routing = &spawneryv1alpha1.ServerRoutingSpec{Strategy: spawneryv1alpha1.RoutingFill}
+	if err := k8s.Patch(ctx, &lobby, lobbyPatch); err != nil {
+		t.Fatalf("patch ServerGroup: %v", err)
+	}
+	t.Cleanup(func() {
+		var now spawneryv1alpha1.ServerGroup
+		if err := k8s.Get(ctx, lobbyKey, &now); err != nil {
+			return
+		}
+		back := client.MergeFrom(now.DeepCopy())
+		now.Spec.MaxPlayers = lobbyBefore.Spec.MaxPlayers
+		now.Spec.PlayableSlots = lobbyBefore.Spec.PlayableSlots
+		now.Spec.Scaling = lobbyBefore.Spec.Scaling
+		now.Spec.Routing = lobbyBefore.Spec.Routing
+		_ = k8s.Patch(ctx, &now, back)
+	})
+
+	route := func(t *testing.T, strategy spawneryv1alpha1.RoutingStrategy) {
+		t.Helper()
+		var now spawneryv1alpha1.ServerGroup
+		if err := k8s.Get(ctx, lobbyKey, &now); err != nil {
+			t.Fatalf("get ServerGroup: %v", err)
+		}
+		patch := client.MergeFrom(now.DeepCopy())
+		now.Spec.Routing = &spawneryv1alpha1.ServerRoutingSpec{Strategy: strategy}
+		if err := k8s.Patch(ctx, &now, patch); err != nil {
+			t.Fatalf("patch ServerGroup routing: %v", err)
+		}
+	}
+
+	var logins loginPacer
+	run := func(t *testing.T, prefix string) fillRun {
+		return runSpareVisits(t, joinPath, &logins, prefix)
+	}
+
+	t.Run("Fill", func(t *testing.T) {
+		route(t, spawneryv1alpha1.RoutingFill)
+		r := run(t, "f")
+		for i, server := range r.visits {
+			if server != r.first {
+				t.Errorf("visit %d landed on %s, want %s, the server the residents are on", i+1, server, r.first)
+			}
+		}
+		for name, players := range r.othersLast {
+			if players != 0 {
+				t.Errorf("%s was last seen with %d players, want 0", name, players)
+			}
+		}
+		if r.oneAt < 0 {
+			t.Fatalf("the group never came back to one server in %s; servers at the end: %d", spareVisitWindow, r.serversAtEnd)
+		}
+		if r.serversAtEnd != 1 {
+			t.Errorf("the group came back to one server after %s but had %d at the end", r.oneAt, r.serversAtEnd)
+		}
+	})
+
+	t.Run("Spread", func(t *testing.T) {
+		route(t, spawneryv1alpha1.RoutingSpread)
+		r := run(t, "s")
+		elsewhere := 0
+		for _, server := range r.visits {
+			if server != r.first {
+				elsewhere++
+			}
+		}
+		if elsewhere == 0 {
+			t.Errorf("every visit landed on %s, the server the residents are on: %v", r.first, r.visits)
+		}
+		if r.serversAtEnd < 2 || r.oneAt >= 0 {
+			t.Errorf("the group had %d servers at the end (one server after %s), want a spare kept", r.serversAtEnd, r.oneAt)
+		}
+	})
+}
+
+// spareVisitWindow, spareVisitEvery and spareVisitHold are the short visits
+// of TestTutorialFillRouting: each over before the next, and each gap far
+// shorter than the group's 60 s scale-down stabilization.
+const (
+	spareVisitWindow = 3 * time.Minute
+	spareVisitEvery  = 30 * time.Second
+	spareVisitHold   = 20 * time.Second
+)
+
+type fillRun struct {
+	first      string
+	visits     []string
+	othersLast map[string]int32
+	// oneAt is negative if the group never got back to one server.
+	oneAt        time.Duration
+	serversAtEnd int
+}
+
+// runSpareVisits starts from one lobby server, holds two residents on it,
+// adds two fillers until a second server is Ready, and then sends one short
+// visit at a time for spareVisitWindow. The fillers leave only once the first
+// visit has landed: until then they keep the spare from being removed before
+// a visit could reach it.
+func runSpareVisits(t *testing.T, joinPath string, logins *loginPacer, prefix string) fillRun {
+	proxyPods := func() ([]corev1.Pod, error) {
+		var list corev1.PodList
+		err := k8s.List(ctx, &list, client.InNamespace(tutorialNamespace),
+			client.MatchingLabels{podspec.LabelGroup: tutorialProxyGroup, podspec.LabelRole: podspec.RoleProxy})
+		return list.Items, err
+	}
+
+	var r fillRun
+	eventuallyIn(t, tutorialOperatorNamespace, 6*time.Minute, "two settled proxies and one Ready lobby server with 7 of 8 seats playable", func() (bool, string) {
+		var list spawneryv1alpha1.ServerList
+		if err := k8s.List(ctx, &list, client.InNamespace(tutorialNamespace)); err != nil {
+			return false, err.Error()
+		}
+		var lobby []spawneryv1alpha1.Server
+		seen := ""
+		for _, s := range list.Items {
+			if s.Spec.GroupRef.Name == tutorialServerGroup {
+				lobby = append(lobby, s)
+				seen += fmt.Sprintf(" %s=%s %d/%d playable %d;", s.Name, s.Status.Phase, s.Status.Players, s.Status.Slots, s.Status.PlayableSlots)
+			}
+		}
+		gateway := settledGateway()
+		var g spawneryv1alpha1.ProxyGroup
+		_ = k8s.Get(ctx, client.ObjectKey{Namespace: tutorialNamespace, Name: tutorialProxyGroup}, &g)
+		detail := fmt.Sprintf("gateway settled=%v replicas=%d; servers:%s", gateway != "", g.Spec.Replicas, seen)
+		if gateway == "" || g.Spec.Replicas != 2 || len(lobby) != 1 {
+			return false, detail
+		}
+		s := lobby[0]
+		if s.Status.Phase != string(phase.Ready) || s.Status.Slots != 8 || s.Status.PlayableSlots != 7 || s.Status.Players != 0 {
+			return false, detail
+		}
+		r.first = s.Name
+		return true, ""
+	})
+	t.Logf("first server %s", r.first)
+
+	base := fmt.Sprintf("%s%04d", prefix, time.Now().UnixNano()%10000)
+	var joins []*heldJoin
+	t.Cleanup(func() {
+		for _, j := range joins {
+			j.stop()
+		}
+	})
+	join := func(username string, hold time.Duration) (*heldJoin, string, string) {
+		logins.wait()
+		j := startHeldJoin(t, joinPath, username, hold)
+		joins = append(joins, j)
+		pod, server := whereIs(t, j, proxyPods)
+		logins.landed()
+		return j, pod, server
+	}
+
+	// Spread balances by each proxy's own players: a proxy without a resident
+	// sees both servers empty and picks by name, whichever that is.
+	residents := map[string]*heldJoin{}
+	for attempt := 1; attempt <= 12 && len(residents) < 2; attempt++ {
+		j, pod, server := join(fmt.Sprintf("%sr%d", base, attempt), 15*time.Minute)
+		if server != r.first {
+			t.Fatalf("%s landed on %s, want %s, the only lobby server", j.username, server, r.first)
+		}
+		if residents[pod] != nil {
+			j.stop()
+			continue
+		}
+		residents[pod] = j
+		t.Logf("resident %s on %s behind %s", j.username, pod, server)
+	}
+	if len(residents) < 2 {
+		t.Fatalf("twelve joins never reached both proxies; the NodePort is not spreading connections")
+	}
+
+	var fillers []*heldJoin
+	for i := 1; i <= 2; i++ {
+		j, pod, server := join(fmt.Sprintf("%sf%d", base, i), 15*time.Minute)
+		if server != r.first {
+			t.Fatalf("%s landed on %s, want %s, the only lobby server", j.username, server, r.first)
+		}
+		fillers = append(fillers, j)
+		t.Logf("filler %s on %s behind %s", j.username, pod, server)
+	}
+
+	scaled := time.Now()
+	eventuallyIn(t, tutorialOperatorNamespace, 5*time.Minute, "a second Ready lobby server", func() (bool, string) {
+		ready := readyLobbyServers()
+		return len(ready) >= 2, fmt.Sprintf("ready: %v", ready)
+	})
+	t.Logf("+%s Ready: %v", time.Since(scaled).Round(time.Second), readyLobbyServers())
+
+	r.oneAt = -1
+	r.othersLast = map[string]int32{}
+	var visit *heldJoin
+	start := time.Now()
+	for i := 0; time.Since(start) < spareVisitWindow; time.Sleep(time.Second) {
+		elapsed := time.Since(start)
+		players := lobbyServerPlayers()
+		for name, p := range players {
+			if name != r.first {
+				r.othersLast[name] = p
+			}
+		}
+		if r.oneAt < 0 && lobbyServerCount() == 1 {
+			r.oneAt = elapsed
+			t.Logf("+%s back at one server: %v", elapsed.Round(time.Second), players)
+		}
+		if elapsed < time.Duration(i)*spareVisitEvery {
+			continue
+		}
+		if visit != nil {
+			visit.stop()
+		}
+		i++
+		var pod, server string
+		visit, pod, server = join(fmt.Sprintf("%sv%d", base, i), spareVisitHold)
+		r.visits = append(r.visits, server)
+		t.Logf("+%s visit %s on %s behind %s; players %v", time.Since(start).Round(time.Second), visit.username, pod, server, players)
+		if fillers != nil {
+			for _, j := range fillers {
+				j.stop()
+			}
+			fillers = nil
+			t.Logf("+%s fillers gone", time.Since(start).Round(time.Second))
+		}
+	}
+	r.serversAtEnd = lobbyServerCount()
+	t.Logf("after %s: %d lobby servers, players %v", spareVisitWindow, r.serversAtEnd, lobbyServerPlayers())
+
+	for _, j := range joins {
+		j.stop()
+	}
+	return r
+}
+
 // loginPacer keeps joins more than Velocity's login-ratelimit apart (3000 ms
 // per address; every join comes from the one node address). Velocity times
 // the login, which trails the join's start by its ping and dial, so the gap

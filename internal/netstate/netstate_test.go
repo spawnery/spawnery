@@ -802,3 +802,57 @@ func TestPrivateServerStateCarriesItsResources(t *testing.T) {
 		}
 	}
 }
+
+func TestARoutingStrategyReachesTheGroupState(t *testing.T) {
+	fill := ephemeralGroup("ns", "fill")
+	fill.Spec.Routing = &spawneryv1alpha1.ServerRoutingSpec{Strategy: spawneryv1alpha1.RoutingFill}
+	src, _ := source(t, fill, ephemeralGroup("ns", "plain"))
+
+	got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
+	if err != nil {
+		t.Fatalf("Build: %v", err)
+	}
+	want := map[string]agentpb.GroupState_RoutingStrategy{
+		"fill":  agentpb.GroupState_ROUTING_FILL,
+		"plain": agentpb.GroupState_ROUTING_SPREAD,
+	}
+	for _, g := range got.GetGroups() {
+		if g.GetRoutingStrategy() != want[g.GetName()] {
+			t.Errorf("group %s routing = %v, want %v", g.GetName(), g.GetRoutingStrategy(), want[g.GetName()])
+		}
+	}
+}
+
+func TestAServerIsStaleOnlyAgainstAKnownHash(t *testing.T) {
+	cases := []struct {
+		name   string
+		memo   string
+		server string
+		want   bool
+	}{
+		{"older spec", "h2", "h1", true},
+		{"current spec", "h2", "h2", false},
+		{"server without a hash", "h2", "", false},
+		{"no desired hash known", "", "h1", false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			srv := readyServer("ns", "lobby-a", "lobby", 0, 100)
+			srv.Spec.PodHash = c.server
+			src, reg := source(t, ephemeralGroup("ns", "lobby"), srv)
+			if c.memo != "" {
+				reg.SetDesiredServerHash("ns", "lobby", c.memo)
+			}
+			got, err := src.Build(context.Background(), "ns", netstate.ForProxies)
+			if err != nil {
+				t.Fatalf("Build: %v", err)
+			}
+			if s := stateOf(t, got, "lobby-a"); s.GetStale() != c.want {
+				t.Errorf("stale = %v, want %v", s.GetStale(), c.want)
+			}
+			if v := netstate.Visible(srv, "", c.memo); v.GetStale() != c.want {
+				t.Errorf("Visible stale = %v, want %v", v.GetStale(), c.want)
+			}
+		})
+	}
+}

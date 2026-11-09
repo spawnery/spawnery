@@ -454,6 +454,7 @@ func main() {
 		Recorder:       mgr.GetEventRecorder("agentserver"),
 		Fleet:          fleet.Size,
 		ReportInterval: reportInterval,
+		ReconcileLag:   controller.ResyncInterval,
 		RenewAfter:     renewAfter,
 		HardDeadline:   hardDeadline,
 		Clock:          time.Now,

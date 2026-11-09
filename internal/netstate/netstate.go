@@ -107,6 +107,7 @@ func (s Source) Build(ctx context.Context, namespace string, audience Audience) 
 		state.Groups = append(state.Groups, &agentpb.GroupState{
 			Name:                   g.Name,
 			Kind:                   serverGroupKind(g),
+			RoutingStrategy:        routingStrategy(g),
 			Replicas:               g.Status.Replicas,
 			ReadyReplicas:          g.Status.ReadyReplicas,
 			OnlinePlayers:          g.Status.OnlinePlayers,
@@ -174,7 +175,8 @@ func (s Source) Build(ctx context.Context, namespace string, audience Audience) 
 			continue
 		}
 		state.Servers = append(state.Servers, serverState(
-			srv, nodeOf[srv.Status.PodName], announcements[srv.Name], closedDoors[srv.Status.PodUID]))
+			srv, nodeOf[srv.Status.PodName], announcements[srv.Name], closedDoors[srv.Status.PodUID],
+			s.Agents.DesiredServerHash(namespace, srv.Spec.GroupRef.Name)))
 	}
 
 	// The staleness flag is not consulted: a namespace with no fresh proxy and one
@@ -233,8 +235,9 @@ func Unschedulable(srv *spawneryv1alpha1.Server) bool {
 }
 
 // serverState is one server's entry in a picture. announced and joinsClosed
-// are what the agents reported, which no CR carries.
-func serverState(srv *spawneryv1alpha1.Server, node string, announced agent.Announcement, joinsClosed bool) *agentpb.ServerState {
+// are what the agents reported, which no CR carries. want is the spec hash the
+// group's servers should carry, empty when the operator has not computed one.
+func serverState(srv *spawneryv1alpha1.Server, node string, announced agent.Announcement, joinsClosed bool, want string) *agentpb.ServerState {
 	return &agentpb.ServerState{
 		Name:  srv.Name,
 		Group: srv.Spec.GroupRef.Name,
@@ -257,6 +260,7 @@ func serverState(srv *spawneryv1alpha1.Server, node string, announced agent.Anno
 		// Keyed by pod UID: a persistent server's name outlives the pod that
 		// closed this door.
 		JoinsClosed: joinsClosed,
+		Stale:       want != "" && srv.Spec.PodHash != "" && srv.Spec.PodHash != want,
 	}
 }
 
@@ -264,13 +268,21 @@ func serverState(srv *spawneryv1alpha1.Server, node string, announced agent.Anno
 // phase, its pod, where it runs and whether it can be placed. What a report
 // moves (players, slots, announcements, the door) is left blank, so comparing
 // two of these tells whether a proxy needs a fresh picture now or can wait for
-// the next resync.
-func Visible(srv *spawneryv1alpha1.Server, node string) *agentpb.ServerState {
-	state := serverState(srv, node, agent.Announcement{}, false)
+// the next resync. want is the group's desired spec hash, so that Stale agrees
+// with what Build reports.
+func Visible(srv *spawneryv1alpha1.Server, node, want string) *agentpb.ServerState {
+	state := serverState(srv, node, agent.Announcement{}, false, want)
 	state.Players = 0
 	state.Slots = 0
 	state.PlayableSlots = 0
 	return state
+}
+
+func routingStrategy(g *spawneryv1alpha1.ServerGroup) agentpb.GroupState_RoutingStrategy {
+	if g.RoutingStrategy() == spawneryv1alpha1.RoutingFill {
+		return agentpb.GroupState_ROUTING_FILL
+	}
+	return agentpb.GroupState_ROUTING_SPREAD
 }
 
 // serverGroupKind maps a ServerGroup's type onto the wire enum. An unknown type

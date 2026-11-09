@@ -11,7 +11,7 @@ E2E_KEEP="${E2E_KEEP:-0}"
 DEADLINE="${DEADLINE:-300}"
 GAME="${GAME:-purpur}"
 # E2E_RUN narrows -run, for proving one test bites.
-E2E_RUN="${E2E_RUN:-TestTutorialPath|TestTutorialPlayableSlots|TestTutorialLoginGate|TestTutorialChangeoverStages|TestTutorialTransferOnDrain|TestTutorialJoinPermission|TestTutorialCloudCommands|TestTutorialPersistentWhenEmpty}"
+E2E_RUN="${E2E_RUN:-TestTutorialPath|TestTutorialPlayableSlots|TestTutorialLoginGate|TestTutorialChangeoverStages|TestTutorialTransferOnDrain|TestTutorialJoinPermission|TestTutorialCloudCommands|TestTutorialPersistentWhenEmpty|TestTutorialFillRouting}"
 
 # The chart's default, so this run installs exactly what README.md documents.
 OPERATOR_NAMESPACE=spawnery-system
@@ -102,4 +102,4 @@ kubectl -n "$OPERATOR_NAMESPACE" rollout status deployment/spawnery-operator --t
 # The reader's single-stream apply, which the Go test's per-document create does not exercise.
 sed "s|image: ${purpur_image}\$|image: ${game_image}|" "$manifest" | kubectl apply -f -
 
-SPAWNERY_E2E_TUTORIAL=1 SPAWNERY_E2E_GAME_IMAGE="$game_image" go test -tags e2e -count=1 -v -timeout 28m -run "$E2E_RUN" ./test/e2e/...
+SPAWNERY_E2E_TUTORIAL=1 SPAWNERY_E2E_GAME_IMAGE="$game_image" go test -tags e2e -count=1 -v -timeout 40m -run "$E2E_RUN" ./test/e2e/...

@@ -21,6 +21,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -39,6 +40,8 @@ import (
 	"github.com/spawnery/spawnery/internal/netstate"
 )
 
+func noPending(string) int32 { return 0 }
+
 func networkWith(players []*agentpb.RosterEntry, servers []*agentpb.ServerState) *agentpb.NetworkState {
 	return &agentpb.NetworkState{Players: players, Servers: servers}
 }
@@ -51,7 +54,7 @@ func TestATargetThisNetworkDoesNotHaveIsNotFound(t *testing.T) {
 
 	if _, ok := resolveTarget(state, &agentpb.ConnectRequest{
 		Target: &agentpb.ConnectRequest_Server{Server: "somebody-elses-server"},
-	}); ok {
+	}, noPending); ok {
 		t.Error("a server this network does not have resolved anyway")
 	}
 }
@@ -219,6 +222,161 @@ func TestAGroupTargetNeverOpensAPrivateServer(t *testing.T) {
 	}
 }
 
+// routedGroupFixture is a group of the given strategy with two registered
+// servers of 10 slots and the given playable slots, lobby-a holding the given
+// players and lobby-b none, and ten players on a proxy's roster elsewhere.
+// connect asks a proxy's move of one of them to the group and returns the
+// target.
+func routedGroupFixture(t *testing.T, strategy spawneryv1alpha1.RoutingStrategy, onA, playable int32) (
+	connect func(player string) string,
+	players []string,
+	s *Server,
+) {
+	t.Helper()
+	scheme := runtime.NewScheme()
+	_ = corev1.AddToScheme(scheme)
+	if err := spawneryv1alpha1.AddToScheme(scheme); err != nil {
+		t.Fatalf("scheme: %v", err)
+	}
+	group := &spawneryv1alpha1.ServerGroup{
+		ObjectMeta: metav1.ObjectMeta{Name: "lobby", Namespace: "ns"},
+		Spec: spawneryv1alpha1.ServerGroupSpec{
+			Type:    spawneryv1alpha1.ServerGroupEphemeral,
+			Routing: &spawneryv1alpha1.ServerRoutingSpec{Strategy: strategy},
+		},
+	}
+	member := func(name string, players int32) *spawneryv1alpha1.Server {
+		return &spawneryv1alpha1.Server{
+			ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "ns"},
+			Spec:       spawneryv1alpha1.ServerSpec{GroupRef: spawneryv1alpha1.ObjectRef{Name: "lobby"}},
+			Status: spawneryv1alpha1.ServerStatus{
+				Phase: "Ready", Players: players, Slots: 10, PlayableSlots: playable, Registered: true,
+			},
+		}
+	}
+
+	registry := agent.New(time.Now, time.Minute, time.Now())
+	registry.Connect("proxy-a", agent.RoleProxy)
+	var roster []agent.RosterEntry
+	for i := range 10 {
+		uuid := fmt.Sprintf("u-%d", i)
+		players = append(players, uuid)
+		roster = append(roster, agent.RosterEntry{UUID: uuid, Name: fmt.Sprintf("p%d", i), Server: "hub-a"})
+	}
+	if err := registry.ReportRoster("proxy-a", "ns", roster); err != nil {
+		t.Fatalf("ReportRoster: %v", err)
+	}
+
+	clock := func() time.Time { return time.Unix(1000, 0) }
+	s = &Server{
+		opts: Options{
+			Agents:  registry,
+			Proxies: stubFleet{},
+			State: netstate.Source{
+				Reader: fake.NewClientBuilder().WithScheme(scheme).
+					WithObjects(group, member("lobby-a", onA), member("lobby-b", 0)).Build(),
+				Agents: registry,
+			},
+			Clock: clock,
+		},
+		requestRate: newRequestLimiter(clock),
+		pending:     newPendingMoves(clock, 15*time.Second),
+	}
+	proxy := grpcauth.Identity{Namespace: "ns", PodName: "gateway-0", PodUID: "proxy-a", Role: agent.RoleProxy}
+	connect = func(player string) string {
+		got := s.answerCloudRequest(context.Background(), logr.Discard(), proxy, &agentpb.CloudRequest{
+			Id: 1,
+			Request: &agentpb.CloudRequest_Connect{Connect: &agentpb.ConnectRequest{
+				PlayerUuid: player,
+				Target:     &agentpb.ConnectRequest_Group{Group: "lobby"},
+			}},
+		})
+		if !got.GetConnect().GetOrdered() {
+			t.Errorf("connect %s: response = %+v, want a move ordered", player, got)
+		}
+		return got.GetConnect().GetTarget()
+	}
+	return connect, players, s
+}
+
+func TestAPartyConnectedToAFillGroupNeverPassesMaxPlayers(t *testing.T) {
+	connect, party, _ := routedGroupFixture(t, spawneryv1alpha1.RoutingFill, 7, 8)
+
+	onServer := map[string]int{"lobby-a": 7, "lobby-b": 0}
+	var targets []string
+	for _, player := range party {
+		target := connect(player)
+		targets = append(targets, target)
+		onServer[target]++
+	}
+
+	if targets[0] != "lobby-a" {
+		t.Errorf("first target = %q, want lobby-a, the fuller server below its line", targets[0])
+	}
+	for name, n := range onServer {
+		if n > 10 {
+			t.Errorf("%s holds %d after the party, past its 10 slots; targets were %v", name, n, targets)
+		}
+	}
+}
+
+func TestTwoSessionsConnectingAtOnceCannotBothTakeTheLastSeat(t *testing.T) {
+	connect, party, s := routedGroupFixture(t, spawneryv1alpha1.RoutingFill, 9, 0)
+
+	chosen, release := make(chan struct{}), make(chan struct{})
+	var once sync.Once
+	s.pending.afterChoose = func() {
+		once.Do(func() {
+			close(chosen)
+			<-release
+		})
+	}
+
+	targets := make([]string, 2)
+	var first, second sync.WaitGroup
+	first.Add(1)
+	go func() { defer first.Done(); targets[0] = connect(party[0]) }()
+	select {
+	case <-chosen:
+	case <-time.After(5 * time.Second):
+		close(release)
+		t.Fatal("the first connect never reached the tally")
+	}
+	second.Add(1)
+	secondDone := make(chan struct{})
+	go func() { defer second.Done(); defer close(secondDone); targets[1] = connect(party[1]) }()
+	// Long enough for the second connect to finish if nothing holds it back;
+	// with the tally locked it cannot, and the wait only delays the test.
+	select {
+	case <-secondDone:
+	case <-time.After(200 * time.Millisecond):
+	}
+	close(release)
+	first.Wait()
+	second.Wait()
+
+	onA := 9
+	for _, target := range targets {
+		if target == "lobby-a" {
+			onA++
+		}
+	}
+	if onA > 10 {
+		t.Errorf("lobby-a holds %d, past its 10 slots, while lobby-b was empty; targets were %v", onA, targets)
+	}
+}
+
+func TestASpreadGroupStillPicksTheMostFreeSlots(t *testing.T) {
+	connect, party, _ := routedGroupFixture(t, spawneryv1alpha1.RoutingSpread, 7, 8)
+
+	for _, player := range party {
+		if got := connect(player); got != "lobby-b" {
+			t.Errorf("connect %s: target = %q, want lobby-b, which has 8 free playable slots to lobby-a's 1",
+				player, got)
+		}
+	}
+}
+
 func TestAnUnregisteredTargetIsRefusedEvenThoughItExists(t *testing.T) {
 	state := networkWith(nil,
 		[]*agentpb.ServerState{{Name: "lobby-a", Group: "lobby", Registered: false}},
@@ -226,7 +384,7 @@ func TestAnUnregisteredTargetIsRefusedEvenThoughItExists(t *testing.T) {
 
 	if _, ok := resolveTarget(state, &agentpb.ConnectRequest{
 		Target: &agentpb.ConnectRequest_Server{Server: "lobby-a"},
-	}); ok {
+	}, noPending); ok {
 		t.Error("an unregistered server was accepted as a move target")
 	}
 }
@@ -241,7 +399,7 @@ func TestAGroupTargetPicksTheServerWithTheMostRoom(t *testing.T) {
 
 	got, ok := resolveTarget(state, &agentpb.ConnectRequest{
 		Target: &agentpb.ConnectRequest_Group{Group: "lobby"},
-	})
+	}, noPending)
 
 	if !ok || got != "lobby-b" {
 		t.Errorf("target = %q ok=%v, want lobby-b: a group means wherever that group has room", got, ok)
@@ -255,7 +413,7 @@ func TestAGroupWithNoRegisteredServerResolvesToNothing(t *testing.T) {
 
 	if _, ok := resolveTarget(state, &agentpb.ConnectRequest{
 		Target: &agentpb.ConnectRequest_Group{Group: "lobby"},
-	}); ok {
+	}, noPending); ok {
 		t.Error("a group whose every server is unroutable resolved to one anyway")
 	}
 }
@@ -608,7 +766,7 @@ func TestAGroupTargetPicksByPlayableSeats(t *testing.T) {
 	})
 	got, ok := resolveTarget(state, &agentpb.ConnectRequest{
 		Target: &agentpb.ConnectRequest_Group{Group: "duels"},
-	})
+	}, noPending)
 	if !ok || got != "duels-b" {
 		t.Errorf("target = %q ok=%v, want duels-b: duels-a is full at its playable seats", got, ok)
 	}
@@ -621,7 +779,7 @@ func TestAPlayableFigureOfZeroReadsAsEverySeat(t *testing.T) {
 	})
 	got, ok := resolveTarget(state, &agentpb.ConnectRequest{
 		Target: &agentpb.ConnectRequest_Group{Group: "lobby"},
-	})
+	}, noPending)
 	if !ok || got != "lobby-b" {
 		t.Errorf("target = %q ok=%v, want lobby-b: an older status's 0 is all 100 seats", got, ok)
 	}
@@ -633,7 +791,7 @@ func TestAGroupWhoseServersAreAllFullStillResolves(t *testing.T) {
 	})
 	if got, ok := resolveTarget(state, &agentpb.ConnectRequest{
 		Target: &agentpb.ConnectRequest_Group{Group: "duels"},
-	}); !ok || got != "duels-a" {
+	}, noPending); !ok || got != "duels-a" {
 		t.Errorf("target = %q ok=%v, want duels-a: full is not unroutable", got, ok)
 	}
 }
@@ -645,7 +803,7 @@ func TestAmongFullRoundsAGroupTargetPicksOneWithRoomLeft(t *testing.T) {
 	})
 	got, ok := resolveTarget(state, &agentpb.ConnectRequest{
 		Target: &agentpb.ConnectRequest_Group{Group: "duels"},
-	})
+	}, noPending)
 	if !ok || got != "duels-b" {
 		t.Errorf("target = %q ok=%v, want duels-b: duels-a is at its hard limit", got, ok)
 	}

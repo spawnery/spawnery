@@ -133,7 +133,10 @@ type Options struct {
 	// ExecuteWait zero means ExecuteWait.
 	ExecuteWait    time.Duration
 	ReportInterval time.Duration
-	RenewAfter     time.Duration
+	// ReconcileLag is how long the Server reconciler can take to publish a
+	// report; zero counts none.
+	ReconcileLag time.Duration
+	RenewAfter   time.Duration
 	// HardDeadline must be above RenewAfter, or a well-behaved agent would be
 	// cut off mid-renewal.
 	HardDeadline time.Duration
@@ -151,6 +154,7 @@ type Server struct {
 	sessions *sessions
 	// requestRate is a bucket separate from grpcauth's; see requestLimiter.
 	requestRate *requestLimiter
+	pending     *pendingMoves
 	executions  executions
 	addr        atomic.Pointer[string]
 }
@@ -175,7 +179,12 @@ func New(opts Options) *Server {
 	if opts.Writer == nil {
 		panic("agentserver: no cluster writer")
 	}
-	return &Server{opts: opts, sessions: newSessions(), requestRate: newRequestLimiter(opts.Clock)}
+	return &Server{
+		opts:        opts,
+		sessions:    newSessions(),
+		requestRate: newRequestLimiter(opts.Clock),
+		pending:     newPendingMoves(opts.Clock, pendingMoveTTL(opts.ReportInterval, opts.ReconcileLag)),
+	}
 }
 
 // Addr is empty until Start has bound the listener.

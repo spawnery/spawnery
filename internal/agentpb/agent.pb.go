@@ -215,6 +215,55 @@ func (GroupState_Kind) EnumDescriptor() ([]byte, []int) {
 	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{57, 0}
 }
 
+// How the proxy picks among this group's servers for a new player.
+// ROUTING_SPREAD is also what an operator older than this field sends;
+// read an absent strategy as spread.
+type GroupState_RoutingStrategy int32
+
+const (
+	GroupState_ROUTING_SPREAD GroupState_RoutingStrategy = 0
+	GroupState_ROUTING_FILL   GroupState_RoutingStrategy = 1
+)
+
+// Enum value maps for GroupState_RoutingStrategy.
+var (
+	GroupState_RoutingStrategy_name = map[int32]string{
+		0: "ROUTING_SPREAD",
+		1: "ROUTING_FILL",
+	}
+	GroupState_RoutingStrategy_value = map[string]int32{
+		"ROUTING_SPREAD": 0,
+		"ROUTING_FILL":   1,
+	}
+)
+
+func (x GroupState_RoutingStrategy) Enum() *GroupState_RoutingStrategy {
+	p := new(GroupState_RoutingStrategy)
+	*p = x
+	return p
+}
+
+func (x GroupState_RoutingStrategy) String() string {
+	return protoimpl.X.EnumStringOf(x.Descriptor(), protoreflect.EnumNumber(x))
+}
+
+func (GroupState_RoutingStrategy) Descriptor() protoreflect.EnumDescriptor {
+	return file_spawnery_agent_v1alpha1_agent_proto_enumTypes[3].Descriptor()
+}
+
+func (GroupState_RoutingStrategy) Type() protoreflect.EnumType {
+	return &file_spawnery_agent_v1alpha1_agent_proto_enumTypes[3]
+}
+
+func (x GroupState_RoutingStrategy) Number() protoreflect.EnumNumber {
+	return protoreflect.EnumNumber(x)
+}
+
+// Deprecated: Use GroupState_RoutingStrategy.Descriptor instead.
+func (GroupState_RoutingStrategy) EnumDescriptor() ([]byte, []int) {
+	return file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP(), []int{57, 1}
+}
+
 // ReportInterval is how often the agent should report. The operator dictates
 // it so both sides derive the staleness threshold from the same number.
 type ReportInterval struct {
@@ -4556,7 +4605,8 @@ type GroupState struct {
 	Pinned         bool  `protobuf:"varint,13,opt,name=pinned,proto3" json:"pinned,omitempty"`
 	PinnedReplicas int32 `protobuf:"varint,14,opt,name=pinned_replicas,json=pinnedReplicas,proto3" json:"pinned_replicas,omitempty"`
 	// When the pin ends, on the operator's clock; 0 for a pin without an end.
-	PinnedUntilUnix int64 `protobuf:"varint,15,opt,name=pinned_until_unix,json=pinnedUntilUnix,proto3" json:"pinned_until_unix,omitempty"`
+	PinnedUntilUnix int64                      `protobuf:"varint,15,opt,name=pinned_until_unix,json=pinnedUntilUnix,proto3" json:"pinned_until_unix,omitempty"`
+	RoutingStrategy GroupState_RoutingStrategy `protobuf:"varint,16,opt,name=routing_strategy,json=routingStrategy,proto3,enum=spawnery.agent.v1alpha1.GroupState_RoutingStrategy" json:"routing_strategy,omitempty"`
 	unknownFields   protoimpl.UnknownFields
 	sizeCache       protoimpl.SizeCache
 }
@@ -4696,6 +4746,13 @@ func (x *GroupState) GetPinnedUntilUnix() int64 {
 	return 0
 }
 
+func (x *GroupState) GetRoutingStrategy() GroupState_RoutingStrategy {
+	if x != nil {
+		return x.RoutingStrategy
+	}
+	return GroupState_ROUTING_SPREAD
+}
+
 // ServerState is one backend as the operator last observed it.
 type ServerState struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
@@ -4742,6 +4799,9 @@ type ServerState struct {
 	// true together with node. False before the scheduler has looked, once the
 	// pod is placed, and from an operator older than this field.
 	Unschedulable bool `protobuf:"varint,16,opt,name=unschedulable,proto3" json:"unschedulable,omitempty"`
+	// True when the server's pod hash differs from its group's current one.
+	// False when either is unknown, and from an operator older than this field.
+	Stale         bool `protobuf:"varint,17,opt,name=stale,proto3" json:"stale,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -4884,6 +4944,13 @@ func (x *ServerState) GetResources() *StartResources {
 func (x *ServerState) GetUnschedulable() bool {
 	if x != nil {
 		return x.Unschedulable
+	}
+	return false
+}
+
+func (x *ServerState) GetStale() bool {
+	if x != nil {
+		return x.Stale
 	}
 	return false
 }
@@ -6292,7 +6359,7 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\aplayers\x18\x03 \x03(\v2$.spawnery.agent.v1alpha1.RosterEntryR\aplayers\x12\x1f\n" +
 	"\vfeed_format\x18\x04 \x01(\tR\n" +
 	"feedFormat\x12=\n" +
-	"\aproxies\x18\x05 \x03(\v2#.spawnery.agent.v1alpha1.ProxyStateR\aproxies\"\xa3\x06\n" +
+	"\aproxies\x18\x05 \x03(\v2#.spawnery.agent.v1alpha1.ProxyStateR\aproxies\"\xbc\a\n" +
 	"\n" +
 	"GroupState\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12<\n" +
@@ -6313,7 +6380,8 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\x19join_permission_deny_only\x18\f \x01(\bR\x16joinPermissionDenyOnly\x12\x16\n" +
 	"\x06pinned\x18\r \x01(\bR\x06pinned\x12'\n" +
 	"\x0fpinned_replicas\x18\x0e \x01(\x05R\x0epinnedReplicas\x12*\n" +
-	"\x11pinned_until_unix\x18\x0f \x01(\x03R\x0fpinnedUntilUnix\x1a=\n" +
+	"\x11pinned_until_unix\x18\x0f \x01(\x03R\x0fpinnedUntilUnix\x12^\n" +
+	"\x10routing_strategy\x18\x10 \x01(\x0e23.spawnery.agent.v1alpha1.GroupState.RoutingStrategyR\x0froutingStrategy\x1a=\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"U\n" +
@@ -6323,7 +6391,10 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\n" +
 	"PERSISTENT\x10\x02\x12\t\n" +
 	"\x05PROXY\x10\x03\x12\r\n" +
-	"\tON_DEMAND\x10\x04\"\xe1\x04\n" +
+	"\tON_DEMAND\x10\x04\"7\n" +
+	"\x0fRoutingStrategy\x12\x12\n" +
+	"\x0eROUTING_SPREAD\x10\x00\x12\x10\n" +
+	"\fROUTING_FILL\x10\x01\"\xf7\x04\n" +
 	"\vServerState\x12\x12\n" +
 	"\x04name\x18\x01 \x01(\tR\x04name\x12\x14\n" +
 	"\x05group\x18\x02 \x01(\tR\x05group\x12\x14\n" +
@@ -6345,7 +6416,8 @@ const file_spawnery_agent_v1alpha1_agent_proto_rawDesc = "" +
 	"\x0eplayable_slots\x18\r \x01(\x05R\rplayableSlots\x12!\n" +
 	"\fjoins_closed\x18\x0e \x01(\bR\vjoinsClosed\x12E\n" +
 	"\tresources\x18\x0f \x01(\v2'.spawnery.agent.v1alpha1.StartResourcesR\tresources\x12$\n" +
-	"\runschedulable\x18\x10 \x01(\bR\runschedulable\x1a=\n" +
+	"\runschedulable\x18\x10 \x01(\bR\runschedulable\x12\x14\n" +
+	"\x05stale\x18\x11 \x01(\bR\x05stale\x1a=\n" +
 	"\x0fAttributesEntry\x12\x10\n" +
 	"\x03key\x18\x01 \x01(\tR\x03key\x12\x14\n" +
 	"\x05value\x18\x02 \x01(\tR\x05value:\x028\x01\"\xc3\x01\n" +
@@ -6448,194 +6520,196 @@ func file_spawnery_agent_v1alpha1_agent_proto_rawDescGZIP() []byte {
 	return file_spawnery_agent_v1alpha1_agent_proto_rawDescData
 }
 
-var file_spawnery_agent_v1alpha1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 3)
+var file_spawnery_agent_v1alpha1_agent_proto_enumTypes = make([]protoimpl.EnumInfo, 4)
 var file_spawnery_agent_v1alpha1_agent_proto_msgTypes = make([]protoimpl.MessageInfo, 77)
 var file_spawnery_agent_v1alpha1_agent_proto_goTypes = []any{
 	(VoiceRelayState)(0),             // 0: spawnery.agent.v1alpha1.VoiceRelayState
 	(RequestError_Reason)(0),         // 1: spawnery.agent.v1alpha1.RequestError.Reason
 	(GroupState_Kind)(0),             // 2: spawnery.agent.v1alpha1.GroupState.Kind
-	(*ReportInterval)(nil),           // 3: spawnery.agent.v1alpha1.ReportInterval
-	(*SessionDeadline)(nil),          // 4: spawnery.agent.v1alpha1.SessionDeadline
-	(*Hello)(nil),                    // 5: spawnery.agent.v1alpha1.Hello
-	(*PlayerCount)(nil),              // 6: spawnery.agent.v1alpha1.PlayerCount
-	(*CloudRequest)(nil),             // 7: spawnery.agent.v1alpha1.CloudRequest
-	(*CloudResponse)(nil),            // 8: spawnery.agent.v1alpha1.CloudResponse
-	(*ConnectRequest)(nil),           // 9: spawnery.agent.v1alpha1.ConnectRequest
-	(*ConnectResult)(nil),            // 10: spawnery.agent.v1alpha1.ConnectResult
-	(*RetireRequest)(nil),            // 11: spawnery.agent.v1alpha1.RetireRequest
-	(*RetireResult)(nil),             // 12: spawnery.agent.v1alpha1.RetireResult
-	(*UnretireRequest)(nil),          // 13: spawnery.agent.v1alpha1.UnretireRequest
-	(*UnretireResult)(nil),           // 14: spawnery.agent.v1alpha1.UnretireResult
-	(*StatusRequest)(nil),            // 15: spawnery.agent.v1alpha1.StatusRequest
-	(*ResourceUsage)(nil),            // 16: spawnery.agent.v1alpha1.ResourceUsage
-	(*GroupStatus)(nil),              // 17: spawnery.agent.v1alpha1.GroupStatus
-	(*InstanceStatus)(nil),           // 18: spawnery.agent.v1alpha1.InstanceStatus
-	(*StatusResult)(nil),             // 19: spawnery.agent.v1alpha1.StatusResult
-	(*BoostRequest)(nil),             // 20: spawnery.agent.v1alpha1.BoostRequest
-	(*BoostResult)(nil),              // 21: spawnery.agent.v1alpha1.BoostResult
-	(*StopBoostRequest)(nil),         // 22: spawnery.agent.v1alpha1.StopBoostRequest
-	(*StopBoostResult)(nil),          // 23: spawnery.agent.v1alpha1.StopBoostResult
-	(*ScaleRequest)(nil),             // 24: spawnery.agent.v1alpha1.ScaleRequest
-	(*ScaleResult)(nil),              // 25: spawnery.agent.v1alpha1.ScaleResult
-	(*ForceStopRequest)(nil),         // 26: spawnery.agent.v1alpha1.ForceStopRequest
-	(*ForceStopResult)(nil),          // 27: spawnery.agent.v1alpha1.ForceStopResult
-	(*ExecuteRequest)(nil),           // 28: spawnery.agent.v1alpha1.ExecuteRequest
-	(*ExecuteResult)(nil),            // 29: spawnery.agent.v1alpha1.ExecuteResult
-	(*ExecuteOutcome)(nil),           // 30: spawnery.agent.v1alpha1.ExecuteOutcome
-	(*AcceptJoinsRequest)(nil),       // 31: spawnery.agent.v1alpha1.AcceptJoinsRequest
-	(*AcceptJoinsResult)(nil),        // 32: spawnery.agent.v1alpha1.AcceptJoinsResult
-	(*AnnounceRequest)(nil),          // 33: spawnery.agent.v1alpha1.AnnounceRequest
-	(*AnnounceResult)(nil),           // 34: spawnery.agent.v1alpha1.AnnounceResult
-	(*StartServerRequest)(nil),       // 35: spawnery.agent.v1alpha1.StartServerRequest
-	(*StartResources)(nil),           // 36: spawnery.agent.v1alpha1.StartResources
-	(*StartServerResult)(nil),        // 37: spawnery.agent.v1alpha1.StartServerResult
-	(*StopServerRequest)(nil),        // 38: spawnery.agent.v1alpha1.StopServerRequest
-	(*StopServerResult)(nil),         // 39: spawnery.agent.v1alpha1.StopServerResult
-	(*DeleteServerRequest)(nil),      // 40: spawnery.agent.v1alpha1.DeleteServerRequest
-	(*DeleteServerResult)(nil),       // 41: spawnery.agent.v1alpha1.DeleteServerResult
-	(*ListRestorePointsRequest)(nil), // 42: spawnery.agent.v1alpha1.ListRestorePointsRequest
-	(*RestorePoint)(nil),             // 43: spawnery.agent.v1alpha1.RestorePoint
-	(*ListRestorePointsResult)(nil),  // 44: spawnery.agent.v1alpha1.ListRestorePointsResult
-	(*RestoreWorldRequest)(nil),      // 45: spawnery.agent.v1alpha1.RestoreWorldRequest
-	(*RestoreWorldResult)(nil),       // 46: spawnery.agent.v1alpha1.RestoreWorldResult
-	(*CloudEvent)(nil),               // 47: spawnery.agent.v1alpha1.CloudEvent
-	(*EventInterest)(nil),            // 48: spawnery.agent.v1alpha1.EventInterest
-	(*RequestError)(nil),             // 49: spawnery.agent.v1alpha1.RequestError
-	(*Ready)(nil),                    // 50: spawnery.agent.v1alpha1.Ready
-	(*ExecuteCommand)(nil),           // 51: spawnery.agent.v1alpha1.ExecuteCommand
-	(*ServerMessage)(nil),            // 52: spawnery.agent.v1alpha1.ServerMessage
-	(*OperatorToServer)(nil),         // 53: spawnery.agent.v1alpha1.OperatorToServer
-	(*Heartbeat)(nil),                // 54: spawnery.agent.v1alpha1.Heartbeat
-	(*PlayerJoinedServer)(nil),       // 55: spawnery.agent.v1alpha1.PlayerJoinedServer
-	(*BackendPlayers)(nil),           // 56: spawnery.agent.v1alpha1.BackendPlayers
-	(*PlayerRoster)(nil),             // 57: spawnery.agent.v1alpha1.PlayerRoster
-	(*RosterEntry)(nil),              // 58: spawnery.agent.v1alpha1.RosterEntry
-	(*NetworkState)(nil),             // 59: spawnery.agent.v1alpha1.NetworkState
-	(*GroupState)(nil),               // 60: spawnery.agent.v1alpha1.GroupState
-	(*ServerState)(nil),              // 61: spawnery.agent.v1alpha1.ServerState
-	(*ProxyState)(nil),               // 62: spawnery.agent.v1alpha1.ProxyState
-	(*ProxyMessage)(nil),             // 63: spawnery.agent.v1alpha1.ProxyMessage
-	(*RegisteredServer)(nil),         // 64: spawnery.agent.v1alpha1.RegisteredServer
-	(*ServerJoinRule)(nil),           // 65: spawnery.agent.v1alpha1.ServerJoinRule
-	(*FullSync)(nil),                 // 66: spawnery.agent.v1alpha1.FullSync
-	(*RegisterServer)(nil),           // 67: spawnery.agent.v1alpha1.RegisterServer
-	(*UnregisterServer)(nil),         // 68: spawnery.agent.v1alpha1.UnregisterServer
-	(*MovePlayer)(nil),               // 69: spawnery.agent.v1alpha1.MovePlayer
-	(*DrainPlayers)(nil),             // 70: spawnery.agent.v1alpha1.DrainPlayers
-	(*SetReady)(nil),                 // 71: spawnery.agent.v1alpha1.SetReady
-	(*VoiceConfig)(nil),              // 72: spawnery.agent.v1alpha1.VoiceConfig
-	(*VoiceCounters)(nil),            // 73: spawnery.agent.v1alpha1.VoiceCounters
-	(*OperatorToProxy)(nil),          // 74: spawnery.agent.v1alpha1.OperatorToProxy
-	nil,                              // 75: spawnery.agent.v1alpha1.AnnounceRequest.AttributesEntry
-	nil,                              // 76: spawnery.agent.v1alpha1.BackendPlayers.PlayersEntry
-	nil,                              // 77: spawnery.agent.v1alpha1.GroupState.AttributesEntry
-	nil,                              // 78: spawnery.agent.v1alpha1.ServerState.AttributesEntry
-	nil,                              // 79: spawnery.agent.v1alpha1.VoiceCounters.TotalsEntry
+	(GroupState_RoutingStrategy)(0),  // 3: spawnery.agent.v1alpha1.GroupState.RoutingStrategy
+	(*ReportInterval)(nil),           // 4: spawnery.agent.v1alpha1.ReportInterval
+	(*SessionDeadline)(nil),          // 5: spawnery.agent.v1alpha1.SessionDeadline
+	(*Hello)(nil),                    // 6: spawnery.agent.v1alpha1.Hello
+	(*PlayerCount)(nil),              // 7: spawnery.agent.v1alpha1.PlayerCount
+	(*CloudRequest)(nil),             // 8: spawnery.agent.v1alpha1.CloudRequest
+	(*CloudResponse)(nil),            // 9: spawnery.agent.v1alpha1.CloudResponse
+	(*ConnectRequest)(nil),           // 10: spawnery.agent.v1alpha1.ConnectRequest
+	(*ConnectResult)(nil),            // 11: spawnery.agent.v1alpha1.ConnectResult
+	(*RetireRequest)(nil),            // 12: spawnery.agent.v1alpha1.RetireRequest
+	(*RetireResult)(nil),             // 13: spawnery.agent.v1alpha1.RetireResult
+	(*UnretireRequest)(nil),          // 14: spawnery.agent.v1alpha1.UnretireRequest
+	(*UnretireResult)(nil),           // 15: spawnery.agent.v1alpha1.UnretireResult
+	(*StatusRequest)(nil),            // 16: spawnery.agent.v1alpha1.StatusRequest
+	(*ResourceUsage)(nil),            // 17: spawnery.agent.v1alpha1.ResourceUsage
+	(*GroupStatus)(nil),              // 18: spawnery.agent.v1alpha1.GroupStatus
+	(*InstanceStatus)(nil),           // 19: spawnery.agent.v1alpha1.InstanceStatus
+	(*StatusResult)(nil),             // 20: spawnery.agent.v1alpha1.StatusResult
+	(*BoostRequest)(nil),             // 21: spawnery.agent.v1alpha1.BoostRequest
+	(*BoostResult)(nil),              // 22: spawnery.agent.v1alpha1.BoostResult
+	(*StopBoostRequest)(nil),         // 23: spawnery.agent.v1alpha1.StopBoostRequest
+	(*StopBoostResult)(nil),          // 24: spawnery.agent.v1alpha1.StopBoostResult
+	(*ScaleRequest)(nil),             // 25: spawnery.agent.v1alpha1.ScaleRequest
+	(*ScaleResult)(nil),              // 26: spawnery.agent.v1alpha1.ScaleResult
+	(*ForceStopRequest)(nil),         // 27: spawnery.agent.v1alpha1.ForceStopRequest
+	(*ForceStopResult)(nil),          // 28: spawnery.agent.v1alpha1.ForceStopResult
+	(*ExecuteRequest)(nil),           // 29: spawnery.agent.v1alpha1.ExecuteRequest
+	(*ExecuteResult)(nil),            // 30: spawnery.agent.v1alpha1.ExecuteResult
+	(*ExecuteOutcome)(nil),           // 31: spawnery.agent.v1alpha1.ExecuteOutcome
+	(*AcceptJoinsRequest)(nil),       // 32: spawnery.agent.v1alpha1.AcceptJoinsRequest
+	(*AcceptJoinsResult)(nil),        // 33: spawnery.agent.v1alpha1.AcceptJoinsResult
+	(*AnnounceRequest)(nil),          // 34: spawnery.agent.v1alpha1.AnnounceRequest
+	(*AnnounceResult)(nil),           // 35: spawnery.agent.v1alpha1.AnnounceResult
+	(*StartServerRequest)(nil),       // 36: spawnery.agent.v1alpha1.StartServerRequest
+	(*StartResources)(nil),           // 37: spawnery.agent.v1alpha1.StartResources
+	(*StartServerResult)(nil),        // 38: spawnery.agent.v1alpha1.StartServerResult
+	(*StopServerRequest)(nil),        // 39: spawnery.agent.v1alpha1.StopServerRequest
+	(*StopServerResult)(nil),         // 40: spawnery.agent.v1alpha1.StopServerResult
+	(*DeleteServerRequest)(nil),      // 41: spawnery.agent.v1alpha1.DeleteServerRequest
+	(*DeleteServerResult)(nil),       // 42: spawnery.agent.v1alpha1.DeleteServerResult
+	(*ListRestorePointsRequest)(nil), // 43: spawnery.agent.v1alpha1.ListRestorePointsRequest
+	(*RestorePoint)(nil),             // 44: spawnery.agent.v1alpha1.RestorePoint
+	(*ListRestorePointsResult)(nil),  // 45: spawnery.agent.v1alpha1.ListRestorePointsResult
+	(*RestoreWorldRequest)(nil),      // 46: spawnery.agent.v1alpha1.RestoreWorldRequest
+	(*RestoreWorldResult)(nil),       // 47: spawnery.agent.v1alpha1.RestoreWorldResult
+	(*CloudEvent)(nil),               // 48: spawnery.agent.v1alpha1.CloudEvent
+	(*EventInterest)(nil),            // 49: spawnery.agent.v1alpha1.EventInterest
+	(*RequestError)(nil),             // 50: spawnery.agent.v1alpha1.RequestError
+	(*Ready)(nil),                    // 51: spawnery.agent.v1alpha1.Ready
+	(*ExecuteCommand)(nil),           // 52: spawnery.agent.v1alpha1.ExecuteCommand
+	(*ServerMessage)(nil),            // 53: spawnery.agent.v1alpha1.ServerMessage
+	(*OperatorToServer)(nil),         // 54: spawnery.agent.v1alpha1.OperatorToServer
+	(*Heartbeat)(nil),                // 55: spawnery.agent.v1alpha1.Heartbeat
+	(*PlayerJoinedServer)(nil),       // 56: spawnery.agent.v1alpha1.PlayerJoinedServer
+	(*BackendPlayers)(nil),           // 57: spawnery.agent.v1alpha1.BackendPlayers
+	(*PlayerRoster)(nil),             // 58: spawnery.agent.v1alpha1.PlayerRoster
+	(*RosterEntry)(nil),              // 59: spawnery.agent.v1alpha1.RosterEntry
+	(*NetworkState)(nil),             // 60: spawnery.agent.v1alpha1.NetworkState
+	(*GroupState)(nil),               // 61: spawnery.agent.v1alpha1.GroupState
+	(*ServerState)(nil),              // 62: spawnery.agent.v1alpha1.ServerState
+	(*ProxyState)(nil),               // 63: spawnery.agent.v1alpha1.ProxyState
+	(*ProxyMessage)(nil),             // 64: spawnery.agent.v1alpha1.ProxyMessage
+	(*RegisteredServer)(nil),         // 65: spawnery.agent.v1alpha1.RegisteredServer
+	(*ServerJoinRule)(nil),           // 66: spawnery.agent.v1alpha1.ServerJoinRule
+	(*FullSync)(nil),                 // 67: spawnery.agent.v1alpha1.FullSync
+	(*RegisterServer)(nil),           // 68: spawnery.agent.v1alpha1.RegisterServer
+	(*UnregisterServer)(nil),         // 69: spawnery.agent.v1alpha1.UnregisterServer
+	(*MovePlayer)(nil),               // 70: spawnery.agent.v1alpha1.MovePlayer
+	(*DrainPlayers)(nil),             // 71: spawnery.agent.v1alpha1.DrainPlayers
+	(*SetReady)(nil),                 // 72: spawnery.agent.v1alpha1.SetReady
+	(*VoiceConfig)(nil),              // 73: spawnery.agent.v1alpha1.VoiceConfig
+	(*VoiceCounters)(nil),            // 74: spawnery.agent.v1alpha1.VoiceCounters
+	(*OperatorToProxy)(nil),          // 75: spawnery.agent.v1alpha1.OperatorToProxy
+	nil,                              // 76: spawnery.agent.v1alpha1.AnnounceRequest.AttributesEntry
+	nil,                              // 77: spawnery.agent.v1alpha1.BackendPlayers.PlayersEntry
+	nil,                              // 78: spawnery.agent.v1alpha1.GroupState.AttributesEntry
+	nil,                              // 79: spawnery.agent.v1alpha1.ServerState.AttributesEntry
+	nil,                              // 80: spawnery.agent.v1alpha1.VoiceCounters.TotalsEntry
 }
 var file_spawnery_agent_v1alpha1_agent_proto_depIdxs = []int32{
-	9,  // 0: spawnery.agent.v1alpha1.CloudRequest.connect:type_name -> spawnery.agent.v1alpha1.ConnectRequest
-	11, // 1: spawnery.agent.v1alpha1.CloudRequest.retire:type_name -> spawnery.agent.v1alpha1.RetireRequest
-	20, // 2: spawnery.agent.v1alpha1.CloudRequest.boost:type_name -> spawnery.agent.v1alpha1.BoostRequest
-	22, // 3: spawnery.agent.v1alpha1.CloudRequest.stop_boost:type_name -> spawnery.agent.v1alpha1.StopBoostRequest
-	33, // 4: spawnery.agent.v1alpha1.CloudRequest.announce:type_name -> spawnery.agent.v1alpha1.AnnounceRequest
-	31, // 5: spawnery.agent.v1alpha1.CloudRequest.accept_joins:type_name -> spawnery.agent.v1alpha1.AcceptJoinsRequest
-	35, // 6: spawnery.agent.v1alpha1.CloudRequest.start_server:type_name -> spawnery.agent.v1alpha1.StartServerRequest
-	38, // 7: spawnery.agent.v1alpha1.CloudRequest.stop_server:type_name -> spawnery.agent.v1alpha1.StopServerRequest
-	13, // 8: spawnery.agent.v1alpha1.CloudRequest.unretire:type_name -> spawnery.agent.v1alpha1.UnretireRequest
-	15, // 9: spawnery.agent.v1alpha1.CloudRequest.status:type_name -> spawnery.agent.v1alpha1.StatusRequest
-	40, // 10: spawnery.agent.v1alpha1.CloudRequest.delete_server:type_name -> spawnery.agent.v1alpha1.DeleteServerRequest
-	24, // 11: spawnery.agent.v1alpha1.CloudRequest.scale:type_name -> spawnery.agent.v1alpha1.ScaleRequest
-	26, // 12: spawnery.agent.v1alpha1.CloudRequest.force_stop:type_name -> spawnery.agent.v1alpha1.ForceStopRequest
-	28, // 13: spawnery.agent.v1alpha1.CloudRequest.execute:type_name -> spawnery.agent.v1alpha1.ExecuteRequest
-	42, // 14: spawnery.agent.v1alpha1.CloudRequest.list_restore_points:type_name -> spawnery.agent.v1alpha1.ListRestorePointsRequest
-	45, // 15: spawnery.agent.v1alpha1.CloudRequest.restore_world:type_name -> spawnery.agent.v1alpha1.RestoreWorldRequest
-	10, // 16: spawnery.agent.v1alpha1.CloudResponse.connect:type_name -> spawnery.agent.v1alpha1.ConnectResult
-	49, // 17: spawnery.agent.v1alpha1.CloudResponse.error:type_name -> spawnery.agent.v1alpha1.RequestError
-	12, // 18: spawnery.agent.v1alpha1.CloudResponse.retire:type_name -> spawnery.agent.v1alpha1.RetireResult
-	21, // 19: spawnery.agent.v1alpha1.CloudResponse.boost:type_name -> spawnery.agent.v1alpha1.BoostResult
-	23, // 20: spawnery.agent.v1alpha1.CloudResponse.stop_boost:type_name -> spawnery.agent.v1alpha1.StopBoostResult
-	34, // 21: spawnery.agent.v1alpha1.CloudResponse.announce:type_name -> spawnery.agent.v1alpha1.AnnounceResult
-	32, // 22: spawnery.agent.v1alpha1.CloudResponse.accept_joins:type_name -> spawnery.agent.v1alpha1.AcceptJoinsResult
-	37, // 23: spawnery.agent.v1alpha1.CloudResponse.start_server:type_name -> spawnery.agent.v1alpha1.StartServerResult
-	39, // 24: spawnery.agent.v1alpha1.CloudResponse.stop_server:type_name -> spawnery.agent.v1alpha1.StopServerResult
-	14, // 25: spawnery.agent.v1alpha1.CloudResponse.unretire:type_name -> spawnery.agent.v1alpha1.UnretireResult
-	19, // 26: spawnery.agent.v1alpha1.CloudResponse.status:type_name -> spawnery.agent.v1alpha1.StatusResult
-	41, // 27: spawnery.agent.v1alpha1.CloudResponse.delete_server:type_name -> spawnery.agent.v1alpha1.DeleteServerResult
-	25, // 28: spawnery.agent.v1alpha1.CloudResponse.scale:type_name -> spawnery.agent.v1alpha1.ScaleResult
-	27, // 29: spawnery.agent.v1alpha1.CloudResponse.force_stop:type_name -> spawnery.agent.v1alpha1.ForceStopResult
-	29, // 30: spawnery.agent.v1alpha1.CloudResponse.execute:type_name -> spawnery.agent.v1alpha1.ExecuteResult
-	44, // 31: spawnery.agent.v1alpha1.CloudResponse.list_restore_points:type_name -> spawnery.agent.v1alpha1.ListRestorePointsResult
-	46, // 32: spawnery.agent.v1alpha1.CloudResponse.restore_world:type_name -> spawnery.agent.v1alpha1.RestoreWorldResult
+	10, // 0: spawnery.agent.v1alpha1.CloudRequest.connect:type_name -> spawnery.agent.v1alpha1.ConnectRequest
+	12, // 1: spawnery.agent.v1alpha1.CloudRequest.retire:type_name -> spawnery.agent.v1alpha1.RetireRequest
+	21, // 2: spawnery.agent.v1alpha1.CloudRequest.boost:type_name -> spawnery.agent.v1alpha1.BoostRequest
+	23, // 3: spawnery.agent.v1alpha1.CloudRequest.stop_boost:type_name -> spawnery.agent.v1alpha1.StopBoostRequest
+	34, // 4: spawnery.agent.v1alpha1.CloudRequest.announce:type_name -> spawnery.agent.v1alpha1.AnnounceRequest
+	32, // 5: spawnery.agent.v1alpha1.CloudRequest.accept_joins:type_name -> spawnery.agent.v1alpha1.AcceptJoinsRequest
+	36, // 6: spawnery.agent.v1alpha1.CloudRequest.start_server:type_name -> spawnery.agent.v1alpha1.StartServerRequest
+	39, // 7: spawnery.agent.v1alpha1.CloudRequest.stop_server:type_name -> spawnery.agent.v1alpha1.StopServerRequest
+	14, // 8: spawnery.agent.v1alpha1.CloudRequest.unretire:type_name -> spawnery.agent.v1alpha1.UnretireRequest
+	16, // 9: spawnery.agent.v1alpha1.CloudRequest.status:type_name -> spawnery.agent.v1alpha1.StatusRequest
+	41, // 10: spawnery.agent.v1alpha1.CloudRequest.delete_server:type_name -> spawnery.agent.v1alpha1.DeleteServerRequest
+	25, // 11: spawnery.agent.v1alpha1.CloudRequest.scale:type_name -> spawnery.agent.v1alpha1.ScaleRequest
+	27, // 12: spawnery.agent.v1alpha1.CloudRequest.force_stop:type_name -> spawnery.agent.v1alpha1.ForceStopRequest
+	29, // 13: spawnery.agent.v1alpha1.CloudRequest.execute:type_name -> spawnery.agent.v1alpha1.ExecuteRequest
+	43, // 14: spawnery.agent.v1alpha1.CloudRequest.list_restore_points:type_name -> spawnery.agent.v1alpha1.ListRestorePointsRequest
+	46, // 15: spawnery.agent.v1alpha1.CloudRequest.restore_world:type_name -> spawnery.agent.v1alpha1.RestoreWorldRequest
+	11, // 16: spawnery.agent.v1alpha1.CloudResponse.connect:type_name -> spawnery.agent.v1alpha1.ConnectResult
+	50, // 17: spawnery.agent.v1alpha1.CloudResponse.error:type_name -> spawnery.agent.v1alpha1.RequestError
+	13, // 18: spawnery.agent.v1alpha1.CloudResponse.retire:type_name -> spawnery.agent.v1alpha1.RetireResult
+	22, // 19: spawnery.agent.v1alpha1.CloudResponse.boost:type_name -> spawnery.agent.v1alpha1.BoostResult
+	24, // 20: spawnery.agent.v1alpha1.CloudResponse.stop_boost:type_name -> spawnery.agent.v1alpha1.StopBoostResult
+	35, // 21: spawnery.agent.v1alpha1.CloudResponse.announce:type_name -> spawnery.agent.v1alpha1.AnnounceResult
+	33, // 22: spawnery.agent.v1alpha1.CloudResponse.accept_joins:type_name -> spawnery.agent.v1alpha1.AcceptJoinsResult
+	38, // 23: spawnery.agent.v1alpha1.CloudResponse.start_server:type_name -> spawnery.agent.v1alpha1.StartServerResult
+	40, // 24: spawnery.agent.v1alpha1.CloudResponse.stop_server:type_name -> spawnery.agent.v1alpha1.StopServerResult
+	15, // 25: spawnery.agent.v1alpha1.CloudResponse.unretire:type_name -> spawnery.agent.v1alpha1.UnretireResult
+	20, // 26: spawnery.agent.v1alpha1.CloudResponse.status:type_name -> spawnery.agent.v1alpha1.StatusResult
+	42, // 27: spawnery.agent.v1alpha1.CloudResponse.delete_server:type_name -> spawnery.agent.v1alpha1.DeleteServerResult
+	26, // 28: spawnery.agent.v1alpha1.CloudResponse.scale:type_name -> spawnery.agent.v1alpha1.ScaleResult
+	28, // 29: spawnery.agent.v1alpha1.CloudResponse.force_stop:type_name -> spawnery.agent.v1alpha1.ForceStopResult
+	30, // 30: spawnery.agent.v1alpha1.CloudResponse.execute:type_name -> spawnery.agent.v1alpha1.ExecuteResult
+	45, // 31: spawnery.agent.v1alpha1.CloudResponse.list_restore_points:type_name -> spawnery.agent.v1alpha1.ListRestorePointsResult
+	47, // 32: spawnery.agent.v1alpha1.CloudResponse.restore_world:type_name -> spawnery.agent.v1alpha1.RestoreWorldResult
 	2,  // 33: spawnery.agent.v1alpha1.GroupStatus.kind:type_name -> spawnery.agent.v1alpha1.GroupState.Kind
-	16, // 34: spawnery.agent.v1alpha1.GroupStatus.usage:type_name -> spawnery.agent.v1alpha1.ResourceUsage
-	16, // 35: spawnery.agent.v1alpha1.InstanceStatus.usage:type_name -> spawnery.agent.v1alpha1.ResourceUsage
-	16, // 36: spawnery.agent.v1alpha1.StatusResult.total:type_name -> spawnery.agent.v1alpha1.ResourceUsage
-	17, // 37: spawnery.agent.v1alpha1.StatusResult.groups:type_name -> spawnery.agent.v1alpha1.GroupStatus
-	18, // 38: spawnery.agent.v1alpha1.StatusResult.instances:type_name -> spawnery.agent.v1alpha1.InstanceStatus
-	16, // 39: spawnery.agent.v1alpha1.StatusResult.other:type_name -> spawnery.agent.v1alpha1.ResourceUsage
-	30, // 40: spawnery.agent.v1alpha1.ExecuteResult.outcomes:type_name -> spawnery.agent.v1alpha1.ExecuteOutcome
-	75, // 41: spawnery.agent.v1alpha1.AnnounceRequest.attributes:type_name -> spawnery.agent.v1alpha1.AnnounceRequest.AttributesEntry
-	36, // 42: spawnery.agent.v1alpha1.StartServerRequest.resources:type_name -> spawnery.agent.v1alpha1.StartResources
-	36, // 43: spawnery.agent.v1alpha1.StartServerResult.resources:type_name -> spawnery.agent.v1alpha1.StartResources
-	43, // 44: spawnery.agent.v1alpha1.ListRestorePointsResult.points:type_name -> spawnery.agent.v1alpha1.RestorePoint
+	17, // 34: spawnery.agent.v1alpha1.GroupStatus.usage:type_name -> spawnery.agent.v1alpha1.ResourceUsage
+	17, // 35: spawnery.agent.v1alpha1.InstanceStatus.usage:type_name -> spawnery.agent.v1alpha1.ResourceUsage
+	17, // 36: spawnery.agent.v1alpha1.StatusResult.total:type_name -> spawnery.agent.v1alpha1.ResourceUsage
+	18, // 37: spawnery.agent.v1alpha1.StatusResult.groups:type_name -> spawnery.agent.v1alpha1.GroupStatus
+	19, // 38: spawnery.agent.v1alpha1.StatusResult.instances:type_name -> spawnery.agent.v1alpha1.InstanceStatus
+	17, // 39: spawnery.agent.v1alpha1.StatusResult.other:type_name -> spawnery.agent.v1alpha1.ResourceUsage
+	31, // 40: spawnery.agent.v1alpha1.ExecuteResult.outcomes:type_name -> spawnery.agent.v1alpha1.ExecuteOutcome
+	76, // 41: spawnery.agent.v1alpha1.AnnounceRequest.attributes:type_name -> spawnery.agent.v1alpha1.AnnounceRequest.AttributesEntry
+	37, // 42: spawnery.agent.v1alpha1.StartServerRequest.resources:type_name -> spawnery.agent.v1alpha1.StartResources
+	37, // 43: spawnery.agent.v1alpha1.StartServerResult.resources:type_name -> spawnery.agent.v1alpha1.StartResources
+	44, // 44: spawnery.agent.v1alpha1.ListRestorePointsResult.points:type_name -> spawnery.agent.v1alpha1.RestorePoint
 	1,  // 45: spawnery.agent.v1alpha1.RequestError.reason:type_name -> spawnery.agent.v1alpha1.RequestError.Reason
-	5,  // 46: spawnery.agent.v1alpha1.ServerMessage.hello:type_name -> spawnery.agent.v1alpha1.Hello
-	50, // 47: spawnery.agent.v1alpha1.ServerMessage.ready:type_name -> spawnery.agent.v1alpha1.Ready
-	6,  // 48: spawnery.agent.v1alpha1.ServerMessage.player_count:type_name -> spawnery.agent.v1alpha1.PlayerCount
-	7,  // 49: spawnery.agent.v1alpha1.ServerMessage.cloud_request:type_name -> spawnery.agent.v1alpha1.CloudRequest
-	48, // 50: spawnery.agent.v1alpha1.ServerMessage.event_interest:type_name -> spawnery.agent.v1alpha1.EventInterest
-	30, // 51: spawnery.agent.v1alpha1.ServerMessage.execute_outcome:type_name -> spawnery.agent.v1alpha1.ExecuteOutcome
-	3,  // 52: spawnery.agent.v1alpha1.OperatorToServer.report_interval:type_name -> spawnery.agent.v1alpha1.ReportInterval
-	4,  // 53: spawnery.agent.v1alpha1.OperatorToServer.session_deadline:type_name -> spawnery.agent.v1alpha1.SessionDeadline
-	59, // 54: spawnery.agent.v1alpha1.OperatorToServer.network_state:type_name -> spawnery.agent.v1alpha1.NetworkState
-	8,  // 55: spawnery.agent.v1alpha1.OperatorToServer.cloud_response:type_name -> spawnery.agent.v1alpha1.CloudResponse
-	47, // 56: spawnery.agent.v1alpha1.OperatorToServer.cloud_event:type_name -> spawnery.agent.v1alpha1.CloudEvent
-	51, // 57: spawnery.agent.v1alpha1.OperatorToServer.execute_command:type_name -> spawnery.agent.v1alpha1.ExecuteCommand
-	76, // 58: spawnery.agent.v1alpha1.BackendPlayers.players:type_name -> spawnery.agent.v1alpha1.BackendPlayers.PlayersEntry
-	58, // 59: spawnery.agent.v1alpha1.PlayerRoster.players:type_name -> spawnery.agent.v1alpha1.RosterEntry
-	60, // 60: spawnery.agent.v1alpha1.NetworkState.groups:type_name -> spawnery.agent.v1alpha1.GroupState
-	61, // 61: spawnery.agent.v1alpha1.NetworkState.servers:type_name -> spawnery.agent.v1alpha1.ServerState
-	58, // 62: spawnery.agent.v1alpha1.NetworkState.players:type_name -> spawnery.agent.v1alpha1.RosterEntry
-	62, // 63: spawnery.agent.v1alpha1.NetworkState.proxies:type_name -> spawnery.agent.v1alpha1.ProxyState
+	6,  // 46: spawnery.agent.v1alpha1.ServerMessage.hello:type_name -> spawnery.agent.v1alpha1.Hello
+	51, // 47: spawnery.agent.v1alpha1.ServerMessage.ready:type_name -> spawnery.agent.v1alpha1.Ready
+	7,  // 48: spawnery.agent.v1alpha1.ServerMessage.player_count:type_name -> spawnery.agent.v1alpha1.PlayerCount
+	8,  // 49: spawnery.agent.v1alpha1.ServerMessage.cloud_request:type_name -> spawnery.agent.v1alpha1.CloudRequest
+	49, // 50: spawnery.agent.v1alpha1.ServerMessage.event_interest:type_name -> spawnery.agent.v1alpha1.EventInterest
+	31, // 51: spawnery.agent.v1alpha1.ServerMessage.execute_outcome:type_name -> spawnery.agent.v1alpha1.ExecuteOutcome
+	4,  // 52: spawnery.agent.v1alpha1.OperatorToServer.report_interval:type_name -> spawnery.agent.v1alpha1.ReportInterval
+	5,  // 53: spawnery.agent.v1alpha1.OperatorToServer.session_deadline:type_name -> spawnery.agent.v1alpha1.SessionDeadline
+	60, // 54: spawnery.agent.v1alpha1.OperatorToServer.network_state:type_name -> spawnery.agent.v1alpha1.NetworkState
+	9,  // 55: spawnery.agent.v1alpha1.OperatorToServer.cloud_response:type_name -> spawnery.agent.v1alpha1.CloudResponse
+	48, // 56: spawnery.agent.v1alpha1.OperatorToServer.cloud_event:type_name -> spawnery.agent.v1alpha1.CloudEvent
+	52, // 57: spawnery.agent.v1alpha1.OperatorToServer.execute_command:type_name -> spawnery.agent.v1alpha1.ExecuteCommand
+	77, // 58: spawnery.agent.v1alpha1.BackendPlayers.players:type_name -> spawnery.agent.v1alpha1.BackendPlayers.PlayersEntry
+	59, // 59: spawnery.agent.v1alpha1.PlayerRoster.players:type_name -> spawnery.agent.v1alpha1.RosterEntry
+	61, // 60: spawnery.agent.v1alpha1.NetworkState.groups:type_name -> spawnery.agent.v1alpha1.GroupState
+	62, // 61: spawnery.agent.v1alpha1.NetworkState.servers:type_name -> spawnery.agent.v1alpha1.ServerState
+	59, // 62: spawnery.agent.v1alpha1.NetworkState.players:type_name -> spawnery.agent.v1alpha1.RosterEntry
+	63, // 63: spawnery.agent.v1alpha1.NetworkState.proxies:type_name -> spawnery.agent.v1alpha1.ProxyState
 	2,  // 64: spawnery.agent.v1alpha1.GroupState.kind:type_name -> spawnery.agent.v1alpha1.GroupState.Kind
-	77, // 65: spawnery.agent.v1alpha1.GroupState.attributes:type_name -> spawnery.agent.v1alpha1.GroupState.AttributesEntry
-	78, // 66: spawnery.agent.v1alpha1.ServerState.attributes:type_name -> spawnery.agent.v1alpha1.ServerState.AttributesEntry
-	36, // 67: spawnery.agent.v1alpha1.ServerState.resources:type_name -> spawnery.agent.v1alpha1.StartResources
-	5,  // 68: spawnery.agent.v1alpha1.ProxyMessage.hello:type_name -> spawnery.agent.v1alpha1.Hello
-	6,  // 69: spawnery.agent.v1alpha1.ProxyMessage.player_count:type_name -> spawnery.agent.v1alpha1.PlayerCount
-	55, // 70: spawnery.agent.v1alpha1.ProxyMessage.player_joined_server:type_name -> spawnery.agent.v1alpha1.PlayerJoinedServer
-	54, // 71: spawnery.agent.v1alpha1.ProxyMessage.heartbeat:type_name -> spawnery.agent.v1alpha1.Heartbeat
-	56, // 72: spawnery.agent.v1alpha1.ProxyMessage.backend_players:type_name -> spawnery.agent.v1alpha1.BackendPlayers
-	57, // 73: spawnery.agent.v1alpha1.ProxyMessage.player_roster:type_name -> spawnery.agent.v1alpha1.PlayerRoster
-	7,  // 74: spawnery.agent.v1alpha1.ProxyMessage.cloud_request:type_name -> spawnery.agent.v1alpha1.CloudRequest
-	48, // 75: spawnery.agent.v1alpha1.ProxyMessage.event_interest:type_name -> spawnery.agent.v1alpha1.EventInterest
-	73, // 76: spawnery.agent.v1alpha1.ProxyMessage.voice_counters:type_name -> spawnery.agent.v1alpha1.VoiceCounters
-	65, // 77: spawnery.agent.v1alpha1.RegisteredServer.join_rule:type_name -> spawnery.agent.v1alpha1.ServerJoinRule
-	64, // 78: spawnery.agent.v1alpha1.FullSync.servers:type_name -> spawnery.agent.v1alpha1.RegisteredServer
-	64, // 79: spawnery.agent.v1alpha1.RegisterServer.server:type_name -> spawnery.agent.v1alpha1.RegisteredServer
-	79, // 80: spawnery.agent.v1alpha1.VoiceCounters.totals:type_name -> spawnery.agent.v1alpha1.VoiceCounters.TotalsEntry
-	0,  // 81: spawnery.agent.v1alpha1.VoiceCounters.relay_state:type_name -> spawnery.agent.v1alpha1.VoiceRelayState
-	66, // 82: spawnery.agent.v1alpha1.OperatorToProxy.full_sync:type_name -> spawnery.agent.v1alpha1.FullSync
-	67, // 83: spawnery.agent.v1alpha1.OperatorToProxy.register_server:type_name -> spawnery.agent.v1alpha1.RegisterServer
-	68, // 84: spawnery.agent.v1alpha1.OperatorToProxy.unregister_server:type_name -> spawnery.agent.v1alpha1.UnregisterServer
-	70, // 85: spawnery.agent.v1alpha1.OperatorToProxy.drain_players:type_name -> spawnery.agent.v1alpha1.DrainPlayers
-	3,  // 86: spawnery.agent.v1alpha1.OperatorToProxy.report_interval:type_name -> spawnery.agent.v1alpha1.ReportInterval
-	4,  // 87: spawnery.agent.v1alpha1.OperatorToProxy.session_deadline:type_name -> spawnery.agent.v1alpha1.SessionDeadline
-	71, // 88: spawnery.agent.v1alpha1.OperatorToProxy.set_ready:type_name -> spawnery.agent.v1alpha1.SetReady
-	59, // 89: spawnery.agent.v1alpha1.OperatorToProxy.network_state:type_name -> spawnery.agent.v1alpha1.NetworkState
-	8,  // 90: spawnery.agent.v1alpha1.OperatorToProxy.cloud_response:type_name -> spawnery.agent.v1alpha1.CloudResponse
-	69, // 91: spawnery.agent.v1alpha1.OperatorToProxy.move_player:type_name -> spawnery.agent.v1alpha1.MovePlayer
-	47, // 92: spawnery.agent.v1alpha1.OperatorToProxy.cloud_event:type_name -> spawnery.agent.v1alpha1.CloudEvent
-	72, // 93: spawnery.agent.v1alpha1.OperatorToProxy.voice_config:type_name -> spawnery.agent.v1alpha1.VoiceConfig
-	63, // 94: spawnery.agent.v1alpha1.AgentService.ProxySession:input_type -> spawnery.agent.v1alpha1.ProxyMessage
-	52, // 95: spawnery.agent.v1alpha1.AgentService.ServerSession:input_type -> spawnery.agent.v1alpha1.ServerMessage
-	74, // 96: spawnery.agent.v1alpha1.AgentService.ProxySession:output_type -> spawnery.agent.v1alpha1.OperatorToProxy
-	53, // 97: spawnery.agent.v1alpha1.AgentService.ServerSession:output_type -> spawnery.agent.v1alpha1.OperatorToServer
-	96, // [96:98] is the sub-list for method output_type
-	94, // [94:96] is the sub-list for method input_type
-	94, // [94:94] is the sub-list for extension type_name
-	94, // [94:94] is the sub-list for extension extendee
-	0,  // [0:94] is the sub-list for field type_name
+	78, // 65: spawnery.agent.v1alpha1.GroupState.attributes:type_name -> spawnery.agent.v1alpha1.GroupState.AttributesEntry
+	3,  // 66: spawnery.agent.v1alpha1.GroupState.routing_strategy:type_name -> spawnery.agent.v1alpha1.GroupState.RoutingStrategy
+	79, // 67: spawnery.agent.v1alpha1.ServerState.attributes:type_name -> spawnery.agent.v1alpha1.ServerState.AttributesEntry
+	37, // 68: spawnery.agent.v1alpha1.ServerState.resources:type_name -> spawnery.agent.v1alpha1.StartResources
+	6,  // 69: spawnery.agent.v1alpha1.ProxyMessage.hello:type_name -> spawnery.agent.v1alpha1.Hello
+	7,  // 70: spawnery.agent.v1alpha1.ProxyMessage.player_count:type_name -> spawnery.agent.v1alpha1.PlayerCount
+	56, // 71: spawnery.agent.v1alpha1.ProxyMessage.player_joined_server:type_name -> spawnery.agent.v1alpha1.PlayerJoinedServer
+	55, // 72: spawnery.agent.v1alpha1.ProxyMessage.heartbeat:type_name -> spawnery.agent.v1alpha1.Heartbeat
+	57, // 73: spawnery.agent.v1alpha1.ProxyMessage.backend_players:type_name -> spawnery.agent.v1alpha1.BackendPlayers
+	58, // 74: spawnery.agent.v1alpha1.ProxyMessage.player_roster:type_name -> spawnery.agent.v1alpha1.PlayerRoster
+	8,  // 75: spawnery.agent.v1alpha1.ProxyMessage.cloud_request:type_name -> spawnery.agent.v1alpha1.CloudRequest
+	49, // 76: spawnery.agent.v1alpha1.ProxyMessage.event_interest:type_name -> spawnery.agent.v1alpha1.EventInterest
+	74, // 77: spawnery.agent.v1alpha1.ProxyMessage.voice_counters:type_name -> spawnery.agent.v1alpha1.VoiceCounters
+	66, // 78: spawnery.agent.v1alpha1.RegisteredServer.join_rule:type_name -> spawnery.agent.v1alpha1.ServerJoinRule
+	65, // 79: spawnery.agent.v1alpha1.FullSync.servers:type_name -> spawnery.agent.v1alpha1.RegisteredServer
+	65, // 80: spawnery.agent.v1alpha1.RegisterServer.server:type_name -> spawnery.agent.v1alpha1.RegisteredServer
+	80, // 81: spawnery.agent.v1alpha1.VoiceCounters.totals:type_name -> spawnery.agent.v1alpha1.VoiceCounters.TotalsEntry
+	0,  // 82: spawnery.agent.v1alpha1.VoiceCounters.relay_state:type_name -> spawnery.agent.v1alpha1.VoiceRelayState
+	67, // 83: spawnery.agent.v1alpha1.OperatorToProxy.full_sync:type_name -> spawnery.agent.v1alpha1.FullSync
+	68, // 84: spawnery.agent.v1alpha1.OperatorToProxy.register_server:type_name -> spawnery.agent.v1alpha1.RegisterServer
+	69, // 85: spawnery.agent.v1alpha1.OperatorToProxy.unregister_server:type_name -> spawnery.agent.v1alpha1.UnregisterServer
+	71, // 86: spawnery.agent.v1alpha1.OperatorToProxy.drain_players:type_name -> spawnery.agent.v1alpha1.DrainPlayers
+	4,  // 87: spawnery.agent.v1alpha1.OperatorToProxy.report_interval:type_name -> spawnery.agent.v1alpha1.ReportInterval
+	5,  // 88: spawnery.agent.v1alpha1.OperatorToProxy.session_deadline:type_name -> spawnery.agent.v1alpha1.SessionDeadline
+	72, // 89: spawnery.agent.v1alpha1.OperatorToProxy.set_ready:type_name -> spawnery.agent.v1alpha1.SetReady
+	60, // 90: spawnery.agent.v1alpha1.OperatorToProxy.network_state:type_name -> spawnery.agent.v1alpha1.NetworkState
+	9,  // 91: spawnery.agent.v1alpha1.OperatorToProxy.cloud_response:type_name -> spawnery.agent.v1alpha1.CloudResponse
+	70, // 92: spawnery.agent.v1alpha1.OperatorToProxy.move_player:type_name -> spawnery.agent.v1alpha1.MovePlayer
+	48, // 93: spawnery.agent.v1alpha1.OperatorToProxy.cloud_event:type_name -> spawnery.agent.v1alpha1.CloudEvent
+	73, // 94: spawnery.agent.v1alpha1.OperatorToProxy.voice_config:type_name -> spawnery.agent.v1alpha1.VoiceConfig
+	64, // 95: spawnery.agent.v1alpha1.AgentService.ProxySession:input_type -> spawnery.agent.v1alpha1.ProxyMessage
+	53, // 96: spawnery.agent.v1alpha1.AgentService.ServerSession:input_type -> spawnery.agent.v1alpha1.ServerMessage
+	75, // 97: spawnery.agent.v1alpha1.AgentService.ProxySession:output_type -> spawnery.agent.v1alpha1.OperatorToProxy
+	54, // 98: spawnery.agent.v1alpha1.AgentService.ServerSession:output_type -> spawnery.agent.v1alpha1.OperatorToServer
+	97, // [97:99] is the sub-list for method output_type
+	95, // [95:97] is the sub-list for method input_type
+	95, // [95:95] is the sub-list for extension type_name
+	95, // [95:95] is the sub-list for extension extendee
+	0,  // [0:95] is the sub-list for field type_name
 }
 
 func init() { file_spawnery_agent_v1alpha1_agent_proto_init() }
@@ -6730,7 +6804,7 @@ func file_spawnery_agent_v1alpha1_agent_proto_init() {
 		File: protoimpl.DescBuilder{
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_spawnery_agent_v1alpha1_agent_proto_rawDesc), len(file_spawnery_agent_v1alpha1_agent_proto_rawDesc)),
-			NumEnums:      3,
+			NumEnums:      4,
 			NumMessages:   77,
 			NumExtensions: 0,
 			NumServices:   1,
