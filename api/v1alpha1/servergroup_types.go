@@ -122,8 +122,8 @@ const (
 // ServerRoutingSpec controls how players are routed into the group's servers.
 type ServerRoutingSpec struct {
 	// Strategy is the routing rule. Fill packs players onto as few servers as
-	// possible and leaves the rest empty for scale-down. Proxy images need the
-	// release that ships Fill, or they keep spreading.
+	// possible and leaves the rest empty for scale-down. Proxy images older
+	// than 0.36.0 ignore it and keep spreading.
 	// +kubebuilder:default=Spread
 	// +optional
 	Strategy RoutingStrategy `json:"strategy,omitempty"`

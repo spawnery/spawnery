@@ -100,7 +100,7 @@ spec:
   networkRef:
     name: production
   type: OnDemand
-  image: ghcr.io/spawnery/purpur:26.3-0.34.0
+  image: ghcr.io/spawnery/purpur:26.3-0.36.0
   maxPlayers: 10
   maxInstances: 4
   # No spec.resources: a start takes the network default above, which has to
