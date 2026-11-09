@@ -18,7 +18,7 @@ spec:
   networkRef:
     name: production
   type: Persistent
-  image: ghcr.io/spawnery/canvas:26.3-0.34.0
+  image: ghcr.io/spawnery/canvas:26.3-0.35.1
   maxPlayers: 100
   configOverlay:
     name: survival-config
