@@ -11,11 +11,11 @@
 # what freezes the input.
 rec {
   purpurVersion = "26.3";
-  purpurBuild = "2654";
+  purpurBuild = "2657";
 
   purpurJar = fetchurl {
     url = "https://api.purpurmc.org/v2/purpur/${purpurVersion}/${purpurBuild}/download";
-    hash = "sha256-oi2Gu5k0kaLU/nfsp3wkdUHxcgzhn2jHrwiBxEO5h44=";
+    hash = "sha256-hDi7v2qGXLUJfrE/VOAWwH2cEtKsp3jQGjvjoeY2uGI=";
     # A stalled transfer from this host does not fail by itself. 10 KiB/s is the
     # rate at which the 55 MB jar still fits in a 90 minute CI job; fetchurl's
     # --retry resumes after curl gives up.
