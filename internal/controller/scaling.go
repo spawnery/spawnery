@@ -173,7 +173,7 @@ func provisionalCapacity(v ServerView, capacity int32) int32 {
 	}
 	// Fresh counts tell a deregistered server apart from one the operator has not
 	// heard from since its own restart, which the credit below is for.
-	if v.WasRegistered && !v.Registered && !v.Stale {
+	if v.dropped() && !v.Stale {
 		return 0
 	}
 	// A server whose pod is gone reads like one that never reported, and Stale

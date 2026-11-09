@@ -53,6 +53,9 @@ type ServerView struct {
 	// Registered is whether the proxies have this server right now, which
 	// decides whether its empty seats are capacity.
 	Registered bool
+	// ReadinessLosses is status.readinessLosses: above zero on every server a
+	// lost readiness sent back to Starting.
+	ReadinessLosses int32
 	// JoinsClosed: the server wants no new players but keeps the ones it has,
 	// and stays registered meanwhile.
 	JoinsClosed bool
@@ -197,6 +200,13 @@ func (v ServerView) leaving() bool {
 // its floor meanwhile.
 func (v ServerView) countsTowardSize() bool {
 	return !v.leaving() && !phase.Terminal(v.Phase)
+}
+
+// dropped: the proxies were told to forget this server. The Server controller
+// persists wasRegistered before it registers and registered only after, so a
+// server between those writes still Starting with no readiness lost is not.
+func (v ServerView) dropped() bool {
+	return v.WasRegistered && !v.Registered && (v.Phase != phase.Starting || v.ReadinessLosses > 0)
 }
 
 // tookPlayers is status.wasRegistered, not the phase: a server back in

@@ -1077,7 +1077,8 @@ func (r *ServerGroupReconciler) collectViews(
 			// From the status, never guessed from the phase.
 			WasRegistered: srv.Status.WasRegistered,
 			// What the proxies have now, which capacity depends on.
-			Registered: srv.Status.Registered,
+			Registered:      srv.Status.Registered,
+			ReadinessLosses: srv.Status.ReadinessLosses,
 			// AcceptingJoins is true for a pod the registry has never heard from,
 			// so after an operator restart every door reads open until restated.
 			JoinsClosed:   !snap.AcceptingJoins,

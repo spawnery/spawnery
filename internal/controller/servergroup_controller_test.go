@@ -4402,3 +4402,78 @@ func TestReportProgressingWaitingForEmpty(t *testing.T) {
 		})
 	}
 }
+
+// The group reconciles on every Server status write, including the one that
+// persists wasRegistered before the proxies are told.
+func TestAScaleUpOrdersOneServerThroughItsFirstRegistration(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.reconcileGroup(t, r)
+	f.readyAllServersOf(t, f.group.Name)
+	first := f.serverNamesOfGroup(t, f.group.Name)
+	if len(first) != 1 {
+		t.Fatalf("servers = %v, want the floor of 1", first)
+	}
+	f.reportPlayersOn(t, first[0], 70)
+	f.reconcileGroup(t, r)
+	names := f.serverNamesOfGroup(t, f.group.Name)
+	if len(names) != 2 {
+		t.Fatalf("servers = %v, want 2 once 70 of 100 seats are taken with 40 spare", names)
+	}
+	second := names[0]
+	if second == first[0] {
+		second = names[1]
+	}
+
+	var during []string
+	f.registrar.onRegister = func(s *spawneryv1alpha1.Server) error {
+		if s.Name == second {
+			f.reconcileGroup(t, r)
+			during = f.serverNamesOfGroup(t, f.group.Name)
+		}
+		return nil
+	}
+	bringUpNamed(t, f, second)
+
+	if len(during) != 2 {
+		t.Errorf("servers while %s was being registered = %v, want 2: it has 100 free seats "+
+			"and the proxies are being told about it", second, during)
+	}
+	f.reconcileGroup(t, r)
+	if got := f.serverNamesOfGroup(t, f.group.Name); len(got) != 2 {
+		t.Errorf("servers once %s is Ready = %v, want 2", second, got)
+	}
+}
+
+func TestAServerDroppedByAReadinessLossIsReplacedAtOnce(t *testing.T) {
+	f := newFixture(t)
+	r := groupReconciler(f)
+
+	f.reconcileGroup(t, r)
+	f.readyAllServersOf(t, f.group.Name)
+	busy := f.serverNamesOfGroup(t, f.group.Name)[0]
+	f.reportPlayersOn(t, busy, 70)
+	f.reconcileGroup(t, r)
+	names := f.serverNamesOfGroup(t, f.group.Name)
+	if len(names) != 2 {
+		t.Fatalf("servers = %v, want 2", names)
+	}
+	spare := names[0]
+	if spare == busy {
+		spare = names[1]
+	}
+	bringUpNamed(t, f, spare)
+	f.reconcileGroup(t, r)
+
+	f.setPodRunning(spare, false)
+	f.reconcile(spare)
+	if got := f.server(spare).Status; got.Phase != string(phase.Starting) || got.Registered {
+		t.Fatalf("%s: phase %s, registered %v, want Starting and deregistered", spare, got.Phase, got.Registered)
+	}
+	f.reconcileGroup(t, r)
+	if got := f.serverNamesOfGroup(t, f.group.Name); len(got) != 3 {
+		t.Errorf("servers = %v, want 3: %s has no seat the proxies can route to, "+
+			"and %s has 30 free of the 40 spare", got, spare, busy)
+	}
+}
