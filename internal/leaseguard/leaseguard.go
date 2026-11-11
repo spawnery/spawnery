@@ -29,6 +29,7 @@ import (
 	"time"
 
 	coordinationv1 "k8s.io/api/coordination/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -39,10 +40,9 @@ import (
 // cadence at which a healthy leader renews.
 const DefaultInterval = 2 * time.Second
 
-// FailureDeadline is controller-runtime's RenewDeadline. By then leader
-// election has either given up on its own or shown the API server reachable,
-// so a read still failing is this guard's RBAC or namespace.
-const FailureDeadline = 10 * time.Second
+// DefaultReadTimeout is what controller-runtime gives each request of the
+// leader elector's own client: half its 10 s RenewDeadline.
+const DefaultReadTimeout = 5 * time.Second
 
 var ErrNotHolder = errors.New("this pod does not hold the leader lease")
 
@@ -68,21 +68,22 @@ type Guard struct {
 	// Lease is the manager's LeaderElectionID.
 	Lease string
 	// Hostname is what controller-runtime puts in front of the holder identity.
-	Hostname string
-	Interval time.Duration
-	Clock    func() time.Time
+	Hostname    string
+	Interval    time.Duration
+	ReadTimeout time.Duration
+	Clock       func() time.Time
 
-	mu           sync.Mutex
-	confirmed    time.Time
-	failingSince time.Time
+	mu        sync.Mutex
+	confirmed time.Time
 }
 
 func (g *Guard) NeedLeaderElection() bool { return true }
 
 // Start returns an error, stopping the manager, when the Lease names another
-// holder or stays unreadable past FailureDeadline. This process wrote the
-// Lease before any leader runnable started and the read is uncached, so either
-// means the lease is lost or the guard reads the wrong Lease.
+// holder, is missing or may not be read: this process wrote it before any
+// leader runnable started, so each means a lost lease or the wrong Lease. A
+// read that times out only leaves the guard unconfirmed; the elector renews
+// through the same API server and notices a real loss.
 func (g *Guard) Start(ctx context.Context) error {
 	logger := log.FromContext(ctx).WithName("leaseguard")
 	ticker := time.NewTicker(g.interval())
@@ -108,7 +109,7 @@ func (g *Guard) Confirm(ctx context.Context) error {
 	// Taken before the read, so a freeze between the answer and this code
 	// does not make an old answer look new.
 	at := g.now()
-	readCtx, cancel := context.WithTimeout(ctx, g.interval())
+	readCtx, cancel := context.WithTimeout(ctx, g.readTimeout())
 	defer cancel()
 	err := CheckHolder(readCtx, g.Client, types.NamespacedName{Namespace: g.Namespace, Name: g.Lease}, g.Hostname)
 	g.mu.Lock()
@@ -116,30 +117,27 @@ func (g *Guard) Confirm(ctx context.Context) error {
 	switch {
 	case err == nil:
 		g.confirmed = at
-		g.failingSince = time.Time{}
 	case errors.Is(err, ErrNotHolder):
 		g.confirmed = time.Time{}
-	case g.failingSince.IsZero():
-		g.failingSince = at
 	}
 	return err
 }
 
 func (g *Guard) fatal(err error) error {
-	if err == nil {
-		return nil
-	}
 	prefix := g.Hostname + "_"
-	if errors.Is(err, ErrNotHolder) {
+	switch {
+	case err == nil:
+		return nil
+	case errors.Is(err, ErrNotHolder):
 		return fmt.Errorf("leader Lease %s/%s does not name this process (holder prefix %q): "+
 			"the lease is lost or the identity is wrong: %w", g.Namespace, g.Lease, prefix, err)
-	}
-	g.mu.Lock()
-	since := g.failingSince
-	g.mu.Unlock()
-	if failing := g.now().Sub(since); !since.IsZero() && failing > FailureDeadline {
-		return fmt.Errorf("leader Lease %s/%s unreadable for %s (holder prefix %q); "+
-			"check the Role's leases get in %s: %w", g.Namespace, g.Lease, failing, prefix, g.Namespace, err)
+	case apierrors.IsNotFound(err):
+		return fmt.Errorf("leader Lease %s/%s does not exist although this process leads (holder prefix %q); "+
+			"the guard reads another namespace or name than leader election writes: %w",
+			g.Namespace, g.Lease, prefix, err)
+	case apierrors.IsForbidden(err):
+		return fmt.Errorf("leader Lease %s/%s may not be read (holder prefix %q); "+
+			"check the Role's leases get in %s: %w", g.Namespace, g.Lease, prefix, g.Namespace, err)
 	}
 	return nil
 }
@@ -160,6 +158,13 @@ func (g *Guard) interval() time.Duration {
 		return DefaultInterval
 	}
 	return g.Interval
+}
+
+func (g *Guard) readTimeout() time.Duration {
+	if g.ReadTimeout <= 0 {
+		return DefaultReadTimeout
+	}
+	return g.ReadTimeout
 }
 
 func (g *Guard) now() time.Time {

@@ -20,12 +20,15 @@ import (
 	"context"
 	"errors"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
 	coordinationv1 "k8s.io/api/coordination/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -130,16 +133,20 @@ func TestTheGuardGoesStaleWithoutAConfirmation(t *testing.T) {
 	}
 }
 
+func refusing(err error) interceptor.Funcs {
+	return interceptor.Funcs{
+		Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+			return err
+		},
+	}
+}
+
 func TestAFailedReadLetsTheConfirmationAgeOut(t *testing.T) {
 	g, c, clk := newGuard(t, "op-a_0529de70")
 	if err := g.Confirm(context.Background()); err != nil {
 		t.Fatalf("Confirm: %v", err)
 	}
-	if err := c.Delete(context.Background(), &coordinationv1.Lease{
-		ObjectMeta: metav1.ObjectMeta{Name: "op.example", Namespace: "spawnery-system"},
-	}); err != nil {
-		t.Fatal(err)
-	}
+	g.Client = interceptor.NewClient(c.(client.WithWatch), refusing(errors.New("connection refused")))
 	clk.now = clk.now.Add(DefaultInterval)
 	if err := g.Confirm(context.Background()); err == nil || errors.Is(err, ErrNotHolder) {
 		t.Fatalf("Confirm: err %v, want a read error", err)
@@ -221,48 +228,66 @@ func TestStartReturnsWhenAnotherHostHolds(t *testing.T) {
 	}
 }
 
-func TestReadsFailingPastTheRenewDeadlineStopTheGuard(t *testing.T) {
-	g, c, clk := newGuard(t, "op-a_0529de70")
-	if err := c.Delete(context.Background(), &coordinationv1.Lease{
-		ObjectMeta: metav1.ObjectMeta{Name: "op.example", Namespace: "spawnery-system"},
-	}); err != nil {
-		t.Fatal(err)
+func TestAMissingOrForbiddenLeaseStopsTheGuard(t *testing.T) {
+	leases := schema.GroupResource{Group: "coordination.k8s.io", Resource: "leases"}
+	for _, tc := range []struct {
+		name  string
+		err   error
+		names string
+	}{
+		{"missing", apierrors.NewNotFound(leases, "op.example"), "does not exist"},
+		{"forbidden", apierrors.NewForbidden(leases, "op.example", errors.New("no rule")), "leases get"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			g, _, _ := newGuardWith(t, "op-a_0529de70", refusing(tc.err))
+			g.Clock = time.Now
+			g.Interval = time.Hour
+			done := make(chan error, 1)
+			go func() { done <- g.Start(context.Background()) }()
+			select {
+			case err := <-done:
+				wantNamed(t, err, "spawnery-system", "op.example", `"op-a_"`, tc.names)
+			case <-time.After(5 * time.Second):
+				t.Fatal("Start kept running on its first read: a guard reading the wrong Lease " +
+					"or without the Role's leases get would hold every decision back for good")
+			}
+		})
 	}
-	if err := g.fatal(g.Confirm(context.Background())); err != nil {
-		t.Fatalf("first failed read stopped the guard: %v", err)
-	}
-	clk.now = clk.now.Add(FailureDeadline)
-	if err := g.fatal(g.Confirm(context.Background())); err != nil {
-		t.Fatalf("reads failing for exactly %s stopped the guard: %v", FailureDeadline, err)
-	}
-	clk.now = clk.now.Add(time.Millisecond)
-	wantNamed(t, g.fatal(g.Confirm(context.Background())),
-		"spawnery-system", "op.example", `"op-a_"`, "not found")
 }
 
-func TestASuccessfulReadRestartsTheFailureCount(t *testing.T) {
-	g, c, clk := newGuardWith(t, "op-a_0529de70", interceptor.Funcs{})
-	failing := true
-	g.Client = interceptor.NewClient(c.(client.WithWatch), interceptor.Funcs{
-		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-			if failing {
-				return errors.New("connection refused")
-			}
-			return c.Get(ctx, key, obj, opts...)
+func TestAReadThatKeepsTimingOutNeverStopsTheGuard(t *testing.T) {
+	var clk *clock
+	var reads atomic.Int32
+	g, _, clk := newGuardWith(t, "op-a_0529de70", interceptor.Funcs{
+		Get: func(context.Context, client.WithWatch, client.ObjectKey, client.Object, ...client.GetOption) error {
+			clk.now = clk.now.Add(DefaultReadTimeout)
+			reads.Add(1)
+			return context.DeadlineExceeded
 		},
 	})
-	if err := g.fatal(g.Confirm(context.Background())); err != nil {
-		t.Fatal(err)
+	g.Interval = time.Millisecond
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- g.Start(ctx) }()
+
+	deadline := time.Now().Add(5 * time.Second)
+	for reads.Load() < 20 && time.Now().Before(deadline) {
+		select {
+		case err := <-done:
+			t.Fatalf("Start returned %v after %d timed-out reads: the elector keeps a leader "+
+				"through a slow API server, and the guard would crash-loop it", err, reads.Load())
+		case <-time.After(time.Millisecond):
+		}
 	}
-	clk.now = clk.now.Add(5 * time.Second)
-	failing = false
-	if err := g.fatal(g.Confirm(context.Background())); err != nil {
-		t.Fatal(err)
+	cancel()
+	if err := <-done; err != nil {
+		t.Errorf("Start returned %v, want nil", err)
 	}
-	failing = true
-	clk.now = clk.now.Add(7 * time.Second)
-	if err := g.fatal(g.Confirm(context.Background())); err != nil {
-		t.Errorf("a read failing 12s after the first failure but 7s after a success stopped the guard: %v", err)
+	if n := reads.Load(); n < 20 {
+		t.Fatalf("only %d reads in 5s", n)
+	}
+	if g.Fresh() {
+		t.Error("Fresh() = true although no read ever answered")
 	}
 }
 
@@ -284,14 +309,31 @@ func TestTheConfirmationIsTimedBeforeTheRead(t *testing.T) {
 	}
 }
 
-func TestEachReadIsBoundedByTheInterval(t *testing.T) {
+func TestAReadSlowerThanTheIntervalStillConfirms(t *testing.T) {
+	g, _, _ := newGuardWith(t, "op-a_0529de70", interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			select {
+			case <-time.After(DefaultInterval + 500*time.Millisecond):
+			case <-ctx.Done():
+				return ctx.Err()
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	if err := g.Confirm(context.Background()); err != nil {
+		t.Errorf("Confirm: %v, want a read of %s to answer: the elector's own requests may "+
+			"take %s", err, DefaultInterval+500*time.Millisecond, DefaultReadTimeout)
+	}
+}
+
+func TestEachReadIsBoundedByTheReadTimeout(t *testing.T) {
 	g, _, _ := newGuardWith(t, "op-a_0529de70", interceptor.Funcs{
 		Get: func(ctx context.Context, _ client.WithWatch, _ client.ObjectKey, _ client.Object, _ ...client.GetOption) error {
 			<-ctx.Done()
 			return ctx.Err()
 		},
 	})
-	g.Interval = 50 * time.Millisecond
+	g.ReadTimeout = 50 * time.Millisecond
 	done := make(chan error, 1)
 	go func() { done <- g.Confirm(context.Background()) }()
 	select {
@@ -300,7 +342,7 @@ func TestEachReadIsBoundedByTheInterval(t *testing.T) {
 			t.Errorf("Confirm: err %v, want a deadline", err)
 		}
 	case <-time.After(5 * time.Second):
-		t.Fatal("a hanging Lease read held Confirm past five seconds; the failure deadline " +
-			"could never be reached")
+		t.Fatal("a hanging Lease read held Confirm past five seconds, and with it every " +
+			"later confirmation")
 	}
 }
