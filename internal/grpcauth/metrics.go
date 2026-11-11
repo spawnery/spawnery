@@ -19,6 +19,8 @@ package grpcauth
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+
+	"github.com/spawnery/spawnery/internal/leaderonly"
 )
 
 var AuthFailures = prometheus.NewCounterVec(
@@ -46,7 +48,7 @@ var RateLimited = prometheus.NewCounter(prometheus.CounterOpts{
 })
 
 func init() {
-	metrics.Registry.MustRegister(AuthFailures)
-	metrics.Registry.MustRegister(ReviewCacheHits, ReviewCacheMisses)
-	metrics.Registry.MustRegister(RateLimited)
+	metrics.Registry.MustRegister(leaderonly.Wrap(AuthFailures))
+	metrics.Registry.MustRegister(leaderonly.Wrap(ReviewCacheHits, ReviewCacheMisses))
+	metrics.Registry.MustRegister(leaderonly.Wrap(RateLimited))
 }

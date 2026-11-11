@@ -47,6 +47,7 @@ import (
 	"github.com/spawnery/spawnery/internal/cloudevent"
 	"github.com/spawnery/spawnery/internal/controller"
 	"github.com/spawnery/spawnery/internal/grpcauth"
+	"github.com/spawnery/spawnery/internal/leaderonly"
 	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/netstatus"
 	"github.com/spawnery/spawnery/internal/phase"
@@ -319,6 +320,7 @@ func main() {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
+	leaderonly.Watch(mgr.Elected())
 
 	// Secrets bypass the cache: the role grants no list or watch on them.
 	directClient, err := client.New(restConfig, client.Options{
@@ -421,7 +423,7 @@ func main() {
 			setupLog.Error(err, "add world deletion sweeper")
 			os.Exit(1)
 		}
-		ctrlmetrics.Registry.MustRegister(worldsync.OperatorCollectors()...)
+		ctrlmetrics.Registry.MustRegister(leaderonly.Wrap(worldsync.OperatorCollectors()...))
 		if err := mgr.Add(&worldsync.Ager{Store: st, Base: base, Policies: policies, Interval: time.Hour,
 			StaleAfter: worldsync.StaleAfter, Clock: time.Now, Log: ctrl.Log.WithName("worldsync")}); err != nil {
 			setupLog.Error(err, "add world history aging")

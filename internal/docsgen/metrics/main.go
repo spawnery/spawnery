@@ -47,6 +47,7 @@ import (
 	_ "github.com/spawnery/spawnery/internal/certs"
 	_ "github.com/spawnery/spawnery/internal/controller"
 	_ "github.com/spawnery/spawnery/internal/grpcauth"
+	"github.com/spawnery/spawnery/internal/leaderonly"
 	_ "github.com/spawnery/spawnery/internal/proxyreg"
 	_ "github.com/spawnery/spawnery/internal/rbacaudit"
 	_ "github.com/spawnery/spawnery/internal/serverreg"
@@ -62,7 +63,10 @@ var agentRegistry = func() *prometheus.Registry {
 }()
 
 // The operator registers these only with --world-sync, so no import does.
-func init() { metrics.Registry.MustRegister(worldsync.OperatorCollectors()...) }
+func init() {
+	leaderonly.Elect()
+	metrics.Registry.MustRegister(worldsync.OperatorCollectors()...)
+}
 
 // metricNamePrefix keeps controller-runtime's own metrics, which its metrics
 // package registers in init, off the page.
