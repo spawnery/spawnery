@@ -82,9 +82,8 @@ const (
 	// agent holding both RPCs at once, each renewing, which no agent does.
 	FleetConnectionsPerAgent = 4
 
-	// The agents send no keepalive, so this throttles only a client that
-	// pings in a loop.
-	MinKeepaliveInterval = 30 * time.Second
+	// The agents ping every 15 s; this throttles a client that pings faster.
+	MinKeepaliveInterval = 10 * time.Second
 )
 
 // ProxyFleet narrows *proxyreg.Fleet to what ProxySession reads, so the handler
