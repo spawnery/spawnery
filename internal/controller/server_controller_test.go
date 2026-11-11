@@ -1091,6 +1091,61 @@ func TestAnUnconfirmedLeaseTakesNoServerOutOfReady(t *testing.T) {
 	}
 }
 
+func TestAnUnconfirmedLeaseFinishesNoRoundOnAQuietStream(t *testing.T) {
+	f := newFixture(t)
+	lease := &leaseFreshness{}
+	f.reconc.Lease = lease
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if _, err := f.agents.ReportAcceptJoins(uid, f.ns, false, true); err != nil {
+		t.Fatalf("ReportAcceptJoins: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if srv := f.server("lobby-x7k2"); srv.Status.RoundEndedAt == nil || srv.Status.Phase != string(phase.Ready) {
+		t.Fatalf("phase %q, roundEndedAt %v after the round-end word, want Ready and stamped",
+			srv.Status.Phase, srv.Status.RoundEndedAt)
+	}
+
+	f.agents.Disconnect(uid)
+	f.clock.Advance(phase.StreamDownGrace + time.Second)
+	res, err := f.reconc.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "lobby-x7k2", Namespace: f.ns},
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Ready) {
+		t.Errorf("phase %q with the lease unconfirmed, want Ready: a leader resumed past its "+
+			"lease would finish a running server on a stream that went quiet while it was frozen", got)
+	}
+	if res.RequeueAfter != leaseguard.DefaultInterval {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, leaseguard.DefaultInterval)
+	}
+
+	lease.fresh = true
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Finished) {
+		t.Errorf("phase %q once the lease is confirmed, want Finished", got)
+	}
+}
+
+func TestAnUnconfirmedLeaseLetsAStoppedPodFinishTheRound(t *testing.T) {
+	f := newFixture(t)
+	f.reconc.Lease = &leaseFreshness{}
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if _, err := f.agents.ReportAcceptJoins(uid, f.ns, false, true); err != nil {
+		t.Fatalf("ReportAcceptJoins: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	f.setPodFailed("lobby-x7k2")
+	f.reconcile("lobby-x7k2")
+
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Finished) {
+		t.Errorf("phase %q after the pod stopped with the lease unconfirmed, want Finished: "+
+			"a terminal pod comes from the API, which stale memory cannot invent", got)
+	}
+}
+
 func TestAnUnconfirmedLeaseLetsADeletionDrain(t *testing.T) {
 	f := newFixture(t)
 	f.reconc.Lease = &leaseFreshness{}

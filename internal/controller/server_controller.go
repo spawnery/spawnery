@@ -392,7 +392,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		in.GroupHasReadyServer = ready
 	}
 	decision := phase.Decide(current, in)
-	if restsOnTheRegistry(decision) && !r.leaseFresh() {
+	if restsOnTheRegistry(current, in, decision) && !r.leaseFresh() {
 		log.FromContext(ctx).Info("holding back a decision until the leader lease is confirmed",
 			"phase", current, "next", decision.Next, "reason", decision.Reason)
 		return ctrl.Result{RequeueAfter: leaseguard.DefaultInterval}, nil
@@ -432,14 +432,18 @@ func leaseFresh(l Freshness) bool {
 	return l == nil || l.Fresh()
 }
 
-// restsOnTheRegistry is whether d takes a server out of Ready or off the
-// proxies on what the agent registry says, which a leader resumed past its
-// lease holds from before it froze. ReadinessLost mixes the pod's readiness
-// with the agent's and is held back whole. Deletion, forceStop, retirement,
-// a lost or terminal pod and the round's end come from the API or are
-// persisted in status, so they stand.
-func restsOnTheRegistry(d phase.Decision) bool {
-	return d.Reason == phase.ReasonReadinessLost
+// restsOnTheRegistry is whether d leaves Ready on the agent registry's view,
+// which a leader resumed past its lease holds from before it froze. Both
+// reasons mix the pod's readiness with the agent's and are held back whole;
+// a terminal pod's RoundFinished comes from the API and stands.
+func restsOnTheRegistry(current phase.Phase, in phase.Inputs, d phase.Decision) bool {
+	switch d.Reason {
+	case phase.ReasonReadinessLost:
+		return true
+	case phase.ReasonRoundFinished:
+		return current == phase.Ready && d.Next == phase.Finished && !in.PodTerminal
+	}
+	return false
 }
 
 // noteVisible tells the proxies when the server looks different to them. It
