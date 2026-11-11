@@ -122,8 +122,8 @@ type ServerReconciler struct {
 	// State is told when a server changes in a way the proxies show; nil means
 	// they learn of it at the next resync.
 	State StateNotifier
-	// Lease holds back every decision that takes a server out of Ready or off
-	// the proxies until it is fresh; nil counts as fresh.
+	// Lease holds back the decisions restsOnTheRegistry names until it is
+	// fresh; nil counts as fresh.
 	Lease Freshness
 
 	visible visibleMemo
@@ -392,7 +392,7 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		in.GroupHasReadyServer = ready
 	}
 	decision := phase.Decide(current, in)
-	if (decision.Deregister || current == phase.Ready && decision.Next != phase.Ready) && !r.leaseFresh() {
+	if restsOnTheRegistry(decision) && !r.leaseFresh() {
 		log.FromContext(ctx).Info("holding back a decision until the leader lease is confirmed",
 			"phase", current, "next", decision.Next, "reason", decision.Reason)
 		return ctrl.Result{RequeueAfter: leaseguard.DefaultInterval}, nil
@@ -425,7 +425,21 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 }
 
 func (r *ServerReconciler) leaseFresh() bool {
-	return r.Lease == nil || r.Lease.Fresh()
+	return leaseFresh(r.Lease)
+}
+
+func leaseFresh(l Freshness) bool {
+	return l == nil || l.Fresh()
+}
+
+// restsOnTheRegistry is whether d takes a server out of Ready or off the
+// proxies on what the agent registry says, which a leader resumed past its
+// lease holds from before it froze. ReadinessLost mixes the pod's readiness
+// with the agent's and is held back whole. Deletion, forceStop, retirement,
+// a lost or terminal pod and the round's end come from the API or are
+// persisted in status, so they stand.
+func restsOnTheRegistry(d phase.Decision) bool {
+	return d.Reason == phase.ReasonReadinessLost
 }
 
 // noteVisible tells the proxies when the server looks different to them. It

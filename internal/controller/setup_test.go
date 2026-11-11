@@ -198,6 +198,10 @@ func TestSetupAllThreadsTheLease(t *testing.T) {
 		t.Errorf("ServerReconciler.Lease = %v, want the guard from Options: a leader resumed "+
 			"past its lease would take servers out of Ready", got)
 	}
+	if got := newProxyGroupReconciler(mgr, opts).Lease; got != Freshness(lease) {
+		t.Errorf("ProxyGroupReconciler.Lease = %v, want the guard from Options: a leader resumed "+
+			"past its lease would delete draining proxies on stale counts", got)
+	}
 }
 
 // An empty OperatorNamespace renders a legal selector that matches no

@@ -71,8 +71,8 @@ type Options struct {
 	// DrainTaintKeys mark a node as departing beside spec.unschedulable, for
 	// autoscalers that taint without cordoning.
 	DrainTaintKeys []string
-	// Lease is the Server controller's check that this process still leads;
-	// nil counts as fresh.
+	// Lease is the Server and ProxyGroup controllers' check that this process
+	// still leads; nil counts as fresh.
 	Lease Freshness
 }
 
@@ -194,5 +194,6 @@ func newProxyGroupReconciler(mgr ctrl.Manager, opts Options) *ProxyGroupReconcil
 		AllowFileVolumes:   opts.AllowFileVolumes,
 		AllowMountVolumes:  opts.AllowMountVolumes,
 		ClaimReader:        mgr.GetAPIReader(),
+		Lease:              opts.Lease,
 	}
 }

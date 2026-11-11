@@ -1091,6 +1091,45 @@ func TestAnUnconfirmedLeaseTakesNoServerOutOfReady(t *testing.T) {
 	}
 }
 
+func TestAnUnconfirmedLeaseLetsADeletionDrain(t *testing.T) {
+	f := newFixture(t)
+	f.reconc.Lease = &leaseFreshness{}
+	bringUpReady(t, f, "lobby-x7k2")
+
+	if err := f.c.Delete(f.ctx, f.server("lobby-x7k2")); err != nil {
+		t.Fatalf("delete Server: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Draining) || srv.Status.Registered {
+		t.Errorf("phase %q, registered %v after a deletion with the lease unconfirmed, want Draining, "+
+			"false: a deletion comes from the API, which stale memory cannot invent",
+			srv.Status.Phase, srv.Status.Registered)
+	}
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v, want one drain command", f.registrar.drained)
+	}
+}
+
+func TestAnUnconfirmedLeaseLetsAForceStopThrough(t *testing.T) {
+	f := newFixture(t)
+	f.reconc.Lease = &leaseFreshness{}
+	bringUpReady(t, f, "lobby-x7k2")
+
+	f.forceStop(t, "lobby-x7k2")
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Terminating) || srv.Status.Registered {
+		t.Errorf("phase %q, registered %v after spec.forceStop with the lease unconfirmed, "+
+			"want Terminating, false", srv.Status.Phase, srv.Status.Registered)
+	}
+	if len(f.registrar.deregistered) != 1 {
+		t.Errorf("deregistered = %v, want one deregistration", f.registrar.deregistered)
+	}
+}
+
 func TestAnUnconfirmedLeaseHoldsBackNothingElse(t *testing.T) {
 	f := newFixture(t)
 	f.reconc.Lease = &leaseFreshness{}

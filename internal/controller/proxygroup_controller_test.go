@@ -406,6 +406,35 @@ func TestProxyGroupScalesDown(t *testing.T) {
 }
 
 // Without the deadline, treating unknown counts as occupied would hold a pod forever.
+func TestAnUnconfirmedLeaseKeepsAProxyPastItsDeadline(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	lease := &leaseFreshness{}
+	r.Lease = lease
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	if got := len(f.proxyPods("gateway")); got != 2 {
+		t.Fatalf("proxy pods = %d, want 2", got)
+	}
+
+	f.setProxyReplicas("gateway", 1)
+	f.reconcileProxyGroup(r, "gateway")
+	f.clock.Advance(f.proxyGroup("gateway").DrainTimeout() + time.Second)
+	f.reconcileProxyGroup(r, "gateway")
+
+	if got := len(f.proxyPods("gateway")); got != 2 {
+		t.Fatalf("proxy pods = %d past the deadline with the lease unconfirmed, want 2: the surplus "+
+			"proxy's unknown count may be a leader's memory from before it froze", got)
+	}
+
+	lease.fresh = true
+	f.reconcileProxyGroup(r, "gateway")
+	if got := len(f.proxyPods("gateway")); got != 1 {
+		t.Errorf("proxy pods = %d once the lease is confirmed, want 1", got)
+	}
+}
+
 func TestAProxyWithAStalePlayerCountWaitsForTheDeadline(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
