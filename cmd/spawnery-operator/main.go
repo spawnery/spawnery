@@ -185,17 +185,20 @@ func podIdentity(getenv func(string) string) (agentendpoint.Identity, error) {
 	}, nil
 }
 
-func agentPublisher(c client.Client, namespace string, pod agentendpoint.Identity, serving <-chan struct{}) *agentendpoint.Publisher {
-	return &agentendpoint.Publisher{
+func agentPublisher(c client.Client, namespace string, pod agentendpoint.Identity, serving <-chan struct{}, leaderElect bool) *agentendpoint.Publisher {
+	p := &agentendpoint.Publisher{
 		Client:    c,
 		Namespace: namespace,
 		Service:   podspec.AgentServiceName,
 		Port:      agentserver.DefaultPort,
-		Lease:     leaderElectionID,
 		Pod:       pod,
 		Serving:   serving,
 		Interval:  agentendpoint.DefaultInterval,
 	}
+	if leaderElect {
+		p.Lease = leaderElectionID
+	}
+	return p
 }
 
 func leaseGuard(c client.Client, namespace, hostname string) *leaseguard.Guard {
@@ -539,7 +542,7 @@ func main() {
 			setupLog.Error(err, "refusing to start")
 			os.Exit(1)
 		}
-		if err := mgr.Add(agentPublisher(directClient, operatorNamespace, pod, agentServer.Serving())); err != nil {
+		if err := mgr.Add(agentPublisher(directClient, operatorNamespace, pod, agentServer.Serving(), leaderElect)); err != nil {
 			setupLog.Error(err, "unable to add the agent endpoint publisher")
 			os.Exit(1)
 		}

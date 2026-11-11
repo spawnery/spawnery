@@ -23,6 +23,7 @@ import (
 	"testing"
 	"time"
 
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -81,7 +82,7 @@ func TestAStandbyTakesOverTheAgentEndpoint(t *testing.T) {
 		}
 		if err := mgr.Add(agentPublisher(direct, ns, agentendpoint.Identity{
 			Name: name, Hostname: hostname, UID: uid, IPs: []string{fmt.Sprintf("10.0.0.%d", i+1)},
-		}, serving)); err != nil {
+		}, serving, true)); err != nil {
 			t.Fatalf("add publisher %s: %v", name, err)
 		}
 
@@ -142,5 +143,71 @@ func TestAStandbyTakesOverTheAgentEndpoint(t *testing.T) {
 		first.done <- err
 	case <-time.After(10 * time.Second):
 		t.Error("the stopped leader's manager had not returned 10s after its context was cancelled")
+	}
+}
+
+func TestWithoutLeaderElectionTheAgentEndpointIsPublished(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+	svc := &corev1.Service{
+		ObjectMeta: metav1.ObjectMeta{Name: podspec.AgentServiceName, Namespace: ns},
+		Spec: corev1.ServiceSpec{Ports: []corev1.ServicePort{{
+			Name: "agent", Port: agentserver.DefaultPort, Protocol: corev1.ProtocolTCP,
+		}}},
+	}
+	if err := c.Create(ctx, svc); err != nil {
+		t.Fatalf("create Service: %v", err)
+	}
+
+	mgr, err := ctrl.NewManager(testenv.Config(t), managerOptions(managerFlags{
+		leaderElect: false, operatorNamespace: ns, metricsAddr: "0", probeAddr: "0",
+	}))
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	direct, err := newDirectClient(testenv.Config(t), mgr)
+	if err != nil {
+		t.Fatalf("direct client: %v", err)
+	}
+	serving := make(chan struct{})
+	close(serving)
+	if err := mgr.Add(agentPublisher(direct, ns, agentendpoint.Identity{
+		Name: "op-a", Hostname: "op-a", UID: "uid-a", IPs: []string{"10.0.0.1"},
+	}, serving, false)); err != nil {
+		t.Fatalf("add publisher: %v", err)
+	}
+	mgrCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- mgr.Start(mgrCtx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(20 * time.Second):
+			t.Error("manager did not stop within 20s")
+		}
+	})
+
+	within(t, 10*time.Second, "a slice naming the only replica, with no Lease anywhere", func() (bool, string) {
+		var list discoveryv1.EndpointSliceList
+		if err := c.List(ctx, &list, client.InNamespace(ns)); err != nil {
+			return false, err.Error()
+		}
+		if len(list.Items) != 1 {
+			return false, fmt.Sprintf("%d slices", len(list.Items))
+		}
+		eps := list.Items[0].Endpoints
+		if len(eps) != 1 || eps[0].TargetRef == nil || eps[0].TargetRef.UID != "uid-a" {
+			return false, fmt.Sprintf("endpoints %+v", eps)
+		}
+		return true, ""
+	})
+	var leases coordinationv1.LeaseList
+	if err := c.List(ctx, &leases, client.InNamespace(ns)); err != nil {
+		t.Fatalf("list Leases: %v", err)
+	}
+	if len(leases.Items) != 0 {
+		t.Errorf("%d Leases in the namespace with leader election off, want none: the test "+
+			"would not show that the publisher needs none", len(leases.Items))
 	}
 }

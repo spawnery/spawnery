@@ -188,7 +188,7 @@
             vendorHash = "sha256-OmwQKY8ZdBx4c64WfuTbLapIIEnEWj/SdrWENk5O69g=";
             subPackages = [ "cmd/spawnery-operator" ];
             # The build sandbox has no envtest control plane; make test runs it.
-            checkFlags = [ "-skip=^(TestTheProductionManagerReconcilesEveryNamespace|TestAServersLifecycleReachesTheProxiesWithoutWaitingForTheResync|TestAStandbyTakesOverTheAgentEndpoint)$" ];
+            checkFlags = [ "-skip=^(TestTheProductionManagerReconcilesEveryNamespace|TestAServersLifecycleReachesTheProxiesWithoutWaitingForTheResync|TestAStandbyTakesOverTheAgentEndpoint|TestWithoutLeaderElectionTheAgentEndpointIsPublished)$" ];
             # Static, because the image carries no libc of its own for it.
             env.CGO_ENABLED = 0;
             ldflags = [ "-s" "-w" ];

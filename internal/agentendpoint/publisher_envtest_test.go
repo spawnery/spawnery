@@ -333,6 +333,16 @@ func TestAssertDoesNothingWithoutTheLease(t *testing.T) {
 	}
 }
 
+func TestAssertWithoutALeaseNameChecksNoHolder(t *testing.T) {
+	f := newFixture(t, "host-b_456")
+	p := f.publisher("10.0.0.5")
+	p.Lease = ""
+
+	f.assert(p)
+
+	checkSlice(t, f.mustSlice(discoveryv1.AddressTypeIPv4), f.svc, discoveryv1.AddressTypeIPv4, "10.0.0.5")
+}
+
 func TestWithdrawEmptiesItsOwnSlice(t *testing.T) {
 	f := newFixture(t, "host-a_123")
 	p := f.publisher("10.0.0.5", "fd00::5")

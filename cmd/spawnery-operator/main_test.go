@@ -100,7 +100,7 @@ func TestTheLeaseGuardChecksTheManagersLease(t *testing.T) {
 
 func TestThePublisherChecksTheManagersLease(t *testing.T) {
 	opts := managerOptions(managerFlags{leaderElect: true, operatorNamespace: "spawnery-system"})
-	p := agentPublisher(nil, "spawnery-system", agentendpoint.Identity{}, nil)
+	p := agentPublisher(nil, "spawnery-system", agentendpoint.Identity{}, nil, true)
 	if p.Lease != opts.LeaderElectionID {
 		t.Errorf("the publisher reads Lease %q, the manager holds %q: the publisher would never "+
 			"see itself as the holder and would publish nothing, without an error anywhere "+
@@ -109,6 +109,13 @@ func TestThePublisherChecksTheManagersLease(t *testing.T) {
 	if p.Namespace != opts.LeaderElectionNamespace {
 		t.Errorf("the publisher looks for the Lease in %q, the manager writes it to %q",
 			p.Namespace, opts.LeaderElectionNamespace)
+	}
+}
+
+func TestWithoutLeaderElectionThePublisherReadsNoLease(t *testing.T) {
+	if p := agentPublisher(nil, "spawnery-system", agentendpoint.Identity{}, nil, false); p.Lease != "" {
+		t.Errorf("the publisher reads Lease %q with leader election off: no Lease exists then, "+
+			"so the agent Service would never get an endpoint", p.Lease)
 	}
 }
 

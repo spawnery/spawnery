@@ -66,7 +66,9 @@ type Publisher struct {
 	Namespace string
 	Service   string
 	Port      int32
-	// Lease is the manager's LeaderElectionID.
+	// Lease is the manager's LeaderElectionID. Empty means no holder check,
+	// for a manager without leader election: no Lease exists, and the
+	// publisher is then the only one.
 	Lease    string
 	Pod      Identity
 	Serving  <-chan struct{}
@@ -177,6 +179,9 @@ func (p *Publisher) Assert(ctx context.Context) error {
 }
 
 func (p *Publisher) checkHolder(ctx context.Context) error {
+	if p.Lease == "" {
+		return nil
+	}
 	return leaseguard.CheckHolder(ctx, p.Client, types.NamespacedName{Namespace: p.Namespace, Name: p.Lease}, p.Pod.Hostname)
 }
 
