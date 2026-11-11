@@ -29,17 +29,22 @@ Where the Prometheus metrics endpoint listens. See
 
 Default: `:8081`
 
-Where `/healthz` and `/readyz` listen. `/readyz` reports ready only once this
-replica holds the leader-election lock. A standby answers `not the leader
-yet` rather than ready, because the agent gRPC endpoint is leader-bound and a
-standby serving readiness would attract agents into a registry no controller
-reads.
+Where `/healthz` and `/readyz` listen. Both are a plain ping and say nothing
+about the leader-election lock: a standby replica is Ready. Agents still reach
+only the leader, because the agent Service has no selector and its
+EndpointSlices name the leader alone; see
+[`--publish-agent-endpoint`](#-publish-agent-endpoint).
 
 ### `--leader-elect`
 
 Default: `true`
 
-Runs leader election among replicas. On by default so that running more than
+Runs leader election among replicas. The leader runs the controllers and the
+agent endpoint; every other replica is a standby that keeps its caches warm
+and takes over when the leader's lease is released or runs out. A leader that
+shuts down gives its runnables at most 7s to stop and then releases the
+lease, inside the chart's 10s grace period, so a planned handover does not
+wait out the lease. On by default so that running more than
 one replica is never a decision made twice, once when the chart was written
 and once when the flag was flipped. Set to `false` for a local `go run`
 outside a cluster: left on, controller-runtime looks for a ServiceAccount
@@ -112,6 +117,20 @@ Default: `:9443`
 Where the agent gRPC endpoint listens. This is the port behind the Service a
 game server pod actually dials: the leader, not the pod, since the
 endpoint is a leader-bound runnable.
+
+### `--publish-agent-endpoint`
+
+Default: `true`
+
+Makes the leader write its own address into the EndpointSlices of the agent
+Service, which has no selector. It writes one slice per address family the pod
+has and re-asserts them every 30s; when the leader shuts down, it empties them
+again. Before each
+write it reads the leader-election Lease and writes nothing unless this
+replica holds it. It needs `POD_NAME`, `POD_UID` and `POD_IPS` from the
+downward API (`NODE_NAME` is optional), which the chart sets; with any of the
+three unset the operator refuses to start. Turn it off only for a run outside
+a pod, where no agent reaches the operator through the Service anyway.
 
 ### `--agent-session-renew-after`
 

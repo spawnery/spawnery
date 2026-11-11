@@ -17,10 +17,16 @@ limitations under the License.
 package main
 
 import (
+	"maps"
+	"os"
+	"reflect"
 	"strings"
 	"testing"
 	"time"
 
+	"k8s.io/apimachinery/pkg/types"
+
+	"github.com/spawnery/spawnery/internal/agentendpoint"
 	"github.com/spawnery/spawnery/internal/controller"
 	"github.com/spawnery/spawnery/internal/phase"
 )
@@ -57,33 +63,92 @@ func TestValidateAgentFlags(t *testing.T) {
 	}
 }
 
-func TestLeaderReadyCheckIsRedBeforeElectionAndGreenAfter(t *testing.T) {
-	elected := make(chan struct{})
-	check := leaderReadyCheck(elected)
-
-	if err := check(nil); err == nil {
-		t.Error("readyz is green before the lock was taken; a standby would attract agents")
+func TestTheManagerReleasesTheLeaseWithinTheGracePeriod(t *testing.T) {
+	opts := managerOptions(managerFlags{leaderElect: true, operatorNamespace: "spawnery-system"})
+	if !opts.LeaderElectionReleaseOnCancel {
+		t.Error("LeaderElectionReleaseOnCancel is off: a stopping leader keeps the lease and " +
+			"the standby waits out its whole duration before it takes over")
 	}
-	close(elected)
-	if err := check(nil); err != nil {
-		t.Errorf("readyz is red although this replica holds the lock: %v", err)
+	if opts.GracefulShutdownTimeout == nil || *opts.GracefulShutdownTimeout != 7*time.Second {
+		t.Errorf("GracefulShutdownTimeout = %v, want 7s. The lease is released only after the "+
+			"runnables have stopped, and the chart's terminationGracePeriodSeconds: 10 sends "+
+			"SIGKILL after ten seconds; controller-runtime's 30s default would let SIGKILL "+
+			"come first, so the lease would never be released", opts.GracefulShutdownTimeout)
 	}
 }
 
-func TestLeaderReadyCheckDoesNotBlock(t *testing.T) {
-	check := leaderReadyCheck(make(chan struct{}))
-
-	done := make(chan struct{})
-	go func() {
-		defer close(done)
-		_ = check(nil)
-	}()
-
-	select {
-	case <-done:
-	case <-time.After(2 * time.Second):
-		t.Fatal("the ready check blocked; every probe of a standby would time out")
+func TestAStandbyWarmsItsControllers(t *testing.T) {
+	opts := managerOptions(managerFlags{leaderElect: true, operatorNamespace: "spawnery-system"})
+	if opts.Controller.EnableWarmup == nil || !*opts.Controller.EnableWarmup {
+		t.Error("Controller.EnableWarmup is not on: a standby's cache holds no informer, and a " +
+			"takeover lists every watched type afresh before the first agent is admitted")
 	}
+}
+
+func TestThePublisherChecksTheManagersLease(t *testing.T) {
+	opts := managerOptions(managerFlags{leaderElect: true, operatorNamespace: "spawnery-system"})
+	p := agentPublisher(nil, "spawnery-system", agentendpoint.Identity{}, nil)
+	if p.Lease != opts.LeaderElectionID {
+		t.Errorf("the publisher reads Lease %q, the manager holds %q: the publisher would never "+
+			"see itself as the holder and would publish nothing, without an error anywhere "+
+			"but its log", p.Lease, opts.LeaderElectionID)
+	}
+	if p.Namespace != opts.LeaderElectionNamespace {
+		t.Errorf("the publisher looks for the Lease in %q, the manager writes it to %q",
+			p.Namespace, opts.LeaderElectionNamespace)
+	}
+}
+
+func TestPodIdentityNeedsTheDownwardAPI(t *testing.T) {
+	full := map[string]string{
+		"POD_NAME":  "spawnery-operator-7d9f-abcde",
+		"POD_UID":   "0b6c2a8e-1111-2222-3333-444455556666",
+		"POD_IPS":   "10.244.1.7,fd00::7",
+		"NODE_NAME": "worker-1",
+	}
+	for _, missing := range []string{"POD_NAME", "POD_UID", "POD_IPS"} {
+		t.Run("without "+missing, func(t *testing.T) {
+			env := maps.Clone(full)
+			delete(env, missing)
+			_, err := podIdentity(func(k string) string { return env[k] })
+			if err == nil {
+				t.Fatalf("podIdentity without %s returned no error", missing)
+			}
+			if !strings.Contains(err.Error(), missing) {
+				t.Errorf("error = %q, want it to name %s", err, missing)
+			}
+		})
+	}
+
+	t.Run("with everything", func(t *testing.T) {
+		got, err := podIdentity(func(k string) string { return full[k] })
+		if err != nil {
+			t.Fatalf("podIdentity: %v", err)
+		}
+		hostname, err := os.Hostname()
+		if err != nil {
+			t.Fatalf("os.Hostname: %v", err)
+		}
+		want := agentendpoint.Identity{
+			Name:     "spawnery-operator-7d9f-abcde",
+			Hostname: hostname,
+			Node:     "worker-1",
+			UID:      types.UID("0b6c2a8e-1111-2222-3333-444455556666"),
+			IPs:      []string{"10.244.1.7", "fd00::7"},
+		}
+		if !reflect.DeepEqual(got, want) {
+			t.Errorf("podIdentity = %+v, want %+v", got, want)
+		}
+	})
+
+	t.Run("with an address that is none", func(t *testing.T) {
+		env := maps.Clone(full)
+		env["POD_IPS"] = "10.244.1.7,not-an-ip"
+		if _, err := podIdentity(func(k string) string { return env[k] }); err == nil ||
+			!strings.Contains(err.Error(), "POD_IPS") {
+			t.Errorf("podIdentity with a bad POD_IPS = %v, want an error naming POD_IPS", err)
+		}
+	})
 }
 
 func TestTaintKeysSetRejectsEmpty(t *testing.T) {
