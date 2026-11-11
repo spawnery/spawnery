@@ -233,6 +233,8 @@ class SessionLoop<Req, Resp>(
     },
     /** Injectable only so tests need not wait out [FALLBACK_ANSWER_BOUND_MILLIS]. */
     private val fallbackAnswerBoundMillis: Long = FALLBACK_ANSWER_BOUND_MILLIS,
+    /** Injectable only so tests need not wait out [RECONNECT_ANSWER_BOUND_MILLIS]. */
+    private val reconnectAnswerBoundMillis: Long = RECONNECT_ANSWER_BOUND_MILLIS,
     /**
      * Called once for every stream that becomes current, on the installing
      * thread before anything is sent on it. Per-stream state hangs off it: the
@@ -270,6 +272,14 @@ class SessionLoop<Req, Resp>(
          * in microseconds, and this is only a finite number in place of none.
          */
         const val FALLBACK_ANSWER_BOUND_MILLIS = 5L * 60 * 1000
+
+        /**
+         * Covers the connect, the TLS handshake and the TokenReview behind the
+         * operator's first answer, which the node-loss e2e case measured well
+         * under a second. internal/agentserver/keepalive_agreement_test.go
+         * keeps it inside phase.ReconnectGrace.
+         */
+        const val RECONNECT_ANSWER_BOUND_MILLIS = 10_000L
 
         const val EXPIRY_PERIOD_MILLIS = 1_000L
 
@@ -325,6 +335,7 @@ class SessionLoop<Req, Resp>(
         // arrive from inside serverSession(), and the handover has to know its
         // predecessor by then.
         val outgoing = current.get()
+        val renewal = outgoing != null && !outgoing.ended.get()
         val session = Session(channel, outgoing)
         // Before the stream exists: the operator ends the displaced stream at
         // the entry of the replacement's handler, so its terminal callback can
@@ -401,7 +412,7 @@ class SessionLoop<Req, Resp>(
 
         // This attempt now owes the agent its next stream, so an operator that
         // never answers needs a bound.
-        awaitAnswer(session)
+        awaitAnswer(session, renewal)
 
         // stop() may have run meanwhile and found nothing in `current` to retire.
         if (stopped.get()) stop()
@@ -434,13 +445,19 @@ class SessionLoop<Req, Resp>(
      * the call has no deadline, and the operator arms its own hard deadline
      * only after its first `Send`.
      *
-     * The bound is the operator's `hardDeadlineSeconds`, so by the time it
-     * fires the outgoing stream is past its own deadline and [answerOverdue]
-     * may retire it too. Until the operator has stated one, it is
-     * [FALLBACK_ANSWER_BOUND_MILLIS].
+     * A renewal's bound is the operator's `hardDeadlineSeconds`, so by the
+     * time it fires the outgoing stream is past its own deadline and
+     * [answerOverdue] may retire it too. Until the operator has stated one, it
+     * is [FALLBACK_ANSWER_BOUND_MILLIS].
+     *
+     * Any other attempt has no live stream behind it and is bounded by
+     * [RECONNECT_ANSWER_BOUND_MILLIS] as well. grpc-okhttp gives neither the
+     * connect nor the TLS handshake a timeout, so a dial that kube-proxy sends
+     * to a frozen pod waits out the kernel's SYN retries, about two minutes.
      */
-    private fun awaitAnswer(session: Session<Req>) {
-        val bound = hardDeadlineMillis.get().takeIf { it > 0 } ?: fallbackAnswerBoundMillis
+    private fun awaitAnswer(session: Session<Req>, renewal: Boolean) {
+        val deadline = hardDeadlineMillis.get().takeIf { it > 0 } ?: fallbackAnswerBoundMillis
+        val bound = if (renewal) deadline else minOf(deadline, reconnectAnswerBoundMillis)
         if (bound <= 0) return
         session.awaitAnswer {
             schedule(bound, "the answer deadline could not be scheduled") { answerOverdue(session) }

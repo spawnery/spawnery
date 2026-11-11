@@ -1107,8 +1107,12 @@ echo "the agent opened $opened streams in ${WINDOW}s across $superseded superses
 # Between the cancel and its first Send, internal/agentserver has armed no
 # deadline. The agent's keepalive is answered by the transport of a stream that
 # says nothing, and the channel has no idle timeout or call deadline of its
-# own. With no bound the agent opens no further stream, which only the floor
-# can see.
+# own. With no bound the agent opens no further stream.
+#
+# The renewal is bounded by the operator's hard deadline, because giving up on
+# it retires the outgoing stream too. Every attempt after it has no live stream
+# behind it and is bounded by SessionLoop's shorter reconnect bound, which is
+# what ends a dial to a frozen pod.
 echo
 echo "restarting the agent against an operator that accepts a stream and says nothing..."
 "$CONTAINER" rm -f "$NAME2" >/dev/null 2>&1 || true
@@ -1116,6 +1120,17 @@ stop_stub "$STUB2_PID"
 STUB2_PID=""
 
 MUTE_HARD_DEADLINE=20
+SESSION_LOOP_SRC="$(dirname "$0")/../agent/common/src/main/kotlin/cloud/spawnery/agent/SessionLoop.kt"
+RECONNECT_BOUND_MS="$(sed -n 's/.*RECONNECT_ANSWER_BOUND_MILLIS = \([0-9_]*\)L.*/\1/p' "$SESSION_LOOP_SRC" | tr -d _)"
+if [ -z "$RECONNECT_BOUND_MS" ]; then
+	echo "no RECONNECT_ANSWER_BOUND_MILLIS in $SESSION_LOOP_SRC" >&2
+	exit 1
+fi
+RECONNECT_BOUND_S=$((RECONNECT_BOUND_MS / 1000))
+if [ "$RECONNECT_BOUND_S" -ge "$MUTE_HARD_DEADLINE" ]; then
+	echo "the reconnect bound (${RECONNECT_BOUND_S}s) is not below this phase's ${MUTE_HARD_DEADLINE}s hard deadline, so the phase cannot tell the two apart" >&2
+	exit 1
+fi
 mkdir -p "$WORK/agent-mute"
 chmod 0755 "$WORK/agent-mute"
 STUB3_PID="$(start_stub "$EVENTS3" "$WORK/stub3.log" "muting" \
@@ -1133,43 +1148,48 @@ start_agent "$NAME3" "$VOLUME3" "$WORK/agent-mute" "$WORK/config" "stubop:19445"
 echo "waiting up to ${DEADLINE}s for the agent to greet the muting operator..."
 await_event hello "$EVENTS3" "$NAME3"
 
-# Stream 1 is the first muted one; the window starts when it opens.
+# await_streams <count> <within> - seconds until the stub has seen <count>
+# streams. Polled once a second, so a gap between two calls is off by up to 1s
+# either way.
+await_streams() {
+	local start=$SECONDS
+	until [ "$(streams_opened "$EVENTS3")" -ge "$1" ]; do
+		if [ $((SECONDS - start)) -gt "$2" ]; then
+			echo "the agent opened no stream $1 within ${2}s of an unanswered session" >&2
+			echo "an operator that accepts a stream and never answers it leaves the agent with no renewal, no reports and no reconnect: the wait has no bound of its own" >&2
+			jq -rs '[.[] | select(.kind == "stream_opened" or (.kind == "stream_closed"))]' <"$EVENTS3" >&2
+			"$CONTAINER" logs "$NAME3" 2>&1 | tail -20 >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
+	echo $((SECONDS - start))
+}
+
 echo "waiting for the renewal the operator will not answer..."
-start=$SECONDS
-until [ "$(streams_opened "$EVENTS3")" -ge 2 ]; do
-	if [ $((SECONDS - start)) -gt 60 ]; then
-		echo "no second stream within 60s of a 5s renewal deadline" >&2
-		cat "$EVENTS3" >&2
-		exit 1
-	fi
-	sleep 1
-done
+await_streams 2 60 >/dev/null
 
-# The agent's bound on an unanswered stream is the operator's
-# hardDeadlineSeconds, so a correct agent gives up at 20s and 41s: two streams.
-WINDOW3=45
-MUTE_FLOOR=1
-MUTE_LIMIT=$((WINDOW3 / MUTE_HARD_DEADLINE + 2))
-before3="$(streams_opened "$EVENTS3")"
-echo "counting the streams the agent opens over ${WINDOW3}s of silence..."
-sleep "$WINDOW3"
-after3="$(streams_opened "$EVENTS3")"
-opened3=$((after3 - before3))
-
-if [ "$opened3" -lt "$MUTE_FLOOR" ]; then
-	echo "the agent opened $opened3 streams in ${WINDOW3}s of an unanswered session, at least $MUTE_FLOOR expected" >&2
-	echo "an operator that accepts a stream and never answers it leaves the agent with no renewal, no reports and no reconnect: the wait has no bound of its own" >&2
-	jq -rs '.' <"$EVENTS3" >&2
-	"$CONTAINER" logs "$NAME3" 2>&1 | tail -20 >&2 || true
-	exit 1
-fi
-if [ "$opened3" -gt "$MUTE_LIMIT" ]; then
-	echo "the agent opened $opened3 streams in ${WINDOW3}s of an unanswered session, at most $MUTE_LIMIT expected" >&2
-	echo "the bound on an unanswered stream is meant to be the operator's own ${MUTE_HARD_DEADLINE}s hard deadline, not something shorter" >&2
+echo "waiting for the agent to give up on the renewal..."
+renewal_gap="$(await_streams 3 $((MUTE_HARD_DEADLINE * 2)))"
+if [ "$renewal_gap" -lt $((MUTE_HARD_DEADLINE - 1)) ]; then
+	echo "the agent gave up on the unanswered renewal after ${renewal_gap}s, before the operator's ${MUTE_HARD_DEADLINE}s hard deadline" >&2
+	echo "the bound on an unanswered renewal is meant to be the operator's own hard deadline, not something shorter: giving up on it retires the outgoing stream too" >&2
 	jq -rs '[.[] | select(.kind == "stream_opened" or (.kind == "stream_closed"))]' <"$EVENTS3" >&2
 	exit 1
 fi
-echo "the agent opened $opened3 streams in ${WINDOW3}s while the operator said nothing: an unanswered session is bounded by the operator's hard deadline"
+echo "the agent gave up on the unanswered renewal after ${renewal_gap}s, at the operator's ${MUTE_HARD_DEADLINE}s hard deadline"
+
+# The reconnect bound, then the second backoff step (2s, +-10%), then the dial.
+RECONNECT_LIMIT=$((RECONNECT_BOUND_S + 5))
+echo "waiting for the agent to give up on the reconnect, which nothing stands behind..."
+reconnect_gap="$(await_streams 4 $((MUTE_HARD_DEADLINE * 2)))"
+if [ "$reconnect_gap" -lt $((RECONNECT_BOUND_S - 1)) ] || [ "$reconnect_gap" -gt "$RECONNECT_LIMIT" ]; then
+	echo "the agent gave up on the unanswered reconnect after ${reconnect_gap}s, want ${RECONNECT_BOUND_S}s to ${RECONNECT_LIMIT}s (RECONNECT_ANSWER_BOUND_MILLIS)" >&2
+	echo "a reconnect with no live stream behind it is what hangs on a frozen pod after a node loss; past ReconnectGrace its server leaves Ready" >&2
+	jq -rs '[.[] | select(.kind == "stream_opened" or (.kind == "stream_closed"))]' <"$EVENTS3" >&2
+	exit 1
+fi
+echo "the agent gave up on the unanswered reconnect after ${reconnect_gap}s: a reconnect is bounded by its own ${RECONNECT_BOUND_S}s, a renewal by the operator's hard deadline"
 
 # ---------------------------------------------------------------------------
 # Phase four: the proxy, and the gate that must not open early - or stay open.
