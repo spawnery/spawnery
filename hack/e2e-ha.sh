@@ -149,10 +149,13 @@ go test -tags e2e -c -o "$workdir/e2e.test" ./test/e2e
 
 created_cluster=1
 kind create cluster --name "$CLUSTER" --config test/e2e/ha-kind.yaml --wait 120s
-kind load image-archive "$workdir/operator.tar" --name "$CLUSTER"
-kind load image-archive "$workdir/game.tar" --name "$CLUSTER"
-kind load image-archive "$workdir/velocity.tar" --name "$CLUSTER"
-kind load image-archive "$workdir/released-operator.tar" --name "$CLUSTER"
+# Workers only: the control plane runs none of these pods, and each node's
+# copy of the four images takes about 1.8 GB of disk (dev, 2026-11-11).
+workers="$(kind get nodes --name "$CLUSTER" | grep -v -- -control-plane | paste -sd, -)"
+for image in operator game velocity released-operator; do
+	kind load image-archive "$workdir/$image.tar" --name "$CLUSTER" --nodes "$workers"
+	rm "$workdir/$image.tar"
+done
 
 # Off the workers, so that pausing the leader's node does not take half of
 # the cluster's DNS with it: that would measure CoreDNS failover, not the
