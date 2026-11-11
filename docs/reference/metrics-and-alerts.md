@@ -140,6 +140,19 @@ spawnery_ca_rotation_phase{phase="distributing"} == 1
 
 The gate waits for every namespace to show the incoming CA and then for a projection margin plus the agent session deadline -- a quarter of an hour in total, not a day. Check spawnery.cloud/ca-rotation-blocked-on, and spawnery.cloud/ca-rotation-discarded for a slot the operator repaired or threw away.
 
+### SpawneryNoLeader
+
+**Group:** <code>spawnery-operator</code> &nbsp;&nbsp; **Severity:** <code>critical</code> &nbsp;&nbsp; **For:** <code>2m</code>
+
+No spawnery operator replica holds the leader lease.
+
+```
+max(leader_election_master_status{name="spawnery-operator.spawnery.cloud", namespace="spawnery-system"}) < 1
+  or absent(leader_election_master_status{name="spawnery-operator.spawnery.cloud", namespace="spawnery-system"})
+```
+
+Nothing reconciles and the agent Service has no endpoint, so agents cannot reconnect and servers that lose their stream leave Ready once the reconnect grace runs out. Check that the operator pods run (`kubectl -n spawnery-system get pod -l app.kubernetes.io/component=operator`) and read the Lease spawnery-operator.spawnery.cloud in this namespace for the last holder. If the pods are up and the lease is stale, their log names the error from the leader election. If the series is absent, check that Prometheus scrapes the spawnery-operator-metrics Service.
+
 ### SpawneryOperatorMissingPermissions
 
 **Group:** <code>spawnery-permissions</code> &nbsp;&nbsp; **Severity:** <code>critical</code> &nbsp;&nbsp; **For:** <code>5m</code>
