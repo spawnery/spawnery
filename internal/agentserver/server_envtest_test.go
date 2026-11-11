@@ -183,12 +183,13 @@ func newFixtureWithProxies(t *testing.T, renewAfter, hardDeadline time.Duration,
 		}
 	}()
 
-	deadline := time.Now().Add(5 * time.Second)
-	for srv.Addr() == "" {
-		if time.Now().After(deadline) {
-			t.Fatal("the agent server never bound a port")
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-srv.Serving():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the agent server never reported serving")
+	}
+	if srv.Addr() == "" {
+		t.Fatal("Serving closed before the listener was bound")
 	}
 
 	return &serverFixture{

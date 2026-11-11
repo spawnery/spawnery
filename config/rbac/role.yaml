@@ -147,6 +147,13 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - endpoints
+  verbs:
+  - delete
+  - get
+- apiGroups:
+  - ""
+  resources:
   - events
   verbs:
   - create
@@ -166,4 +173,14 @@ rules:
   verbs:
   - create
   - get
+  - update
+- apiGroups:
+  - discovery.k8s.io
+  resources:
+  - endpointslices
+  verbs:
+  - create
+  - delete
+  - get
+  - list
   - update
