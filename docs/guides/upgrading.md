@@ -100,6 +100,20 @@ Rolling the *operator* back on its own is safe. An agent that supports
 `SetReady` and never receives one opens its gate on the first full sync
 unless a `false` was asserted.
 
+## Rolling back to a chart with a selector on the agent Service
+
+The agent Service `spawnery-operator` has no selector, and the operator's
+leader writes its EndpointSlices. A rollback to a chart whose Service has the
+selector brings the EndpointSlice controller's slice back but leaves this
+operator's slices in place, because the Service that owns them still exists.
+kube-proxy then routes agents to the old version's leader and to an address
+that no longer serves. Delete the operator's slices after the rollback:
+
+```bash
+kubectl -n spawnery-system delete endpointslice \
+  -l endpointslice.kubernetes.io/managed-by=spawnery.cloud-operator
+```
+
 ## A new Minecraft version
 
 A game image's tag is `<minecraft>-<release>`. When a release moves to a new

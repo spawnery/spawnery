@@ -24,6 +24,66 @@ metrics:
       grafana_folder: Minecraft
 ```
 
+## Running more than one operator replica
+
+The chart runs two operator replicas (`operator.replicas`, default 2). One is
+the leader and does all the work; the other is a standby with warm caches that
+takes over when the leader's lease is released or runs out. The agent Service
+`spawnery-operator` has no selector. The leader writes its own address into
+the EndpointSlices `spawnery-operator-agent-ipv4` and `-ipv6`, so agents reach
+the leader only. A standby is `Ready` and is not in those slices.
+
+What the standby buys is the loss of a node. Measured on a four-node kind
+cluster, a planned handover (a rollout, or deleting the leader) is served by
+the next leader after 5.8 to 7.3 s, and a killed leader pod after 15.8 to
+18.4 s. With the leader's node lost, the next leader served after 15.6 to
+17.6 s and every agent was back by about 21 s, inside the reconnect grace: in
+5 of 5 runs no server left `Ready`. Agents ping every 15 s and give up after
+5 s, so a dead leader is noticed in about 20 s; a reconnect not answered
+within 10 s is retired and redialled.
+
+It costs one more operator's memory (the chart requests 128Mi and limits 256Mi
+per replica) and, per rollout, one or two agent reconnects: the old leader
+hands over, and the agents redial the new one. The Deployment rolls with
+`maxSurge: 1` and `maxUnavailable: 0`, a PodDisruptionBudget with
+`maxUnavailable: 1` applies when `replicas` is above 1, and the replicas are
+spread over nodes softly (`operator.topologySpreadConstraints` replaces that).
+Set `operator.replicas: 1` for the old shape.
+
+The ServiceMonitor scrapes every replica through the separate Service
+`spawnery-operator-metrics`, so a standby's series are present too. The alert
+`SpawneryNoLeader` fires when no replica holds the lease.
+
+### Finding the leader
+
+```bash
+kubectl -n spawnery-system get lease spawnery-operator.spawnery.cloud \
+  -o jsonpath='{.spec.holderIdentity}'
+```
+
+The pod name is the part before `_`. Only the leader logs reconciliation, so
+`kubectl logs deployment/spawnery-operator` picks an arbitrary pod and may
+show a standby's quiet log. Name the pod:
+
+```bash
+POD=$(kubectl -n spawnery-system get lease spawnery-operator.spawnery.cloud \
+  -o jsonpath='{.spec.holderIdentity}' | cut -d_ -f1)
+kubectl -n spawnery-system logs "$POD"
+```
+
+A leader that cannot confirm its lease, because another replica holds it or
+because reads of it have failed for more than 10 s, stops its manager.
+While it cannot confirm, it holds back Ready exits that it would
+derive from agent state.
+
+### Game and proxy images must not move ahead of the operator
+
+Agents built with the 15 s keepalive ping more often than an operator from
+before standby replicas accepts (it enforces a 30 s minimum and answers 15 s
+pings with a GOAWAY). Upgrade the operator first. If an agent does get ahead,
+grpc-java backs its keepalive off after the `too_many_pings` GOAWAY, so the
+operator log is noisy; it does not loop.
+
 ## What the network metrics are
 
 They are computed on every scrape from what the operator holds at that

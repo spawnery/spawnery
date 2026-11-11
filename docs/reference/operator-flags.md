@@ -124,13 +124,13 @@ Default: `true`
 
 Makes the leader write its own address into the EndpointSlices of the agent
 Service, which has no selector. It writes one slice per address family the pod
-has and re-asserts them every 30s; when the leader shuts down, it empties them
-again. Before each
-write it reads the leader-election Lease and writes nothing unless this
-replica holds it. It needs `POD_NAME`, `POD_UID` and `POD_IPS` from the
-downward API (`NODE_NAME` is optional), which the chart sets; with any of the
-three unset the operator refuses to start. Turn it off only for a run outside
-a pod, where no agent reaches the operator through the Service anyway.
+has and re-asserts them every 30s. When the leader shuts down, it empties only
+the slices that still name this pod's UID, so it never wipes a successor's
+address. Before each write it reads the leader-election Lease and writes
+nothing unless this replica holds it. It needs `POD_NAME`, `POD_UID` and
+`POD_IPS` from the downward API (`NODE_NAME` is optional), which the chart
+sets; with any of the three unset the operator refuses to start. Turn it off only for a run
+outside a pod, where no agent reaches the operator through the Service anyway.
 
 ### `--agent-session-renew-after`
 
