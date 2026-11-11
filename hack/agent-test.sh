@@ -1613,7 +1613,9 @@ fi
 
 # The keepalive fires KEEPALIVE_S after the last thing the operator said and
 # waits KEEPALIVE_TIMEOUT_S for the answer, so deafening 5s after the first
-# ping lands after it has been answered and before the second is due.
+# ping lands after it has been answered and before the second is due. The stub
+# counts --deafen-after from the first stream, where the keepalive starts too,
+# so the server's boot time does not shorten the window.
 DEAFEN_AFTER=$((KEEPALIVE_S + 5))
 # Worst case is a ping sent the instant before the deafening: the interval to
 # the next one and the timeout to give up on it. Half as much again for a

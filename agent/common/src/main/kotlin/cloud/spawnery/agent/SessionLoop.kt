@@ -487,10 +487,12 @@ class SessionLoop<Req, Resp>(
      * the call has no deadline, and the operator arms its own hard deadline
      * only after its first `Send`.
      *
-     * A renewal's bound is the operator's `hardDeadlineSeconds`, so by the
-     * time it fires the outgoing stream is past its own deadline and
-     * [answerOverdue] may retire it too. Until the operator has stated one, it
-     * is [FALLBACK_ANSWER_BOUND_MILLIS].
+     * While the stream it replaces lives, a renewal's bound is the operator's
+     * `hardDeadlineSeconds`, so by the time it fires the outgoing stream is
+     * past its own deadline and [answerOverdue] may retire it too. Until the
+     * operator has stated one, it is [FALLBACK_ANSWER_BOUND_MILLIS]. Once the
+     * outgoing stream ends, [predecessorEnded] shortens it to the reconnect
+     * bound.
      *
      * Any other attempt has no live stream behind it and is bounded by
      * [RECONNECT_ANSWER_BOUND_MILLIS] as well. grpc-okhttp gives neither the
