@@ -1,3 +1,6 @@
+{{- if and (not .Values.operator.leaderElect) (gt (int .Values.operator.replicas) 1) }}
+{{- fail (printf "operator.leaderElect=false needs operator.replicas=1, not %d: without leader election every replica runs the controllers and writes the agent Service's endpoints" (int .Values.operator.replicas)) }}
+{{- end }}
 apiVersion: apps/v1
 kind: Deployment
 metadata:

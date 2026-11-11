@@ -146,7 +146,7 @@
         },
         "leaderElect": {
           "type": "boolean",
-          "description": "A bool, not a YAML string. `yes` is a string here, and the flag parser refuses it at container start."
+          "description": "A bool, not a YAML string. `yes` is a string here, and the flag parser refuses it at container start. false needs replicas 1, and the chart refuses more: without leader election every replica would run the controllers and write the agent Service's endpoints."
         },
         "allowPluginVolumes": {
           "type": "boolean",
