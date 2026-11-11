@@ -27,13 +27,13 @@ metrics:
 ## Running more than one operator replica
 
 The chart runs two operator replicas (`operator.replicas`, default 2). One is
-the leader and does all the work; the other is a standby with warm caches that
-takes over when the leader's lease is released or runs out. The agent Service
-`spawnery-operator` has no selector. The leader writes its own address into
-the EndpointSlices `spawnery-operator-agent-ipv4` and `-ipv6`, so agents reach
-the leader only. A standby is `Ready` and is not in those slices.
+the leader and does all the work. The other is a standby with warm caches,
+and it takes over when the leader's lease is released or runs out. The agent
+Service `spawnery-operator` has no selector: the leader writes its own address
+into the EndpointSlices `spawnery-operator-agent-ipv4` and `-ipv6`, so agents
+reach only the leader. A standby is `Ready` and is not in those slices.
 
-What the standby buys is the loss of a node. Measured on a four-node kind
+The standby is there for the loss of a node. Measured on a four-node kind
 cluster, a planned handover (a rollout, or deleting the leader) is served by
 the next leader after 5.8 to 7.3 s, and a killed leader pod after 15.8 to
 18.4 s. With the leader's node lost, the next leader served after 15.6 to
@@ -42,13 +42,22 @@ the next leader after 5.8 to 7.3 s, and a killed leader pod after 15.8 to
 5 s, so a dead leader is noticed in about 20 s; a reconnect not answered
 within 10 s is retired and redialled.
 
+Those node-loss figures need game and proxy images with the agent of the
+release that brings standby replicas, since the 15 s keepalive and the 10 s
+reconnect bound are in the agent. The agent ships in the image a group names,
+so upgrading the operator rolls no server (`DesiredServerHash` does not
+move). Until its group moves to a new image, or rolls for another reason, a
+server keeps its old agent, which pings only after 45 s of silence and waits
+20 s for the answer.
+
 It costs one more operator's memory (the chart requests 128Mi and limits 256Mi
 per replica) and, per rollout, one or two agent reconnects: the old leader
 hands over, and the agents redial the new one. The Deployment rolls with
 `maxSurge: 1` and `maxUnavailable: 0`, a PodDisruptionBudget with
 `maxUnavailable: 1` applies when `replicas` is above 1, and the replicas are
 spread over nodes softly (`operator.topologySpreadConstraints` replaces that).
-Set `operator.replicas: 1` for the old shape.
+Set `operator.replicas: 1` for the old shape. With
+`operator.leaderElect: false` the chart refuses more than one replica.
 
 The ServiceMonitor scrapes every replica through the separate Service
 `spawnery-operator-metrics`, so a standby's series are present too. The alert
@@ -71,10 +80,11 @@ POD=$(kubectl -n spawnery-system get lease spawnery-operator.spawnery.cloud \
 kubectl -n spawnery-system logs "$POD"
 ```
 
-A leader that cannot confirm its lease, because another replica holds it or
-because reads of it have failed for more than 10 s, stops its manager.
-While it cannot confirm, it holds back Ready exits that it would
-derive from agent state.
+The leader reads its Lease every 2 s. When the Lease names another replica,
+is missing, or may not be read, the leader's pod exits and Kubernetes restarts
+it. A read that times out or fails on the network only leaves the lease
+unconfirmed. While it is unconfirmed, the leader holds back taking a server
+out of `Ready` on what the agents reported.
 
 ### Game and proxy images must not move ahead of the operator
 

@@ -100,14 +100,22 @@ Rolling the *operator* back on its own is safe. An agent that supports
 `SetReady` and never receives one opens its gate on the first full sync
 unless a `false` was asserted.
 
+## Upgrade the operator before this release's game and proxy images
+
+This release's agents ping every 15 s, which an operator from before standby
+replicas answers with a GOAWAY, so upgrade the operator first. Proxy images
+older than `SetReady` still go first, as above. See [Running more than one
+operator replica](monitoring.md#running-more-than-one-operator-replica).
+
 ## Rolling back to a chart with a selector on the agent Service
 
-The agent Service `spawnery-operator` has no selector, and the operator's
-leader writes its EndpointSlices. A rollback to a chart whose Service has the
-selector brings the EndpointSlice controller's slice back but leaves this
-operator's slices in place, because the Service that owns them still exists.
-kube-proxy then routes agents to the old version's leader and to an address
-that no longer serves. Delete the operator's slices after the rollback:
+The agent Service `spawnery-operator` has no selector; the operator's leader
+writes its EndpointSlices. A rollback to a chart whose Service has the
+selector brings the EndpointSlice controller's slice back and leaves this
+operator's slices, which the Service still owns. A leader that shut down
+cleanly emptied them. One that crashed or lost its node leaves its address
+there, and kube-proxy sends some agents to it. Delete the slices after the
+rollback either way:
 
 ```bash
 kubectl -n spawnery-system delete endpointslice \
