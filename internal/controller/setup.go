@@ -71,6 +71,9 @@ type Options struct {
 	// DrainTaintKeys mark a node as departing beside spec.unschedulable, for
 	// autoscalers that taint without cordoning.
 	DrainTaintKeys []string
+	// Lease is the Server controller's check that this process still leads;
+	// nil counts as fresh.
+	Lease Freshness
 }
 
 // Leader election. spawnery-system is a placeholder controller-gen needs to
@@ -152,6 +155,7 @@ func newServerReconciler(mgr ctrl.Manager, opts Options) *ServerReconciler {
 		WorldSync:            opts.WorldSync,
 		WorldSyncInterval:    opts.WorldSyncInterval,
 		State:                opts.State,
+		Lease:                opts.Lease,
 	}
 }
 

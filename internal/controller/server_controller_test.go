@@ -43,6 +43,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
+	"github.com/spawnery/spawnery/internal/leaseguard"
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 )
@@ -1044,6 +1045,61 @@ func TestStreamLossDeregistersAfterTheGracePeriod(t *testing.T) {
 	f.reconcile("lobby-x7k2")
 	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Starting) {
 		t.Errorf("phase = %q past the grace period, want Starting", got)
+	}
+}
+
+type leaseFreshness struct{ fresh bool }
+
+func (l *leaseFreshness) Fresh() bool { return l.fresh }
+
+func TestAnUnconfirmedLeaseTakesNoServerOutOfReady(t *testing.T) {
+	f := newFixture(t)
+	lease := &leaseFreshness{}
+	f.reconc.Lease = lease
+	uid := bringUpReady(t, f, "lobby-x7k2")
+
+	f.agents.Disconnect(uid)
+	f.clock.Advance(phase.StreamDownGrace + time.Second)
+	res, err := f.reconc.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "lobby-x7k2", Namespace: f.ns},
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Ready) || !srv.Status.Registered || srv.Status.ReadinessLosses != 0 {
+		t.Errorf("phase %q, registered %v, readinessLosses %d with the lease unconfirmed, want Ready, "+
+			"true, 0: a leader resumed past its lease acts on streams that went quiet while it was frozen",
+			srv.Status.Phase, srv.Status.Registered, srv.Status.ReadinessLosses)
+	}
+	if len(f.registrar.deregistered) != 0 {
+		t.Errorf("deregistered = %v with the lease unconfirmed, want none", f.registrar.deregistered)
+	}
+	if res.RequeueAfter != leaseguard.DefaultInterval {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, leaseguard.DefaultInterval)
+	}
+
+	lease.fresh = true
+	f.reconcile("lobby-x7k2")
+	srv = f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Starting) || srv.Status.Registered {
+		t.Errorf("phase %q, registered %v once the lease is confirmed, want Starting, false",
+			srv.Status.Phase, srv.Status.Registered)
+	}
+	if len(f.registrar.deregistered) != 1 {
+		t.Errorf("deregistered = %v once the lease is confirmed, want one deregistration", f.registrar.deregistered)
+	}
+}
+
+func TestAnUnconfirmedLeaseHoldsBackNothingElse(t *testing.T) {
+	f := newFixture(t)
+	f.reconc.Lease = &leaseFreshness{}
+	bringUpReady(t, f, "lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Ready) || !srv.Status.Registered {
+		t.Errorf("phase %q, registered %v, want Ready and registered: only leaving Ready and "+
+			"deregistering wait for the lease", srv.Status.Phase, srv.Status.Registered)
 	}
 }
 

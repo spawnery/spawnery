@@ -26,7 +26,6 @@ import (
 	"strings"
 	"time"
 
-	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	discoveryv1 "k8s.io/api/discovery/v1"
 	"k8s.io/apimachinery/pkg/api/equality"
@@ -36,6 +35,8 @@ import (
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
+
+	"github.com/spawnery/spawnery/internal/leaseguard"
 )
 
 const (
@@ -48,7 +49,7 @@ const (
 	withdrawDeadline = 2 * time.Second
 )
 
-var ErrNotHolder = errors.New("this pod does not hold the leader lease")
+var ErrNotHolder = leaseguard.ErrNotHolder
 
 var families = []discoveryv1.AddressType{discoveryv1.AddressTypeIPv4, discoveryv1.AddressTypeIPv6}
 
@@ -176,16 +177,7 @@ func (p *Publisher) Assert(ctx context.Context) error {
 }
 
 func (p *Publisher) checkHolder(ctx context.Context) error {
-	lease := &coordinationv1.Lease{}
-	if err := p.Client.Get(ctx, types.NamespacedName{Namespace: p.Namespace, Name: p.Lease}, lease); err != nil {
-		return fmt.Errorf("get Lease %s: %w", p.Lease, err)
-	}
-	holder := ptr.Deref(lease.Spec.HolderIdentity, "")
-	// controller-runtime's identity is <hostname>_<uuid>.
-	if !strings.HasPrefix(holder, p.Pod.Hostname+"_") {
-		return fmt.Errorf("%w: Lease %s is held by %q", ErrNotHolder, p.Lease, holder)
-	}
-	return nil
+	return leaseguard.CheckHolder(ctx, p.Client, types.NamespacedName{Namespace: p.Namespace, Name: p.Lease}, p.Pod.Hostname)
 }
 
 func (p *Publisher) writeSlice(ctx context.Context, svc *corev1.Service, family discoveryv1.AddressType, ip string) error {

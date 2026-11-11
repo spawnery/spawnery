@@ -85,6 +85,19 @@ func TestAStandbyWarmsItsControllers(t *testing.T) {
 	}
 }
 
+func TestTheLeaseGuardChecksTheManagersLease(t *testing.T) {
+	opts := managerOptions(managerFlags{leaderElect: true, operatorNamespace: "spawnery-system"})
+	g := leaseGuard(nil, "spawnery-system", "op-a")
+	if g.Lease != opts.LeaderElectionID {
+		t.Errorf("the lease guard reads Lease %q, the manager holds %q: the guard would never "+
+			"confirm, and no server would ever leave Ready", g.Lease, opts.LeaderElectionID)
+	}
+	if g.Namespace != opts.LeaderElectionNamespace {
+		t.Errorf("the lease guard looks for the Lease in %q, the manager writes it to %q",
+			g.Namespace, opts.LeaderElectionNamespace)
+	}
+}
+
 func TestThePublisherChecksTheManagersLease(t *testing.T) {
 	opts := managerOptions(managerFlags{leaderElect: true, operatorNamespace: "spawnery-system"})
 	p := agentPublisher(nil, "spawnery-system", agentendpoint.Identity{}, nil)

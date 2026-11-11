@@ -51,6 +51,7 @@ import (
 	"github.com/spawnery/spawnery/internal/controller"
 	"github.com/spawnery/spawnery/internal/grpcauth"
 	"github.com/spawnery/spawnery/internal/leaderonly"
+	"github.com/spawnery/spawnery/internal/leaseguard"
 	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/netstatus"
 	"github.com/spawnery/spawnery/internal/phase"
@@ -194,6 +195,17 @@ func agentPublisher(c client.Client, namespace string, pod agentendpoint.Identit
 		Pod:       pod,
 		Serving:   serving,
 		Interval:  agentendpoint.DefaultInterval,
+	}
+}
+
+func leaseGuard(c client.Client, namespace, hostname string) *leaseguard.Guard {
+	return &leaseguard.Guard{
+		Client:    c,
+		Namespace: namespace,
+		Lease:     leaderElectionID,
+		Hostname:  hostname,
+		Interval:  leaseguard.DefaultInterval,
+		Clock:     time.Now,
 	}
 }
 
@@ -533,6 +545,22 @@ func main() {
 		}
 	}
 
+	// Without leader election there is no Lease, and a guard that never
+	// confirms one would keep every server Ready for good.
+	var guard *leaseguard.Guard
+	if leaderElect {
+		hostname, err := os.Hostname()
+		if err != nil {
+			setupLog.Error(err, "the lease guard needs the hostname")
+			os.Exit(1)
+		}
+		guard = leaseGuard(directClient, operatorNamespace, hostname)
+		if err := mgr.Add(guard); err != nil {
+			setupLog.Error(err, "unable to add the lease guard")
+			os.Exit(1)
+		}
+	}
+
 	if err := controller.SetupAll(mgr, controller.Options{
 		Agents:               registry,
 		Events:               cloudevent.Fanout{Backends: servers, Proxies: proxies},
@@ -559,6 +587,7 @@ func main() {
 		Proxies:           proxies,
 		State:             statePush,
 		DrainTaintKeys:    drainTaints,
+		Lease:             guard,
 	}); err != nil {
 		setupLog.Error(err, "unable to set up controllers")
 		os.Exit(1)

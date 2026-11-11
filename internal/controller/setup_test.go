@@ -168,6 +168,38 @@ func TestSetupAllThreadsTheStateNotifier(t *testing.T) {
 	}
 }
 
+func TestSetupAllThreadsTheLease(t *testing.T) {
+	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	clock := &testClock{now: start}
+
+	mgr, err := ctrl.NewManager(testenv.Config(t), manager.Options{
+		Scheme:         testenv.Scheme(t),
+		Metrics:        metricsserver.Options{BindAddress: "0"},
+		LeaderElection: false,
+	})
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	lease := &leaseFreshness{}
+	opts := Options{
+		Agents:    agent.New(clock.Now, 5*time.Second),
+		Clock:     clock.Now,
+		Registrar: NoopRegistrar{},
+		Bootstrapper: &Bootstrapper{
+			Client: mgr.GetClient(), Reader: mgr.GetAPIReader(),
+			CA: func() []byte { return []byte("test-ca") },
+		},
+		Proxies: &recordingFleet{},
+		Lease:   lease,
+	}
+
+	if got := newServerReconciler(mgr, opts).Lease; got != Freshness(lease) {
+		t.Errorf("ServerReconciler.Lease = %v, want the guard from Options: a leader resumed "+
+			"past its lease would take servers out of Ready", got)
+	}
+}
+
 // An empty OperatorNamespace renders a legal selector that matches no
 // namespace, silently cutting every agent off from the operator.
 func TestSetupAllThreadsTheOperatorNamespace(t *testing.T) {
