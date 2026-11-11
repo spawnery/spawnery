@@ -1645,7 +1645,7 @@ func groupWithMaxStale(seconds int32) *spawneryv1alpha1.ServerGroup {
 func collectInputsReconciler(clock func() time.Time) *ServerReconciler {
 	return &ServerReconciler{
 		Clock:  clock,
-		Agents: agent.New(clock, 5*time.Second, clock()),
+		Agents: agent.New(clock, 5*time.Second),
 	}
 }
 

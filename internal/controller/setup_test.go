@@ -59,7 +59,7 @@ func TestSetupAllRegistersEveryController(t *testing.T) {
 	}
 
 	opts := Options{
-		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Agents:               agent.New(clock.Now, 5*time.Second),
 		Clock:                clock.Now,
 		StartupDeadline:      5 * time.Minute,
 		PlayerStatusInterval: 30 * time.Second,
@@ -100,7 +100,7 @@ func TestSetupAllThreadsTheDrainTaintKeys(t *testing.T) {
 
 	keys := []string{"ToBeDeletedByClusterAutoscaler", "example.com/going-away"}
 	opts := Options{
-		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Agents:               agent.New(clock.Now, 5*time.Second),
 		Clock:                clock.Now,
 		StartupDeadline:      5 * time.Minute,
 		PlayerStatusInterval: 30 * time.Second,
@@ -152,7 +152,7 @@ func TestSetupAllThreadsTheStateNotifier(t *testing.T) {
 
 	state := &recordingState{}
 	opts := Options{
-		Agents:    agent.New(clock.Now, 5*time.Second, start),
+		Agents:    agent.New(clock.Now, 5*time.Second),
 		Clock:     clock.Now,
 		Registrar: NoopRegistrar{},
 		Bootstrapper: &Bootstrapper{
@@ -185,7 +185,7 @@ func TestSetupAllThreadsTheOperatorNamespace(t *testing.T) {
 
 	const ns = "spawnery-operators-own-namespace"
 	opts := Options{
-		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Agents:               agent.New(clock.Now, 5*time.Second),
 		Clock:                clock.Now,
 		StartupDeadline:      5 * time.Minute,
 		PlayerStatusInterval: 30 * time.Second,
@@ -247,7 +247,7 @@ func TestSetupAllRefusesWithoutABootstrapper(t *testing.T) {
 	}
 
 	err = SetupAll(mgr, Options{
-		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Agents:               agent.New(clock.Now, 5*time.Second),
 		Clock:                clock.Now,
 		StartupDeadline:      5 * time.Minute,
 		PlayerStatusInterval: 30 * time.Second,
@@ -283,7 +283,7 @@ func TestSetupAllRefusesWithoutProxies(t *testing.T) {
 	}
 
 	err = SetupAll(mgr, Options{
-		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Agents:               agent.New(clock.Now, 5*time.Second),
 		Clock:                clock.Now,
 		StartupDeadline:      5 * time.Minute,
 		PlayerStatusInterval: 30 * time.Second,
@@ -325,7 +325,7 @@ func TestSetupAllRefusesWithoutAnAPIReader(t *testing.T) {
 	}
 
 	err = SetupAll(readerlessManager{mgr}, Options{
-		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Agents:               agent.New(clock.Now, 5*time.Second),
 		Clock:                clock.Now,
 		StartupDeadline:      5 * time.Minute,
 		PlayerStatusInterval: 30 * time.Second,
@@ -387,7 +387,7 @@ func TestManagerReconcilesEndToEnd(t *testing.T) {
 	}
 
 	opts := Options{
-		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Agents:               agent.New(clock.Now, 5*time.Second),
 		Clock:                clock.Now,
 		StartupDeadline:      5 * time.Minute,
 		PlayerStatusInterval: 30 * time.Second,

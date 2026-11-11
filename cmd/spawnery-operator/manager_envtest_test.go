@@ -61,7 +61,7 @@ func TestTheProductionManagerReconcilesEveryNamespace(t *testing.T) {
 		t.Fatalf("new manager: %v", err)
 	}
 	if err := controller.SetupAll(mgr, controller.Options{
-		Agents:               agent.New(time.Now, 5*time.Second, time.Now()),
+		Agents:               agent.New(time.Now, 5*time.Second),
 		Clock:                time.Now,
 		StartupDeadline:      5 * time.Minute,
 		PlayerStatusInterval: 30 * time.Second,

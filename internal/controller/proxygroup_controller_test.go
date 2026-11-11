@@ -2035,7 +2035,7 @@ func TestProxyOccupiedForBudget(t *testing.T) {
 	}
 }
 
-// newFixture starts the registry with the clock, so unknown pods begin inside budgetReconnectGrace.
+// newFixture marks the registry serving at its start, so unknown pods begin inside budgetReconnectGrace.
 func TestAProxyTheRegistryHasNeverSeenDoesNotWedgeTheBudget(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -2283,7 +2283,7 @@ func TestTheProxyGroupBudgetReadsTheRegistryOnce(t *testing.T) {
 		priming:    true,
 		freshCalls: 2,
 	}
-	customAgents := agent.New(clk.Now, reportInterval, f.clock.Now())
+	customAgents := agent.New(clk.Now, reportInterval)
 	r.Agents = customAgents
 
 	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {

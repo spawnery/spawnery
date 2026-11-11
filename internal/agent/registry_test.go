@@ -30,11 +30,12 @@ func (c *fakeClock) Advance(d time.Duration) { c.now = c.now.Add(d) }
 func newTestRegistry() (*Registry, *fakeClock) {
 	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	clock := &fakeClock{now: start}
-	return New(clock.Now, 5*time.Second, start), clock
+	return New(clock.Now, 5*time.Second), clock
 }
 
 func TestLookupUnknownPod(t *testing.T) {
 	r, clock := newTestRegistry()
+	r.MarkServing()
 	clock.Advance(3 * time.Second)
 
 	got := r.Lookup("pod-uid-1")
@@ -48,7 +49,7 @@ func TestLookupUnknownPod(t *testing.T) {
 		t.Error("unknown pod must count as stale, i.e. occupied")
 	}
 	if got.StreamDownFor != 3*time.Second {
-		t.Errorf("StreamDownFor = %v, want 3s since operator start", got.StreamDownFor)
+		t.Errorf("StreamDownFor = %v, want 3s since serving began", got.StreamDownFor)
 	}
 }
 
@@ -302,7 +303,7 @@ func TestEmptyForAcrossStreamChanges(t *testing.T) {
 
 func TestAttachedToSumsTheProxiesThatAreCurrent(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 
 	for _, uid := range []string{"proxy-a", "proxy-b"} {
 		r.Connect(uid, RoleProxy)
@@ -329,7 +330,7 @@ func TestAttachedToSumsTheProxiesThatAreCurrent(t *testing.T) {
 // Server names are unique per namespace, not across a cluster.
 func TestAttachedToIsScopedToItsNamespace(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 	r.Connect("proxy-other", RoleProxy)
 	if err := r.ReportBackends("proxy-other", "other", map[string]int32{"lobby-0": 4}); err != nil {
 		t.Fatalf("report: %v", err)
@@ -345,7 +346,7 @@ func TestAttachedToIsScopedToItsNamespace(t *testing.T) {
 
 func TestAProxyThatNeverReportedBackendsIsNotStale(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 	r.Connect("old-proxy", RoleProxy)
 	if err := r.ReportPlayers("old-proxy", 7, 100); err != nil {
 		t.Fatalf("report players: %v", err)
@@ -359,7 +360,7 @@ func TestAProxyThatNeverReportedBackendsIsNotStale(t *testing.T) {
 
 func TestAProxyThatStoppedReportingBackendsIsStale(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 	r.Connect("proxy-a", RoleProxy)
 	if err := r.ReportBackends("proxy-a", "minecraft", map[string]int32{"lobby-0": 1}); err != nil {
 		t.Fatalf("report: %v", err)
@@ -379,7 +380,7 @@ func TestAProxyThatStoppedReportingBackendsIsStale(t *testing.T) {
 // namespace as occupied.
 func TestABackendReportFromAServerAgentIsRefused(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 	r.Connect("a-server", RoleServer)
 
 	if err := r.ReportBackends("a-server", "minecraft", map[string]int32{"lobby-0": 9}); err == nil {
@@ -392,7 +393,7 @@ func TestABackendReportFromAServerAgentIsRefused(t *testing.T) {
 
 func TestAReportFromBeforeTheDrainCannotAnswerAboutIt(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 	r.Connect("proxy-a", RoleProxy)
 	if err := r.ReportBackends("proxy-a", "minecraft", map[string]int32{}); err != nil {
 		t.Fatalf("report: %v", err)
@@ -412,7 +413,7 @@ func TestAReportFromBeforeTheDrainCannotAnswerAboutIt(t *testing.T) {
 
 func TestTheNextReportAfterTheDrainAnswersIt(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 	r.Connect("proxy-a", RoleProxy)
 	if err := r.ReportBackends("proxy-a", "minecraft", map[string]int32{}); err != nil {
 		t.Fatalf("report: %v", err)
@@ -434,7 +435,7 @@ func TestTheNextReportAfterTheDrainAnswersIt(t *testing.T) {
 
 func TestAnOldProxyIsStillNotHeldAgainstADrain(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 	r.Connect("old-proxy", RoleProxy)
 	if err := r.ReportPlayers("old-proxy", 5, 500); err != nil {
 		t.Fatalf("report players: %v", err)
@@ -450,7 +451,7 @@ func TestAnOldProxyIsStillNotHeldAgainstADrain(t *testing.T) {
 
 func TestLookupCarriesWhenTheCountArrived(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 	r.Connect("a-server", RoleServer)
 
 	if got := r.Lookup("a-server").PlayersReportedAt; !got.IsZero() {
@@ -467,7 +468,7 @@ func TestLookupCarriesWhenTheCountArrived(t *testing.T) {
 
 func TestTheShortestReadTimeoutWins(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 
 	for _, uid := range []string{"proxy-a", "proxy-b"} {
 		r.Connect(uid, RoleProxy)
@@ -482,7 +483,7 @@ func TestTheShortestReadTimeoutWins(t *testing.T) {
 
 func TestAnUnreportedReadTimeoutIsUnknownRatherThanZero(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 
 	r.Connect("proxy-a", RoleProxy)
 	if got, known := r.ShortestReadTimeout("minecraft"); known {
@@ -499,7 +500,7 @@ func TestAnUnreportedReadTimeoutIsUnknownRatherThanZero(t *testing.T) {
 
 func TestTheReadTimeoutIsScopedAndProxyOnly(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 
 	r.Connect("elsewhere", RoleProxy)
 	r.ReportReadTimeout("elsewhere", "other", 3*time.Second)
@@ -519,7 +520,7 @@ func TestTheReadTimeoutIsScopedAndProxyOnly(t *testing.T) {
 
 func TestRosterMergesEveryProxyInTheNamespace(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 	for _, uid := range []string{"proxy-a", "proxy-b"} {
 		r.Connect(uid, RoleProxy)
 	}
@@ -546,7 +547,7 @@ func TestRosterMergesEveryProxyInTheNamespace(t *testing.T) {
 func TestRosterKeepsOneEntryPerPlayerAcrossProxies(t *testing.T) {
 	// A rollout hands the player over; they must be counted once.
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 	r.Connect("proxy-a", RoleProxy)
 	r.Connect("proxy-b", RoleProxy)
 
@@ -573,7 +574,7 @@ func TestRosterKeepsOneEntryPerPlayerAcrossProxies(t *testing.T) {
 
 func TestRosterSkipsAProxyWhoseReportWentStale(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 	r.Connect("proxy-a", RoleProxy)
 	if err := r.ReportRoster("proxy-a", "minecraft", []RosterEntry{
 		{UUID: "u-alice", Name: "alice", Server: "lobby-0"},
@@ -594,7 +595,7 @@ func TestRosterSkipsAProxyWhoseReportWentStale(t *testing.T) {
 
 func TestARosterFromAServerAgentIsRefused(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 	r.Connect("pod-uid-1", RoleServer)
 
 	if err := r.ReportRoster("pod-uid-1", "minecraft", nil); err == nil {
@@ -604,7 +605,7 @@ func TestARosterFromAServerAgentIsRefused(t *testing.T) {
 
 func TestRosterIsScopedToItsNamespace(t *testing.T) {
 	clock := &fakeClock{now: time.Unix(1000, 0)}
-	r := New(clock.Now, 5*time.Second, clock.now)
+	r := New(clock.Now, 5*time.Second)
 	r.Connect("proxy-other", RoleProxy)
 	if err := r.ReportRoster("proxy-other", "minecraft", []RosterEntry{
 		{UUID: "u-alice", Name: "alice", Server: "lobby-0"},
@@ -618,7 +619,7 @@ func TestRosterIsScopedToItsNamespace(t *testing.T) {
 }
 
 func TestAnAnnouncementIsKeptUnderTheNameTheIdentityGave(t *testing.T) {
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 	r.Connect("pod-a", RoleServer)
 
 	if err := r.ReportAnnouncement("pod-a", "ns", "lobby-a", Announcement{
@@ -639,7 +640,7 @@ func TestAnAnnouncementIsKeptUnderTheNameTheIdentityGave(t *testing.T) {
 
 func TestAnAnnouncementReplacesItsPredecessorWhole(t *testing.T) {
 	// Not merged: otherwise an attribute could never be taken back.
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 	r.Connect("pod-a", RoleServer)
 
 	_ = r.ReportAnnouncement("pod-a", "ns", "lobby-a", Announcement{
@@ -661,7 +662,7 @@ func TestAnAnnouncementReplacesItsPredecessorWhole(t *testing.T) {
 }
 
 func TestAnAnnouncementIsNotAliasedToTheCallersMap(t *testing.T) {
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 	r.Connect("pod-a", RoleServer)
 
 	attributes := map[string]string{"map": "arena"}
@@ -679,7 +680,7 @@ func TestAnAnnouncementIsNotAliasedToTheCallersMap(t *testing.T) {
 }
 
 func TestAnAnnouncementOutlivesADisconnect(t *testing.T) {
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 	r.Connect("pod-a", RoleServer)
 	_ = r.ReportAnnouncement("pod-a", "ns", "lobby-a", Announcement{State: "running"})
 
@@ -691,7 +692,7 @@ func TestAnAnnouncementOutlivesADisconnect(t *testing.T) {
 }
 
 func TestAProxyCannotAnnounce(t *testing.T) {
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 	r.Connect("proxy-a", RoleProxy)
 
 	if err := r.ReportAnnouncement("proxy-a", "ns", "gateway-0",
@@ -704,7 +705,7 @@ func TestAProxyCannotAnnounce(t *testing.T) {
 }
 
 func TestAnAnnouncementNeedsALiveStream(t *testing.T) {
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 
 	if err := r.ReportAnnouncement("pod-a", "ns", "lobby-a",
 		Announcement{State: "running"}); err == nil {
@@ -713,7 +714,7 @@ func TestAnAnnouncementNeedsALiveStream(t *testing.T) {
 }
 
 func TestAServerTakesPlayersUntilItSaysOtherwise(t *testing.T) {
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 
 	if !r.Lookup("nobody-has-heard-of-this-pod").AcceptingJoins {
 		t.Error("a pod the registry has never seen was read as refusing players")
@@ -727,7 +728,7 @@ func TestAServerTakesPlayersUntilItSaysOtherwise(t *testing.T) {
 
 func TestAServerCanCloseItsDoorAndOpenItAgain(t *testing.T) {
 	// Both directions: unlike a retire, this verb has a way back.
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 	r.Connect("pod-a", RoleServer)
 
 	if _, err := r.ReportAcceptJoins("pod-a", "ns", false, false); err != nil {
@@ -746,7 +747,7 @@ func TestAServerCanCloseItsDoorAndOpenItAgain(t *testing.T) {
 }
 
 func TestReportAcceptJoinsSaysWhenTheDoorMoved(t *testing.T) {
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 	r.Connect("pod-a", RoleServer)
 
 	for _, step := range []struct {
@@ -763,7 +764,7 @@ func TestReportAcceptJoinsSaysWhenTheDoorMoved(t *testing.T) {
 }
 
 func TestAClosedDoorOutlivesADisconnect(t *testing.T) {
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 	r.Connect("pod-a", RoleServer)
 	_, _ = r.ReportAcceptJoins("pod-a", "ns", false, false)
 
@@ -775,7 +776,7 @@ func TestAClosedDoorOutlivesADisconnect(t *testing.T) {
 }
 
 func TestAProxyHasNoDoorToClose(t *testing.T) {
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 	r.Connect("proxy-a", RoleProxy)
 
 	if _, err := r.ReportAcceptJoins("proxy-a", "ns", false, false); err == nil {
@@ -784,7 +785,7 @@ func TestAProxyHasNoDoorToClose(t *testing.T) {
 }
 
 func TestARoundEndIsRememberedAfterTheStreamDrops(t *testing.T) {
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 	r.Connect("pod-a", RoleServer)
 
 	if got := r.Lookup("pod-a").RoundEnded; got {
@@ -805,7 +806,7 @@ func TestARoundEndIsRememberedAfterTheStreamDrops(t *testing.T) {
 }
 
 func TestClosedDoorsListsAPodThatClosedItsDoor(t *testing.T) {
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 	r.Connect("pod-a", RoleServer)
 	if _, err := r.ReportAcceptJoins("pod-a", "ns", false, false); err != nil {
 		t.Fatalf("ReportAcceptJoins: %v", err)
@@ -817,7 +818,7 @@ func TestClosedDoorsListsAPodThatClosedItsDoor(t *testing.T) {
 }
 
 func TestClosedDoorsDropsAPodThatReopened(t *testing.T) {
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 	r.Connect("pod-a", RoleServer)
 	_, _ = r.ReportAcceptJoins("pod-a", "ns", false, false)
 	if _, err := r.ReportAcceptJoins("pod-a", "ns", true, false); err != nil {
@@ -830,7 +831,7 @@ func TestClosedDoorsDropsAPodThatReopened(t *testing.T) {
 }
 
 func TestClosedDoorsOmitsAServerNothingIsKnownAbout(t *testing.T) {
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 
 	if closed := r.ClosedDoors("ns"); len(closed) != 0 {
 		t.Errorf("ClosedDoors(ns) = %v, want none", closed)
@@ -838,7 +839,7 @@ func TestClosedDoorsOmitsAServerNothingIsKnownAbout(t *testing.T) {
 }
 
 func TestClosedDoorsSurvivesASameUIDDisconnect(t *testing.T) {
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 	r.Connect("pod-a", RoleServer)
 	_, _ = r.ReportAcceptJoins("pod-a", "ns", false, false)
 
@@ -850,7 +851,7 @@ func TestClosedDoorsSurvivesASameUIDDisconnect(t *testing.T) {
 }
 
 func TestClosedDoorsIsKeyedByPodNotByServerName(t *testing.T) {
-	r := New(time.Now, time.Second, time.Now())
+	r := New(time.Now, time.Second)
 	r.Connect("old-pod", RoleServer)
 	_, _ = r.ReportAcceptJoins("old-pod", "ns", false, false)
 
@@ -863,6 +864,27 @@ func TestClosedDoorsIsKeyedByPodNotByServerName(t *testing.T) {
 	}
 	if closed["new-pod"] {
 		t.Errorf("ClosedDoors(ns) = %v, want new-pod open", closed)
+	}
+}
+
+func TestAnUnknownPodIsNotDownBeforeTheOperatorServes(t *testing.T) {
+	r, clock := newTestRegistry()
+	clock.Advance(time.Hour) // a standby that waited for the lease
+
+	if got := r.Lookup("ns/x").StreamDownFor; got != 0 {
+		t.Errorf("StreamDownFor = %v before MarkServing, want 0: no agent could have reached "+
+			"this operator yet, so none has been gone for any time", got)
+	}
+}
+
+func TestAnUnknownPodsDownTimeCountsFromServing(t *testing.T) {
+	r, clock := newTestRegistry()
+	clock.Advance(time.Hour)
+	r.MarkServing()
+	clock.Advance(10 * time.Second)
+
+	if got := r.Lookup("ns/x").StreamDownFor; got != 10*time.Second {
+		t.Errorf("StreamDownFor = %v, want 10s since MarkServing", got)
 	}
 }
 
@@ -884,7 +906,7 @@ func TestAnUnknownPodIsMeasuredFromWhenAgentsCouldReachTheOperator(t *testing.T)
 
 func TestReportTicksShowsInSnapshot(t *testing.T) {
 	now := time.Unix(1000, 0)
-	r := New(func() time.Time { return now }, 5*time.Second, now)
+	r := New(func() time.Time { return now }, 5*time.Second)
 	r.Connect("pod-a", RoleServer)
 	if err := r.ReportPlayers("pod-a", 2, 20); err != nil {
 		t.Fatal(err)
@@ -900,7 +922,7 @@ func TestReportTicksShowsInSnapshot(t *testing.T) {
 
 func TestReportTicksRefusesImpossibleValues(t *testing.T) {
 	now := time.Unix(1000, 0)
-	r := New(func() time.Time { return now }, 5*time.Second, now)
+	r := New(func() time.Time { return now }, 5*time.Second)
 	r.Connect("pod-a", RoleServer)
 	for _, c := range []struct{ tps, mspt float64 }{
 		{-1, 10}, {101, 10}, {20, -1}, {20, 600001}, {math.NaN(), 10}, {20, math.Inf(1)},
@@ -916,7 +938,7 @@ func TestReportTicksRefusesImpossibleValues(t *testing.T) {
 
 func TestReportHeapShowsInSnapshot(t *testing.T) {
 	now := time.Unix(1000, 0)
-	r := New(func() time.Time { return now }, 5*time.Second, now)
+	r := New(func() time.Time { return now }, 5*time.Second)
 	r.Connect("pod-a", RoleServer)
 	if snap := r.Lookup("pod-a"); snap.HeapUsed != 0 || snap.HeapMax != 0 {
 		t.Fatalf("heap before any report = %v/%v, want 0/0", snap.HeapUsed, snap.HeapMax)
@@ -931,7 +953,7 @@ func TestReportHeapShowsInSnapshot(t *testing.T) {
 
 func TestReportHeapRefusesNegatives(t *testing.T) {
 	now := time.Unix(1000, 0)
-	r := New(func() time.Time { return now }, 5*time.Second, now)
+	r := New(func() time.Time { return now }, 5*time.Second)
 	r.Connect("pod-a", RoleServer)
 	for _, c := range []struct{ used, max int64 }{{-1, 10}, {10, -1}} {
 		if err := r.ReportHeap("pod-a", c.used, c.max); err == nil {
@@ -942,7 +964,7 @@ func TestReportHeapRefusesNegatives(t *testing.T) {
 
 func TestReportTicksNeedsALiveStream(t *testing.T) {
 	now := time.Unix(1000, 0)
-	r := New(func() time.Time { return now }, 5*time.Second, now)
+	r := New(func() time.Time { return now }, 5*time.Second)
 	if err := r.ReportTicks("nobody", 20, 10); err == nil {
 		t.Fatal("ReportTicks accepted a pod with no stream")
 	}

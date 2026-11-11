@@ -87,14 +87,14 @@ func TestAServersLifecycleReachesTheProxiesWithoutWaitingForTheResync(t *testing
 	}
 	pictures := &pictureRecorder{source: netstate.Source{
 		Reader: mgr.GetClient(),
-		Agents: agent.New(time.Now, 5*time.Second, time.Now()),
+		Agents: agent.New(time.Now, 5*time.Second),
 	}}
 	notifier := statepush.New(statepush.Options{Proxies: pictures, Interval: 100 * time.Millisecond})
 	if err := mgr.Add(notifier); err != nil {
 		t.Fatalf("add the notifier: %v", err)
 	}
 	if err := controller.SetupAll(mgr, controller.Options{
-		Agents:               agent.New(time.Now, 5*time.Second, time.Now()),
+		Agents:               agent.New(time.Now, 5*time.Second),
 		Clock:                time.Now,
 		StartupDeadline:      5 * time.Minute,
 		PlayerStatusInterval: 30 * time.Second,

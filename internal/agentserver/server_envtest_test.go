@@ -141,7 +141,7 @@ func newFixtureWithProxies(t *testing.T, renewAfter, hardDeadline time.Duration,
 		t.Fatalf("Set: %v", err)
 	}
 
-	registry := agent.New(now, 5*time.Second, now())
+	registry := agent.New(now, 5*time.Second)
 	state := netstate.Source{Reader: c, Agents: registry}
 	// The real writer, not a stub: a retire that patches nothing would pass every
 	// assertion about the answer.

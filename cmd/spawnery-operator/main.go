@@ -425,8 +425,7 @@ func main() {
 		setupLog.Info("the rescue window for a dead node is short", "warning", warning)
 	}
 
-	started := time.Now()
-	registry := agent.New(time.Now, reportInterval, started)
+	registry := agent.New(time.Now, reportInterval)
 
 	// One Source for both fan-outs, so backends and proxies get the same
 	// picture.
