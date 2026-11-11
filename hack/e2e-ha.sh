@@ -11,6 +11,11 @@
 #     nix develop -c env KIND_EXPERIMENTAL_PROVIDER=podman make e2e-ha
 #
 # HA_RUN narrows the cases to a -test.run pattern; HA_COUNT repeats them.
+# HA_COUNT > 1 needs an HA_RUN that leaves out the upgrade case: it reads
+# the state this script's upgrade left, so it runs once, first. For the
+# node-loss case five times:
+#
+#   HA_RUN=TestHALostLeaderNodeKeepsServersReady HA_COUNT=5 make e2e-ha
 #
 # Not covered: a node that is powered off rather than paused. For new
 # connections the two look alike: a dial to the paused leader's pod got no
@@ -26,6 +31,11 @@ RELEASED_CHART=oci://ghcr.io/spawnery/charts/spawnery
 
 # test/e2e's helpers look the operator up in this namespace.
 OPERATOR_NAMESPACE=platform-system
+
+if [ "${HA_COUNT:-1}" != 1 ] && [ -z "${HA_RUN:-}" ]; then
+	echo "HA_COUNT=${HA_COUNT} without HA_RUN would repeat the upgrade case, which can only pass once" >&2
+	exit 1
+fi
 
 repo_root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$repo_root"

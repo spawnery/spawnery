@@ -19,9 +19,11 @@ limitations under the License.
 package e2e
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
+	"maps"
 	"net/http"
 	"os"
 	"os/exec"
@@ -61,6 +63,9 @@ const (
 	haHold = phase.ReconnectGrace + 15*time.Second
 
 	operatorMetricsPort = 8080
+
+	haBlindPolls  = 3
+	haPollTimeout = 2 * time.Second
 )
 
 var (
@@ -162,6 +167,13 @@ type haFixture struct {
 	leader  *corev1.Pod
 	proxy   string
 	servers []string
+	// restarts holds each "pod/container"'s restart count from when the
+	// network came up.
+	restarts map[string]int32
+}
+
+func (f *haFixture) pods() []string {
+	return append([]string{f.proxy}, f.servers...)
 }
 
 // haNetworkUp waits for both operator replicas to settle, then starts the
@@ -246,7 +258,46 @@ func haNetworkUp(t *testing.T) *haFixture {
 		}
 		return streams["server"] == haServers && streams["proxy"] == 1, fmt.Sprintf("open streams %v", streams)
 	})
+	f.restarts = containerRestarts(t, f.pods())
 	return f
+}
+
+func containerRestarts(t *testing.T, pods []string) map[string]int32 {
+	t.Helper()
+	counts := map[string]int32{}
+	for _, name := range pods {
+		var p corev1.Pod
+		if err := k8s.Get(ctx, client.ObjectKey{Namespace: haNamespace, Name: name}, &p); err != nil {
+			t.Fatalf("get pod %s: %v", name, err)
+		}
+		for _, c := range p.Status.ContainerStatuses {
+			counts[name+"/"+c.Name] = c.RestartCount
+		}
+	}
+	return counts
+}
+
+// noRestarts fails if a container of the network's pods restarted since the
+// network came up, and prints the end of the log it had before.
+func noRestarts(t *testing.T, f *haFixture) {
+	t.Helper()
+	now := containerRestarts(t, f.pods())
+	keys := slices.Sorted(maps.Keys(now))
+	for _, key := range keys {
+		before, n := f.restarts[key], now[key]
+		if n == before {
+			continue
+		}
+		pod, container, _ := strings.Cut(key, "/")
+		previous, err := readPodLog(haNamespace, pod, &corev1.PodLogOptions{
+			Container: container, Previous: true, Timestamps: true, TailLines: ptr.To[int64](60),
+		})
+		if err != nil {
+			previous = fmt.Sprintf("(no previous log: %v)", err)
+		}
+		t.Errorf("container %s restarted: restart count %d, %d when the network came up; the end of "+
+			"its previous log:\n%s", key, n, before, previous)
+	}
 }
 
 func groupPods(t *testing.T, role, group string) []corev1.Pod {
@@ -359,8 +410,9 @@ func describeSlice(s *discoveryv1.EndpointSlice) string {
 }
 
 // serversStayReady polls every Server in namespace from before during until
-// hold after it returns, and fails on any phase other than Ready, or on a
-// server that disappears.
+// hold after it returns, and fails on any phase other than Ready, on a
+// server that disappears, and on a watch that could not see: more than
+// haBlindPolls failed polls in a row, or none that succeeded.
 func serversStayReady(t *testing.T, namespace string, hold time.Duration, during func()) {
 	t.Helper()
 	var list spawneryv1alpha1.ServerList
@@ -379,6 +431,8 @@ func serversStayReady(t *testing.T, namespace string, hold time.Duration, during
 	var mu sync.Mutex
 	var trouble []string
 	seen := map[string]bool{}
+	var succeeded, failedInARow int
+	var blind []string
 	note := func(what string) {
 		mu.Lock()
 		defer mu.Unlock()
@@ -389,9 +443,22 @@ func serversStayReady(t *testing.T, namespace string, hold time.Duration, during
 	}
 	observe := func() {
 		var now spawneryv1alpha1.ServerList
-		if err := k8s.List(ctx, &now, client.InNamespace(namespace)); err != nil {
+		listCtx, cancel := context.WithTimeout(ctx, haPollTimeout)
+		err := k8s.List(listCtx, &now, client.InNamespace(namespace))
+		cancel()
+		mu.Lock()
+		if err != nil {
+			failedInARow++
+			if failedInARow == haBlindPolls+1 {
+				blind = append(blind, fmt.Sprintf("+%.1fs %d polls in a row failed, the last with: %v",
+					time.Since(start).Seconds(), failedInARow, err))
+			}
+			mu.Unlock()
 			return
 		}
+		succeeded++
+		failedInARow = 0
+		mu.Unlock()
 		phases := map[string]string{}
 		for _, s := range now.Items {
 			phases[s.Name] = s.Status.Phase
@@ -428,6 +495,13 @@ func serversStayReady(t *testing.T, namespace string, hold time.Duration, during
 		defer mu.Unlock()
 		if len(trouble) > 0 {
 			t.Errorf("servers left Ready (times from before the disruption):\n%s", strings.Join(trouble, "\n"))
+		}
+		if len(blind) > 0 {
+			t.Errorf("the watch on the servers went blind (times from before the disruption):\n%s",
+				strings.Join(blind, "\n"))
+		}
+		if succeeded == 0 {
+			t.Errorf("no poll of the servers in %s succeeded, so nothing says they stayed Ready", namespace)
 		}
 	}()
 
@@ -530,9 +604,9 @@ func handover(t *testing.T, f *haFixture, act func()) handoverResult {
 
 	serversStayReady(t, haNamespace, haHold, func() {
 		act()
-		r.next, r.takeover = awaitNewLeader(t, f.leader, start, 2*time.Minute)
+		r.next, r.takeover = awaitNewLeader(t, f.leader, start, time.Now(), 2*time.Minute)
 		t.Logf("%s leads, %.1fs after the disruption began", r.next.Name, r.takeover.Seconds())
-		r.slice = awaitSlice(t, r.next, start, time.Minute)
+		r.slice = awaitSlice(t, r.next, start, start.Add(r.takeover), time.Minute)
 		t.Logf("the slice names %s, %.1fs after the disruption began", r.next.Name, r.slice.Seconds())
 
 		led := start.Add(r.takeover)
@@ -546,6 +620,7 @@ func handover(t *testing.T, f *haFixture, act func()) handoverResult {
 			secondsSince(start, led), phase.ReconnectGrace)
 	})
 
+	noRestarts(t, f)
 	log, err := readPodLog(haNamespace, f.proxy, &corev1.PodLogOptions{Container: podspec.ProxyContainerName})
 	if err != nil {
 		t.Errorf("read the proxy's log: %v", err)
@@ -576,7 +651,10 @@ func linesMatching(log string, pattern *regexp.Regexp) []string {
 	return found
 }
 
-func awaitNewLeader(t *testing.T, old *corev1.Pod, start time.Time, within time.Duration) (*corev1.Pod, time.Duration) {
+// awaitNewLeader and awaitSlice report times since start but count their
+// budget from from, because the rollout case's act returns only after
+// rollout status does.
+func awaitNewLeader(t *testing.T, old *corev1.Pod, start, from time.Time, within time.Duration) (*corev1.Pod, time.Duration) {
 	t.Helper()
 	for {
 		pod, holder, err := leaderPod(operatorNamespace)
@@ -593,22 +671,24 @@ func awaitNewLeader(t *testing.T, old *corev1.Pod, start time.Time, within time.
 		default:
 			return pod, time.Since(start)
 		}
-		if time.Since(start) >= within {
-			t.Fatalf("no pod other than %s took the lease within %s: %s", old.Name, within, last)
+		if time.Since(from) >= within {
+			t.Fatalf("no pod other than %s took the lease within %s (%.1fs after the disruption began): %s",
+				old.Name, within, time.Since(start).Seconds(), last)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
 }
 
-func awaitSlice(t *testing.T, pod *corev1.Pod, start time.Time, within time.Duration) time.Duration {
+func awaitSlice(t *testing.T, pod *corev1.Pod, start, from time.Time, within time.Duration) time.Duration {
 	t.Helper()
 	for {
 		ok, detail := sliceNames(pod)
 		if ok {
 			return time.Since(start)
 		}
-		if time.Since(start) >= within {
-			t.Fatalf("the slice did not name the new leader %s within %s: %s", pod.Name, within, detail)
+		if time.Since(from) >= within {
+			t.Fatalf("the slice did not name the new leader %s within %s of the takeover (%.1fs after "+
+				"the disruption began): %s", pod.Name, within, time.Since(start).Seconds(), detail)
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
@@ -680,7 +760,7 @@ func logAgentConnections(t *testing.T, f *haFixture) {
 	}
 	t.Logf("conntrack: Service %s is %s; operator pods %v", svc.Name, svc.Spec.ClusterIP, pods)
 	nodes := map[string]bool{}
-	for _, name := range append([]string{f.proxy}, f.servers...) {
+	for _, name := range f.pods() {
 		var p corev1.Pod
 		if err := k8s.Get(ctx, client.ObjectKey{Namespace: haNamespace, Name: name}, &p); err == nil {
 			nodes[p.Spec.NodeName] = true
@@ -965,6 +1045,14 @@ func TestHALostLeaderNodeKeepsServersReady(t *testing.T) {
 	})
 
 	r := handover(t, f, func() {
+		pod, holder, err := leaderPod(operatorNamespace)
+		switch {
+		case err != nil:
+			t.Fatalf("before pausing %s: %v", node, err)
+		case pod.UID != f.leader.UID:
+			t.Fatalf("before pausing %s: %q holds the lease, not %s on that node, so the pause "+
+				"would freeze a standby and leave the leader running", node, holder, f.leader.Name)
+		}
 		if out, err := exec.Command(runtime, "pause", node).CombinedOutput(); err != nil {
 			t.Fatalf("%s pause %s: %v\n%s", runtime, node, err, out)
 		}
@@ -989,6 +1077,7 @@ func TestHALostLeaderNodeKeepsServersReady(t *testing.T) {
 			time.Sleep(250 * time.Millisecond)
 		}
 	})
+	noRestarts(t, f)
 }
 
 func kubectl(t *testing.T, args ...string) {
