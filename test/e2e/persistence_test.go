@@ -112,7 +112,7 @@ func theOperatorHoldsItsSecretAndItsLease(t *testing.T) {
 	}
 	if len(leases.Items) == 0 {
 		t.Errorf("no Lease in %s, yet the Deployment passes --leader-elect=true and the "+
-			"readiness probe only turns green once the lock is held", operatorNamespace)
+			"agent endpoint is published only by the replica holding the lock", operatorNamespace)
 	}
 }
 
