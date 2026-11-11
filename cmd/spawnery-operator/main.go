@@ -545,8 +545,8 @@ func main() {
 		}
 	}
 
-	// Without leader election there is no Lease, and a guard that never
-	// confirms one would keep every server Ready for good.
+	// Without leader election there is no Lease to read, and the guard would
+	// stop the manager.
 	var guard *leaseguard.Guard
 	if leaderElect {
 		hostname, err := os.Hostname()

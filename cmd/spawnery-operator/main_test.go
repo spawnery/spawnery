@@ -89,8 +89,8 @@ func TestTheLeaseGuardChecksTheManagersLease(t *testing.T) {
 	opts := managerOptions(managerFlags{leaderElect: true, operatorNamespace: "spawnery-system"})
 	g := leaseGuard(nil, "spawnery-system", "op-a")
 	if g.Lease != opts.LeaderElectionID {
-		t.Errorf("the lease guard reads Lease %q, the manager holds %q: the guard would never "+
-			"confirm, and no server would ever leave Ready", g.Lease, opts.LeaderElectionID)
+		t.Errorf("the lease guard reads Lease %q, the manager holds %q: the guard would "+
+			"never find this process as holder and would stop the manager", g.Lease, opts.LeaderElectionID)
 	}
 	if g.Namespace != opts.LeaderElectionNamespace {
 		t.Errorf("the lease guard looks for the Lease in %q, the manager writes it to %q",
