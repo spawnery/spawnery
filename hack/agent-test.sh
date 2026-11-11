@@ -1105,9 +1105,10 @@ echo "the agent opened $opened streams in ${WINDOW}s across $superseded superses
 # Phase three: the operator that accepts a stream and then says nothing.
 #
 # Between the cancel and its first Send, internal/agentserver has armed no
-# deadline, and the agent's channel has no keepalive, idle timeout or call
-# deadline of its own. With no bound the agent opens no further stream, which
-# only the floor can see.
+# deadline. The agent's keepalive is answered by the transport of a stream that
+# says nothing, and the channel has no idle timeout or call deadline of its
+# own. With no bound the agent opens no further stream, which only the floor
+# can see.
 echo
 echo "restarting the agent against an operator that accepts a stream and says nothing..."
 "$CONTAINER" rm -f "$NAME2" >/dev/null 2>&1 || true
@@ -1540,8 +1541,8 @@ echo "the agent completed a session through it"
 #
 # The stub stops reading and writing without closing anything (see `deafness`
 # in cmd/spawnery-stubop/deafen.go). Before that, the connection count proves
-# the stub's KeepaliveEnforcementPolicy (the operator's) accepts the agent's 45s
-# pings; after it, only that keepalive can end the wait. About two minutes,
+# the stub's KeepaliveEnforcementPolicy (the operator's) accepts the agent's
+# pings; after it, only that keepalive can end the wait. About a minute,
 # because it tests the production timer rather than a test-only knob.
 echo
 echo "deafening the operator mid-session, to prove the agent has a clock of its own..."
@@ -1549,13 +1550,23 @@ echo "deafening the operator mid-session, to prove the agent has a clock of its 
 stop_stub "$STUB6_PID"
 STUB6_PID=""
 
-# The keepalive fires 45s after the last thing the operator said and waits 20
-# for the answer, so deafening at 50 lands after the first ping has been
-# answered and before the second is due.
-DEAFEN_AFTER=50
-# Worst case is a ping sent the instant before the deafening: 45 to the next
-# one and 20 more to give up on it. Half as much again for a loaded machine.
-DEAF_LIMIT=100
+# Read from OperatorChannel.kt so the phase follows the production timer.
+KEEPALIVE_SRC="$(dirname "$0")/../agent/common/src/main/kotlin/cloud/spawnery/agent/OperatorChannel.kt"
+KEEPALIVE_S="$(sed -n 's/.*KEEPALIVE_SECONDS = \([0-9]*\)L.*/\1/p' "$KEEPALIVE_SRC")"
+KEEPALIVE_TIMEOUT_S="$(sed -n 's/.*KEEPALIVE_TIMEOUT_SECONDS = \([0-9]*\)L.*/\1/p' "$KEEPALIVE_SRC")"
+if [ -z "$KEEPALIVE_S" ] || [ -z "$KEEPALIVE_TIMEOUT_S" ]; then
+	echo "no KEEPALIVE_SECONDS or KEEPALIVE_TIMEOUT_SECONDS in $KEEPALIVE_SRC" >&2
+	exit 1
+fi
+
+# The keepalive fires KEEPALIVE_S after the last thing the operator said and
+# waits KEEPALIVE_TIMEOUT_S for the answer, so deafening 5s after the first
+# ping lands after it has been answered and before the second is due.
+DEAFEN_AFTER=$((KEEPALIVE_S + 5))
+# Worst case is a ping sent the instant before the deafening: the interval to
+# the next one and the timeout to give up on it. Half as much again for a
+# loaded machine; the old 45s + 20s keepalive (65s) exceeds it.
+DEAF_LIMIT=$(((KEEPALIVE_S + KEEPALIVE_TIMEOUT_S) * 3 / 2))
 
 mkdir -p "$WORK/agent-deaf"
 chmod 0755 "$WORK/agent-deaf"
