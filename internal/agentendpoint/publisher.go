@@ -32,6 +32,7 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/log"
@@ -47,6 +48,8 @@ const (
 
 	portName         = "agent"
 	withdrawDeadline = 2 * time.Second
+	// controller-runtime's leader election retry period.
+	retryPeriod = 2 * time.Second
 )
 
 var ErrNotHolder = leaseguard.ErrNotHolder
@@ -124,27 +127,33 @@ func (p *Publisher) Start(ctx context.Context) error {
 	if interval <= 0 {
 		interval = DefaultInterval
 	}
-	if err := p.Assert(ctx); err != nil {
-		logger.Error(err, "publishing the agent endpoint")
-	} else {
-		logger.Info("published the agent endpoint", "service", p.Service, "ips", p.Pod.IPs)
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+	published := false
+	timer := time.NewTimer(0)
+	defer timer.Stop()
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case <-ticker.C:
-			if err := p.Assert(ctx); err != nil {
-				logger.Error(err, "re-asserting the agent endpoint")
-			}
+		case <-timer.C:
 		}
+		err := p.Assert(ctx)
+		switch {
+		case err != nil && !published:
+			logger.Error(err, "publishing the agent endpoint")
+			timer.Reset(retryPeriod)
+			continue
+		case err != nil:
+			logger.Error(err, "re-asserting the agent endpoint")
+		case !published:
+			published = true
+			logger.Info("published the agent endpoint", "service", p.Service, "ips", p.Pod.IPs)
+		}
+		timer.Reset(interval)
 	}
 }
 
-// Assert checks the Lease before any write, so a leader that resumes after
-// being frozen past its lease cannot overwrite its successor's endpoint.
+// Assert reads the Lease before any write, so a leader resumed after a freeze
+// past its lease finds its successor named there and writes nothing.
 func (p *Publisher) Assert(ctx context.Context) error {
 	if err := p.checkHolder(ctx); err != nil {
 		return err
@@ -186,6 +195,12 @@ func (p *Publisher) checkHolder(ctx context.Context) error {
 }
 
 func (p *Publisher) writeSlice(ctx context.Context, svc *corev1.Service, family discoveryv1.AddressType, ip string) error {
+	return retry.OnError(retry.DefaultRetry, func(err error) bool {
+		return apierrors.IsConflict(err) || apierrors.IsAlreadyExists(err)
+	}, func() error { return p.writeSliceOnce(ctx, svc, family, ip) })
+}
+
+func (p *Publisher) writeSliceOnce(ctx context.Context, svc *corev1.Service, family discoveryv1.AddressType, ip string) error {
 	name := SliceName(p.Service, family)
 	existing := &discoveryv1.EndpointSlice{}
 	err := p.Client.Get(ctx, types.NamespacedName{Namespace: p.Namespace, Name: name}, existing)

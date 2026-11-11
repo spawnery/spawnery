@@ -20,6 +20,7 @@ import (
 	"context"
 	"errors"
 	"os"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,9 +30,11 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 
 	"github.com/spawnery/spawnery/internal/agentendpoint"
 	"github.com/spawnery/spawnery/internal/testenv"
@@ -340,6 +343,75 @@ func TestAssertWithoutALeaseNameChecksNoHolder(t *testing.T) {
 
 	f.assert(p)
 
+	checkSlice(t, f.mustSlice(discoveryv1.AddressTypeIPv4), f.svc, discoveryv1.AddressTypeIPv4, "10.0.0.5")
+}
+
+func (f *fixture) intercepted(funcs interceptor.Funcs) client.Client {
+	f.t.Helper()
+	c, err := client.NewWithWatch(testenv.Config(f.t), client.Options{Scheme: testenv.Scheme(f.t)})
+	if err != nil {
+		f.t.Fatalf("new client: %v", err)
+	}
+	return interceptor.NewClient(c, funcs)
+}
+
+func TestAFailedFirstAssertIsRetriedSoon(t *testing.T) {
+	f := newFixture(t, "host-a_123")
+	var failed atomic.Bool
+	p := f.publisher("10.0.0.5")
+	p.Client = f.intercepted(interceptor.Funcs{
+		Get: func(ctx context.Context, c client.WithWatch, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*corev1.Service); ok && failed.CompareAndSwap(false, true) {
+				return errors.New("connection reset by peer")
+			}
+			return c.Get(ctx, key, obj, opts...)
+		},
+	})
+	p.Interval = agentendpoint.DefaultInterval
+	serving := make(chan struct{})
+	close(serving)
+	p.Serving = serving
+
+	ctx, cancel := context.WithCancel(f.ctx)
+	defer cancel()
+	done := make(chan error, 1)
+	go func() { done <- p.Start(ctx) }()
+
+	eventually(t, 3*time.Second, "the slice after one failed first Assert", func() bool {
+		s, err := f.slice(discoveryv1.AddressTypeIPv4)
+		return err == nil && len(s.Endpoints) == 1
+	})
+	if !failed.Load() {
+		t.Error("the first Assert did not fail, so this test proved nothing")
+	}
+	cancel()
+	<-done
+}
+
+func TestAssertRetriesAConflictingWrite(t *testing.T) {
+	f := newFixture(t, "host-a_123")
+	other := f.publisher("10.0.0.7")
+	other.Pod.Name, other.Pod.UID = "op-b", "uid-b"
+	other.Lease = ""
+	f.assert(other)
+
+	var conflicted atomic.Bool
+	p := f.publisher("10.0.0.5")
+	p.Client = f.intercepted(interceptor.Funcs{
+		Update: func(ctx context.Context, c client.WithWatch, obj client.Object, opts ...client.UpdateOption) error {
+			if _, ok := obj.(*discoveryv1.EndpointSlice); ok && conflicted.CompareAndSwap(false, true) {
+				return apierrors.NewConflict(schema.GroupResource{Group: "discovery.k8s.io", Resource: "endpointslices"},
+					obj.GetName(), errors.New("the object has been modified"))
+			}
+			return c.Update(ctx, obj, opts...)
+		},
+	})
+
+	f.assert(p)
+
+	if !conflicted.Load() {
+		t.Fatal("no update conflicted, so this test proved nothing")
+	}
 	checkSlice(t, f.mustSlice(discoveryv1.AddressTypeIPv4), f.svc, discoveryv1.AddressTypeIPv4, "10.0.0.5")
 }
 
