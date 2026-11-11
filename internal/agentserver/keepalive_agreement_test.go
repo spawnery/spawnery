@@ -99,3 +99,16 @@ func TestAReconnectToAFrozenLeaderEndsInsideTheGrace(t *testing.T) {
 			phase.ReconnectGrace, takeover, deadline)
 	}
 }
+
+func TestAReconnectHasTimeForTheOperatorsFirstAnswer(t *testing.T) {
+	bound := time.Duration(kotlinConstant(t, sessionLoopSource, "RECONNECT_ANSWER_BOUND_MILLIS")) * time.Millisecond
+	if bound < 5*time.Second {
+		t.Fatalf("RECONNECT_ANSWER_BOUND_MILLIS in %s is %s, under 5s. It has to cover the "+
+			"connect, the TLS handshake and the TokenReview behind the operator's first answer. "+
+			"The node-loss e2e case measured first answers well under a second, but right after "+
+			"a takeover the new leader's TokenReview cache (internal/grpcauth) is cold and the "+
+			"whole fleet dials at once. A bound below the slowest first answer retires every "+
+			"attempt before it is answered, and the agent never gets back in.",
+			sessionLoopSource, bound)
+	}
+}
