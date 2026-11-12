@@ -582,6 +582,24 @@ func TestTheOperatorRollsWithoutLosingAnEndpoint(t *testing.T) {
 	}
 }
 
+// Without a Lease nothing stops a surge pod from running the controllers and
+// writing the agent slice beside the old one.
+func TestWithoutLeaderElectionTheOperatorIsRecreated(t *testing.T) {
+	docs := renderChartWith(t, "operator.leaderElect=false", "operator.replicas=1")
+	var deploy appsv1.Deployment
+	if err := yaml.Unmarshal(docs["Deployment/spawnery-operator"], &deploy); err != nil {
+		t.Fatalf("decode Deployment: %v", err)
+	}
+	st := deploy.Spec.Strategy
+	if st.Type != appsv1.RecreateDeploymentStrategyType {
+		t.Errorf("strategy type = %q with leaderElect false, want Recreate", st.Type)
+	}
+	if st.RollingUpdate != nil {
+		t.Errorf("rollingUpdate = %+v with leaderElect false, want none: the API server "+
+			"refuses it beside type Recreate", st.RollingUpdate)
+	}
+}
+
 func TestThePDBNeedsASecondReplica(t *testing.T) {
 	if _, ok := renderChartWith(t, "operator.replicas=1")["PodDisruptionBudget/spawnery-operator"]; ok {
 		t.Error("one replica renders a PodDisruptionBudget, which would block every node drain")

@@ -146,7 +146,7 @@
         },
         "leaderElect": {
           "type": "boolean",
-          "description": "A bool, not a YAML string. `yes` is a string here, and the flag parser refuses it at container start. false needs replicas 1, and the chart refuses more: without leader election every replica would run the controllers and write the agent Service's endpoints."
+          "description": "A bool, not a YAML string. `yes` is a string here, and the flag parser refuses it at container start. false needs replicas 1, and the chart refuses more: without leader election every replica would run the controllers and write the agent Service's endpoints. For the same reason false rolls the Deployment with strategy Recreate, so the old pod is gone before the new one starts."
         },
         "allowPluginVolumes": {
           "type": "boolean",
