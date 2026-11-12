@@ -36,6 +36,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
+	"github.com/spawnery/spawnery/internal/leaseguard"
 	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
@@ -121,9 +122,16 @@ type ServerReconciler struct {
 	// State is told when a server changes in a way the proxies show; nil means
 	// they learn of it at the next resync.
 	State StateNotifier
+	// Lease holds back the decisions restsOnTheRegistry names until it is
+	// fresh; nil counts as fresh.
+	Lease Freshness
 
 	visible visibleMemo
 }
+
+// Freshness is whether this process has lately seen itself hold the leader
+// Lease (internal/leaseguard).
+type Freshness interface{ Fresh() bool }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servers,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=servers/status,verbs=update
@@ -384,6 +392,11 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 		in.GroupHasReadyServer = ready
 	}
 	decision := phase.Decide(current, in)
+	if restsOnTheRegistry(current, in, decision) && !r.leaseFresh() {
+		log.FromContext(ctx).Info("holding back a decision until the leader lease is confirmed",
+			"phase", current, "next", decision.Next, "reason", decision.Reason)
+		return ctrl.Result{RequeueAfter: leaseguard.DefaultInterval}, nil
+	}
 
 	if err := r.applyDecision(ctx, srv, group, pod, podFound, current, decision); err != nil {
 		return ctrl.Result{}, err
@@ -409,6 +422,28 @@ func (r *ServerReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctr
 	}
 
 	return ctrl.Result{RequeueAfter: ResyncInterval}, nil
+}
+
+func (r *ServerReconciler) leaseFresh() bool {
+	return leaseFresh(r.Lease)
+}
+
+func leaseFresh(l Freshness) bool {
+	return l == nil || l.Fresh()
+}
+
+// restsOnTheRegistry is whether d leaves Ready on the agent registry's view,
+// which a leader resumed past its lease holds from before it froze. Both
+// reasons mix the pod's readiness with the agent's and are held back whole;
+// a terminal pod's RoundFinished comes from the API and stands.
+func restsOnTheRegistry(current phase.Phase, in phase.Inputs, d phase.Decision) bool {
+	switch d.Reason {
+	case phase.ReasonReadinessLost:
+		return true
+	case phase.ReasonRoundFinished:
+		return current == phase.Ready && d.Next == phase.Finished && !in.PodTerminal
+	}
+	return false
 }
 
 // noteVisible tells the proxies when the server looks different to them. It

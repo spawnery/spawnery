@@ -1,0 +1,9 @@
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+# Three workers: one for each operator replica, and one for the network,
+# which stays up while the leader's node is paused.
+nodes:
+  - role: control-plane
+  - role: worker
+  - role: worker
+  - role: worker

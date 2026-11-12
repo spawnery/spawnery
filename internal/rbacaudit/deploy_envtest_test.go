@@ -38,9 +38,11 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	corev1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	rbacv1 "k8s.io/api/rbac/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
@@ -114,9 +116,9 @@ func TestTheSelectorsCarryOnlyTheFrozenPair(t *testing.T) {
 	}
 
 	var svc corev1.Service
-	renderedManifest(t, "Service/spawnery-operator", &svc)
+	renderedManifest(t, "Service/spawnery-operator-metrics", &svc)
 	if !maps.Equal(svc.Spec.Selector, want) {
-		t.Errorf("the Service's selector = %v, want exactly %v", svc.Spec.Selector, want)
+		t.Errorf("the metrics Service's selector = %v, want exactly %v", svc.Spec.Selector, want)
 	}
 
 	var policy networkingv1.NetworkPolicy
@@ -142,9 +144,11 @@ var renderedObjectKeys = []string{
 	"CustomResourceDefinition/servers.spawnery.cloud",
 	"Deployment/spawnery-operator",
 	"NetworkPolicy/spawnery-operator-agent",
+	"PodDisruptionBudget/spawnery-operator",
 	"Role/spawnery-operator",
 	"RoleBinding/spawnery-operator",
 	"Service/spawnery-operator",
+	"Service/spawnery-operator-metrics",
 	"ServiceAccount/spawnery-operator",
 	// Audited by TestTheOperatorMayDeleteOnlyAnOnDemandWorld.
 	"ValidatingAdmissionPolicy/spawnery-world-deletion",
@@ -427,8 +431,8 @@ func TestDeployManifestsAreAcceptedAndConsistent(t *testing.T) {
 		t.Errorf("deployment serviceAccountName = %q, want %q — the operator would "+
 			"run as the namespace default account and have no permissions at all", got, sa.Name)
 	}
-	if deploy.Spec.Replicas == nil || *deploy.Spec.Replicas != 1 {
-		t.Errorf("replicas = %v, want 1", deploy.Spec.Replicas)
+	if deploy.Spec.Replicas == nil || *deploy.Spec.Replicas != 2 {
+		t.Errorf("replicas = %v, want 2", deploy.Spec.Replicas)
 	}
 
 	got := &appsv1.Deployment{}
@@ -478,15 +482,29 @@ func TestTheRoleBindingBindsTheOperatorInItsOwnNamespace(t *testing.T) {
 	}
 }
 
-// Every hop of the agents' dial address lives in a different file.
-func TestAgentServiceReachesTheOperatorPods(t *testing.T) {
-	ns := corev1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: renderNamespace}}
+func operatorContainer(t *testing.T, deploy *appsv1.Deployment) corev1.Container {
+	t.Helper()
+	if len(deploy.Spec.Template.Spec.Containers) != 1 {
+		t.Fatalf("got %d containers, want exactly one", len(deploy.Spec.Template.Spec.Containers))
+	}
+	return deploy.Spec.Template.Spec.Containers[0]
+}
+
+func declaredPorts(c corev1.Container) map[string]int32 {
+	named := map[string]int32{}
+	for _, p := range c.Ports {
+		named[p.Name] = p.ContainerPort
+	}
+	return named
+}
+
+// The leader writes this Service's EndpointSlice itself, so a selector would
+// bring the endpoints controller back and put the standbys in the slice.
+func TestTheAgentServiceIsLeftToTheLeader(t *testing.T) {
 	var svc corev1.Service
 	var deploy appsv1.Deployment
 	renderedManifest(t, "Service/spawnery-operator", &svc)
 	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
-
-	apply(t, &ns, &svc)
 
 	// The operator derives the dial address and its certificate SANs from
 	// podspec.AgentServiceName and never compares them with the manifest.
@@ -495,70 +513,228 @@ func TestAgentServiceReachesTheOperatorPods(t *testing.T) {
 			"every agent would fail its TLS handshake against a name that does not resolve",
 			svc.Name, podspec.AgentServiceName)
 	}
-
 	if svc.Namespace != deploy.Namespace {
-		t.Errorf("service namespace = %q, deployment namespace = %q — a Service only "+
-			"selects pods in its own namespace", svc.Namespace, deploy.Namespace)
+		t.Errorf("service namespace = %q, deployment namespace = %q", svc.Namespace, deploy.Namespace)
 	}
-
-	podLabels := deploy.Spec.Template.Labels
-	for k, v := range svc.Spec.Selector {
-		if podLabels[k] != v {
-			t.Errorf("service selects %s=%q but the operator pods carry %s=%q — "+
-				"the Service would have no endpoints at all", k, v, k, podLabels[k])
-		}
+	if len(svc.Spec.Selector) != 0 {
+		t.Errorf("the agent Service selects %v; with a selector the endpoints controller "+
+			"fights the leader's EndpointSlice", svc.Spec.Selector)
 	}
-
-	if len(deploy.Spec.Template.Spec.Containers) != 1 {
-		t.Fatalf("got %d containers, want exactly one", len(deploy.Spec.Template.Spec.Containers))
+	if len(svc.Spec.Ports) != 1 || svc.Spec.Ports[0].Name != "agent" || svc.Spec.Ports[0].Port != 9443 {
+		t.Errorf("the agent Service ports = %v, want exactly agent/9443", svc.Spec.Ports)
 	}
-	container := deploy.Spec.Template.Spec.Containers[0]
-	named := map[string]int32{}
-	for _, p := range container.Ports {
-		named[p.Name] = p.ContainerPort
-	}
-	for _, p := range svc.Spec.Ports {
-		target := p.TargetPort.StrVal
-		if target == "" {
-			t.Errorf("service port %q targets a number, not a named port", p.Name)
-			continue
-		}
-		if _, ok := named[target]; !ok {
-			t.Errorf("service port %q targets the container port %q, which the operator "+
-				"container does not declare", p.Name, target)
-		}
-	}
-	if got := named["agent"]; got != 9443 {
+	if got := declaredPorts(operatorContainer(t, &deploy))["agent"]; got != 9443 {
 		t.Errorf("the agent container port = %d, want 9443", got)
-	}
-
-	// readyz turns green only on the leader, which keeps a standby out of the
-	// Service.
-	probe := container.ReadinessProbe
-	if probe == nil || probe.HTTPGet == nil {
-		t.Fatal("the operator has no HTTP readiness probe; a standby would serve as an endpoint")
-	}
-	if probe.HTTPGet.Path != "/readyz" {
-		t.Errorf("readiness probe path = %q, want /readyz", probe.HTTPGet.Path)
 	}
 }
 
-// With readiness tied to the leader lock, RollingUpdate (maxSurge 1,
-// maxUnavailable 0) deadlocks: the new pod waits for a lease the old pod
-// holds. Recreate is the shape for a single-replica leader-elected operator.
-func TestTheOperatorIsReplacedRatherThanRolled(t *testing.T) {
+func TestTheMetricsServiceReachesEveryOperatorPod(t *testing.T) {
+	var svc corev1.Service
+	var deploy appsv1.Deployment
+	renderedManifest(t, "Service/spawnery-operator-metrics", &svc)
+	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
+
+	if svc.Labels["app.kubernetes.io/component"] != "metrics" {
+		t.Errorf("component label = %q, want metrics", svc.Labels["app.kubernetes.io/component"])
+	}
+	if len(svc.Spec.Selector) == 0 {
+		t.Fatal("the metrics Service has no selector")
+	}
+	for k, v := range svc.Spec.Selector {
+		if deploy.Spec.Template.Labels[k] != v {
+			t.Errorf("the metrics Service selects %s=%q but the pods carry %q", k, v, deploy.Spec.Template.Labels[k])
+		}
+	}
+	named := declaredPorts(operatorContainer(t, &deploy))
+	var found bool
+	for _, p := range svc.Spec.Ports {
+		if p.Name == "metrics" {
+			found = true
+		}
+		if _, ok := named[p.TargetPort.StrVal]; !ok {
+			t.Errorf("port %q targets %q (%v), which the operator container does not declare",
+				p.Name, p.TargetPort.StrVal, p.TargetPort)
+		}
+	}
+	if !found {
+		t.Error("the metrics Service has no port named metrics")
+	}
+}
+
+// A new pod is Ready without the lock, so the surge pod replaces an old one
+// without a gap in the operator's capacity.
+func TestTheOperatorRollsWithoutLosingAnEndpoint(t *testing.T) {
 	var deploy appsv1.Deployment
 	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
 
-	if deploy.Spec.Replicas == nil || *deploy.Spec.Replicas != 1 {
-		t.Fatalf("replicas = %v, want 1 — this test reasons about the single-replica case",
-			deploy.Spec.Replicas)
+	if deploy.Spec.Replicas == nil || *deploy.Spec.Replicas != 2 {
+		t.Fatalf("replicas = %v, want 2", deploy.Spec.Replicas)
 	}
-	if got := deploy.Spec.Strategy.Type; got != appsv1.RecreateDeploymentStrategyType {
-		t.Errorf("deployment strategy = %q, want %q — a rolling update would wait for a "+
-			"readiness the new pod cannot reach until the old one releases the leader lease",
-			got, appsv1.RecreateDeploymentStrategyType)
+	st := deploy.Spec.Strategy
+	if st.Type != appsv1.RollingUpdateDeploymentStrategyType || st.RollingUpdate == nil {
+		t.Fatalf("strategy = %+v, want RollingUpdate", st)
 	}
+	if st.RollingUpdate.MaxSurge == nil || st.RollingUpdate.MaxSurge.String() != "1" {
+		t.Errorf("maxSurge = %v, want 1", st.RollingUpdate.MaxSurge)
+	}
+	if st.RollingUpdate.MaxUnavailable == nil || st.RollingUpdate.MaxUnavailable.String() != "0" {
+		t.Errorf("maxUnavailable = %v, want 0", st.RollingUpdate.MaxUnavailable)
+	}
+}
+
+// Without a Lease nothing stops a surge pod from running the controllers and
+// writing the agent slice beside the old one.
+func TestWithoutLeaderElectionTheOperatorIsRecreated(t *testing.T) {
+	docs := renderChartWith(t, "operator.leaderElect=false", "operator.replicas=1")
+	var deploy appsv1.Deployment
+	if err := yaml.Unmarshal(docs["Deployment/spawnery-operator"], &deploy); err != nil {
+		t.Fatalf("decode Deployment: %v", err)
+	}
+	st := deploy.Spec.Strategy
+	if st.Type != appsv1.RecreateDeploymentStrategyType {
+		t.Errorf("strategy type = %q with leaderElect false, want Recreate", st.Type)
+	}
+	if st.RollingUpdate != nil {
+		t.Errorf("rollingUpdate = %+v with leaderElect false, want none: the API server "+
+			"refuses it beside type Recreate", st.RollingUpdate)
+	}
+}
+
+func TestThePDBNeedsASecondReplica(t *testing.T) {
+	if _, ok := renderChartWith(t, "operator.replicas=1")["PodDisruptionBudget/spawnery-operator"]; ok {
+		t.Error("one replica renders a PodDisruptionBudget, which would block every node drain")
+	}
+
+	var pdb policyv1.PodDisruptionBudget
+	renderedManifest(t, "PodDisruptionBudget/spawnery-operator", &pdb)
+	if pdb.Spec.MaxUnavailable == nil || pdb.Spec.MaxUnavailable.String() != "1" {
+		t.Errorf("maxUnavailable = %v, want 1", pdb.Spec.MaxUnavailable)
+	}
+	want := map[string]string{
+		"app.kubernetes.io/name":      "spawnery",
+		"app.kubernetes.io/component": "operator",
+	}
+	if pdb.Spec.Selector == nil || !maps.Equal(pdb.Spec.Selector.MatchLabels, want) {
+		t.Errorf("PDB selector = %v, want %v", pdb.Spec.Selector, want)
+	}
+}
+
+func TestTheOperatorPodsSpreadAcrossNodes(t *testing.T) {
+	var deploy appsv1.Deployment
+	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
+	got := deploy.Spec.Template.Spec.TopologySpreadConstraints
+	if len(got) != 1 {
+		t.Fatalf("got %d spread constraints, want 1: %v", len(got), got)
+	}
+	c := got[0]
+	if c.TopologyKey != "kubernetes.io/hostname" || c.MaxSkew != 1 ||
+		c.WhenUnsatisfiable != corev1.ScheduleAnyway {
+		t.Errorf("constraint = %+v, want a soft maxSkew 1 on kubernetes.io/hostname", c)
+	}
+	if c.LabelSelector == nil || !maps.Equal(c.LabelSelector.MatchLabels, deploy.Spec.Selector.MatchLabels) {
+		t.Errorf("constraint selector = %v, want the pod selector", c.LabelSelector)
+	}
+
+	docs := renderChartWith(t, `operator.topologySpreadConstraints=[{"maxSkew":2,"topologyKey":"topology.kubernetes.io/zone","whenUnsatisfiable":"DoNotSchedule"}]`)
+	var custom appsv1.Deployment
+	if err := yaml.UnmarshalStrict(docs["Deployment/spawnery-operator"], &custom); err != nil {
+		t.Fatal(err)
+	}
+	cs := custom.Spec.Template.Spec.TopologySpreadConstraints
+	if len(cs) != 1 || cs[0].TopologyKey != "topology.kubernetes.io/zone" || cs[0].MaxSkew != 2 {
+		t.Errorf("a given constraint must replace the default, got %+v", cs)
+	}
+}
+
+func TestTheOperatorKnowsItsOwnPod(t *testing.T) {
+	var deploy appsv1.Deployment
+	renderedManifest(t, "Deployment/spawnery-operator", &deploy)
+	want := map[string]string{
+		"POD_NAME":  "metadata.name",
+		"POD_UID":   "metadata.uid",
+		"POD_IPS":   "status.podIPs",
+		"NODE_NAME": "spec.nodeName",
+	}
+	got := map[string]string{}
+	for _, e := range operatorContainer(t, &deploy).Env {
+		if e.ValueFrom != nil && e.ValueFrom.FieldRef != nil {
+			got[e.Name] = e.ValueFrom.FieldRef.FieldPath
+		}
+	}
+	for name, path := range want {
+		if got[name] != path {
+			t.Errorf("%s comes from %q, want %q", name, got[name], path)
+		}
+	}
+}
+
+func TestTheServiceMonitorScrapesTheMetricsService(t *testing.T) {
+	docs := renderChartWith(t, `metrics.serviceMonitor.enabled=true`)
+	var sm struct {
+		Spec struct {
+			Selector metav1.LabelSelector `json:"selector"`
+		} `json:"spec"`
+	}
+	if err := yaml.Unmarshal(docs["ServiceMonitor/spawnery-operator"], &sm); err != nil {
+		t.Fatal(err)
+	}
+	want := map[string]string{"app.kubernetes.io/component": "metrics"}
+	if got := sm.Spec.Selector.MatchLabels; got["app.kubernetes.io/component"] != "metrics" {
+		t.Fatalf("selector = %v, want it to include %v", got, want)
+	}
+	sel, err := metav1.LabelSelectorAsSelector(&sm.Spec.Selector)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var agent, metrics corev1.Service
+	if err := yaml.Unmarshal(docs["Service/spawnery-operator"], &agent); err != nil {
+		t.Fatal(err)
+	}
+	if err := yaml.Unmarshal(docs["Service/spawnery-operator-metrics"], &metrics); err != nil {
+		t.Fatal(err)
+	}
+	if sel.Matches(labelsSet(agent.Labels)) {
+		t.Error("the ServiceMonitor selects the agent Service, whose port is not metrics")
+	}
+	if !sel.Matches(labelsSet(metrics.Labels)) {
+		t.Error("the ServiceMonitor does not select the metrics Service")
+	}
+}
+
+func TestTheNoLeaderAlertNamesTheLease(t *testing.T) {
+	docs := renderChartWith(t, `metrics.prometheusRule.enabled=true`)
+	var rule struct {
+		Spec struct {
+			Groups []struct {
+				Rules []struct {
+					Alert string `json:"alert"`
+					Expr  string `json:"expr"`
+					For   string `json:"for"`
+				} `json:"rules"`
+			} `json:"groups"`
+		} `json:"spec"`
+	}
+	if err := yaml.Unmarshal(docs["PrometheusRule/spawnery-operator"], &rule); err != nil {
+		t.Fatal(err)
+	}
+	for _, g := range rule.Spec.Groups {
+		for _, r := range g.Rules {
+			if r.Alert != "SpawneryNoLeader" {
+				continue
+			}
+			if !strings.Contains(r.Expr, "spawnery-operator.spawnery.cloud") {
+				t.Errorf("expr %q does not name the lease", r.Expr)
+			}
+			if !strings.Contains(r.Expr, `namespace="`+renderNamespace+`"`) || !strings.Contains(r.Expr, "absent(") {
+				t.Errorf("expr %q must be scoped to the release namespace and cover a missing series", r.Expr)
+			}
+			if r.For != "2m" {
+				t.Errorf("for = %q, want 2m", r.For)
+			}
+			return
+		}
+	}
+	t.Error("no SpawneryNoLeader alert is rendered")
 }
 
 func TestOperatorPodIsRestrictedCompliant(t *testing.T) {
@@ -980,10 +1156,12 @@ var chartClusterScopedKinds = map[string]bool{
 var chartNamespacedObjects = []string{
 	"Deployment/spawnery-operator",
 	"NetworkPolicy/spawnery-operator-agent",
+	"PodDisruptionBudget/spawnery-operator",
 	"PrometheusRule/spawnery-operator",
 	"Role/spawnery-operator",
 	"RoleBinding/spawnery-operator",
 	"Service/spawnery-operator",
+	"Service/spawnery-operator-metrics",
 	"ServiceAccount/spawnery-operator",
 	"ServiceMonitor/spawnery-operator",
 }
@@ -1170,3 +1348,5 @@ func TestAnEntryWithNoSecretsIsRefused(t *testing.T) {
 		t.Errorf("helm said %q for a missing key, want it to name what is missing", said)
 	}
 }
+
+func labelsSet(m map[string]string) labels.Set { return labels.Set(m) }

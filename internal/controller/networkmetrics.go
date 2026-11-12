@@ -29,6 +29,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
+	"github.com/spawnery/spawnery/internal/leaderonly"
 	"github.com/spawnery/spawnery/internal/podspec"
 )
 
@@ -75,7 +76,7 @@ var (
 // series; SetupAll binds it.
 var NetworkMetrics = &NetworkCollector{}
 
-func init() { metrics.Registry.MustRegister(NetworkMetrics) }
+func init() { metrics.Registry.MustRegister(leaderonly.Wrap(NetworkMetrics)) }
 
 // NetworkCollector keeps nothing between scrapes, so a server that is gone
 // leaves no series behind.

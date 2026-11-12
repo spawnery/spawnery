@@ -82,9 +82,8 @@ const (
 	// agent holding both RPCs at once, each renewing, which no agent does.
 	FleetConnectionsPerAgent = 4
 
-	// The agents send no keepalive, so this throttles only a client that
-	// pings in a loop.
-	MinKeepaliveInterval = 30 * time.Second
+	// The agents ping every 15 s; this throttles a client that pings faster.
+	MinKeepaliveInterval = 10 * time.Second
 )
 
 // ProxyFleet narrows *proxyreg.Fleet to what ProxySession reads, so the handler
@@ -157,6 +156,7 @@ type Server struct {
 	pending     *pendingMoves
 	executions  executions
 	addr        atomic.Pointer[string]
+	serving     chan struct{}
 }
 
 func New(opts Options) *Server {
@@ -184,6 +184,7 @@ func New(opts Options) *Server {
 		sessions:    newSessions(),
 		requestRate: newRequestLimiter(opts.Clock),
 		pending:     newPendingMoves(opts.Clock, pendingMoveTTL(opts.ReportInterval, opts.ReconcileLag)),
+		serving:     make(chan struct{}),
 	}
 }
 
@@ -194,6 +195,9 @@ func (s *Server) Addr() string {
 	}
 	return ""
 }
+
+// Serving is closed once Start has bound the listener.
+func (s *Server) Serving() <-chan struct{} { return s.serving }
 
 func (s *Server) NeedLeaderElection() bool { return true }
 
@@ -207,6 +211,7 @@ func (s *Server) Start(ctx context.Context) error {
 	bound := listener.Addr().String()
 	s.addr.Store(&bound)
 	s.opts.Agents.MarkServing()
+	close(s.serving)
 
 	// Logged at powers of ten only, so a flooding peer cannot amplify itself
 	// through the operator's log.

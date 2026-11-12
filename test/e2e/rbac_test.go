@@ -125,19 +125,24 @@ func operatorSubject(t *testing.T) string {
 // that rbacaudit.Checker is wired in, runs, and reports. Unlike
 // theOperatorWasNeverDenied it also covers cached reads.
 func theOperatorCheckedItsOwnPermissions(t *testing.T) {
-	log, _ := operatorLog(t, operatorNamespace)
+	pods := operatorPods(t, operatorNamespace)
+	for i := range pods {
+		pod := &pods[i]
+		log, _ := operatorPodLog(t, operatorNamespace, pod)
 
-	if strings.Contains(log, "is missing permissions it needs") {
-		t.Errorf("the operator reports permissions it does not have. Its own lines say which:\n%s",
-			strings.Join(linesContaining(log, "is missing permissions it needs"), "\n"))
-	}
+		if strings.Contains(log, "is missing permissions it needs") {
+			t.Errorf("operator pod %s reports permissions it does not have. Its own lines say which:\n%s",
+				pod.Name, strings.Join(linesContaining(log, "is missing permissions it needs"), "\n"))
+		}
 
-	granted := linesContaining(log, "every permission the operator needs is granted")
-	if len(granted) < len(rbacaudit.DefaultScopes(operatorNamespace)) {
-		t.Errorf("the operator reported on %d permission scopes, want %d. Either the "+
-			"self-check is not wired in or it did not finish; without it a permission "+
-			"revoked while the operator runs is invisible to everything here",
-			len(granted), len(rbacaudit.DefaultScopes(operatorNamespace)))
+		granted := linesContaining(log, "every permission the operator needs is granted")
+		if len(granted) < len(rbacaudit.DefaultScopes(operatorNamespace)) {
+			t.Errorf("operator pod %s reported on %d permission scopes, want %d. The self-check "+
+				"runs on every replica; either it is not wired in or it did not finish, and "+
+				"without it a permission revoked while the operator runs is invisible to "+
+				"everything here",
+				pod.Name, len(granted), len(rbacaudit.DefaultScopes(operatorNamespace)))
+		}
 	}
 }
 

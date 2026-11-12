@@ -123,6 +123,9 @@ type ProxyGroupReconciler struct {
 	// ClaimReader reads a group's spec.extraPlugins claim, and it must be
 	// uncached; see ServerGroupReconciler.ClaimReader.
 	ClaimReader client.Reader
+	// Lease holds back deleting a draining proxy past its deadline until it is
+	// fresh; nil counts as fresh.
+	Lease Freshness
 }
 
 // +kubebuilder:rbac:groups=spawnery.cloud,resources=proxygroups,verbs=get;list;watch
@@ -771,6 +774,9 @@ func (r *ProxyGroupReconciler) drainDeparting(
 				r.Recorder.Eventf(pod, nil, corev1.EventTypeNormal, "ProxyStopped", actionDrainProxy,
 					"proxy %s stopped: no players left", pod.Name)
 			}
+		case expired && !leaseFresh(r.Lease):
+			// unknownFor may be a resumed leader's memory from before it froze.
+			continue
 		case expired:
 			// The one path that disconnects anybody, so it says so loudly.
 			announce = func() {

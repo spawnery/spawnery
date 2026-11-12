@@ -118,7 +118,7 @@ func connectFixture(t *testing.T) (
 		Spec:       spawneryv1alpha1.ServerSpec{GroupRef: spawneryv1alpha1.ObjectRef{Name: "lobby"}},
 		Status:     spawneryv1alpha1.ServerStatus{Phase: "Ready", Slots: 100, Registered: false},
 	}
-	registry := agent.New(time.Now, time.Minute, time.Now())
+	registry := agent.New(time.Now, time.Minute)
 	registry.Connect("proxy-a", agent.RoleProxy)
 	if err := registry.ReportRoster("proxy-a", "ns", []agent.RosterEntry{
 		{UUID: "u-alice", Name: "alice", Server: "lobby-a"},
@@ -255,7 +255,7 @@ func routedGroupFixture(t *testing.T, strategy spawneryv1alpha1.RoutingStrategy,
 		}
 	}
 
-	registry := agent.New(time.Now, time.Minute, time.Now())
+	registry := agent.New(time.Now, time.Minute)
 	registry.Connect("proxy-a", agent.RoleProxy)
 	var roster []agent.RosterEntry
 	for i := range 10 {
@@ -571,7 +571,7 @@ func TestAnAttributeWithNoNameIsRefused(t *testing.T) {
 }
 
 func TestAnAnnouncementIsStoredUnderTheIdentitysOwnName(t *testing.T) {
-	registry := agent.New(time.Now, time.Second, time.Now())
+	registry := agent.New(time.Now, time.Second)
 	registry.Connect("pod-a", agent.RoleServer)
 	// Not New, which needs the fleets and certificates this verb never reaches.
 	s := &Server{opts: Options{Agents: registry, Proxies: stubFleet{}}, requestRate: newRequestLimiter(time.Now)}
@@ -595,7 +595,7 @@ func TestAnAnnouncementIsStoredUnderTheIdentitysOwnName(t *testing.T) {
 }
 
 func TestAProxyAnnouncementIsRefusedRatherThanDropped(t *testing.T) {
-	registry := agent.New(time.Now, time.Second, time.Now())
+	registry := agent.New(time.Now, time.Second)
 	registry.Connect("proxy-a", agent.RoleProxy)
 	s := &Server{opts: Options{Agents: registry, Proxies: stubFleet{}}, requestRate: newRequestLimiter(time.Now)}
 
@@ -615,7 +615,7 @@ func TestAProxyAnnouncementIsRefusedRatherThanDropped(t *testing.T) {
 }
 
 func TestAServerClosesItsOwnDoorAndNobodyElses(t *testing.T) {
-	registry := agent.New(time.Now, time.Second, time.Now())
+	registry := agent.New(time.Now, time.Second)
 	registry.Connect("pod-a", agent.RoleServer)
 	registry.Connect("pod-b", agent.RoleServer)
 	s := &Server{opts: Options{Agents: registry, Proxies: stubFleet{}}, requestRate: newRequestLimiter(time.Now)}
@@ -650,7 +650,7 @@ func (r *stateRecorder) SendState(_ context.Context, namespace string) {
 }
 
 func TestADoorThatMovesReachesTheProxiesAtOnce(t *testing.T) {
-	registry := agent.New(time.Now, time.Second, time.Now())
+	registry := agent.New(time.Now, time.Second)
 	registry.Connect("pod-a", agent.RoleServer)
 	proxies := &stateRecorder{}
 	s := &Server{opts: Options{Agents: registry, Proxies: proxies}, requestRate: newRequestLimiter(time.Now)}
@@ -680,7 +680,7 @@ func TestADoorThatMovesReachesTheProxiesAtOnce(t *testing.T) {
 }
 
 func TestAServerSaysItsRoundIsOver(t *testing.T) {
-	registry := agent.New(time.Now, time.Second, time.Now())
+	registry := agent.New(time.Now, time.Second)
 	registry.Connect("pod-a", agent.RoleServer)
 	s := &Server{opts: Options{Agents: registry, Proxies: stubFleet{}}, requestRate: newRequestLimiter(time.Now)}
 
@@ -702,7 +702,7 @@ func TestAServerSaysItsRoundIsOver(t *testing.T) {
 }
 
 func TestAProxyIsRefusedADoor(t *testing.T) {
-	registry := agent.New(time.Now, time.Second, time.Now())
+	registry := agent.New(time.Now, time.Second)
 	registry.Connect("proxy-a", agent.RoleProxy)
 	s := &Server{opts: Options{Agents: registry, Proxies: stubFleet{}}, requestRate: newRequestLimiter(time.Now)}
 

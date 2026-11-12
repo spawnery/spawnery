@@ -19,6 +19,8 @@ package serverreg
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+
+	"github.com/spawnery/spawnery/internal/leaderonly"
 )
 
 // SessionsCut counts backend sessions ended because their queue filled up;
@@ -31,4 +33,4 @@ var SessionsCut = prometheus.NewCounter(
 	},
 )
 
-func init() { metrics.Registry.MustRegister(SessionsCut) }
+func init() { metrics.Registry.MustRegister(leaderonly.Wrap(SessionsCut)) }

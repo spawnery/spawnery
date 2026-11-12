@@ -130,6 +130,15 @@
       "type": "object",
       "additionalProperties": false,
       "properties": {
+        "replicas": {
+          "type": "integer",
+          "minimum": 1,
+          "description": "Operator pods. Every replica is Ready, one holds the leader lease and the rest stand by; the leader writes the agent Service's endpoints, so a replica taking over moves the agents' connections within seconds. Two cost twice the memory and API watch load of one. With 1 no PodDisruptionBudget is rendered, since it would block every node drain."
+        },
+        "topologySpreadConstraints": {
+          "type": "array",
+          "description": "Replaces the default constraint, which spreads the replicas softly (maxSkew 1, ScheduleAnyway) over kubernetes.io/hostname so that a single-node cluster still runs both. A constraint given here needs its own labelSelector: matchLabels app.kubernetes.io/name=spawnery and app.kubernetes.io/component=operator."
+        },
         "startupDeadline": {
           "type": "string",
           "description": "A Go duration, so it carries a unit: 5m, 20s, 1h30m. A bare number is accepted by YAML and refused by the flag parser at container start, which is the failure this whole file exists for.",
@@ -137,7 +146,7 @@
         },
         "leaderElect": {
           "type": "boolean",
-          "description": "A bool, not a YAML string. `yes` is a string here, and the flag parser refuses it at container start."
+          "description": "A bool, not a YAML string. `yes` is a string here, and the flag parser refuses it at container start. false needs replicas 1, and the chart refuses more: without leader election every replica would run the controllers and write the agent Service's endpoints. For the same reason false rolls the Deployment with strategy Recreate, so the old pod is gone before the new one starts."
         },
         "allowPluginVolumes": {
           "type": "boolean",

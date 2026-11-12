@@ -18,6 +18,8 @@ package controller
 
 import (
 	"context"
+	"fmt"
+	"maps"
 	"slices"
 	"strings"
 	"sync"
@@ -31,6 +33,7 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/rest"
 	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
@@ -59,7 +62,7 @@ func TestSetupAllRegistersEveryController(t *testing.T) {
 	}
 
 	opts := Options{
-		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Agents:               agent.New(clock.Now, 5*time.Second),
 		Clock:                clock.Now,
 		StartupDeadline:      5 * time.Minute,
 		PlayerStatusInterval: 30 * time.Second,
@@ -100,7 +103,7 @@ func TestSetupAllThreadsTheDrainTaintKeys(t *testing.T) {
 
 	keys := []string{"ToBeDeletedByClusterAutoscaler", "example.com/going-away"}
 	opts := Options{
-		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Agents:               agent.New(clock.Now, 5*time.Second),
 		Clock:                clock.Now,
 		StartupDeadline:      5 * time.Minute,
 		PlayerStatusInterval: 30 * time.Second,
@@ -152,7 +155,7 @@ func TestSetupAllThreadsTheStateNotifier(t *testing.T) {
 
 	state := &recordingState{}
 	opts := Options{
-		Agents:    agent.New(clock.Now, 5*time.Second, start),
+		Agents:    agent.New(clock.Now, 5*time.Second),
 		Clock:     clock.Now,
 		Registrar: NoopRegistrar{},
 		Bootstrapper: &Bootstrapper{
@@ -165,6 +168,42 @@ func TestSetupAllThreadsTheStateNotifier(t *testing.T) {
 
 	if got := newServerReconciler(mgr, opts).State; got != StateNotifier(state) {
 		t.Errorf("ServerReconciler.State = %v, want the notifier from Options", got)
+	}
+}
+
+func TestSetupAllThreadsTheLease(t *testing.T) {
+	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+	clock := &testClock{now: start}
+
+	mgr, err := ctrl.NewManager(testenv.Config(t), manager.Options{
+		Scheme:         testenv.Scheme(t),
+		Metrics:        metricsserver.Options{BindAddress: "0"},
+		LeaderElection: false,
+	})
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+
+	lease := &leaseFreshness{}
+	opts := Options{
+		Agents:    agent.New(clock.Now, 5*time.Second),
+		Clock:     clock.Now,
+		Registrar: NoopRegistrar{},
+		Bootstrapper: &Bootstrapper{
+			Client: mgr.GetClient(), Reader: mgr.GetAPIReader(),
+			CA: func() []byte { return []byte("test-ca") },
+		},
+		Proxies: &recordingFleet{},
+		Lease:   lease,
+	}
+
+	if got := newServerReconciler(mgr, opts).Lease; got != Freshness(lease) {
+		t.Errorf("ServerReconciler.Lease = %v, want the guard from Options: a leader resumed "+
+			"past its lease would take servers out of Ready", got)
+	}
+	if got := newProxyGroupReconciler(mgr, opts).Lease; got != Freshness(lease) {
+		t.Errorf("ProxyGroupReconciler.Lease = %v, want the guard from Options: a leader resumed "+
+			"past its lease would delete draining proxies on stale counts", got)
 	}
 }
 
@@ -185,7 +224,7 @@ func TestSetupAllThreadsTheOperatorNamespace(t *testing.T) {
 
 	const ns = "spawnery-operators-own-namespace"
 	opts := Options{
-		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Agents:               agent.New(clock.Now, 5*time.Second),
 		Clock:                clock.Now,
 		StartupDeadline:      5 * time.Minute,
 		PlayerStatusInterval: 30 * time.Second,
@@ -247,7 +286,7 @@ func TestSetupAllRefusesWithoutABootstrapper(t *testing.T) {
 	}
 
 	err = SetupAll(mgr, Options{
-		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Agents:               agent.New(clock.Now, 5*time.Second),
 		Clock:                clock.Now,
 		StartupDeadline:      5 * time.Minute,
 		PlayerStatusInterval: 30 * time.Second,
@@ -283,7 +322,7 @@ func TestSetupAllRefusesWithoutProxies(t *testing.T) {
 	}
 
 	err = SetupAll(mgr, Options{
-		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Agents:               agent.New(clock.Now, 5*time.Second),
 		Clock:                clock.Now,
 		StartupDeadline:      5 * time.Minute,
 		PlayerStatusInterval: 30 * time.Second,
@@ -325,7 +364,7 @@ func TestSetupAllRefusesWithoutAnAPIReader(t *testing.T) {
 	}
 
 	err = SetupAll(readerlessManager{mgr}, Options{
-		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Agents:               agent.New(clock.Now, 5*time.Second),
 		Clock:                clock.Now,
 		StartupDeadline:      5 * time.Minute,
 		PlayerStatusInterval: 30 * time.Second,
@@ -387,7 +426,7 @@ func TestManagerReconcilesEndToEnd(t *testing.T) {
 	}
 
 	opts := Options{
-		Agents:               agent.New(clock.Now, 5*time.Second, start),
+		Agents:               agent.New(clock.Now, 5*time.Second),
 		Clock:                clock.Now,
 		StartupDeadline:      5 * time.Minute,
 		PlayerStatusInterval: 30 * time.Second,
@@ -535,4 +574,97 @@ func (l *managerLog) String() string {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	return strings.Join(l.lines, "\n")
+}
+
+type informerRecorder struct {
+	cache.Cache
+	mu    sync.Mutex
+	types map[string]bool
+}
+
+func (r *informerRecorder) GetInformer(ctx context.Context, obj client.Object, opts ...cache.InformerGetOption) (cache.Informer, error) {
+	r.mu.Lock()
+	r.types[fmt.Sprintf("%T", obj)] = true
+	r.mu.Unlock()
+	return r.Cache.GetInformer(ctx, obj, opts...)
+}
+
+func (r *informerRecorder) seen() []string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return slices.Sorted(maps.Keys(r.types))
+}
+
+// The operator's readiness check waits on WatchedObjects' informers: a type
+// missing there is not waited for, and one too many adds a watch nothing reads.
+func TestWatchedObjectsAreWhatTheControllersWatch(t *testing.T) {
+	c, ctx := testenv.Client(t)
+	ns := testenv.Namespace(t, ctx, c)
+
+	recorder := &informerRecorder{types: map[string]bool{}}
+	mgr, err := ctrl.NewManager(testenv.Config(t), manager.Options{
+		Scheme:                 testenv.Scheme(t),
+		Metrics:                metricsserver.Options{BindAddress: "0"},
+		HealthProbeBindAddress: "0",
+		Cache:                  cache.Options{DefaultNamespaces: map[string]cache.Config{ns: {}}},
+		NewCache: func(cfg *rest.Config, opts cache.Options) (cache.Cache, error) {
+			inner, err := cache.New(cfg, opts)
+			recorder.Cache = inner
+			return recorder, err
+		},
+		Controller: config.Controller{SkipNameValidation: ptr.To(true)},
+	})
+	if err != nil {
+		t.Fatalf("new manager: %v", err)
+	}
+	clock := &testClock{now: time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)}
+	if err := SetupAll(mgr, Options{
+		Agents:               agent.New(clock.Now, 5*time.Second),
+		Clock:                clock.Now,
+		StartupDeadline:      5 * time.Minute,
+		PlayerStatusInterval: 30 * time.Second,
+		OrphanInterval:       time.Minute,
+		Registrar:            NoopRegistrar{},
+		Bootstrapper: &Bootstrapper{
+			Client: mgr.GetClient(), Reader: mgr.GetAPIReader(),
+			CA: func() []byte { return []byte("test-ca") },
+		},
+		AgentEndpoint:     "spawnery-operator.spawnery-system.svc:9443",
+		OperatorNamespace: "spawnery-system",
+		Proxies:           &recordingFleet{},
+	}); err != nil {
+		t.Fatalf("SetupAll: %v", err)
+	}
+
+	mgrCtx, cancel := context.WithCancel(context.Background())
+	done := make(chan error, 1)
+	go func() { done <- mgr.Start(mgrCtx) }()
+	t.Cleanup(func() {
+		cancel()
+		select {
+		case <-done:
+		case <-time.After(20 * time.Second):
+			t.Error("manager did not stop within 20s")
+		}
+	})
+
+	var want []string
+	for _, obj := range WatchedObjects() {
+		want = append(want, fmt.Sprintf("%T", obj))
+	}
+	slices.Sort(want)
+
+	deadline := time.Now().Add(30 * time.Second)
+	for !mgr.GetCache().WaitForCacheSync(ctx) || len(recorder.seen()) < len(want) {
+		if time.Now().After(deadline) {
+			t.Fatalf("after 30s the controllers asked for informers %v, WatchedObjects names %v",
+				recorder.seen(), want)
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	// A controller asks for its sources' informers one after another.
+	time.Sleep(time.Second)
+	if got := recorder.seen(); !slices.Equal(got, want) {
+		t.Errorf("the controllers asked for informers %v, WatchedObjects names %v", got, want)
+	}
 }

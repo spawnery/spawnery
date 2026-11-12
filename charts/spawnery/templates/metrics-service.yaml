@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: spawnery-operator-metrics
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: spawnery
+    app.kubernetes.io/component: metrics
+    {{- include "spawnery.commonLabels" . | nindent 4 }}
+spec:
+  selector:
+    {{- include "spawnery.selectorLabels" . | nindent 4 }}
+  ports:
+    - name: metrics
+      port: 8080
+      targetPort: metrics
+      protocol: TCP

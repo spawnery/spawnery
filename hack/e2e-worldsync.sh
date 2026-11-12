@@ -34,8 +34,8 @@ export KUBECONFIG
 created_cluster=0
 
 dump() {
-	echo "================ operator log ================"
-	kubectl -n "$OPERATOR_NAMESPACE" logs deployment/spawnery-operator --tail=-1 2>&1 || true
+	echo "================ operator logs ================"
+	kubectl -n "$OPERATOR_NAMESPACE" logs -l app.kubernetes.io/name=spawnery,app.kubernetes.io/component=operator --prefix --tail=-1 2>&1 || true
 	echo "================ objects ================"
 	kubectl get networks,servergroups,proxygroups,servers,pods,pvc -A 2>&1 || true
 	echo "================ the private server's own log ================"

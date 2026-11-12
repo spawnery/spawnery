@@ -24,6 +24,7 @@ import (
 	"crypto/x509"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strconv"
@@ -604,9 +605,14 @@ func operatorServingIdentity(t *testing.T) ([]byte, string) {
 func forwardAgentPort(t *testing.T) (string, func()) {
 	t.Helper()
 	pod := operatorPod(t, operatorNamespace)
+	return forwardPodPort(t, operatorNamespace, pod.Name, int(podspec.AgentPort))
+}
 
-	cmd := exec.Command("kubectl", "-n", operatorNamespace, "port-forward",
-		"pod/"+pod.Name, ":"+strconv.Itoa(int(podspec.AgentPort)))
+// forwardPodPort puts a pod's port on a local one, through kubectl, which
+// picks the local port.
+func forwardPodPort(t *testing.T, namespace, pod string, port int) (string, func()) {
+	t.Helper()
+	cmd := exec.Command("kubectl", "-n", namespace, "port-forward", "pod/"+pod, ":"+strconv.Itoa(port))
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
 		t.Fatalf("pipe kubectl port-forward: %v", err)
@@ -623,15 +629,18 @@ func forwardAgentPort(t *testing.T) (string, func()) {
 
 	// "Forwarding from 127.0.0.1:41235 -> 9443", printed once the listener
 	// is up.
-	line, err := bufio.NewReader(stdout).ReadString('\n')
+	out := bufio.NewReader(stdout)
+	line, err := out.ReadString('\n')
 	if err != nil {
 		stop()
-		t.Fatalf("kubectl port-forward said nothing: %v\n%s", err, stderr.String())
+		t.Fatalf("kubectl port-forward to %s said nothing: %v\n%s", pod, err, stderr.String())
 	}
 	fields := strings.Fields(line)
 	if len(fields) < 3 || !strings.Contains(fields[2], ":") {
 		stop()
 		t.Fatalf("kubectl port-forward opened with %q, which carries no local address", line)
 	}
+	// kubectl prints a line per connection; a full pipe would stall it.
+	go func() { _, _ = io.Copy(io.Discard, out) }()
 	return fields[2], stop
 }

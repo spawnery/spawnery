@@ -156,7 +156,8 @@ func run(args []string, stdout, stderr io.Writer, stop <-chan os.Signal) int {
 		"seconds to hold the FullSync back after the opening messages, so a test can "+
 			"probe the readiness gate while the proxy has no server list yet")
 	deafenAfter := fs.Duration("deafen-after", 0,
-		"after this long, stop reading and writing on every connection without closing "+
+		"this long after the first stream opens, stop reading and writing on every "+
+			"connection without closing "+
 			"any of them; 0 disables. The one fault with no clock on either side -- see "+
 			"deafness in deafen.go for what it does and does not reproduce, and "+
 			"OperatorChannel's keepalive for what is meant to end the wait")
@@ -257,13 +258,19 @@ func run(args []string, stdout, stderr io.Writer, stop <-chan os.Signal) int {
 	// Outside the counter: a deafened connection still counts.
 	var serving net.Listener = counted
 	var deaf *deafness
+	var deafen sync.Once
+	var startDeafening func()
 	if *deafenAfter > 0 {
 		deaf = newDeafness()
 		serving = deaf.listener(counted)
-		time.AfterFunc(*deafenAfter, func() {
-			deaf.on.Store(true)
-			events.record("deafened", map[string]any{"after": deafenAfter.String()})
-		})
+		startDeafening = func() {
+			deafen.Do(func() {
+				time.AfterFunc(*deafenAfter, func() {
+					deaf.on.Store(true)
+					events.record("deafened", map[string]any{"after": deafenAfter.String()})
+				})
+			})
+		}
 	}
 
 	served := &stub{
@@ -279,6 +286,7 @@ func run(args []string, stdout, stderr io.Writer, stop <-chan os.Signal) int {
 		voice:          voice,
 		execute:        execute,
 		token:          material.Token,
+		streamOpened:   startDeafening,
 	}
 
 	// The operator's keepalive enforcement, the one server option mirrored
@@ -533,6 +541,8 @@ type stub struct {
 	executeNext int
 
 	token string
+
+	streamOpened func()
 }
 
 // nextCommand hands out each --execute command once per process, whichever
@@ -794,6 +804,9 @@ func serveSession[In, Out any](
 	}
 	muted := s.muted(index)
 	s.events.record("stream_opened", of(map[string]any{"muted": muted}))
+	if s.streamOpened != nil {
+		s.streamOpened()
+	}
 
 	ctx := stream.Context()
 	if s.supersede {

@@ -43,6 +43,7 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
+	"github.com/spawnery/spawnery/internal/leaseguard"
 	"github.com/spawnery/spawnery/internal/phase"
 	"github.com/spawnery/spawnery/internal/podspec"
 )
@@ -1047,6 +1048,155 @@ func TestStreamLossDeregistersAfterTheGracePeriod(t *testing.T) {
 	}
 }
 
+type leaseFreshness struct{ fresh bool }
+
+func (l *leaseFreshness) Fresh() bool { return l.fresh }
+
+func TestAnUnconfirmedLeaseTakesNoServerOutOfReady(t *testing.T) {
+	f := newFixture(t)
+	lease := &leaseFreshness{}
+	f.reconc.Lease = lease
+	uid := bringUpReady(t, f, "lobby-x7k2")
+
+	f.agents.Disconnect(uid)
+	f.clock.Advance(phase.StreamDownGrace + time.Second)
+	res, err := f.reconc.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "lobby-x7k2", Namespace: f.ns},
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Ready) || !srv.Status.Registered || srv.Status.ReadinessLosses != 0 {
+		t.Errorf("phase %q, registered %v, readinessLosses %d with the lease unconfirmed, want Ready, "+
+			"true, 0: a leader resumed past its lease acts on streams that went quiet while it was frozen",
+			srv.Status.Phase, srv.Status.Registered, srv.Status.ReadinessLosses)
+	}
+	if len(f.registrar.deregistered) != 0 {
+		t.Errorf("deregistered = %v with the lease unconfirmed, want none", f.registrar.deregistered)
+	}
+	if res.RequeueAfter != leaseguard.DefaultInterval {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, leaseguard.DefaultInterval)
+	}
+
+	lease.fresh = true
+	f.reconcile("lobby-x7k2")
+	srv = f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Starting) || srv.Status.Registered {
+		t.Errorf("phase %q, registered %v once the lease is confirmed, want Starting, false",
+			srv.Status.Phase, srv.Status.Registered)
+	}
+	if len(f.registrar.deregistered) != 1 {
+		t.Errorf("deregistered = %v once the lease is confirmed, want one deregistration", f.registrar.deregistered)
+	}
+}
+
+func TestAnUnconfirmedLeaseFinishesNoRoundOnAQuietStream(t *testing.T) {
+	f := newFixture(t)
+	lease := &leaseFreshness{}
+	f.reconc.Lease = lease
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if _, err := f.agents.ReportAcceptJoins(uid, f.ns, false, true); err != nil {
+		t.Fatalf("ReportAcceptJoins: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+	if srv := f.server("lobby-x7k2"); srv.Status.RoundEndedAt == nil || srv.Status.Phase != string(phase.Ready) {
+		t.Fatalf("phase %q, roundEndedAt %v after the round-end word, want Ready and stamped",
+			srv.Status.Phase, srv.Status.RoundEndedAt)
+	}
+
+	f.agents.Disconnect(uid)
+	f.clock.Advance(phase.StreamDownGrace + time.Second)
+	res, err := f.reconc.Reconcile(f.ctx, ctrlreconcile.Request{
+		NamespacedName: types.NamespacedName{Name: "lobby-x7k2", Namespace: f.ns},
+	})
+	if err != nil {
+		t.Fatalf("reconcile: %v", err)
+	}
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Ready) {
+		t.Errorf("phase %q with the lease unconfirmed, want Ready: a leader resumed past its "+
+			"lease would finish a running server on a stream that went quiet while it was frozen", got)
+	}
+	if res.RequeueAfter != leaseguard.DefaultInterval {
+		t.Errorf("RequeueAfter = %v, want %v", res.RequeueAfter, leaseguard.DefaultInterval)
+	}
+
+	lease.fresh = true
+	f.reconcile("lobby-x7k2")
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Finished) {
+		t.Errorf("phase %q once the lease is confirmed, want Finished", got)
+	}
+}
+
+func TestAnUnconfirmedLeaseLetsAStoppedPodFinishTheRound(t *testing.T) {
+	f := newFixture(t)
+	f.reconc.Lease = &leaseFreshness{}
+	uid := bringUpReady(t, f, "lobby-x7k2")
+	if _, err := f.agents.ReportAcceptJoins(uid, f.ns, false, true); err != nil {
+		t.Fatalf("ReportAcceptJoins: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	f.setPodFailed("lobby-x7k2")
+	f.reconcile("lobby-x7k2")
+
+	if got := f.server("lobby-x7k2").Status.Phase; got != string(phase.Finished) {
+		t.Errorf("phase %q after the pod stopped with the lease unconfirmed, want Finished: "+
+			"a terminal pod comes from the API, which stale memory cannot invent", got)
+	}
+}
+
+func TestAnUnconfirmedLeaseLetsADeletionDrain(t *testing.T) {
+	f := newFixture(t)
+	f.reconc.Lease = &leaseFreshness{}
+	bringUpReady(t, f, "lobby-x7k2")
+
+	if err := f.c.Delete(f.ctx, f.server("lobby-x7k2")); err != nil {
+		t.Fatalf("delete Server: %v", err)
+	}
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Draining) || srv.Status.Registered {
+		t.Errorf("phase %q, registered %v after a deletion with the lease unconfirmed, want Draining, "+
+			"false: a deletion comes from the API, which stale memory cannot invent",
+			srv.Status.Phase, srv.Status.Registered)
+	}
+	if len(f.registrar.drained) != 1 {
+		t.Errorf("drained = %v, want one drain command", f.registrar.drained)
+	}
+}
+
+func TestAnUnconfirmedLeaseLetsAForceStopThrough(t *testing.T) {
+	f := newFixture(t)
+	f.reconc.Lease = &leaseFreshness{}
+	bringUpReady(t, f, "lobby-x7k2")
+
+	f.forceStop(t, "lobby-x7k2")
+	f.reconcile("lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Terminating) || srv.Status.Registered {
+		t.Errorf("phase %q, registered %v after spec.forceStop with the lease unconfirmed, "+
+			"want Terminating, false", srv.Status.Phase, srv.Status.Registered)
+	}
+	if len(f.registrar.deregistered) != 1 {
+		t.Errorf("deregistered = %v, want one deregistration", f.registrar.deregistered)
+	}
+}
+
+func TestAnUnconfirmedLeaseHoldsBackNothingElse(t *testing.T) {
+	f := newFixture(t)
+	f.reconc.Lease = &leaseFreshness{}
+	bringUpReady(t, f, "lobby-x7k2")
+
+	srv := f.server("lobby-x7k2")
+	if srv.Status.Phase != string(phase.Ready) || !srv.Status.Registered {
+		t.Errorf("phase %q, registered %v, want Ready and registered: only leaving Ready and "+
+			"deregistering wait for the lease", srv.Status.Phase, srv.Status.Registered)
+	}
+}
+
 func TestOccupiedLabelTracksThePlayerCount(t *testing.T) {
 	f := newFixture(t)
 	uid := bringUpReady(t, f, "lobby-x7k2")
@@ -1645,7 +1795,7 @@ func groupWithMaxStale(seconds int32) *spawneryv1alpha1.ServerGroup {
 func collectInputsReconciler(clock func() time.Time) *ServerReconciler {
 	return &ServerReconciler{
 		Clock:  clock,
-		Agents: agent.New(clock, 5*time.Second, clock()),
+		Agents: agent.New(clock, 5*time.Second),
 	}
 }
 

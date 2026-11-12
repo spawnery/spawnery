@@ -162,3 +162,19 @@ func TestTheValuesSchemaAcceptsWhatIsActuallyUsed(t *testing.T) {
 		})
 	}
 }
+
+func TestTheChartRefusesStandbysWithoutLeaderElection(t *testing.T) {
+	out, ok := helmTemplate(t, "--set", "operator.leaderElect=false", "--set", "operator.replicas=2")
+	if ok {
+		t.Fatal("helm rendered two replicas with leader election off: both would run the " +
+			"controllers and overwrite each other's agent endpoint")
+	}
+	for _, key := range []string{"operator.leaderElect", "operator.replicas"} {
+		if !strings.Contains(out, key) {
+			t.Errorf("helm refused it without naming %q:\n%s", key, out)
+		}
+	}
+	if out, ok := helmTemplate(t, "--set", "operator.leaderElect=false", "--set", "operator.replicas=1"); !ok {
+		t.Errorf("helm refused one replica with leader election off, which is meant to work:\n%s", out)
+	}
+}

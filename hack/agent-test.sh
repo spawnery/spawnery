@@ -66,6 +66,7 @@ WORK="$(mktemp -d)"
 EVENTS="$WORK/events.jsonl"
 EVENTS2="$WORK/events-supersede.jsonl"
 EVENTS3="$WORK/events-mute.jsonl"
+EVENTS3B="$WORK/events-mute-supersede.jsonl"
 EVENTS4="$WORK/events-proxy.jsonl"
 EVENTS5="$WORK/events-proxy-supersede.jsonl"
 EVENTS6="$WORK/events-rotate.jsonl"
@@ -1104,10 +1105,20 @@ echo "the agent opened $opened streams in ${WINDOW}s across $superseded superses
 # ---------------------------------------------------------------------------
 # Phase three: the operator that accepts a stream and then says nothing.
 #
-# Between the cancel and its first Send, internal/agentserver has armed no
-# deadline, and the agent's channel has no keepalive, idle timeout or call
-# deadline of its own. With no bound the agent opens no further stream, which
-# only the floor can see.
+# The agent's keepalive is answered by the transport of a stream that says
+# nothing, and the channel has no idle timeout or call deadline of its own.
+# With no bound of the agent's own it opens no further stream.
+#
+# First a passive stub, which leaves the outgoing stream running: the renewal
+# it never answers is bounded by the operator's hard deadline, because giving
+# up on it retires the outgoing stream too. The attempt after that has no live
+# stream behind it and gets SessionLoop's shorter reconnect bound, which is
+# what ends a dial to a frozen pod.
+#
+# Then a stub that cancels the displaced stream at the renewal's entry and
+# says nothing, as internal/agentserver does between the cancel and its first
+# Send, when it has armed no deadline yet. With nothing behind it, the renewal
+# gets the reconnect bound from the cancel on.
 echo
 echo "restarting the agent against an operator that accepts a stream and says nothing..."
 "$CONTAINER" rm -f "$NAME2" >/dev/null 2>&1 || true
@@ -1115,6 +1126,17 @@ stop_stub "$STUB2_PID"
 STUB2_PID=""
 
 MUTE_HARD_DEADLINE=20
+SESSION_LOOP_SRC="$(dirname "$0")/../agent/common/src/main/kotlin/cloud/spawnery/agent/SessionLoop.kt"
+RECONNECT_BOUND_MS="$(sed -n 's/.*RECONNECT_ANSWER_BOUND_MILLIS = \([0-9_]*\)L.*/\1/p' "$SESSION_LOOP_SRC" | tr -d _)"
+if [ -z "$RECONNECT_BOUND_MS" ]; then
+	echo "no RECONNECT_ANSWER_BOUND_MILLIS in $SESSION_LOOP_SRC" >&2
+	exit 1
+fi
+RECONNECT_BOUND_S=$((RECONNECT_BOUND_MS / 1000))
+if [ "$RECONNECT_BOUND_S" -ge "$MUTE_HARD_DEADLINE" ]; then
+	echo "the reconnect bound (${RECONNECT_BOUND_S}s) is not below this phase's ${MUTE_HARD_DEADLINE}s hard deadline, so the phase cannot tell the two apart" >&2
+	exit 1
+fi
 mkdir -p "$WORK/agent-mute"
 chmod 0755 "$WORK/agent-mute"
 STUB3_PID="$(start_stub "$EVENTS3" "$WORK/stub3.log" "muting" \
@@ -1124,7 +1146,6 @@ STUB3_PID="$(start_stub "$EVENTS3" "$WORK/stub3.log" "muting" \
 	--report-interval 1 \
 	--renew-after "$RENEW_AFTER" \
 	--hard-deadline "$MUTE_HARD_DEADLINE" \
-	--supersede \
 	--mute-after 1)"
 
 start_agent "$NAME3" "$VOLUME3" "$WORK/agent-mute" "$WORK/config" "stubop:19445" "$IMAGE"
@@ -1132,43 +1153,75 @@ start_agent "$NAME3" "$VOLUME3" "$WORK/agent-mute" "$WORK/config" "stubop:19445"
 echo "waiting up to ${DEADLINE}s for the agent to greet the muting operator..."
 await_event hello "$EVENTS3" "$NAME3"
 
-# Stream 1 is the first muted one; the window starts when it opens.
+# await_streams <events> <count> <within> - seconds until the stub has seen
+# <count> streams. Polled once a second, so a gap between two calls is off by
+# up to 1s either way.
+await_streams() {
+	local start=$SECONDS
+	until [ "$(streams_opened "$1")" -ge "$2" ]; do
+		if [ $((SECONDS - start)) -gt "$3" ]; then
+			echo "the agent opened no stream $2 within ${3}s of an unanswered session" >&2
+			echo "an operator that accepts a stream and never answers it leaves the agent with no renewal, no reports and no reconnect: the wait has no bound of its own" >&2
+			jq -rs '[.[] | select(.kind == "stream_opened" or (.kind == "stream_closed"))]' <"$1" >&2
+			"$CONTAINER" logs "$NAME3" 2>&1 | tail -20 >&2 || true
+			exit 1
+		fi
+		sleep 1
+	done
+	echo $((SECONDS - start))
+}
+
 echo "waiting for the renewal the operator will not answer..."
-start=$SECONDS
-until [ "$(streams_opened "$EVENTS3")" -ge 2 ]; do
-	if [ $((SECONDS - start)) -gt 60 ]; then
-		echo "no second stream within 60s of a 5s renewal deadline" >&2
-		cat "$EVENTS3" >&2
-		exit 1
-	fi
-	sleep 1
-done
+await_streams "$EVENTS3" 2 60 >/dev/null
 
-# The agent's bound on an unanswered stream is the operator's
-# hardDeadlineSeconds, so a correct agent gives up at 20s and 41s: two streams.
-WINDOW3=45
-MUTE_FLOOR=1
-MUTE_LIMIT=$((WINDOW3 / MUTE_HARD_DEADLINE + 2))
-before3="$(streams_opened "$EVENTS3")"
-echo "counting the streams the agent opens over ${WINDOW3}s of silence..."
-sleep "$WINDOW3"
-after3="$(streams_opened "$EVENTS3")"
-opened3=$((after3 - before3))
-
-if [ "$opened3" -lt "$MUTE_FLOOR" ]; then
-	echo "the agent opened $opened3 streams in ${WINDOW3}s of an unanswered session, at least $MUTE_FLOOR expected" >&2
-	echo "an operator that accepts a stream and never answers it leaves the agent with no renewal, no reports and no reconnect: the wait has no bound of its own" >&2
-	jq -rs '.' <"$EVENTS3" >&2
-	"$CONTAINER" logs "$NAME3" 2>&1 | tail -20 >&2 || true
-	exit 1
-fi
-if [ "$opened3" -gt "$MUTE_LIMIT" ]; then
-	echo "the agent opened $opened3 streams in ${WINDOW3}s of an unanswered session, at most $MUTE_LIMIT expected" >&2
-	echo "the bound on an unanswered stream is meant to be the operator's own ${MUTE_HARD_DEADLINE}s hard deadline, not something shorter" >&2
+echo "waiting for the agent to give up on the renewal..."
+renewal_gap="$(await_streams "$EVENTS3" 3 $((MUTE_HARD_DEADLINE * 2)))"
+if [ "$renewal_gap" -lt $((MUTE_HARD_DEADLINE - 1)) ]; then
+	echo "the agent gave up on the unanswered renewal after ${renewal_gap}s, before the operator's ${MUTE_HARD_DEADLINE}s hard deadline" >&2
+	echo "while the outgoing stream lives, the bound on an unanswered renewal is meant to be the operator's own hard deadline, not something shorter: giving up on it retires the outgoing stream too" >&2
 	jq -rs '[.[] | select(.kind == "stream_opened" or (.kind == "stream_closed"))]' <"$EVENTS3" >&2
 	exit 1
 fi
-echo "the agent opened $opened3 streams in ${WINDOW3}s while the operator said nothing: an unanswered session is bounded by the operator's hard deadline"
+echo "the agent gave up on the unanswered renewal after ${renewal_gap}s, at the operator's ${MUTE_HARD_DEADLINE}s hard deadline"
+
+# The reconnect bound, then the second backoff step (2s, +-10%), then the dial.
+RECONNECT_LIMIT=$((RECONNECT_BOUND_S + 5))
+echo "waiting for the agent to give up on the reconnect, which nothing stands behind..."
+reconnect_gap="$(await_streams "$EVENTS3" 4 $((MUTE_HARD_DEADLINE * 2)))"
+if [ "$reconnect_gap" -lt $((RECONNECT_BOUND_S - 1)) ] || [ "$reconnect_gap" -gt "$RECONNECT_LIMIT" ]; then
+	echo "the agent gave up on the unanswered reconnect after ${reconnect_gap}s, want ${RECONNECT_BOUND_S}s to ${RECONNECT_LIMIT}s (RECONNECT_ANSWER_BOUND_MILLIS)" >&2
+	echo "a reconnect with no live stream behind it is what hangs on a frozen pod after a node loss; past ReconnectGrace its server leaves Ready" >&2
+	jq -rs '[.[] | select(.kind == "stream_opened" or (.kind == "stream_closed"))]' <"$EVENTS3" >&2
+	exit 1
+fi
+echo "the agent gave up on the unanswered reconnect after ${reconnect_gap}s: a reconnect is bounded by its own ${RECONNECT_BOUND_S}s, a renewal by the operator's hard deadline"
+
+# Same port and directory: the agent reads the new stub's CA and token on its
+# next dial, so it needs no restart.
+echo "replacing the stub with one that cancels the displaced stream at the renewal and says nothing..."
+stop_stub "$STUB3_PID"
+STUB3_PID="$(start_stub "$EVENTS3B" "$WORK/stub3b.log" "superseding and muting" \
+	--dir "$WORK/agent-mute" \
+	--san stubop \
+	--listen ":19445" \
+	--report-interval 1 \
+	--renew-after "$RENEW_AFTER" \
+	--hard-deadline "$MUTE_HARD_DEADLINE" \
+	--supersede \
+	--mute-after 1)"
+
+await_event hello "$EVENTS3B" "$NAME3"
+echo "waiting for the renewal the operator cancels the outgoing stream for and will not answer..."
+await_streams "$EVENTS3B" 2 60 >/dev/null
+# The reconnect bound from the cancel, then the first backoff step (1s, +-10%).
+orphan_gap="$(await_streams "$EVENTS3B" 3 $((MUTE_HARD_DEADLINE * 2)))"
+if [ "$orphan_gap" -lt $((RECONNECT_BOUND_S - 1)) ] || [ "$orphan_gap" -gt $((RECONNECT_BOUND_S + 4)) ]; then
+	echo "the agent gave up on the renewal whose outgoing stream was gone after ${orphan_gap}s, want ${RECONNECT_BOUND_S}s to $((RECONNECT_BOUND_S + 4))s (RECONNECT_ANSWER_BOUND_MILLIS)" >&2
+	echo "the outgoing stream books no reconnect while a renewal owes one, so a renewal left on the ${MUTE_HARD_DEADLINE}s hard deadline after a node loss keeps its server off the operator for that long" >&2
+	jq -rs '[.[] | select(.kind == "stream_opened" or (.kind == "stream_closed"))]' <"$EVENTS3B" >&2
+	exit 1
+fi
+echo "the agent gave up on the renewal ${orphan_gap}s after the operator cancelled the stream behind it: a renewal with nothing behind it is bounded like a reconnect"
 
 # ---------------------------------------------------------------------------
 # Phase four: the proxy, and the gate that must not open early - or stay open.
@@ -1540,8 +1593,8 @@ echo "the agent completed a session through it"
 #
 # The stub stops reading and writing without closing anything (see `deafness`
 # in cmd/spawnery-stubop/deafen.go). Before that, the connection count proves
-# the stub's KeepaliveEnforcementPolicy (the operator's) accepts the agent's 45s
-# pings; after it, only that keepalive can end the wait. About two minutes,
+# the stub's KeepaliveEnforcementPolicy (the operator's) accepts the agent's
+# pings; after it, only that keepalive can end the wait. About a minute,
 # because it tests the production timer rather than a test-only knob.
 echo
 echo "deafening the operator mid-session, to prove the agent has a clock of its own..."
@@ -1549,13 +1602,25 @@ echo "deafening the operator mid-session, to prove the agent has a clock of its 
 stop_stub "$STUB6_PID"
 STUB6_PID=""
 
-# The keepalive fires 45s after the last thing the operator said and waits 20
-# for the answer, so deafening at 50 lands after the first ping has been
-# answered and before the second is due.
-DEAFEN_AFTER=50
-# Worst case is a ping sent the instant before the deafening: 45 to the next
-# one and 20 more to give up on it. Half as much again for a loaded machine.
-DEAF_LIMIT=100
+# Read from OperatorChannel.kt so the phase follows the production timer.
+KEEPALIVE_SRC="$(dirname "$0")/../agent/common/src/main/kotlin/cloud/spawnery/agent/OperatorChannel.kt"
+KEEPALIVE_S="$(sed -n 's/.*KEEPALIVE_SECONDS = \([0-9]*\)L.*/\1/p' "$KEEPALIVE_SRC")"
+KEEPALIVE_TIMEOUT_S="$(sed -n 's/.*KEEPALIVE_TIMEOUT_SECONDS = \([0-9]*\)L.*/\1/p' "$KEEPALIVE_SRC")"
+if [ -z "$KEEPALIVE_S" ] || [ -z "$KEEPALIVE_TIMEOUT_S" ]; then
+	echo "no KEEPALIVE_SECONDS or KEEPALIVE_TIMEOUT_SECONDS in $KEEPALIVE_SRC" >&2
+	exit 1
+fi
+
+# The keepalive fires KEEPALIVE_S after the last thing the operator said and
+# waits KEEPALIVE_TIMEOUT_S for the answer, so deafening 5s after the first
+# ping lands after it has been answered and before the second is due. The stub
+# counts --deafen-after from the first stream, where the keepalive starts too,
+# so the server's boot time does not shorten the window.
+DEAFEN_AFTER=$((KEEPALIVE_S + 5))
+# Worst case is a ping sent the instant before the deafening: the interval to
+# the next one and the timeout to give up on it. Half as much again for a
+# loaded machine; the old 45s + 20s keepalive (65s) exceeds it.
+DEAF_LIMIT=$(((KEEPALIVE_S + KEEPALIVE_TIMEOUT_S) * 3 / 2))
 
 mkdir -p "$WORK/agent-deaf"
 chmod 0755 "$WORK/agent-deaf"

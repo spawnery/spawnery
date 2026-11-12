@@ -47,7 +47,7 @@ func source(t *testing.T, objects ...client.Object) (netstate.Source, *agent.Reg
 		t.Fatalf("scheme: %v", err)
 	}
 	start := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
-	reg := agent.New(func() time.Time { return start }, 5*time.Second, start)
+	reg := agent.New(func() time.Time { return start }, 5*time.Second)
 	reader := fake.NewClientBuilder().WithScheme(scheme).
 		WithStatusSubresource(&spawneryv1alpha1.Server{}).
 		WithObjects(objects...).Build()

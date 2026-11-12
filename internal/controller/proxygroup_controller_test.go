@@ -406,6 +406,35 @@ func TestProxyGroupScalesDown(t *testing.T) {
 }
 
 // Without the deadline, treating unknown counts as occupied would hold a pod forever.
+func TestAnUnconfirmedLeaseKeepsAProxyPastItsDeadline(t *testing.T) {
+	f := newFixture(t)
+	r := proxyGroupReconciler(f)
+	lease := &leaseFreshness{}
+	r.Lease = lease
+	f.createProxyGroup("gateway")
+	f.reconcileProxyGroup(r, "gateway")
+
+	if got := len(f.proxyPods("gateway")); got != 2 {
+		t.Fatalf("proxy pods = %d, want 2", got)
+	}
+
+	f.setProxyReplicas("gateway", 1)
+	f.reconcileProxyGroup(r, "gateway")
+	f.clock.Advance(f.proxyGroup("gateway").DrainTimeout() + time.Second)
+	f.reconcileProxyGroup(r, "gateway")
+
+	if got := len(f.proxyPods("gateway")); got != 2 {
+		t.Fatalf("proxy pods = %d past the deadline with the lease unconfirmed, want 2: the surplus "+
+			"proxy's unknown count may be a leader's memory from before it froze", got)
+	}
+
+	lease.fresh = true
+	f.reconcileProxyGroup(r, "gateway")
+	if got := len(f.proxyPods("gateway")); got != 1 {
+		t.Errorf("proxy pods = %d once the lease is confirmed, want 1", got)
+	}
+}
+
 func TestAProxyWithAStalePlayerCountWaitsForTheDeadline(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -2035,7 +2064,7 @@ func TestProxyOccupiedForBudget(t *testing.T) {
 	}
 }
 
-// newFixture starts the registry with the clock, so unknown pods begin inside budgetReconnectGrace.
+// newFixture marks the registry serving at its start, so unknown pods begin inside budgetReconnectGrace.
 func TestAProxyTheRegistryHasNeverSeenDoesNotWedgeTheBudget(t *testing.T) {
 	f := newFixture(t)
 	r := proxyGroupReconciler(f)
@@ -2283,7 +2312,7 @@ func TestTheProxyGroupBudgetReadsTheRegistryOnce(t *testing.T) {
 		priming:    true,
 		freshCalls: 2,
 	}
-	customAgents := agent.New(clk.Now, reportInterval, f.clock.Now())
+	customAgents := agent.New(clk.Now, reportInterval)
 	r.Agents = customAgents
 
 	f.createProxyGroup("gateway", func(g *spawneryv1alpha1.ProxyGroup) {

@@ -26,6 +26,7 @@ import (
 	"google.golang.org/grpc/status"
 
 	"github.com/spawnery/spawnery/internal/agentpb"
+	"github.com/spawnery/spawnery/internal/netstate"
 )
 
 func TestNewRefusesWithoutAProxyFleet(t *testing.T) {
@@ -55,6 +56,20 @@ func TestNewRefusesWithoutANetworkStateSource(t *testing.T) {
 		}
 	}()
 	New(Options{Proxies: stubFleet{}, Servers: stubFanout{}})
+}
+
+func TestServingStaysOpenUntilStart(t *testing.T) {
+	c := fakeClient(t)
+	s := New(Options{
+		Proxies: stubFleet{}, Servers: stubFanout{},
+		State:  netstate.Source{Reader: c},
+		Writer: KubeWriter{Client: c, Reader: c, Clock: time.Now},
+	})
+	select {
+	case <-s.Serving():
+		t.Fatal("Serving closed before Start bound the listener")
+	default:
+	}
 }
 
 type stubFanout struct{}

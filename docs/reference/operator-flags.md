@@ -29,21 +29,31 @@ Where the Prometheus metrics endpoint listens. See
 
 Default: `:8081`
 
-Where `/healthz` and `/readyz` listen. `/readyz` reports ready only once this
-replica holds the leader-election lock. A standby answers `not the leader
-yet` rather than ready, because the agent gRPC endpoint is leader-bound and a
-standby serving readiness would attract agents into a registry no controller
-reads.
+Where `/healthz` and `/readyz` listen. `/healthz` is a plain ping. `/readyz`
+passes once the informers of every type the controllers watch have synced, so
+a new pod in a rollout is not Ready before it could take over. It says nothing
+about the leader-election lock: a standby is Ready once its caches have
+synced. Agents still reach only the leader, because the agent Service has no
+selector and its EndpointSlices name the leader alone; see
+[`--publish-agent-endpoint`](#-publish-agent-endpoint).
 
 ### `--leader-elect`
 
 Default: `true`
 
-Runs leader election among replicas. On by default so that running more than
-one replica is never a decision made twice, once when the chart was written
-and once when the flag was flipped. Set to `false` for a local `go run`
-outside a cluster: left on, controller-runtime looks for a ServiceAccount
-token mount that only exists inside a pod, and a local run dies at startup.
+Runs leader election among replicas. The leader runs the controllers and the
+agent endpoint. Every other replica is a standby that keeps its caches warm
+and takes over when the leader's lease is released or runs out. A leader that
+shuts down takes at most 7s to stop its work and then releases the lease,
+inside the chart's 10s grace period, so a planned handover does not wait out
+the lease. On by default so that running more than one replica is never a
+decision made twice, once when the chart was written and once when the flag
+was flipped. With it off, run one replica: every replica would act as the
+leader, and the chart refuses `leaderElect: false` with more than one. A local
+`go run` starts either way, since the Lease goes to `--operator-namespace`.
+Turn it off there anyway, or the run contends for the lease with an operator
+installed in that namespace and waits it out first. A local run also needs
+`--publish-agent-endpoint=false`.
 
 ### `--namespace`
 
@@ -112,6 +122,24 @@ Default: `:9443`
 Where the agent gRPC endpoint listens. This is the port behind the Service a
 game server pod actually dials: the leader, not the pod, since the
 endpoint is a leader-bound runnable.
+
+### `--publish-agent-endpoint`
+
+Default: `true`
+
+Makes the leader write its own address into the EndpointSlices of the agent
+Service, which has no selector. It writes one slice per address family the pod
+has and re-asserts them every 30s; when the first write after an election
+fails, it retries every 2s until one succeeds. When the leader shuts down, it
+empties only the slices that still name this pod's UID, so it never wipes a
+successor's address. Before each write it reads the leader-election Lease and
+writes nothing unless this replica holds it. With `--leader-elect=false` there
+is no Lease, and it writes without that check. It needs `POD_NAME`, `POD_UID`
+and `POD_IPS` from the downward API (`NODE_NAME` is optional), which the chart
+sets; with any of the three unset the operator refuses to start. A local
+`go run` has none of them, so it needs `--publish-agent-endpoint=false`, and
+the agent Service's endpoints are then yours to write (see
+[development](../contributing/development.md)).
 
 ### `--agent-session-renew-after`
 
