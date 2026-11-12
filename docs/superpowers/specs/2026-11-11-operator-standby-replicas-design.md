@@ -43,7 +43,8 @@ Goals:
 
 - The chart runs more than one operator replica, and a standby takes over
   from a crashed or evicted leader within seconds.
-- Every replica is Ready when it is healthy, so the Deployment rolls with
+- Every replica is Ready when it is healthy (since 2026-11-12: once its
+  caches have synced, §3.3), so the Deployment rolls with
   `RollingUpdate`, `helm --wait` and Flux health checks pass, and a node drain
   respects a PodDisruptionBudget.
 - A planned handover (rollout, drain, `kubectl delete pod`) releases the lease
@@ -152,6 +153,21 @@ period, about 17 s.
   without leading. The feature is beta in controller-runtime 0.24; §3.4
   already accounts for the doubled watch load.
 
+Decided 2026-11-12: `/readyz` waits for the caches, which replaces the first
+bullet above. With `healthz.Ping` a new pod was Ready at once, so a rollout
+stopped the old pod before the new one had synced its caches and could
+campaign. The check `caches` now asks the manager's cache, without blocking,
+for the informer of every type the controllers watch
+(`controller.WatchedObjects`; a test holds it to what `SetupAll`'s
+controllers ask for), and passes once each of them has synced.
+`WaitForCacheSync` alone is not enough: until warmup has asked for the
+informers, the cache holds none and reports itself synced. The leader and a
+standby both turn Ready at that point. The lock is still not checked, and
+agents still find the leader through the EndpointSlices. The check answers
+within 500 ms, half the probe's default `timeoutSeconds`, because the first
+request for an informer looks up its REST mapping, and that can wait on API
+discovery.
+
 The order of a planned handover, then:
 
 1. The leader gets SIGTERM. Its slice writer empties the slices; `agentserver`
@@ -171,6 +187,12 @@ The order of a planned handover, then:
   works with one replica now, since the new pod becomes Ready without the
   lock. A rollout costs one or two handovers (the old leader may hand to an old
   standby that is replaced next).
+
+  Decided 2026-11-12: with `operator.leaderElect: false` the strategy is
+  `Recreate`, with no `rollingUpdate` block. Without a Lease the surge pod
+  would run the controllers and write the agent slice beside the old pod for
+  as long as both run. With leader election on, the RollingUpdate above
+  stands.
 - A PodDisruptionBudget with `maxUnavailable: 1`, rendered only when
   `replicas > 1`. With one replica a PDB would block every node drain.
 - A soft `topologySpreadConstraints` on `kubernetes.io/hostname`

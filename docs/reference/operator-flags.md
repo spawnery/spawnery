@@ -29,10 +29,12 @@ Where the Prometheus metrics endpoint listens. See
 
 Default: `:8081`
 
-Where `/healthz` and `/readyz` listen. Both are a plain ping and say nothing
-about the leader-election lock: a standby replica is Ready. Agents still reach
-only the leader, because the agent Service has no selector and its
-EndpointSlices name the leader alone; see
+Where `/healthz` and `/readyz` listen. `/healthz` is a plain ping. `/readyz`
+passes once the informers of every type the controllers watch have synced, so
+a new pod in a rollout is not Ready before it could take over. It says nothing
+about the leader-election lock: a standby is Ready once its caches have
+synced. Agents still reach only the leader, because the agent Service has no
+selector and its EndpointSlices name the leader alone; see
 [`--publish-agent-endpoint`](#-publish-agent-endpoint).
 
 ### `--leader-elect`

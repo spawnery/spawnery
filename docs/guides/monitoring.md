@@ -56,8 +56,11 @@ hands over, and the agents redial the new one. The Deployment rolls with
 `maxSurge: 1` and `maxUnavailable: 0`, a PodDisruptionBudget with
 `maxUnavailable: 1` applies when `replicas` is above 1, and the replicas are
 spread over nodes softly (`operator.topologySpreadConstraints` replaces that).
-Set `operator.replicas: 1` for the old shape. With
-`operator.leaderElect: false` the chart refuses more than one replica.
+A new pod is Ready only once its caches have synced, so the rollout stops an
+old pod only when its replacement could take over. Set `operator.replicas: 1`
+for the old shape. With `operator.leaderElect: false` the chart refuses more
+than one replica and recreates the pod instead of rolling it, since without a
+Lease two operators would briefly run side by side.
 
 The ServiceMonitor scrapes every replica through the separate Service
 `spawnery-operator-metrics`, so a standby's series are present too. The alert
