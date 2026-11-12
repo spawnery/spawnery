@@ -20,7 +20,13 @@ import (
 	"fmt"
 	"time"
 
+	corev1 "k8s.io/api/core/v1"
+	networkingv1 "k8s.io/api/networking/v1"
+	policyv1 "k8s.io/api/policy/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
+
+	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 
 	"github.com/spawnery/spawnery/internal/agent"
 	"github.com/spawnery/spawnery/internal/cloudevent"
@@ -122,6 +128,23 @@ func SetupAll(mgr ctrl.Manager, opts Options) error {
 	}
 
 	return nil
+}
+
+// WatchedObjects are the types SetupAll's controllers watch, one object each.
+func WatchedObjects() []client.Object {
+	return []client.Object{
+		&spawneryv1alpha1.Network{},
+		&spawneryv1alpha1.ServerGroup{},
+		&spawneryv1alpha1.ProxyGroup{},
+		&spawneryv1alpha1.Server{},
+		&spawneryv1alpha1.ScaleBoost{},
+		&corev1.Pod{},
+		&corev1.Service{},
+		&corev1.ConfigMap{},
+		&corev1.Node{},
+		&policyv1.PodDisruptionBudget{},
+		&networkingv1.NetworkPolicy{},
+	}
 }
 
 // The new*Reconciler functions exist so tests can assert the Options wiring,

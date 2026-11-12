@@ -600,7 +600,7 @@ func main() {
 		setupLog.Error(err, "unable to add health check")
 		os.Exit(1)
 	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+	if err := mgr.AddReadyzCheck("caches", readyzCheck(mgr)); err != nil {
 		setupLog.Error(err, "unable to add ready check")
 		os.Exit(1)
 	}
