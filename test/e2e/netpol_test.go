@@ -63,10 +63,11 @@ func theOperatorStaysReadyBehindItsOwnPolicy(t *testing.T) {
 	// Held: a probe failure takes three periods to move the pod out of Ready.
 	eventuallyStable(t, time.Minute, 20*time.Second,
 		"the operator ready behind its own policy", func() (bool, string) {
-			pod := operatorPod(t, operatorNamespace)
-			for _, c := range pod.Status.ContainerStatuses {
-				if !c.Ready {
-					return false, fmt.Sprintf("container not ready, restarts %d", c.RestartCount)
+			for _, pod := range operatorPods(t, operatorNamespace) {
+				for _, c := range pod.Status.ContainerStatuses {
+					if !c.Ready {
+						return false, fmt.Sprintf("%s: container not ready, restarts %d", pod.Name, c.RestartCount)
+					}
 				}
 			}
 			return true, ""

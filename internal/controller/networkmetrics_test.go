@@ -79,7 +79,7 @@ func networkMetricsFixture(t *testing.T) (client.Client, *agent.Registry) {
 	).WithStatusSubresource(group).Build()
 
 	now := time.Unix(1000, 0)
-	reg := agent.New(func() time.Time { return now }, 5*time.Second, now)
+	reg := agent.New(func() time.Time { return now }, 5*time.Second)
 	reg.Connect("u1", agent.RoleServer)
 	must := func(err error) {
 		if err != nil {

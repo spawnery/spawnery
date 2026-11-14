@@ -17,7 +17,8 @@ spec:
       - {{ .Release.Namespace }}
   selector:
     matchLabels:
-      {{- include "spawnery.selectorLabels" . | nindent 6 }}
+      app.kubernetes.io/name: spawnery
+      app.kubernetes.io/component: metrics
   endpoints:
     # The Service's port name, not the container's.
     - port: metrics

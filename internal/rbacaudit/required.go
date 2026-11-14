@@ -109,7 +109,7 @@ var RequiredCluster = []Permission{
 	{Group: "spawnery.cloud", Resource: "servers", Subresource: "finalizers", Verb: "update", Why: "blockOwnerDeletion on the pod owner references in podspec.BuildServerPod"},
 
 	// The proxy layer's Service, one per ProxyGroup.
-	{Group: "", Resource: "services", Verb: "get", Why: "CreateOrUpdate in ProxyGroupReconciler"},
+	{Group: "", Resource: "services", Verb: "get", Why: "CreateOrUpdate in ProxyGroupReconciler, and agentendpoint.Publisher.Assert reads the agent Service's UID for the slices' owner reference"},
 	{Group: "", Resource: "services", Verb: "list", Why: "ProxyGroupReconciler Owns(&corev1.Service{})"},
 	{Group: "", Resource: "services", Verb: "watch", Why: "ProxyGroupReconciler Owns(&corev1.Service{})"},
 	{Group: "", Resource: "services", Verb: "create", Why: "CreateOrUpdate in ProxyGroupReconciler"},
@@ -153,6 +153,15 @@ var RequiredNamespaced = []Permission{
 	// Core events, for leader election's lock on a Lease in this namespace only.
 	{Group: "", Resource: "events", Verb: "create", Why: "leader election's resource lock records elections"},
 	{Group: "", Resource: "events", Verb: "patch", Why: "the leader election recorder's event aggregation"},
+
+	// The agent Service has no selector; the leader writes its endpoints.
+	{Group: "discovery.k8s.io", Resource: "endpointslices", Verb: "get", Why: "agentendpoint.Publisher.Assert and Withdraw read the slices they write"},
+	{Group: "discovery.k8s.io", Resource: "endpointslices", Verb: "list", Why: "agentendpoint.Publisher.Assert finds the slices the EndpointSlice controller left behind, whose names are generated"},
+	{Group: "discovery.k8s.io", Resource: "endpointslices", Verb: "create", Why: "agentendpoint.Publisher.Assert creates a slice per IP family of the leader"},
+	{Group: "discovery.k8s.io", Resource: "endpointslices", Verb: "update", Why: "agentendpoint.Publisher.Assert overwrites a slice naming another pod, and Withdraw empties its own"},
+	{Group: "discovery.k8s.io", Resource: "endpointslices", Verb: "delete", Why: "agentendpoint.Publisher.Assert deletes stale controller slices and the slice of a family the pod lacks"},
+	{Group: "", Resource: "endpoints", Verb: "get", Why: "agentendpoint.Publisher.Assert looks for the Endpoints object the selector left behind"},
+	{Group: "", Resource: "endpoints", Verb: "delete", Why: "agentendpoint.Publisher.Assert deletes it, or the mirroring controller turns it into a stale slice"},
 }
 
 // RequiredNetworkNamespace is granted per Network namespace by

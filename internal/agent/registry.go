@@ -68,8 +68,9 @@ type Snapshot struct {
 	// such as the start of a drain.
 	PlayersReportedAt time.Time
 	// StreamDownFor is how long the stream has been down. Zero while up. For
-	// an unknown pod it is the time since the operator started, so agents get
-	// a grace period to reconnect after an operator restart.
+	// an unknown pod it is the time since MarkServing, and zero before it, so
+	// agents get a grace period to reconnect after an operator restart or a
+	// takeover.
 	StreamDownFor time.Duration
 	// AcceptingJoins is whether this server wants new players routed to it.
 	// True unless the server said otherwise, and true for an unknown pod, so an
@@ -171,20 +172,16 @@ type Registry struct {
 	entries        map[string]*entry
 	now            func() time.Time
 	reportInterval time.Duration
-	startedAt      time.Time
 	servingAt      time.Time
 	desiredHash    map[string]string
 }
 
-// New creates a registry. startedAt is when the operator process came up; an
-// unknown pod's StreamDownFor counts from it until MarkServing moves it.
-func New(clock func() time.Time, reportInterval time.Duration, startedAt time.Time) *Registry {
+func New(clock func() time.Time, reportInterval time.Duration) *Registry {
 	return &Registry{
 		entries:        make(map[string]*entry),
 		desiredHash:    make(map[string]string),
 		now:            clock,
 		reportInterval: reportInterval,
-		startedAt:      startedAt,
 	}
 }
 
@@ -677,15 +674,11 @@ func (r *Registry) Lookup(key string) Snapshot {
 	now := r.now()
 	e, ok := r.entries[key]
 	if !ok {
-		since := r.startedAt
+		snap := Snapshot{PlayersStale: true, AcceptingJoins: true}
 		if !r.servingAt.IsZero() {
-			since = r.servingAt
+			snap.StreamDownFor = now.Sub(r.servingAt)
 		}
-		return Snapshot{
-			PlayersStale:   true,
-			AcceptingJoins: true,
-			StreamDownFor:  now.Sub(since),
-		}
+		return snap
 	}
 
 	snap := Snapshot{

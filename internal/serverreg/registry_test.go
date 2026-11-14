@@ -58,7 +58,7 @@ func newRegistry(t *testing.T, opts serverreg.Options, objects ...client.Object)
 		Reader: fake.NewClientBuilder().WithScheme(scheme).
 			WithStatusSubresource(&spawneryv1alpha1.Server{}).
 			WithObjects(objects...).Build(),
-		Agents: agent.New(func() time.Time { return start }, 5*time.Second, start),
+		Agents: agent.New(func() time.Time { return start }, 5*time.Second),
 	}
 	return serverreg.New(opts)
 }

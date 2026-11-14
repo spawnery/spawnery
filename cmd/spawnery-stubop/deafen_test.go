@@ -92,3 +92,47 @@ func TestADeafenedStubStillStopsOnSIGTERM(t *testing.T) {
 		t.Fatal("the deafened stub was still running 5s after SIGTERM")
 	}
 }
+
+// agent-test.sh phase seven times the deafening against the agent's
+// keepalive, which starts with the stream, not with the stub.
+func TestTheDeafeningCountsFromTheFirstStream(t *testing.T) {
+	dir := t.TempDir()
+	stop := make(chan os.Signal, 1)
+	stdout, stderr := &lockedBuffer{}, &lockedBuffer{}
+	exited := make(chan int, 1)
+	go func() {
+		exited <- run([]string{"--dir", dir, "--listen", "127.0.0.1:0", "--deafen-after", "300ms"}, stdout, stderr, stop)
+	}()
+	t.Cleanup(func() {
+		stop <- syscall.SIGTERM
+		<-exited
+	})
+
+	var addr string
+	for deadline := time.Now().Add(10 * time.Second); addr == ""; {
+		if _, rest, ok := strings.Cut(stderr.String(), "serving AgentService on "); ok {
+			addr, _, _ = strings.Cut(rest, " ")
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("the stub never started serving: %s", stderr.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	time.Sleep(time.Second)
+	if strings.Contains(stdout.String(), `"deafened"`) {
+		t.Fatalf("the stub went deaf 300ms after it started, with no stream yet: %s", stdout.String())
+	}
+
+	stream := serverStream(t, dir, addr)
+	if err := stream.Send(&agentpb.ServerMessage{}); err != nil {
+		t.Fatalf("Send: %v", err)
+	}
+	for deadline := time.Now().Add(5 * time.Second); !strings.Contains(stdout.String(), `"deafened"`); {
+		if time.Now().After(deadline) {
+			t.Fatalf("the stub never deafened after its first stream: %s", stdout.String())
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}

@@ -91,11 +91,8 @@ their status to show for it.
 Every key is in [Chart values](../reference/chart-values.md), generated from
 `charts/spawnery/values.schema.json` by `make manifests`, so it cannot drift.
 
-One thing that page does not carry: `replicas` and `imagePullSecrets` are
-deliberately not values. `readyz` hangs off the leader lock, so a second
-replica never becomes ready. The Deployment hard-codes `1` and `strategy:
-Recreate`, and a knob whose only valid setting is 1 is a trap. There is no
-`imagePullSecrets` because all three images are public.
+One thing that page does not carry: `imagePullSecrets` is deliberately not a
+value, because all three images are public.
 
 ## The `/cloud` permissions
 

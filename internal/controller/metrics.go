@@ -19,6 +19,8 @@ package controller
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+
+	"github.com/spawnery/spawnery/internal/leaderonly"
 )
 
 // ChangeoversInFlight counts the groups AdmitChangeovers holds a place for;
@@ -36,5 +38,5 @@ var (
 )
 
 func init() {
-	metrics.Registry.MustRegister(ChangeoversInFlight, ChangeoversWaiting)
+	metrics.Registry.MustRegister(leaderonly.Wrap(ChangeoversInFlight, ChangeoversWaiting))
 }

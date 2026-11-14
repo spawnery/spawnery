@@ -346,6 +346,12 @@ e2e-worldsync: manifests
 e2e-worldsync-canvas: manifests
 	GAME=canvas hack/e2e-worldsync.sh
 
+# Four kind nodes, the released chart and real game images: two operator
+# replicas through an upgrade, handovers and a paused node.
+.PHONY: e2e-ha
+e2e-ha: manifests
+	hack/e2e-ha.sh
+
 # mkdocs --strict is the only link checker. Out of `test`; ci.yml runs it in
 # its own job.
 .PHONY: docs

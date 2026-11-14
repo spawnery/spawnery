@@ -47,6 +47,10 @@ metrics:
     annotations: {}
 
 operator:
+  replicas: 2
+  # Empty: one soft constraint spreading the replicas over
+  # kubernetes.io/hostname.
+  topologySpreadConstraints: []
   # hack/e2e.sh overrides this for its own run.
   startupDeadline: 5m
   leaderElect: true

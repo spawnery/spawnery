@@ -563,8 +563,13 @@ project and the flag. It never acts on it. A warning that stops appearing
 costs a warning; a drain that stops working costs a node's worth of players.
 
 ```bash
-kubectl logs -n spawnery-system deployment/spawnery-operator | grep drain-taint
+POD=$(kubectl -n spawnery-system get lease spawnery-operator.spawnery.cloud \
+  -o jsonpath='{.spec.holderIdentity}' | cut -d_ -f1)
+kubectl -n spawnery-system logs "$POD" | grep drain-taint
 ```
+
+Only the leader reconciles nodes, so the pod comes from the Lease; see
+[Running more than one operator replica](monitoring.md#running-more-than-one-operator-replica).
 
 ## This page and the other two
 

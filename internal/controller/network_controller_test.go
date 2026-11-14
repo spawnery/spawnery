@@ -1235,7 +1235,7 @@ func TestTheRescueWindowConditionReportsWhatTheProxiesSaid(t *testing.T) {
 	} {
 		t.Run(tc.what, func(t *testing.T) {
 			f := newFixture(t)
-			registry := agent.New(f.clock.Now, 5*time.Second, f.clock.now)
+			registry := agent.New(f.clock.Now, 5*time.Second)
 			tc.report(registry, f.ns)
 			r, _ := networkReconcilerWithEvents(f)
 			r.Agents = registry

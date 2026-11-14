@@ -141,7 +141,7 @@ func newFixtureWithProxies(t *testing.T, renewAfter, hardDeadline time.Duration,
 		t.Fatalf("Set: %v", err)
 	}
 
-	registry := agent.New(now, 5*time.Second, now())
+	registry := agent.New(now, 5*time.Second)
 	state := netstate.Source{Reader: c, Agents: registry}
 	// The real writer, not a stub: a retire that patches nothing would pass every
 	// assertion about the answer.
@@ -183,12 +183,13 @@ func newFixtureWithProxies(t *testing.T, renewAfter, hardDeadline time.Duration,
 		}
 	}()
 
-	deadline := time.Now().Add(5 * time.Second)
-	for srv.Addr() == "" {
-		if time.Now().After(deadline) {
-			t.Fatal("the agent server never bound a port")
-		}
-		time.Sleep(10 * time.Millisecond)
+	select {
+	case <-srv.Serving():
+	case <-time.After(5 * time.Second):
+		t.Fatal("the agent server never reported serving")
+	}
+	if srv.Addr() == "" {
+		t.Fatal("Serving closed before the listener was bound")
 	}
 
 	return &serverFixture{

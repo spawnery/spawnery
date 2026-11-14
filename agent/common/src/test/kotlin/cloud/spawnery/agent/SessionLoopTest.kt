@@ -14,10 +14,14 @@ import io.grpc.Status
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.assertThrows
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.net.InetAddress
+import java.net.ServerSocket
+import java.net.Socket
 import java.nio.file.Files
 import java.nio.file.Path
 import java.util.Collections
@@ -129,6 +133,7 @@ class SessionLoopTest {
         // Identity, so a test's delays are exactly the ones it wrote down.
         jitter: (Long) -> Long = { it },
         fallbackAnswerBoundMillis: Long = SessionLoop.FALLBACK_ANSWER_BOUND_MILLIS,
+        reconnectAnswerBoundMillis: Long = SessionLoop.RECONNECT_ANSWER_BOUND_MILLIS,
         onStreamChanged: () -> Unit = {},
         expireRequests: () -> Unit = {},
         log: (String, Throwable?) -> Unit = { _, _ -> },
@@ -146,6 +151,7 @@ class SessionLoopTest {
             note = note,
             jitter = jitter,
             fallbackAnswerBoundMillis = fallbackAnswerBoundMillis,
+            reconnectAnswerBoundMillis = reconnectAnswerBoundMillis,
             onStreamChanged = onStreamChanged,
             expireRequests = expireRequests,
         )
@@ -725,6 +731,235 @@ class SessionLoopTest {
                     "cancelled",
                     first.terminal.get(),
                     "the first attempt was half-closed rather than cancelled",
+                )
+            }
+        }
+    }
+
+    /**
+     * A stream that was established and broke, then a reconnect the operator
+     * accepts and never answers. The operator stated a hard deadline far past
+     * the test, so only the reconnect bound can end the wait.
+     */
+    private fun unansweredReconnect(
+        dir: Path,
+        name: String,
+        boundMillis: Long,
+        check: (FakeOperator, AcceptedStream) -> Unit,
+    ) {
+        FakeOperator(name).use { operator ->
+            val role = FakeRole().apply { markReady() }
+            loopAgainst(operator, role, dir, reconnectAnswerBoundMillis = boundMillis).use { loop ->
+                loop.start()
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+                first.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setSessionDeadline(
+                            SessionDeadline.newBuilder()
+                                .setRenewAfterSeconds(600)
+                                .setHardDeadlineSeconds(600),
+                        )
+                        .build(),
+                )
+                first.toAgent.onError(Status.UNAVAILABLE.asRuntimeException())
+
+                val reconnect = operator.awaitStream(1)
+                reconnect.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+                check(operator, reconnect)
+            }
+        }
+    }
+
+    @Test
+    fun `a reconnect that is never answered is retired within the bound`(@TempDir dir: Path) {
+        unansweredReconnect(dir, "mute-reconnect", boundMillis = 200) { operator, reconnect ->
+            assertTrue(
+                reconnect.closed.await(2, TimeUnit.SECONDS),
+                "a reconnect the operator never answered was still open 2s into a 200ms bound; " +
+                    "behind a connect to a frozen pod nothing else ends that wait",
+            )
+            assertEquals(
+                "cancelled",
+                reconnect.terminal.get(),
+                "the abandoned reconnect was half-closed rather than cancelled",
+            )
+            operator.awaitStream(2).awaitMessage {
+                it.messageCase == ServerMessage.MessageCase.HELLO
+            }
+        }
+        unansweredReconnect(dir, "mute-reconnect-long", boundMillis = 60_000) { operator, reconnect ->
+            assertFalse(
+                reconnect.closed.await(1, TimeUnit.SECONDS),
+                "a reconnect was retired long before its 60s bound",
+            )
+            assertEquals(
+                2,
+                operator.streams.size,
+                "the agent dialled again while its reconnect was still in its bound",
+            )
+        }
+    }
+
+    /**
+     * The real transport against a listener that accepts TCP and never sends a
+     * TLS ServerHello, the way a frozen pod's address holds a dial. Also the
+     * first attempt after start, which has no live stream behind it either.
+     */
+    @Test
+    fun `a dial to a listener that never speaks TLS is retired within the reconnect bound`(@TempDir dir: Path) {
+        val ca = newTestCa("operator-ca")
+        ServerSocket(0, 50, InetAddress.getLoopbackAddress()).use { listener ->
+            val accepted = LinkedBlockingQueue<Socket>()
+            Thread {
+                runCatching { while (true) accepted.add(listener.accept()) }
+            }.apply { isDaemon = true }.start()
+            val role = FakeRole()
+            FakeOperator("unused-silent-listener").use { operator ->
+                loopAgainst(
+                    operator,
+                    role,
+                    dir,
+                    channels = { OperatorChannel.build("localhost:${listener.localPort}", ca.pem()) },
+                    jitter = { 50L },
+                    reconnectAnswerBoundMillis = 200,
+                ).use { loop ->
+                    loop.start()
+                    try {
+                        assertNotNull(accepted.poll(5, TimeUnit.SECONDS), "the agent never dialled")
+                        assertNotNull(
+                            accepted.poll(5, TimeUnit.SECONDS),
+                            "the agent was still waiting on a TLS handshake nothing answers, 5s into " +
+                                "a 200ms bound; grpc-okhttp gives the handshake no timeout of its own",
+                        )
+                    } finally {
+                        accepted.forEach { it.close() }
+                    }
+                }
+            }
+        }
+    }
+
+    /**
+     * The operator says nothing on the replacement and leaves the outgoing
+     * stream running, as hack/agent-test.sh phase three does. While that
+     * stream lives the renewal's bound stays the operator's hard deadline,
+     * because giving up on the renewal retires the outgoing stream too.
+     */
+    @Test
+    fun `a renewal keeps the operator's hard deadline as its bound`(@TempDir dir: Path) {
+        FakeOperator("mute-renewal").use { operator ->
+            val role = FakeRole().apply { markReady() }
+            loopAgainst(operator, role, dir, reconnectAnswerBoundMillis = 200).use { loop ->
+                loop.start()
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+                first.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setSessionDeadline(
+                            SessionDeadline.newBuilder()
+                                .setRenewAfterSeconds(1)
+                                .setHardDeadlineSeconds(3),
+                        )
+                        .build(),
+                )
+
+                val renewal = operator.awaitStream(1)
+                renewal.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+
+                assertFalse(
+                    renewal.closed.await(2, TimeUnit.SECONDS),
+                    "the renewal was given up on before the operator's 3s hard deadline although " +
+                        "the stream it replaces was still up",
+                )
+                assertFalse(
+                    first.closed.await(0, TimeUnit.SECONDS),
+                    "the outgoing stream was retired before the renewal was given up on",
+                )
+                assertTrue(
+                    renewal.closed.await(5, TimeUnit.SECONDS),
+                    "the renewal was not given up on at the operator's hard deadline",
+                )
+                operator.awaitStream(2).awaitMessage {
+                    it.messageCase == ServerMessage.MessageCase.HELLO
+                }
+            }
+        }
+    }
+
+    /**
+     * A leader that freezes between the outgoing stream's last answer and the
+     * renewal: the renewal hangs, and the keepalive ends the outgoing stream.
+     * That stream books no reconnect, because the renewal owes it, so only the
+     * renewal's own bound can end the wait, and the hard deadline is far off.
+     */
+    @Test
+    fun `a renewal whose outgoing stream dies is retired within the reconnect bound from then`(
+        @TempDir dir: Path,
+    ) {
+        val noted = Collections.synchronizedList(mutableListOf<String>())
+        FakeOperator("mute-renewal-orphaned").use { operator ->
+            val role = FakeRole().apply { markReady() }
+            loopAgainst(
+                operator,
+                role,
+                dir,
+                reconnectAnswerBoundMillis = 500,
+                note = { noted += it },
+            ).use { loop ->
+                loop.start()
+                val first = operator.awaitStream(0)
+                first.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+                first.toAgent.onNext(
+                    OperatorToServer.newBuilder()
+                        .setSessionDeadline(
+                            SessionDeadline.newBuilder()
+                                .setRenewAfterSeconds(1)
+                                .setHardDeadlineSeconds(600),
+                        )
+                        .build(),
+                )
+
+                val renewal = operator.awaitStream(1)
+                renewal.awaitMessage { it.messageCase == ServerMessage.MessageCase.HELLO }
+                // Past the reconnect bound counted from the renewal's dial.
+                Thread.sleep(1_000)
+                assertFalse(
+                    renewal.closed.await(0, TimeUnit.SECONDS),
+                    "the renewal was given up on with its outgoing stream still up",
+                )
+
+                first.toAgent.onError(
+                    Status.UNAVAILABLE
+                        .withDescription("Keepalive failed. The connection is likely gone")
+                        .asRuntimeException(),
+                )
+                val died = System.nanoTime()
+
+                assertTrue(
+                    renewal.closed.await(5, TimeUnit.SECONDS),
+                    "the renewal was still waiting 5s after the stream it replaced died, with a 500ms " +
+                        "reconnect bound; it would wait out the operator's 600s hard deadline",
+                )
+                val waited = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - died)
+                assertTrue(
+                    noted.any { it.contains("Keepalive failed") } &&
+                        noted.none { it.contains("retired this stream for a renewal") },
+                    "a keepalive failure under an unanswered renewal was reported as the operator's " +
+                        "retirement: $noted",
+                )
+                assertTrue(
+                    waited >= 400,
+                    "the renewal was given up on ${waited}ms after its outgoing stream died, not 500ms",
+                )
+                operator.awaitStream(2).awaitMessage {
+                    it.messageCase == ServerMessage.MessageCase.HELLO
+                }
+                Thread.sleep(1_000)
+                assertEquals(
+                    3,
+                    operator.streams.size,
+                    "the dead outgoing stream and the given-up renewal booked a reconnect each",
                 )
             }
         }

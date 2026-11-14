@@ -248,7 +248,7 @@ func TestAnOperatorRestartDoesNotEndALongProxyDrain(t *testing.T) {
 	f.reconcileProxyGroup(r, "gateway")
 
 	// A restarted operator has heard from no agent yet.
-	r.Agents = agent.New(f.clock.Now, 5*time.Second, f.clock.Now())
+	r.Agents = agent.New(f.clock.Now, 5*time.Second)
 	f.reconcileProxyGroup(r, "gateway")
 	if got := len(f.proxyPods("gateway")); got != 2 {
 		t.Fatalf("proxy pods = %d, want 2: the drain outlived drain.timeoutSeconds before the restart, and nobody knows yet whether its players left", got)

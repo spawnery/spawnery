@@ -19,6 +19,8 @@ package certs
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+
+	"github.com/spawnery/spawnery/internal/leaderonly"
 )
 
 var (
@@ -58,9 +60,9 @@ var (
 )
 
 func init() {
-	metrics.Registry.MustRegister(
+	metrics.Registry.MustRegister(leaderonly.Wrap(
 		RotationPhase, RotationBlockedNamespaces, CAExpiry, ServingCertExpiry, CAKeyUnmatched,
-	)
+	))
 }
 
 // observeExpiry leaves a gauge alone on a parse failure: zero would read as

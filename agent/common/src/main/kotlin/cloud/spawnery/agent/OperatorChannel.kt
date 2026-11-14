@@ -67,11 +67,11 @@ object OperatorChannel {
      * `phase.Inputs.AgentSilent` already covers its side and a broken stream
      * would weaken that state.
      *
-     * 45 s stays well above the operator's `MinKeepaliveInterval` of 30 s, below
+     * 15 s stays above the operator's `MinKeepaliveInterval` of 10 s, below
      * which a client collects strikes and is sent a GOAWAY.
      */
-    private const val KEEPALIVE_SECONDS = 45L
-    private const val KEEPALIVE_TIMEOUT_SECONDS = 20L
+    private const val KEEPALIVE_SECONDS = 15L
+    private const val KEEPALIVE_TIMEOUT_SECONDS = 5L
 
     fun build(endpoint: String, caBundlePem: ByteArray): ManagedChannel {
         val trust = trustManager(caBundlePem)

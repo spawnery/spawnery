@@ -20,6 +20,7 @@ import (
 	"testing"
 	"time"
 
+	coordinationv1 "k8s.io/api/coordination/v1"
 	corev1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
@@ -27,6 +28,7 @@ import (
 	utilyaml "k8s.io/apimachinery/pkg/util/yaml"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/utils/ptr"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/config"
 	"sigs.k8s.io/yaml"
@@ -113,23 +115,24 @@ func TestSpawneryUnderItsOwnServiceAccount(t *testing.T) {
 }
 
 func theOperatorIsUp(t *testing.T) {
-	pod := operatorPod(t, operatorNamespace)
-
-	ready := false
-	for _, c := range pod.Status.ContainerStatuses {
-		if c.Ready {
-			ready = true
+	operatorPod(t, operatorNamespace)
+	for _, pod := range operatorPods(t, operatorNamespace) {
+		ready := false
+		for _, c := range pod.Status.ContainerStatuses {
+			if c.Ready {
+				ready = true
+			}
+			if c.RestartCount > 0 {
+				t.Errorf("the operator container of %s has restarted %d time(s) before the run "+
+					"even began. Kubernetes keeps one container back, so from the second "+
+					"restart on there is a stretch of this operator's life nothing can read, "+
+					"and theOperatorWasNeverDenied's silence stops meaning anything about it",
+					pod.Name, c.RestartCount)
+			}
 		}
-		if c.RestartCount > 0 {
-			t.Errorf("the operator container has restarted %d time(s) before the run even "+
-				"began. Kubernetes keeps one container back, so from the second restart "+
-				"on there is a stretch of this operator's life nothing can read, and "+
-				"theOperatorWasNeverDenied's silence stops meaning anything about it",
-				c.RestartCount)
+		if !ready {
+			t.Fatalf("the operator pod %s is not ready: phase %s", pod.Name, pod.Status.Phase)
 		}
-	}
-	if !ready {
-		t.Fatalf("the operator pod %s is not ready: phase %s", pod.Name, pod.Status.Phase)
 	}
 }
 
@@ -171,9 +174,10 @@ func theOperatorWasNeverDenied(t *testing.T) {
 	}
 }
 
-// operatorPod returns the single operator pod in namespace, or fails. The
-// tutorial scenario installs into a different namespace than the main suite.
-func operatorPod(t *testing.T, namespace string) *corev1.Pod {
+// operatorLease is the manager's LeaderElectionID.
+const operatorLease = "spawnery-operator.spawnery.cloud"
+
+func operatorPods(t *testing.T, namespace string) []corev1.Pod {
 	t.Helper()
 	var pods corev1.PodList
 	err := k8s.List(ctx, &pods,
@@ -185,20 +189,72 @@ func operatorPod(t *testing.T, namespace string) *corev1.Pod {
 	if err != nil {
 		t.Fatalf("list operator pods: %v", err)
 	}
-	if len(pods.Items) != 1 {
-		t.Fatalf("got %d operator pods in %s, want exactly one", len(pods.Items), namespace)
+	if len(pods.Items) == 0 {
+		t.Fatalf("no operator pod in %s", namespace)
 	}
-	return &pods.Items[0]
+	return pods.Items
 }
 
-// operatorLog reads the operator's log through the API, prepending the
-// previous container's where there is one, and reports how many times its
-// container has restarted. Kubernetes keeps only one previous log, so beyond
-// one restart the log has a hole the caller must report.
+// leaderPod reads the pod the Lease names. controller-runtime's holder
+// identity is <hostname>_<uuid>, and a pod's hostname is its name.
+func leaderPod(namespace string) (*corev1.Pod, string, error) {
+	var lease coordinationv1.Lease
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: namespace, Name: operatorLease}, &lease); err != nil {
+		return nil, "", fmt.Errorf("get Lease %s: %w", operatorLease, err)
+	}
+	holder := ptr.Deref(lease.Spec.HolderIdentity, "")
+	name, _, ok := strings.Cut(holder, "_")
+	if !ok || name == "" {
+		return nil, holder, fmt.Errorf("Lease %s names no holder (%q)", operatorLease, holder)
+	}
+	var pod corev1.Pod
+	if err := k8s.Get(ctx, client.ObjectKey{Namespace: namespace, Name: name}, &pod); err != nil {
+		return nil, holder, fmt.Errorf("the Lease's holder %q: %w", holder, err)
+	}
+	if pod.Labels["app.kubernetes.io/component"] != "operator" {
+		return nil, holder, fmt.Errorf("the Lease's holder %q is pod %s, which is not an operator pod", holder, name)
+	}
+	return &pod, holder, nil
+}
+
+// operatorPod returns the leader, waiting out a handover. The tutorial
+// scenario installs into a different namespace than the main suite.
+func operatorPod(t *testing.T, namespace string) *corev1.Pod {
+	t.Helper()
+	stop := time.Now().Add(time.Minute)
+	for {
+		pod, _, err := leaderPod(namespace)
+		if err == nil {
+			return pod
+		}
+		if time.Now().After(stop) {
+			t.Fatalf("no operator pod in %s holds the lease: %v", namespace, err)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// operatorLog reads every operator pod's log through the API, each prepended
+// with its previous container's where there is one, and reports how many
+// times their containers have restarted in all. Kubernetes keeps only one
+// previous log, so beyond one restart of a pod the log has a hole the caller
+// must report.
 func operatorLog(t *testing.T, namespace string) (string, int32) {
 	t.Helper()
-	pod := operatorPod(t, namespace)
+	var b strings.Builder
+	var restarts int32
+	pods := operatorPods(t, namespace)
+	for i := range pods {
+		log, n := operatorPodLog(t, namespace, &pods[i])
+		b.WriteString(log)
+		b.WriteString("\n")
+		restarts += n
+	}
+	return b.String(), restarts
+}
 
+func operatorPodLog(t *testing.T, namespace string, pod *corev1.Pod) (string, int32) {
+	t.Helper()
 	var restarts int32
 	for _, c := range pod.Status.ContainerStatuses {
 		restarts += c.RestartCount
@@ -210,8 +266,8 @@ func operatorLog(t *testing.T, namespace string) (string, int32) {
 			b.WriteString(prev)
 			b.WriteString("\n")
 		} else {
-			t.Logf("the previous container's log is not available (%v); this check can "+
-				"only read the current process", err)
+			t.Logf("the previous container's log of %s is not available (%v); this check can "+
+				"only read the current process", pod.Name, err)
 		}
 	}
 
@@ -221,8 +277,8 @@ func operatorLog(t *testing.T, namespace string) (string, int32) {
 		b.WriteString(body)
 	case restarts > 0:
 		// GetLogs refuses a container between restart attempts.
-		t.Logf("the current container's log is not available (%v); this check has only "+
-			"the previous container's", err)
+		t.Logf("the current container's log of %s is not available (%v); this check has only "+
+			"the previous container's", pod.Name, err)
 	default:
 		t.Fatalf("read logs of %s: %v", pod.Name, err)
 	}
@@ -337,8 +393,12 @@ func applyManifest(t *testing.T, rel string, opts ...client.CreateOption) {
 	if err != nil {
 		t.Fatalf("read %s: %v", rel, err)
 	}
+	applyDocuments(t, rel, withGameImage(t, rel, raw), opts...)
+}
 
-	docs := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(withGameImage(t, rel, raw))))
+func applyDocuments(t *testing.T, rel string, raw []byte, opts ...client.CreateOption) {
+	t.Helper()
+	docs := utilyaml.NewYAMLReader(bufio.NewReader(bytes.NewReader(raw)))
 	for {
 		doc, err := docs.Read()
 		if errors.Is(err, io.EOF) {

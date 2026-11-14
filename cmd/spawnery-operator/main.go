@@ -20,7 +20,6 @@ package main
 import (
 	"flag"
 	"fmt"
-	"net/http"
 	"os"
 	"strings"
 	"time"
@@ -28,9 +27,12 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/kubernetes"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
+	"k8s.io/client-go/rest"
+	"k8s.io/utils/ptr"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -42,11 +44,14 @@ import (
 
 	spawneryv1alpha1 "github.com/spawnery/spawnery/api/v1alpha1"
 	"github.com/spawnery/spawnery/internal/agent"
+	"github.com/spawnery/spawnery/internal/agentendpoint"
 	"github.com/spawnery/spawnery/internal/agentserver"
 	"github.com/spawnery/spawnery/internal/certs"
 	"github.com/spawnery/spawnery/internal/cloudevent"
 	"github.com/spawnery/spawnery/internal/controller"
 	"github.com/spawnery/spawnery/internal/grpcauth"
+	"github.com/spawnery/spawnery/internal/leaderonly"
+	"github.com/spawnery/spawnery/internal/leaseguard"
 	"github.com/spawnery/spawnery/internal/netstate"
 	"github.com/spawnery/spawnery/internal/netstatus"
 	"github.com/spawnery/spawnery/internal/phase"
@@ -142,18 +147,80 @@ func (t *taintKeys) Set(value string) error {
 	return nil
 }
 
-// leaderReadyCheck reports ready only once this replica holds the leader lock:
-// a standby serves no agent endpoint and must stay out of the Service. It must
-// not block until election.
-func leaderReadyCheck(elected <-chan struct{}) healthz.Checker {
-	return func(_ *http.Request) error {
-		select {
-		case <-elected:
-			return nil
-		default:
-			return fmt.Errorf("not the leader yet")
+const (
+	leaderElectionID = "spawnery-operator.spawnery.cloud"
+	// Below the chart's terminationGracePeriodSeconds: 10, so the lease is
+	// released before SIGKILL; the remaining 3 s are for the release and the
+	// exit.
+	gracefulShutdownTimeout = 7 * time.Second
+)
+
+// The hostname, not POD_NAME, is what controller-runtime puts in front of the
+// Lease's holder identity, which the publisher compares against.
+func podIdentity(getenv func(string) string) (agentendpoint.Identity, error) {
+	var missing []string
+	for _, k := range []string{"POD_NAME", "POD_UID", "POD_IPS"} {
+		if getenv(k) == "" {
+			missing = append(missing, k)
 		}
 	}
+	if len(missing) > 0 {
+		return agentendpoint.Identity{}, fmt.Errorf("%s unset: the agent endpoint names this pod, "+
+			"so --publish-agent-endpoint needs them from the downward API", strings.Join(missing, ", "))
+	}
+	ips, err := agentendpoint.ParseIPs(getenv("POD_IPS"))
+	if err != nil {
+		return agentendpoint.Identity{}, fmt.Errorf("POD_IPS: %w", err)
+	}
+	hostname, err := os.Hostname()
+	if err != nil {
+		return agentendpoint.Identity{}, fmt.Errorf("hostname: %w", err)
+	}
+	return agentendpoint.Identity{
+		Name:     getenv("POD_NAME"),
+		Hostname: hostname,
+		Node:     getenv("NODE_NAME"),
+		UID:      types.UID(getenv("POD_UID")),
+		IPs:      ips,
+	}, nil
+}
+
+func agentPublisher(c client.Client, namespace string, pod agentendpoint.Identity, serving <-chan struct{}, leaderElect bool) *agentendpoint.Publisher {
+	p := &agentendpoint.Publisher{
+		Client:    c,
+		Namespace: namespace,
+		Service:   podspec.AgentServiceName,
+		Port:      agentserver.DefaultPort,
+		Pod:       pod,
+		Serving:   serving,
+		Interval:  agentendpoint.DefaultInterval,
+	}
+	if leaderElect {
+		p.Lease = leaderElectionID
+	}
+	return p
+}
+
+func leaseGuard(c client.Client, namespace, hostname string) *leaseguard.Guard {
+	return &leaseguard.Guard{
+		Client:    c,
+		Namespace: namespace,
+		Lease:     leaderElectionID,
+		Hostname:  hostname,
+		Interval:  leaseguard.DefaultInterval,
+		Clock:     time.Now,
+	}
+}
+
+// newDirectClient bypasses the cache: the role grants no list or watch on
+// Secrets, and with --namespace set the cache does not cover the operator's
+// own namespace.
+func newDirectClient(cfg *rest.Config, mgr manager.Manager) (client.Client, error) {
+	return client.New(cfg, client.Options{
+		Scheme:     scheme,
+		Mapper:     mgr.GetRESTMapper(),
+		HTTPClient: mgr.GetHTTPClient(),
+	})
 }
 
 type managerFlags struct {
@@ -170,11 +237,15 @@ func managerOptions(f managerFlags) manager.Options {
 		Metrics:                metricsserver.Options{BindAddress: f.metricsAddr},
 		HealthProbeBindAddress: f.probeAddr,
 		LeaderElection:         f.leaderElect,
-		LeaderElectionID:       "spawnery-operator.spawnery.cloud",
+		LeaderElectionID:       leaderElectionID,
 		// Left empty, controller-runtime reads it from the ServiceAccount
 		// mount, which a local `go run` does not have.
-		LeaderElectionNamespace: f.operatorNamespace,
+		LeaderElectionNamespace:       f.operatorNamespace,
+		LeaderElectionReleaseOnCancel: true,
+		GracefulShutdownTimeout:       ptr.To(gracefulShutdownTimeout),
 	}
+	// Without warmup a standby's cache holds no informer until it leads.
+	opts.Controller.EnableWarmup = ptr.To(true)
 	if f.watchNamespace != "" {
 		opts.Cache.DefaultNamespaces = map[string]cache.Config{f.watchNamespace: {}}
 	}
@@ -222,6 +293,7 @@ func main() {
 		aotCache                bool
 		worldSync               bool
 		worldSyncInterval       time.Duration
+		publishAgentEndpoint    bool
 	)
 
 	flag.StringVar(&metricsAddr, "metrics-bind-address", ":8080", "address the metrics endpoint binds to")
@@ -293,6 +365,11 @@ func main() {
 	flag.DurationVar(&worldSyncInterval, "world-sync-snapshot-interval", 5*time.Minute,
 		"how often a member of an ObjectStore group asks for a snapshot; the most play a node loss costs")
 
+	flag.BoolVar(&publishAgentEndpoint, "publish-agent-endpoint", true,
+		"write the leader's address into the EndpointSlices of the agent Service, which has no "+
+			"selector; needs POD_NAME, POD_UID and POD_IPS from the downward API. Off only for a run "+
+			"outside a pod, where no agent can reach the operator through the Service anyway")
+
 	opts := zap.Options{Development: false}
 	opts.BindFlags(flag.CommandLine)
 	flag.Parse()
@@ -319,13 +396,9 @@ func main() {
 		setupLog.Error(err, "unable to start manager")
 		os.Exit(1)
 	}
+	leaderonly.Watch(mgr.Elected())
 
-	// Secrets bypass the cache: the role grants no list or watch on them.
-	directClient, err := client.New(restConfig, client.Options{
-		Scheme:     scheme,
-		Mapper:     mgr.GetRESTMapper(),
-		HTTPClient: mgr.GetHTTPClient(),
-	})
+	directClient, err := newDirectClient(restConfig, mgr)
 	if err != nil {
 		setupLog.Error(err, "unable to build the uncached client")
 		os.Exit(1)
@@ -367,8 +440,7 @@ func main() {
 		setupLog.Info("the rescue window for a dead node is short", "warning", warning)
 	}
 
-	started := time.Now()
-	registry := agent.New(time.Now, reportInterval, started)
+	registry := agent.New(time.Now, reportInterval)
 
 	// One Source for both fan-outs, so backends and proxies get the same
 	// picture.
@@ -421,7 +493,7 @@ func main() {
 			setupLog.Error(err, "add world deletion sweeper")
 			os.Exit(1)
 		}
-		ctrlmetrics.Registry.MustRegister(worldsync.OperatorCollectors()...)
+		ctrlmetrics.Registry.MustRegister(leaderonly.Wrap(worldsync.OperatorCollectors()...))
 		if err := mgr.Add(&worldsync.Ager{Store: st, Base: base, Policies: policies, Interval: time.Hour,
 			StaleAfter: worldsync.StaleAfter, Clock: time.Now, Log: ctrl.Log.WithName("worldsync")}); err != nil {
 			setupLog.Error(err, "add world history aging")
@@ -429,7 +501,7 @@ func main() {
 		}
 	}
 
-	if err := mgr.Add(agentserver.New(agentserver.Options{
+	agentServer := agentserver.New(agentserver.Options{
 		Addr:     agentBindAddress,
 		Provider: provider,
 		Auth: &grpcauth.Authenticator{
@@ -458,9 +530,38 @@ func main() {
 		RenewAfter:     renewAfter,
 		HardDeadline:   hardDeadline,
 		Clock:          time.Now,
-	})); err != nil {
+	})
+	if err := mgr.Add(agentServer); err != nil {
 		setupLog.Error(err, "unable to add the agent endpoint")
 		os.Exit(1)
+	}
+
+	if publishAgentEndpoint {
+		pod, err := podIdentity(os.Getenv)
+		if err != nil {
+			setupLog.Error(err, "refusing to start")
+			os.Exit(1)
+		}
+		if err := mgr.Add(agentPublisher(directClient, operatorNamespace, pod, agentServer.Serving(), leaderElect)); err != nil {
+			setupLog.Error(err, "unable to add the agent endpoint publisher")
+			os.Exit(1)
+		}
+	}
+
+	// Without leader election there is no Lease to read, and the guard would
+	// stop the manager.
+	var guard *leaseguard.Guard
+	if leaderElect {
+		hostname, err := os.Hostname()
+		if err != nil {
+			setupLog.Error(err, "the lease guard needs the hostname")
+			os.Exit(1)
+		}
+		guard = leaseGuard(directClient, operatorNamespace, hostname)
+		if err := mgr.Add(guard); err != nil {
+			setupLog.Error(err, "unable to add the lease guard")
+			os.Exit(1)
+		}
 	}
 
 	if err := controller.SetupAll(mgr, controller.Options{
@@ -489,6 +590,7 @@ func main() {
 		Proxies:           proxies,
 		State:             statePush,
 		DrainTaintKeys:    drainTaints,
+		Lease:             guard,
 	}); err != nil {
 		setupLog.Error(err, "unable to set up controllers")
 		os.Exit(1)
@@ -498,11 +600,7 @@ func main() {
 		setupLog.Error(err, "unable to add health check")
 		os.Exit(1)
 	}
-	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
-		setupLog.Error(err, "unable to add ready check")
-		os.Exit(1)
-	}
-	if err := mgr.AddReadyzCheck("leader", leaderReadyCheck(mgr.Elected())); err != nil {
+	if err := mgr.AddReadyzCheck("caches", readyzCheck(mgr)); err != nil {
 		setupLog.Error(err, "unable to add ready check")
 		os.Exit(1)
 	}

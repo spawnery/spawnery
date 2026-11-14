@@ -264,7 +264,10 @@ nix develop -c kubectl apply -f config/samples/network.yaml
 # --leader-elect=false is not needed to *start*, but it is what you want here:
 # with leader election on, a local run contends for the same lease as an
 # operator already installed in that namespace and waits it out first.
-nix develop -c go run ./cmd/spawnery-operator --leader-elect=false --operator-namespace minecraft &
+# --publish-agent-endpoint=false is needed: without POD_NAME, POD_UID and
+# POD_IPS the operator refuses to start, and the Endpoints below are yours.
+nix develop -c go run ./cmd/spawnery-operator --leader-elect=false \
+  --publish-agent-endpoint=false --operator-namespace minecraft &
 
 # Rootless Podman only. With a real Docker daemon, skip this and use
 # 172.17.0.1 as the endpoint address below.

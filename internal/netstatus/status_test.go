@@ -130,7 +130,7 @@ func network(t *testing.T) (client.Client, *agent.Registry) {
 		pod("db-0", "", "", "200m", "", "256Mi", "", "uid-db"),
 	).Build()
 
-	reg := agent.New(func() time.Time { return t0 }, 5*time.Second, t0)
+	reg := agent.New(func() time.Time { return t0 }, 5*time.Second)
 	for _, key := range []string{"uid-la", "uid-lb", "uid-rx", "uid-ga"} {
 		reg.Connect(key, agent.RoleServer)
 	}
@@ -344,7 +344,7 @@ func TestLowestTPSIgnoresUnreported(t *testing.T) {
 func TestStaleTicksAreDropped(t *testing.T) {
 	c, _ := network(t)
 	now := t0
-	reg := agent.New(func() time.Time { return now }, 5*time.Second, t0)
+	reg := agent.New(func() time.Time { return now }, 5*time.Second)
 	reg.Connect("uid-la", agent.RoleServer)
 	if err := reg.ReportPlayers("uid-la", 1, 20); err != nil {
 		t.Fatal(err)

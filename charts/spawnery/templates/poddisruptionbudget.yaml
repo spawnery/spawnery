@@ -1,0 +1,14 @@
+{{- if gt (int .Values.operator.replicas) 1 }}
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: spawnery-operator
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "spawnery.labels" . | nindent 4 }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "spawnery.selectorLabels" . | nindent 6 }}
+{{- end }}

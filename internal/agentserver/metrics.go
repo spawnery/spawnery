@@ -19,6 +19,8 @@ package agentserver
 import (
 	"github.com/prometheus/client_golang/prometheus"
 	"sigs.k8s.io/controller-runtime/pkg/metrics"
+
+	"github.com/spawnery/spawnery/internal/leaderonly"
 )
 
 var OpenStreams = prometheus.NewGaugeVec(
@@ -103,11 +105,11 @@ const (
 )
 
 func init() {
-	metrics.Registry.MustRegister(
+	metrics.Registry.MustRegister(leaderonly.Wrap(
 		RequestsRefused,
 		OpenStreams, RejectedReports, OpenConnections, ExpectedAgents, ConnectionsRefused,
 		WorldRestores, VoicePackets, AnswersDropped,
-	)
+	))
 	// A labelled counter does not exist until incremented, and increase() over
 	// a series born mid-window has nothing to subtract from.
 	ConnectionsRefused.WithLabelValues(BoundPeer)

@@ -703,7 +703,7 @@ func TestAJoiningProxyIsSentTheNetworkStateAfterItsFullSync(t *testing.T) {
 		Reader: reader,
 		State: netstate.Source{
 			Reader: reader,
-			Agents: agent.New(func() time.Time { return start }, 5*time.Second, start),
+			Agents: agent.New(func() time.Time { return start }, 5*time.Second),
 		},
 	})
 
@@ -737,7 +737,7 @@ func TestSendStateCarriesADoorToEveryProxyOfTheNamespace(t *testing.T) {
 	lobby := registered("lobby-0", "10.0.0.1:25565")
 	lobby.Status.PodUID = "pod-lobby"
 	reader := newReader(t, proxyGroup(), lobby)
-	agents := agent.New(func() time.Time { return start }, 5*time.Second, start)
+	agents := agent.New(func() time.Time { return start }, 5*time.Second)
 	f := proxyreg.New(proxyreg.Options{Reader: reader, State: netstate.Source{Reader: reader, Agents: agents}})
 
 	here, leaveHere, err := f.Join(context.Background(), ns, group, "proxy-a")
@@ -783,7 +783,7 @@ func TestABurstOfDoorFlipsIsCoalescedRatherThanCuttingTheSession(t *testing.T) {
 		objects = append(objects, srv)
 	}
 	reader := newReader(t, objects...)
-	agents := agent.New(func() time.Time { return start }, 5*time.Second, start)
+	agents := agent.New(func() time.Time { return start }, 5*time.Second)
 	f := proxyreg.New(proxyreg.Options{
 		Reader: reader, OutboxSize: outbox,
 		State: netstate.Source{Reader: reader, Agents: agents},
@@ -853,7 +853,7 @@ func TestABurstOfDoorFlipsIsCoalescedRatherThanCuttingTheSession(t *testing.T) {
 func TestDeliveredIgnoresAMessageTheCurrentSessionNeverQueued(t *testing.T) {
 	start := time.Date(2026, 8, 28, 12, 0, 0, 0, time.UTC)
 	reader := newReader(t, proxyGroup())
-	agents := agent.New(func() time.Time { return start }, 5*time.Second, start)
+	agents := agent.New(func() time.Time { return start }, 5*time.Second)
 	f := proxyreg.New(proxyreg.Options{Reader: reader, State: netstate.Source{Reader: reader, Agents: agents}})
 
 	old, leaveOld, err := f.Join(context.Background(), ns, group, "proxy-a")
@@ -904,7 +904,7 @@ func TestAJoiningProxyIsSentPrivateServersAndTheirGroup(t *testing.T) {
 		Reader: reader,
 		State: netstate.Source{
 			Reader: reader,
-			Agents: agent.New(func() time.Time { return start }, 5*time.Second, start),
+			Agents: agent.New(func() time.Time { return start }, 5*time.Second),
 		},
 	})
 
@@ -1101,7 +1101,7 @@ func TestTheVoiceConfigComesBeforeTheNetworkState(t *testing.T) {
 		Reader: reader,
 		State: netstate.Source{
 			Reader: reader,
-			Agents: agent.New(func() time.Time { return start }, 5*time.Second, start),
+			Agents: agent.New(func() time.Time { return start }, 5*time.Second),
 		},
 	})
 

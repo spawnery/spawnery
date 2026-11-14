@@ -2,6 +2,7 @@ package cloud.spawnery.agent
 
 import io.grpc.CallCredentials
 import io.grpc.ManagedChannel
+import io.grpc.Status
 import io.grpc.stub.ClientCallStreamObserver
 import io.grpc.stub.StreamObserver
 import java.util.concurrent.RejectedExecutionException
@@ -37,6 +38,15 @@ private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?)
      * replacement owes the reconnect. See [SessionLoop.streamEnded].
      */
     private val replaced = AtomicBoolean(false)
+
+    /**
+     * The replacement itself, until it takes over or gives up, so that
+     * [SessionLoop.streamEnded] can tell it nothing stands behind it any more.
+     */
+    private val replacement = AtomicReference<Session<Req>?>(null)
+
+    /** Set once the stream this one replaced has ended; see [predecessorEnded]. */
+    private var alone = false
 
     /**
      * Claimed exactly once, by whichever ends this attempt first: [close] (no
@@ -87,26 +97,47 @@ private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?)
      * running until its own hard deadline.
      */
     fun abandon() {
-        replaces.set(null)
+        replaces.getAndSet(null)?.replacement?.compareAndSet(this, null)
     }
 
     /**
      * Called before the replacement's stream exists, because the operator can
      * end this one the instant it does.
      */
-    fun replacementOpened() {
+    fun replacementOpened(next: Session<Req>) {
+        // Before the flag: whoever sees the flag must find the replacement.
+        replacement.set(next)
         replaced.set(true)
     }
 
     fun hasReplacement(): Boolean = replaced.get()
+
+    fun replacementAnswered(): Boolean = replacement.get()?.wasAnswered() ?: true
+
+    fun takeReplacement(): Session<Req>? = replacement.getAndSet(null)
 
     /**
      * The operator can answer before connect() gets here, synchronously from
      * inside `serverSession()` on the in-process transport.
      */
     @Synchronized
-    fun awaitAnswer(arm: () -> ScheduledFuture<*>?) {
+    fun awaitAnswer(arm: (alone: Boolean) -> ScheduledFuture<*>?) {
         if (retired || answered.get()) return
+        answerDeadline = arm(alone)
+    }
+
+    /**
+     * The stream this one replaced ended before the operator answered this
+     * one. Brings the answer deadline forward to [millis] from now, unless it
+     * is due sooner; before it is armed, [awaitAnswer] sees [alone] instead.
+     */
+    @Synchronized
+    fun predecessorEnded(millis: Long, arm: () -> ScheduledFuture<*>?) {
+        alone = true
+        if (retired || answered.get()) return
+        val armed = answerDeadline ?: return
+        if (armed.getDelay(TimeUnit.MILLISECONDS) <= millis) return
+        armed.cancel(false)
         answerDeadline = arm()
     }
 
@@ -150,6 +181,7 @@ private class Session<Req>(val channel: ManagedChannel, replaces: Session<Req>?)
         reporting?.cancel(false)
         reporting = null
         stopAwaitingAnswer()
+        replacement.set(null)
         val observer = toOperator.get()
         if (cancel) {
             // Cancelling through the call's observer puts RST_STREAM on the
@@ -233,6 +265,8 @@ class SessionLoop<Req, Resp>(
     },
     /** Injectable only so tests need not wait out [FALLBACK_ANSWER_BOUND_MILLIS]. */
     private val fallbackAnswerBoundMillis: Long = FALLBACK_ANSWER_BOUND_MILLIS,
+    /** Injectable only so tests need not wait out [RECONNECT_ANSWER_BOUND_MILLIS]. */
+    private val reconnectAnswerBoundMillis: Long = RECONNECT_ANSWER_BOUND_MILLIS,
     /**
      * Called once for every stream that becomes current, on the installing
      * thread before anything is sent on it. Per-stream state hangs off it: the
@@ -270,6 +304,14 @@ class SessionLoop<Req, Resp>(
          * in microseconds, and this is only a finite number in place of none.
          */
         const val FALLBACK_ANSWER_BOUND_MILLIS = 5L * 60 * 1000
+
+        /**
+         * Covers the connect, the TLS handshake and the TokenReview behind the
+         * operator's first answer, which the node-loss e2e case measured well
+         * under a second. internal/agentserver/keepalive_agreement_test.go
+         * keeps it inside phase.ReconnectGrace.
+         */
+        const val RECONNECT_ANSWER_BOUND_MILLIS = 10_000L
 
         const val EXPIRY_PERIOD_MILLIS = 1_000L
 
@@ -329,7 +371,10 @@ class SessionLoop<Req, Resp>(
         // Before the stream exists: the operator ends the displaced stream at
         // the entry of the replacement's handler, so its terminal callback can
         // fire while the call below is still returning. See streamEnded.
-        outgoing?.replacementOpened()
+        outgoing?.replacementOpened(session)
+        // After replacementOpened: an outgoing stream that ends in between is
+        // then either seen as ended here or finds the replacement itself.
+        val renewal = outgoing != null && !outgoing.ended.get()
 
         val fromOperator = object : StreamObserver<Resp> {
             override fun onNext(value: Resp) {
@@ -358,8 +403,12 @@ class SessionLoop<Req, Resp>(
                 // Every renewal ends the displaced stream with Unavailable, by
                 // design, so that is a note rather than a failure with a stack
                 // trace. A stream nothing replaced keeps its cause.
-                if (session.hasReplacement()) {
+                if (session.hasReplacement() && session.replacementAnswered()) {
                     note("the operator retired this stream for a renewal")
+                } else if (session.hasReplacement()) {
+                    // The operator retires the outgoing stream before it
+                    // answers the replacement, so this is also every renewal.
+                    note("the operator stream ended before its renewal was answered: ${Status.fromThrowable(t)}")
                 } else {
                     log("the operator stream failed", t)
                 }
@@ -401,7 +450,7 @@ class SessionLoop<Req, Resp>(
 
         // This attempt now owes the agent its next stream, so an operator that
         // never answers needs a bound.
-        awaitAnswer(session)
+        awaitAnswer(session, renewal)
 
         // stop() may have run meanwhile and found nothing in `current` to retire.
         if (stopped.get()) stop()
@@ -416,7 +465,8 @@ class SessionLoop<Req, Resp>(
      * stream at the replacement's handler entry, so on every renewal the
      * outgoing stream fails first. Reconnecting here would supersede the
      * replacement a second later, and again, at roughly 1 Hz. A replacement
-     * that dies books its own reconnect.
+     * that dies books its own reconnect, and one the operator has not
+     * answered yet is a reconnect from now on: see [predecessorEnded].
      */
     private fun streamEnded(session: Session<Req>) {
         if (!session.ended.compareAndSet(false, true)) return
@@ -424,7 +474,10 @@ class SessionLoop<Req, Resp>(
         // Before the skip: a superseded stream's channel is as dead as a broken
         // one's.
         session.releaseChannel()
-        if (session.hasReplacement()) return
+        if (session.hasReplacement()) {
+            session.takeReplacement()?.let { predecessorEnded(it) }
+            return
+        }
         reconnectLater()
     }
 
@@ -434,18 +487,49 @@ class SessionLoop<Req, Resp>(
      * the call has no deadline, and the operator arms its own hard deadline
      * only after its first `Send`.
      *
-     * The bound is the operator's `hardDeadlineSeconds`, so by the time it
-     * fires the outgoing stream is past its own deadline and [answerOverdue]
-     * may retire it too. Until the operator has stated one, it is
-     * [FALLBACK_ANSWER_BOUND_MILLIS].
+     * While the stream it replaces lives, a renewal's bound is the operator's
+     * `hardDeadlineSeconds`, so by the time it fires the outgoing stream is
+     * past its own deadline and [answerOverdue] may retire it too. Until the
+     * operator has stated one, it is [FALLBACK_ANSWER_BOUND_MILLIS]. Once the
+     * outgoing stream ends, [predecessorEnded] shortens it to the reconnect
+     * bound.
+     *
+     * Any other attempt has no live stream behind it and is bounded by
+     * [RECONNECT_ANSWER_BOUND_MILLIS] as well. grpc-okhttp gives neither the
+     * connect nor the TLS handshake a timeout, so a dial that kube-proxy sends
+     * to a frozen pod waits out the kernel's SYN retries, about two minutes.
      */
-    private fun awaitAnswer(session: Session<Req>) {
-        val bound = hardDeadlineMillis.get().takeIf { it > 0 } ?: fallbackAnswerBoundMillis
-        if (bound <= 0) return
-        session.awaitAnswer {
-            schedule(bound, "the answer deadline could not be scheduled") { answerOverdue(session) }
+    private fun awaitAnswer(session: Session<Req>, renewal: Boolean) {
+        val deadline = answerDeadlineMillis()
+        val reconnect = reconnectBoundMillis()
+        session.awaitAnswer { alone ->
+            val bound = if (renewal && !alone) deadline else reconnect
+            if (bound <= 0) {
+                null
+            } else {
+                schedule(bound, "the answer deadline could not be scheduled") { answerOverdue(session) }
+            }
         }
     }
+
+    /**
+     * The stream a renewal replaced has ended before the operator answered the
+     * renewal, as when a keepalive gives up on a leader that froze between the
+     * two. Nothing stands behind the renewal any more, so from now on it is
+     * bounded like a reconnect.
+     */
+    private fun predecessorEnded(replacement: Session<Req>) {
+        val bound = reconnectBoundMillis()
+        if (bound <= 0) return
+        replacement.predecessorEnded(bound) {
+            schedule(bound, "the answer deadline could not be scheduled") { answerOverdue(replacement) }
+        }
+    }
+
+    private fun answerDeadlineMillis(): Long =
+        hardDeadlineMillis.get().takeIf { it > 0 } ?: fallbackAnswerBoundMillis
+
+    private fun reconnectBoundMillis(): Long = minOf(answerDeadlineMillis(), reconnectAnswerBoundMillis)
 
     /**
      * The operator accepted this attempt and never answered it. Claiming
@@ -461,7 +545,7 @@ class SessionLoop<Req, Resp>(
      * The close is the forceful one; see [Session.close].
      */
     private fun answerOverdue(session: Session<Req>) {
-        if (!session.ended.compareAndSet(false, true)) return
+        if (session.wasAnswered() || !session.ended.compareAndSet(false, true)) return
         log("the operator accepted the stream and never answered it; opening another", null)
         session.close(cancel = true)
         reconnectLater()

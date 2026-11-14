@@ -192,7 +192,8 @@ func newFixture(t *testing.T) *fixture {
 
 	start := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
 	clock := &testClock{now: start}
-	agents := agent.New(clock.Now, 5*time.Second, start)
+	agents := agent.New(clock.Now, 5*time.Second)
+	agents.MarkServing()
 	registrar := &recordingRegistrar{}
 	proxies := &recordingFleet{}
 
