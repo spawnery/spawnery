@@ -8,6 +8,7 @@ import cloud.spawnery.agent.FeedAudience
 import cloud.spawnery.agent.FeedLevels
 import cloud.spawnery.agent.dormantConnector
 import cloud.spawnery.agent.pb.DrainPlayers
+import cloud.spawnery.agent.pb.MovePlayer
 import cloud.spawnery.agent.PermissionValue
 import cloud.spawnery.agent.pb.FullSync
 import cloud.spawnery.agent.pb.GroupState
@@ -320,6 +321,57 @@ class ProxyRoleTest {
         )
 
         assertEquals(listOf("alice" to "lobby-1", "bob" to "lobby-1"), players.moves)
+    }
+
+    private fun movePlayer(player: UUID, server: String): OperatorToProxy =
+        OperatorToProxy.newBuilder()
+            .setMovePlayer(MovePlayer.newBuilder().setPlayerUuid(player.toString()).setTargetServer(server))
+            .build()
+
+    @Test
+    fun `a move message moves the player when they are on this proxy`() {
+        role.onMessage(
+            fullSync(
+                backend("hub-1", "10.0.0.1:25565", "hub"),
+                backend("mini-1", "10.0.1.7:25565", "mini"),
+            ),
+        )
+        roster.forEach { it.currentServer = "mini-1" }
+
+        assertEquals(Directive.None, role.onMessage(movePlayer(roster[0].uuid, "hub-1")))
+
+        assertEquals(listOf("alice" to "hub-1"), players.moves)
+    }
+
+    @Test
+    fun `a move for a player on another proxy touches nobody here`() {
+        role.onMessage(fullSync(backend("hub-1", "10.0.0.1:25565", "hub")))
+
+        role.onMessage(movePlayer(UUID.fromString("00000000-0000-0000-0000-0000000000bb"), "hub-1"))
+
+        assertEquals(emptyList<Pair<String, String>>(), players.moves)
+        assertEquals(emptyList<Pair<String, Throwable?>>(), logs)
+    }
+
+    @Test
+    fun `a move to a server this proxy does not route to is logged and moves nobody`() {
+        role.onMessage(fullSync(backend("hub-1", "10.0.0.1:25565", "hub")))
+
+        role.onMessage(movePlayer(roster[0].uuid, "hub-2"))
+
+        assertEquals(emptyList<Pair<String, String>>(), players.moves)
+        assertEquals(1, logs.size, "a move to nowhere left no trace")
+        assertTrue(logs[0].first.contains("hub-2"), "the log line does not name the target: ${logs[0].first}")
+    }
+
+    @Test
+    fun `a move to the server the player is already on does nothing`() {
+        role.onMessage(fullSync(backend("hub-1", "10.0.0.1:25565", "hub")))
+        roster[0].currentServer = "hub-1"
+
+        role.onMessage(movePlayer(roster[0].uuid, "hub-1"))
+
+        assertEquals(emptyList<Pair<String, String>>(), players.moves)
     }
 
     @Test

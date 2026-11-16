@@ -75,6 +75,11 @@ class ServerDirectory(
             .filter { it.group == group }
             .mapNotNull { registry.server(it.name) }
 
+    /** Only a server this directory registered, resolved fresh like [inGroup]. */
+    @Synchronized
+    fun server(name: String): RegisteredServer? =
+        backends[name.lowercase()]?.let { registry.server(it.name) }
+
     @Synchronized
     fun names(): Set<String> = backends.values.mapTo(mutableSetOf()) { it.name }
 

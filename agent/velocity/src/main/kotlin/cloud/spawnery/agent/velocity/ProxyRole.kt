@@ -204,6 +204,12 @@ class ProxyRole(
                 Directive.None
             }
 
+            // Broadcast to every proxy; only the one holding the player acts.
+            OperatorToProxy.MessageCase.MOVE_PLAYER -> {
+                move(message.movePlayer.playerUuid, message.movePlayer.targetServer)
+                Directive.None
+            }
+
             OperatorToProxy.MessageCase.SET_READY -> {
                 // Remembered as well as applied: the first FullSync must not
                 // open a gate the operator has already closed.
@@ -253,6 +259,17 @@ class ProxyRole(
             // Including MESSAGE_NOT_SET, for a newer operator.
             else -> Directive.None
         }
+
+    private fun move(playerUuid: String, targetServer: String) {
+        val player = players.all().firstOrNull { it.uuid.toString() == playerUuid } ?: return
+        if (player.currentServer.equals(targetServer, ignoreCase = true)) return
+        val target = directory.server(targetServer)
+        if (target == null) {
+            log("spawnery: the operator asked to move '${player.username}' to '$targetServer', which this proxy does not route to", null)
+            return
+        }
+        player.moveTo(target)
+    }
 
     /**
      * The address is passed through raw; [ServerDirectory] decides what an
