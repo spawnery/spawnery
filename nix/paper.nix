@@ -10,11 +10,11 @@
 # paper-pin-check` compares without changing anything.
 rec {
   paperVersion = "26.3";
-  paperBuild = "245";
+  paperBuild = "253";
 
   paperJar = fetchurl {
-    url = "https://fill-data.papermc.io/v1/objects/192d277ea1ce29b2df3933dd488521d4555cc82be864ea8df811fe536e8aed43/paper-${paperVersion}-${paperBuild}.jar";
-    hash = "sha256-GS0nfqHOKbLfOTPdSIUh1FVcyCvoZOqN+BH+U26K7UM=";
+    url = "https://fill-data.papermc.io/v1/objects/f9df8e19f4bdee97dbded48095391ea69c64342a4e19624db4f5e0d0136dfe0b/paper-${paperVersion}-${paperBuild}.jar";
+    hash = "sha256-+d+OGfS97pfb3tSAlTkeppxkNCpOGWJNtPXg0BNt/gs=";
   };
 
   # URL and hash come from META-INF/download-context inside paperJar, not from
